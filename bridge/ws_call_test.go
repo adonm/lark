@@ -378,6 +378,7 @@ func TestWSCallStopsPlaybackAndExcludesNoteTail(t *testing.T) {
 	for _, c := range []*testWS{cake, mint} {
 		c.until(t, hasWS("call", `"mic_prefix":4`))
 	}
+	mint.until(t, hasWS("svg", "call-hangup"))
 	if playback.Err() != context.Canceled {
 		t.Fatal("Answer did not cancel the playback producer")
 	}

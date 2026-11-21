@@ -73,7 +73,6 @@ func storedVoice(id string) string {
 
 type deviceVoices struct {
 	*store[string]
-	hot      *hotCache
 	fallback string
 }
 
@@ -82,13 +81,11 @@ func deviceVoiceStore(db *bridgeDB, fallback string) deviceVoices {
 	if fallback == "" {
 		fallback = heartVoice
 	}
-	var hot *hotCache
 	var st *store[string]
 	if db != nil {
-		hot = db.hot
 		st = voiceStore(db)
 	}
-	return deviceVoices{st, hot, fallback}
+	return deviceVoices{st, fallback}
 }
 
 func (v deviceVoices) allowed(voice string) bool {
@@ -107,18 +104,13 @@ func (v deviceVoices) defaultFor(theme string) string {
 
 func (v deviceVoices) get(id, theme string) string {
 	id = strings.ToLower(id)
-	if voice, ok := v.hot.getVoice(id); ok {
-		return v.resolve(voice, theme)
-	}
 	var voice string
 	if v.store != nil {
 		rdb := v.readDB
 		if rdb == nil {
 			rdb = v.db
 		}
-		if err := rdb.QueryRow("SELECT "+companionVoiceSQL, id, id).Scan(&voice); err == nil {
-			v.hot.setVoice(id, voice)
-		}
+		_ = rdb.QueryRow("SELECT "+companionVoiceSQL, id, id).Scan(&voice)
 	}
 	return v.resolve(voice, theme)
 }
@@ -136,11 +128,7 @@ func (v deviceVoices) save(id, voice string) error {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if err := v.store.save(strings.ToLower(id), voice, voice == ""); err != nil {
-		return err
-	}
-	v.hot.setVoice(id, voice)
-	return nil
+	return v.store.save(strings.ToLower(id), voice, voice == "")
 }
 
 func lanIP(value string, loopback bool) (string, error) {

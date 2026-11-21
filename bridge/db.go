@@ -61,7 +61,6 @@ type bridgeDB struct {
 	*sql.DB
 	readers    *sql.DB
 	dataDir    string
-	hot        *hotCache
 	lastBackup atomic.Int64
 }
 
@@ -223,7 +222,7 @@ func openBridgeDB(ctx context.Context, path string) (_ *bridgeDB, err error) {
 			return nil, err
 		}
 	}
-	d := &bridgeDB{dataDir: dataDir, hot: newHotCache()}
+	d := &bridgeDB{dataDir: dataDir}
 	d.DB, err = sql.Open("lark-sqlite3", sqliteDSN(path, true))
 	if err != nil {
 		return nil, err
@@ -274,15 +273,11 @@ func (b *bridge) volumePrefs(id string) (auto bool, level int) {
 	if b.db == nil {
 		return auto, level
 	}
-	if cached, ok := b.db.hot.getVolume(id); ok {
-		return cached.auto, cached.level
-	}
 	err := b.db.readDB().QueryRow(`SELECT auto_volume,manual_volume FROM device_prefs WHERE device_id=?`, strings.ToLower(id)).Scan(&auto, &level)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Print("Lark could not read volume preferences")
 		return auto, level
 	}
-	b.db.hot.setVolume(id, auto, level)
 	return auto, level
 }
 
@@ -296,7 +291,6 @@ func (b *bridge) saveVolumePrefs(ctx context.Context, id string, auto bool, leve
 	if err != nil {
 		return problem(502, "Cannot save volume")
 	}
-	b.db.hot.setVolume(id, auto, level)
 	return nil
 }
 
@@ -310,7 +304,6 @@ type store[T any] struct {
 	upsert              string
 	scan                func(rowScanner) (string, T, error)
 	values              func(string, T) []any
-	onWrite             func(string)
 }
 
 func (s *store[T]) all() (map[string]T, error) {
@@ -370,9 +363,6 @@ func (s *store[T]) save(id string, value T, remove bool) error {
 	if err != nil {
 		return problem(502, "Cannot save "+s.table)
 	}
-	if s.onWrite != nil {
-		s.onWrite(id)
-	}
 	return nil
 }
 
@@ -390,8 +380,7 @@ func deviceStore(d *bridgeDB) *store[peer] {
 
 func voiceStore(d *bridgeDB) *store[string] {
 	return &store[string]{db: d.DB, readDB: d.readDB(), table: "voices", key: "device_id", columns: "device_id,voice", upsert: "voice=excluded.voice",
-		scan: scanString, values: func(id, voice string) []any { return []any{id, voice} },
-		onWrite: func(id string) { d.hot.invalidateVoice(id) }}
+		scan: scanString, values: func(id, voice string) []any { return []any{id, voice} }}
 }
 
 func scanString(r rowScanner) (string, string, error) {
@@ -424,7 +413,7 @@ func virtualStore(d *bridgeDB) *store[virtualClient] {
 			return v.ID, v, err
 		}, values: func(id string, v virtualClient) []any {
 			return []any{id, v.Character, v.Voice, v.CreatedAt.Format(time.RFC3339Nano)}
-		}, onWrite: func(id string) { d.hot.invalidateCompanion(id) }}
+		}}
 }
 
 func tunnelStore(d *bridgeDB) *store[tunnelRecord] {

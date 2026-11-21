@@ -103,29 +103,16 @@ func (h *wsHub) parentLoad(key string) (*parentRuntime, error) {
 	}
 	p := &parentRuntime{settings: parentSettings{Timezone: "UTC"}, loc: time.UTC}
 	if h.b.db != nil {
-		if entry, ok := h.b.db.hot.getParentSettings(key); ok {
-			if entry.found {
-				p.settings = entry.settings
-				p.configured = true
-			}
-			var err error
-			p.loc, err = time.LoadLocation(p.settings.Timezone)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			s := &p.settings
-			err := h.b.db.readDB().QueryRow(`SELECT timezone,quiet_start,quiet_end,daily_minutes,pause_until_ms,override_until_ms
-				FROM parent_settings WHERE device_id=?`, key).Scan(&s.Timezone, &s.QuietStart, &s.QuietEnd, &s.DailyMinutes, &s.PauseUntil, &s.OverrideUntil)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, err
-			}
-			p.configured = err == nil
-			h.b.db.hot.setParentSettings(key, p.configured, p.settings)
-			p.loc, err = time.LoadLocation(s.Timezone)
-			if err != nil {
-				return nil, err
-			}
+		s := &p.settings
+		err := h.b.db.readDB().QueryRow(`SELECT timezone,quiet_start,quiet_end,daily_minutes,pause_until_ms,override_until_ms
+			FROM parent_settings WHERE device_id=?`, key).Scan(&s.Timezone, &s.QuietStart, &s.QuietEnd, &s.DailyMinutes, &s.PauseUntil, &s.OverrideUntil)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		p.configured = err == nil
+		p.loc, err = time.LoadLocation(s.Timezone)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if h.parents == nil {
@@ -150,7 +137,6 @@ func (h *wsHub) parentSet(key string, s parentSettings, loc *time.Location, now 
 	if err != nil {
 		return err
 	}
-	h.b.db.hot.setParentSettings(key, true, s)
 	if p.settings.Timezone != s.Timezone {
 		p.day, p.dayEnd = "", time.Time{}
 	}

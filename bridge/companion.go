@@ -133,33 +133,15 @@ func (b *bridge) companionFor(who peer) companionState {
 		return blankCompanion()
 	}
 	id := strings.ToLower(who.DeviceID)
-	if entry, ok := b.db.hot.getCompanion(id); ok {
-		if entry.found {
-			c := entry.state
-			c.Voice = storedVoice(c.Voice)
-			return c
-		}
-		c := blankCompanion()
-		if who.Character != "" && who.Character != c.Name && !strings.EqualFold(who.Character, id) && !webDeviceID(id) {
-			c.Name = who.Character
-			c.Configured = true
-			c.FaceSVG = c.defaultFace()
-		}
-		c.Voice = storedVoice(entry.state.Voice)
-		return c
-	}
 	c, err := readCompanion(b.db.readDB().QueryRowContext(context.Background(), `SELECT `+activeCompanionColumns+`,`+
 		companionVoiceSQL+` FROM companions WHERE device_id=?`, id, id, id))
 	if err == nil {
 		c.Voice = storedVoice(c.Voice)
-		b.db.hot.setCompanion(id, companionCacheEntry{found: true, state: c})
 		return c
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		var voice string
-		if verr := b.db.readDB().QueryRowContext(context.Background(), "SELECT "+companionVoiceSQL, id, id).Scan(&voice); verr == nil {
-			b.db.hot.setCompanion(id, companionCacheEntry{found: false, state: companionState{Voice: storedVoice(voice)}})
-		}
+		_ = b.db.readDB().QueryRowContext(context.Background(), "SELECT "+companionVoiceSQL, id, id).Scan(&voice)
 		c = blankCompanion()
 		if who.Character != "" && who.Character != c.Name && !strings.EqualFold(who.Character, id) && !webDeviceID(id) {
 			c.Name = who.Character
@@ -382,7 +364,6 @@ func (b *bridge) changeCompanionPrepared(ctx context.Context, who peer, theme, o
 	if err := tx.Commit(); err != nil {
 		return companionState{}, false, unavailable
 	}
-	b.db.hot.setCompanion(id, companionCacheEntry{found: true, state: next})
 	return next, profilesChanged, nil
 }
 
@@ -695,8 +676,6 @@ func (b *bridge) transferCompanions(ctx context.Context, from, to peer, mode str
 	if err != nil {
 		return companionState{}, companionState{}, false, problem(502, "Cannot reassign companions")
 	}
-	b.db.hot.setCompanion(from.DeviceID, companionCacheEntry{found: true, state: nextFrom.companion})
-	b.db.hot.setCompanion(to.DeviceID, companionCacheEntry{found: true, state: nextTo.companion})
 	return nextFrom.companion, nextTo.companion, archived, nil
 }
 
