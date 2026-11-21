@@ -6,7 +6,6 @@
 
 #include "audio.h"
 #include "board.h"
-#include "cJSON.h"
 #include "display.h"
 #include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
@@ -148,6 +147,35 @@ static esp_err_t reboot_post(httpd_req_t *request)
     return respond_and_reboot(request, "Rebooting\n");
 }
 
+static const char *skip_ws(const char *p)
+{
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    return p;
+}
+
+static bool parse_volume_level(const char *s, int *out)
+{
+    const char *p = skip_ws(s);
+    if (*p++ != '{') return false;
+    p = skip_ws(p);
+    if (strncmp(p, "\"level\"", 7) != 0) return false;
+    p = skip_ws(p + 7);
+    if (*p++ != ':') return false;
+    p = skip_ws(p);
+    if (*p < '0' || *p > '9') return false;
+    int value = 0;
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10 + (*p++ - '0');
+        if (value > 100) return false;
+    }
+    p = skip_ws(p);
+    if (*p++ != '}') return false;
+    p = skip_ws(p);
+    if (*p != '\0') return false;
+    *out = value;
+    return true;
+}
+
 static esp_err_t volume_post(httpd_req_t *request)
 {
     char body[64];
@@ -160,13 +188,8 @@ static esp_err_t volume_post(httpd_req_t *request)
         return err;
     }
     body[bytes] = '\0';
-    cJSON *json = cJSON_ParseWithLengthOpts(body, bytes + 1, NULL, true);
-    const cJSON *level = cJSON_GetObjectItemCaseSensitive(json, "level");
-    bool valid = cJSON_IsNumber(level) && level->valueint >= 0 && level->valueint <= 100 &&
-                 level->valuedouble == level->valueint;
-    int value = valid ? level->valueint : -1;
-    cJSON_Delete(json);
-    if (!valid) {
+    int value = -1;
+    if (!parse_volume_level(body, &value)) {
         return text_response(request, "400 Bad Request", "Expected an integer level from 0 to 100\n");
     }
     if (audio_set_volume(value) != ESP_OK) {

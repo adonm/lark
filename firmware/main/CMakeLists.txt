@@ -3,7 +3,7 @@ idf_component_register(
          "power.c" "telemetry.c" "media.c" "echo_suppress.c" "net_client.c" "ota_server.c" "wake_word.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES app_update board_bsp esp_app_format esp_event esp_http_client esp_http_server
-                  esp_https_ota esp_lcd esp_netif esp_timer esp_wifi json lwip mbedtls nvs_flash
+                  esp_https_ota esp_lcd esp_netif esp_timer esp_wifi lwip mbedtls nvs_flash
 )
 # Ship one model inside the OTA app so deployed partition tables need no change.
 idf_component_get_property(sr_dir espressif__esp-sr COMPONENT_DIR)

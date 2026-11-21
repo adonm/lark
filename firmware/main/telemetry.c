@@ -16,7 +16,7 @@ static unsigned sample_cpu(uint64_t *uptime_us)
     portENTER_CRITICAL(&cpu_lock);
     uint64_t now = esp_timer_get_time();
     uint64_t elapsed = now - sampled_us;
-    // Share a five-second minimum sample window between HTTP and WebSocket readers.
+    // Share a five-second minimum sample window between HTTP and bridge readers.
     if (elapsed && (!sampled_us || elapsed >= 5000000)) {
         uint64_t idle = 0;
         for (int core = 0; core < configNUMBER_OF_CORES; ++core) {

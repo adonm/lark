@@ -157,7 +157,7 @@ bool media_tts_pcm(const void *data, size_t bytes)
     xSemaphoreTake(lock, portMAX_DELAY);
     bool accepted = false;
     if (stream.open && !stream.ended) {
-        // The WS callback must not wait for speaker space; writes and reads
+        // The net_service task must not wait for speaker space; writes and reads
         // only hold this lock for the short buffer copies, never codec I/O.
         if (xStreamBufferSpacesAvailable(tts) >= bytes && xStreamBufferSend(tts, data, bytes, 0) == bytes) {
             accepted = true;
