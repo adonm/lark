@@ -299,6 +299,15 @@ An explicit rate-limit or supported upstream rejection before output or tools
 can retry once on the configured fallback. The next turn starts on the
 primary. Stalls, interruptions and permission failures do not switch models.
 
+## Upgrading
+
+Lark carries no runtime database migrations or backwards-compatibility shims.
+Upgrades are documented as changelog entries in
+[`.opencode/skills/lark-upgrade/references/changelog.md`](.opencode/skills/lark-upgrade/references/changelog.md)
+and executed by OpenCode using the
+[`.opencode/skills/lark-upgrade/SKILL.md`](.opencode/skills/lark-upgrade/SKILL.md)
+skill across host config, SQLite, and the live bridge API/MCP tools.
+
 ### Background builds
 
 Say “Make me a dinosaur quiz,” “Edit this game to add a hard round,” or
