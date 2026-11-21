@@ -41,6 +41,9 @@ if ! spirv_prefix=$(find_spirv_headers); then
     exit 1
 fi
 export CMAKE_PREFIX_PATH="${spirv_prefix}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+if [[ "$spirv_prefix" != /usr && -d "$spirv_prefix/include" ]]; then
+    export CPLUS_INCLUDE_PATH="$spirv_prefix/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+fi
 
 download "$build/source.tar.gz" "https://codeload.github.com/anomalyco/transcribe.cpp/tar.gz/$source_rev"
 if ! verify "$source_sha" "$build/source.tar.gz"; then

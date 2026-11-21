@@ -278,7 +278,7 @@ def get(path):
 deadline = time.monotonic() + 10
 while True:
     try:
-        get("/api/info")
+        agent = get("/api/agent/lark")
         break
     except OSError:
         if time.monotonic() >= deadline:
@@ -286,7 +286,7 @@ while True:
         time.sleep(0.2)
 
 try:
-    primary = get("/api/agent/lark")["data"]["model"]["providerID"]
+    primary = agent["data"]["model"]["providerID"]
     target_config = Path(root, "config/opencode/opencode.jsonc").resolve()
     router = next(p for entry in get("/api/config")
                   if entry.get("path") and Path(entry["path"]).resolve() == target_config
