@@ -23,7 +23,14 @@ typedef struct {
     int x0, y0, x1, y1; // Half-open LCD bounds. Zero initialized means empty.
 } frame_bounds_t;
 
+typedef struct {
+    frame_rect_t rect;
+    const uint8_t *pixels; // Raw payload or internal scratch; valid until next frame_decode.
+} frame_decoded_t;
+
 void frame_union(frame_bounds_t *dirty, frame_rect_t rect);
 
 // Pixels are stored in LCD wire byte order. Invalid packets leave fb and dirty untouched.
+bool frame_decode(const uint8_t *data, size_t len, frame_decoded_t *out);
+void frame_commit(uint16_t *fb, const frame_decoded_t *decoded);
 bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *dirty);

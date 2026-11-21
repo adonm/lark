@@ -69,39 +69,27 @@ static bool rle_valid(const uint8_t *p, size_t len, size_t pixels)
     return pixels == 0 && len == 0;
 }
 
-static void decode_rle(uint16_t *fb, const uint8_t *p, frame_rect_t r)
+static void decode_rle(uint16_t *out, const uint8_t *p, size_t pixels)
 {
-    size_t row = 0, col = 0;
-    while (row < r.h) {
+    size_t pos = 0;
+    while (pos < pixels) {
         uint8_t tag = *p++;
         size_t run = (tag & 0x7f) + 1;
-        bool repeat = tag & 0x80;
-        uint16_t pixel;
-        if (repeat) {
+        if (tag & 0x80) {
+            uint16_t pixel;
             // Copy the representation, not a numeric RGB565 value.
             memcpy(&pixel, p, 2);
             p += 2;
-        }
-        while (run) {
-            size_t span = r.w - col;
-            if (span > run) span = run;
-            uint16_t *out = fb + (r.y + row) * FRAME_WIDTH + r.x + col;
-            if (repeat) {
-                for (size_t i = 0; i < span; ++i) out[i] = pixel;
-            } else {
-                memcpy(out, p, span * 2);
-                p += span * 2;
-            }
-            run -= span;
-            col += span;
-            if (col == r.w) {
-                col = 0;
-                ++row;
-            }
+            for (size_t i = 0; i < run; ++i) out[pos++] = pixel;
+        } else {
+            memcpy(out + pos, p, run * 2);
+            p += run * 2;
+            pos += run;
         }
     }
 }
 
+#ifndef ESP_PLATFORM
 static bool lz4_block_valid(const uint8_t *src, size_t src_len, size_t expected_dst)
 {
     const uint8_t *ip = src, *iend = src + src_len;
@@ -142,7 +130,6 @@ static bool lz4_block_valid(const uint8_t *src, size_t src_len, size_t expected_
     return dst_pos == expected_dst && ip == iend;
 }
 
-#ifndef ESP_PLATFORM
 static int lz4_block_decode(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap)
 {
     const uint8_t *ip = src, *iend = src + src_len;
@@ -224,33 +211,23 @@ static bool jpeg_valid(const uint8_t *src, size_t len, uint16_t w, uint16_t h)
 }
 #endif
 
-static bool decode_lz4(uint16_t *fb, const uint8_t *payload, size_t len, frame_rect_t r)
+static const uint8_t *decode_lz4(const uint8_t *payload, size_t len, frame_rect_t r)
 {
     size_t expected = (size_t)r.w * r.h * 2;
-    if (len > (size_t)INT_MAX || expected > (size_t)INT_MAX) return false;
-    if (!lz4_block_valid(payload, len, expected)) return false;
-
-    bool direct = (r.x == 0 && r.w == FRAME_WIDTH);
-    uint8_t *dst = direct ? (uint8_t *)(fb + (size_t)r.y * FRAME_WIDTH) : frame_scratch(expected);
-    if (!dst) return false;
+    if (len > (size_t)INT_MAX || expected > (size_t)INT_MAX) return NULL;
+    uint8_t *dst = frame_scratch(expected);
+    if (!dst) return NULL;
 
 #ifdef ESP_PLATFORM
     int dec = LZ4_decompress_safe((const char *)payload, (char *)dst, (int)len, (int)expected);
 #else
+    if (!lz4_block_valid(payload, len, expected)) return NULL;
     int dec = lz4_block_decode(payload, len, dst, expected);
 #endif
-    if (dec != (int)expected) return false;
-
-    if (!direct) {
-        size_t row_bytes = (size_t)r.w * 2;
-        for (size_t row = 0; row < r.h; ++row) {
-            memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, dst + row * row_bytes, row_bytes);
-        }
-    }
-    return true;
+    return dec == (int)expected ? dst : NULL;
 }
 
-static bool decode_jpeg(uint16_t *fb, const uint8_t *payload, size_t len, frame_rect_t r)
+static bool decode_jpeg(const uint8_t *payload, size_t len, frame_rect_t r, const uint8_t **out_pixels)
 {
 #ifdef ESP_PLATFORM
     if (len < 4 || len > (size_t)INT_MAX || payload[0] != 0xff || payload[1] != 0xd8) return false;
@@ -277,20 +254,17 @@ static bool decode_jpeg(uint16_t *fb, const uint8_t *payload, size_t len, frame_
     io.outbuf = out;
     io.out_size = outbuf_len;
     if (jpeg_dec_process(jpeg_dec, &io) != JPEG_ERR_OK) return false;
-    size_t row_bytes = (size_t)r.w * 2;
-    for (size_t row = 0; row < r.h; ++row) {
-        memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, out + row * row_bytes, row_bytes);
-    }
+    *out_pixels = out;
     return true;
 #else
-    (void)fb;
+    *out_pixels = NULL;
     return jpeg_valid(payload, len, r.w, r.h);
 #endif
 }
 
-bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *dirty)
+bool frame_decode(const uint8_t *data, size_t len, frame_decoded_t *out)
 {
-    if (!fb || !data || !dirty || len < FRAME_HEADER_SIZE || data[0] != FRAME_TAG) return false;
+    if (!data || !out || len < FRAME_HEADER_SIZE || data[0] != FRAME_TAG) return false;
     frame_rect_t r = {
         .x = le16(data + 1), .y = le16(data + 3), .w = le16(data + 5),
         .h = le16(data + 7), .rev_lo = le16(data + 10),
@@ -299,27 +273,55 @@ bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *di
     const uint8_t *payload = data + FRAME_HEADER_SIZE;
     len -= FRAME_HEADER_SIZE;
     size_t pixels = (size_t)r.w * r.h;
+    const uint8_t *decoded = NULL;
     switch (data[9]) {
     case FRAME_CODEC_RAW:
         if (len != pixels * 2) return false;
-        for (size_t row = 0; row < r.h; ++row) {
-            memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, payload + row * r.w * 2, r.w * 2);
-        }
+        decoded = payload;
         break;
-    case FRAME_CODEC_RLE565:
-        // Validate the whole stream before exposing any pixels to a later flush.
+    case FRAME_CODEC_RLE565: {
         if (!rle_valid(payload, len, pixels)) return false;
-        decode_rle(fb, payload, r);
+        uint8_t *scratch = frame_scratch(pixels * 2);
+        if (!scratch) return false;
+        decode_rle((uint16_t *)scratch, payload, pixels);
+        decoded = scratch;
         break;
+    }
     case FRAME_CODEC_JPEG:
-        if (!decode_jpeg(fb, payload, len, r)) return false;
+        if (!decode_jpeg(payload, len, r, &decoded)) return false;
         break;
     case FRAME_CODEC_LZ4:
-        if (!decode_lz4(fb, payload, len, r)) return false;
+        decoded = decode_lz4(payload, len, r);
+        if (!decoded) return false;
         break;
     default:
         return false;
     }
-    *dirty = r;
+    out->rect = r;
+    out->pixels = decoded;
+    return true;
+}
+
+void frame_commit(uint16_t *fb, const frame_decoded_t *decoded)
+{
+    if (!fb || !decoded || !decoded->pixels) return;
+    frame_rect_t r = decoded->rect;
+    size_t row_bytes = (size_t)r.w * 2;
+    if (r.x == 0 && r.w == FRAME_WIDTH) {
+        memcpy(fb + (size_t)r.y * FRAME_WIDTH, decoded->pixels, (size_t)r.h * row_bytes);
+    } else {
+        for (size_t row = 0; row < r.h; ++row) {
+            memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, decoded->pixels + row * row_bytes, row_bytes);
+        }
+    }
+}
+
+bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *dirty)
+{
+    if (!fb || !dirty) return false;
+    frame_decoded_t decoded;
+    if (!frame_decode(data, len, &decoded)) return false;
+    frame_commit(fb, &decoded);
+    *dirty = decoded.rect;
     return true;
 }

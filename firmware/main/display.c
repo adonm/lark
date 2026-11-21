@@ -163,17 +163,19 @@ void display_set_link(bool connected)
 
 bool display_apply_frame(const uint8_t *data, size_t len)
 {
-    frame_rect_t dirty;
+    frame_decoded_t decoded;
+    if (!frame_decode(data, len, &decoded)) return false;
     xSemaphoreTake(fb_lock, portMAX_DELAY);
-    bool applied = linked && frame_apply(fb, data, len, &dirty);
+    bool applied = linked;
     if (applied) {
-        frame_union(&dirty_bounds, dirty);
-        atomic_store_explicit(&telemetry_io.last_frame_rev, dirty.rev_lo, memory_order_relaxed);
+        frame_commit(fb, &decoded);
+        frame_union(&dirty_bounds, decoded.rect);
+        atomic_store_explicit(&telemetry_io.last_frame_rev, decoded.rect.rev_lo, memory_order_relaxed);
     }
     bool first = applied && first_frame;
     if (first) first_frame = false;
     xSemaphoreGive(fb_lock);
-    if (first) ESP_LOGI(TAG, "Applied bridge frame 0x03 %ux%u (codec %u)", dirty.w, dirty.h, data[9]);
+    if (first) ESP_LOGI(TAG, "Applied bridge frame 0x03 %ux%u (codec %u)", decoded.rect.w, decoded.rect.h, data[9]);
     if (applied && !(BOARD_HAS_BATTERY && display_is_sleeping())) xTaskNotifyGive(painter);
     return applied;
 }
