@@ -118,7 +118,9 @@ func run() error {
 		return err
 	}
 	if os.Getenv("LARK_REPO_DIR") == "" && filepath.Base(project) == "lark" {
-		project = filepath.Dir(project)
+		if _, err := os.Stat(filepath.Join(project, "agents/lark.md")); err != nil {
+			project = filepath.Dir(project)
+		}
 	}
 	// Hash the prompt behind the installed lark agent symlink.
 	contract, err := readMCPContract(filepath.Join(project, "agents/lark.md"))

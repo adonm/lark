@@ -154,7 +154,9 @@ func repoRoot() (string, error) {
 		return "", err
 	}
 	if os.Getenv("LARK_REPO_DIR") == "" && filepath.Base(project) == "lark" {
-		project = filepath.Dir(project)
+		if _, err := os.Stat(filepath.Join(project, "firmware")); err != nil {
+			project = filepath.Dir(project)
+		}
 	}
 	return project, nil
 }
