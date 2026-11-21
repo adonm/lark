@@ -267,6 +267,14 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	frame := nat.readUntil(msgFrame)
 	revLo := binary.LittleEndian.Uint16(frame[10:12])
 
+	udpDone := make(chan struct{}, 1)
+	srv.onUDP = func() {
+		select {
+		case udpDone <- struct{}{}:
+		default:
+		}
+	}
+
 	var ptr [8]byte
 	ptr[0] = ptrTap
 	binary.LittleEndian.PutUint16(ptr[2:4], 180)
@@ -275,11 +283,16 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	nat.send(msgPointer, ptr[:])
 	recCtrl := nat.readUntil(msgRecCtrl)
 	nat.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0, 0})
-	time.Sleep(15 * time.Millisecond)
+	nat.send(msgPing, []byte{1, 2, 3, 4})
+	nat.readUntil(msgPong)
 
 	recChunk := bytes.Repeat([]byte{0x2A, 0x00}, rtpSamples) // 640 B = 20 ms
 	nat.sendRTP(rtpPTRecPCM, recChunk)
-	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-udpDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for UDP REC_PCM")
+	}
 	nat.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 0, 0})
 
 	select {

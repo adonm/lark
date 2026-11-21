@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -512,7 +513,7 @@ func TestMCPControl(t *testing.T) {
 
 func eventually(t *testing.T, f func() bool) {
 	t.Helper()
-	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); time.Sleep(time.Millisecond) {
+	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); runtime.Gosched() {
 		if f() {
 			return
 		}

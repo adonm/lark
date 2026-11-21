@@ -45,6 +45,7 @@ type timerManager struct {
 	// HTTP MCP calls do not carry a trusted OpenCode session ID. Reject
 	// wake-agent scheduling on a device while its timer-triggered turn runs.
 	fromTimerTurn map[string]int
+	onFired       func(string)
 }
 
 type timerHandle struct{ timer *time.Timer }
@@ -391,6 +392,9 @@ func (m *timerManager) fire(id string, expected *timerHandle) {
 	}
 	m.b.timerUpdate(t.DeviceID)
 	m.b.deliverTimer(m.ctx, t)
+	if m.onFired != nil {
+		m.onFired(id)
+	}
 }
 
 func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]string, error) {

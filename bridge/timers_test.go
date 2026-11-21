@@ -169,6 +169,8 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	defer b.ws.shutdown()
 	m := newTimerManager(b)
 	defer m.close()
+	fired := make(chan string, 4)
+	m.onFired = func(id string) { fired <- id }
 	if err := m.restore(time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -176,22 +178,17 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	if err != nil || len(initial) != 2 || initial[0].ID != ids[0] || initial[1].ID != ids[2] {
 		t.Fatal("recovery did not prune only the stale timer", initial, err)
 	}
-	deadline := time.Now().Add(timerGrace + 3*time.Second)
-	for {
-		events, err := b.history.list(t.Context(), device)
-		if err != nil {
-			t.Fatal(err)
+	select {
+	case gotID := <-fired:
+		if gotID != ids[0] {
+			t.Fatalf("unexpected timer fired: %q", gotID)
 		}
-		if len(events) == 1 {
-			if events[0].Text != "Time's up! 0" {
-				t.Fatal(events)
-			}
-			break
-		}
-		if len(events) > 1 || time.Now().After(deadline) {
-			t.Fatal("missed timer did not fire once", events)
-		}
-		time.Sleep(20 * time.Millisecond)
+	case <-time.After(timerGrace + 3*time.Second):
+		t.Fatal("missed timer did not fire")
+	}
+	events, err := b.history.list(t.Context(), device)
+	if err != nil || len(events) != 1 || events[0].Text != "Time's up! 0" {
+		t.Fatal("missed timer did not fire once", events, err)
 	}
 	m.fire(ids[0], nil)
 	if events, err := b.history.list(t.Context(), device); err != nil || len(events) != 1 {

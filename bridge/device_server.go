@@ -46,6 +46,7 @@ type deviceServer struct {
 
 	peersMu sync.RWMutex
 	peers   map[uint32]*nativeClient
+	onUDP   func()
 
 	closed atomic.Bool
 	wg     sync.WaitGroup
@@ -320,6 +321,9 @@ func (s *deviceServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 		s.hub.micChunkPCM(nc.client, micPrefix, pcm)
 	case rtpPTCallUp:
 		s.hub.micChunkPCM(nc.client, callMicPrefix, pcm)
+	}
+	if s.onUDP != nil {
+		s.onUDP()
 	}
 }
 
