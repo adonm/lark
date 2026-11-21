@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	builderAgent         = "echoear-builder"
-	builderSessionPrefix = "ses_echoear_build_"
-	builderTitle         = "EchoEar background build"
+	builderAgent         = "lark-builder"
+	builderSessionPrefix = "ses_lark_build_"
+	builderTitle         = "Lark background build"
 )
 
 var (

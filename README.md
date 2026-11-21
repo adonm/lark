@@ -13,11 +13,6 @@ Device  <-- /ws: RGB565 frames, touch, PCM --> Go bridge :8765 <-- /app: SVG -->
 centered on the BOX-3’s rectangular display. The bridge runs apps and renders
  RGB565 updates for hardware and SVG for `/app`. Boards draw a fallback face offline.
 
-**Upgrading from EchoEar:** Lark keeps the `echoear` host paths, systemd units,
-OpenCode agent ID, database, and API routes. Existing boards and Phone Lark
-installs keep their IDs, chat history, and scoped OpenTunnel links. No move,
-reinstall, or firmware flash is needed for the rebrand.
-
 **New in 0.9.3:** Both boards use the touchscreen for all touch controls.
 VoCat’s capacitive head pads are disabled.
 
@@ -46,7 +41,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    The Vulkan loader and driver come from the OS. Host setup still uses
    Python; the bridge has no Python runtime or TTS subprocess. Set
    `TTS_MODEL_DIR` in `bridge.env` to load that pack from a different directory.
-   Set `ECHOEAR_REPO_DIR` when launching outside the checkout to locate the
+   Set `LARK_REPO_DIR` when launching outside the checkout to locate the
    agent prompt and OTA files (the systemd unit sets it). Choose the models in
     the [dedicated OpenCode config](#companion-models).
 
@@ -65,10 +60,10 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    chmod 600 firmware/sdkconfig.local
    ```
 
-   Set `CONFIG_ECHOEAR_WIFI_SSID`, `CONFIG_ECHOEAR_WIFI_PASSWORD`,
-   `CONFIG_ECHOEAR_BRIDGE_URL` (`http://<bridge-host>:8765`, no trailing slash), and
-   `CONFIG_ECHOEAR_BRIDGE_TOKEN` (copy `ECHOEAR_BRIDGE_TOKEN` from
-   `~/.config/echoear/bridge.env`, or use `$XDG_CONFIG_HOME`).
+   Set `CONFIG_LARK_WIFI_SSID`, `CONFIG_LARK_WIFI_PASSWORD`,
+   `CONFIG_LARK_BRIDGE_URL` (`http://<bridge-host>:8765`, no trailing slash), and
+   `CONFIG_LARK_BRIDGE_TOKEN` (copy `LARK_BRIDGE_TOKEN` from
+   `~/.config/lark/bridge.env`, or use `$XDG_CONFIG_HOME`).
    Both board builds use the ESP-IDF 5.5 container and read the same
    `firmware/sdkconfig.local`. Never commit that file or share the resulting binaries.
 
@@ -96,9 +91,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    mismatch. Direct OTA works without the bridge and reads the token from the
     environment or `bridge.env`. The board confirms the new image after display
     initialization and Wi-Fi DHCP; the script checks the running partition.
-   Current builds still use `echoear` and `echoear_box3`; the updated OTA
-   validator also accepts the future `lark` and `lark_box3` names for the same
-   board. Older firmware still needs an image with its original project name.
+   Builds use `lark` and `lark_box3` as the firmware project names.
 
 5. Run `./scripts/check.sh` for ShellCheck (if installed), Node tests, Go vet
    and race tests, strict GCC/ASan/UBSan host tests for both board layouts,
@@ -111,7 +104,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    temporary database, real Parakeet Vulkan, Silero and Kokoro, synthetic
    photos, and a deterministic model stub. It does not connect to the installed bridge, use
    model quota, or test wake word. Allow at least two minutes for the actual
-   idle timeout. Set `ECHOEAR_PARAKEET_NATIVE` to the `native/` prefix from
+   idle timeout. Set `LARK_PARAKEET_NATIVE` to the `native/` prefix from
    `scripts/build-parakeet.sh` to reuse its verified static libraries.
    `scripts/setup-host.sh --models-only` installs the pinned Kokoro and Silero
    assets without replacing the bridge or restarting services.
@@ -128,7 +121,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
 ### Parent controls
 
 Store a separate random token (at least 32 ASCII characters, no spaces) in
-`~/.config/echoear/parent.token` (or under `$XDG_CONFIG_HOME`), mode `0600`.
+`~/.config/lark/parent.token` (or under `$XDG_CONFIG_HOME`), mode `0600`.
 The bridge reads it at startup. On the LAN, open **Parent controls** in `/app`
 and enter both tokens. Keep the parent token with the grown-ups; kids should
 use their device or a scoped share link, not the LAN dashboard. Scoped links
@@ -199,7 +192,7 @@ Heart or Fable, or choose one of six warm, kid-friendly storyteller voices:
 Heart, Bella, and Puck (US English), or Fable, Emma, and George (UK English).
 The choice is saved per device in the bridge database. Mint defaults to Fable
 (`bm_fable`). Cake and other companions default to Heart (`af_heart`) unless
-`ECHOEAR_TTS_VOICE` sets a different fallback. Retired UK voices resolve to
+`LARK_TTS_VOICE` sets a different fallback. Retired UK voices resolve to
 Emma or Fable without rewriting existing profiles.
 The conversation panel shows active timers for the selected companion with a
 countdown and a Cancel button. The LAN sidebar's **Saved Memory & Assets**
@@ -211,8 +204,8 @@ Voice notes use the same adaptive silence timing as the boards. On manual stop, 
 audio before ending the recording, without a fixed recording tail. For a remote
 phone, install the [OpenTunnel CLI](https://opentunnel.xyz) on the bridge host. If it is
 outside the bridge service's `PATH` and `~/.local/bin`, set
-`ECHOEAR_OPENTUNNEL_BIN` to its path in `bridge.env`. Restart the bridge
-with `systemctl --user restart echoear-bridge.service` so it finds the CLI.
+`LARK_OPENTUNNEL_BIN` to its path in `bridge.env`. Restart the bridge
+with `systemctl --user restart lark-bridge.service` so it finds the CLI.
 In the dashboard, select a virtual companion, choose **Create Tunnel** to start
 its route, then **Copy Share Link**. The HTTPS link opens the same companion and
 conversation as the LAN dashboard, with mic, screen, voice notes, and calls to
@@ -267,29 +260,29 @@ render, and elapsed time to the first queued PCM (or HTTP audio URL). The board'
 
 ## Dedicated OpenCode
 
-`echoear-opencode.service` listens at `127.0.0.1:49375` with Basic auth.
+`lark-opencode.service` listens at `127.0.0.1:49375` with Basic auth.
 Setup generates its password in the private `bridge.env` and gives it separate
 configuration, session data, cache, state, and workspace under
-`~/.local/share/echoear/opencode/` (or `$XDG_DATA_HOME`). It installs the model
-fallback plugin, links the `echoear` agent and legacy `auth.json`, and imports the
+`~/.local/share/lark/opencode/` (or `$XDG_DATA_HOME`). It installs the model
+fallback plugin, links the `lark` agent and legacy `auth.json`, and imports the
 configured model providers' current V2 credentials once through OpenCode's
 CLI. It does not share your session database or load personal plugins, MCP
 servers, or coding `AGENTS.md`.
 Setup does not edit personal OpenCode configuration. If upgrading, remove the
-old `mcp.servers.echoear` entry and `echoear` agent symlink from your personal config.
-Without `ECHOEAR_OPENCODE_URL`, the bridge still discovers the shared service
-through `service.json`. `ECHOEAR_OPENCODE_DIR` overrides the dedicated workspace.
+old `mcp.servers.lark` entry and `lark` agent symlink from your personal config.
+Without `LARK_OPENCODE_URL`, the bridge still discovers the shared service
+through `service.json`. `LARK_OPENCODE_DIR` overrides the dedicated workspace.
 
 ### Companion models
 
-Edit the dedicated `~/.local/share/echoear/opencode/config/opencode/opencode.jsonc`
+Edit the dedicated `~/.local/share/lark/opencode/config/opencode/opencode.jsonc`
 (under `$XDG_DATA_HOME` if set). Its model settings are:
 
 ```jsonc
 {
-  "agents": { "echoear": { "model": "opencode/gemini-4-hydrogen#low" } },
+  "agents": { "lark": { "model": "opencode/gemini-4-hydrogen#low" } },
   "plugins": [
-    { "package": "./echoear-model-router", "options": { "fallback": "opencode/claude-haiku-5-5" } }
+    { "package": "./lark-model-router", "options": { "fallback": "opencode/claude-haiku-5-5" } }
   ]
 }
 ```
@@ -299,7 +292,7 @@ same provider: OpenCode only supports routing within a provider. Keep the other
 config entries. Once OpenCode reloads the file, the next Lark turn uses the
 new selection without rotating the companion's session or restarting services. Use
 `/reload` in dedicated OpenCode if needed. Setup migrates an old
-`ECHOEAR_OPENCODE_MODEL` on upgrade; after that, `bridge.env` does not control
+`LARK_OPENCODE_MODEL` on upgrade; after that, `bridge.env` does not control
 models. If you change providers, connect them on the dedicated server.
 
 An explicit rate-limit or supported upstream rejection before output or tools
@@ -324,9 +317,9 @@ Tap **Cancel build** on the progress card or say “Cancel the build.” Regular
 a time. After a bridge restart, queued work can continue; in-flight work is
 reported as interrupted.
 
-Setup links the tool-free `echoear-builder` agent in the dedicated OpenCode
-configuration. The builder uses `agents.echoear.model` by default. To use a
-different model, add `agents.echoear-builder.model` in that same JSONC file,
+Setup links the tool-free `lark-builder` agent in the dedicated OpenCode
+configuration. The builder uses `agents.lark.model` by default. To use a
+different model, add `agents.lark-builder.model` in that same JSONC file,
 using the same `provider/model#variant` format. The bridge explicitly selects
 both the agent and model for each disposable session and deletes it afterward.
 The fallback router retains its existing foreground configuration.
@@ -335,27 +328,27 @@ The fallback router retains its existing foreground configuration.
 
 Click **Pair OpenCode** in the LAN dashboard's Devices sidebar to create a
 short-lived, single-use link. The link opens the dedicated server via the
-`echoear-opencode-lan.socket` TCP forwarder on port `49376`. It does not pair
+`lark-opencode-lan.socket` TCP forwarder on port `49376`. It does not pair
 with your personal OpenCode or work through companion share links. Keep ports `8765`
 and `49376` on a trusted LAN; neither uses TLS. Pair only trusted clients: a
 paired client gets access to the dedicated OpenCode server, not just companion chat.
 To turn off LAN OpenCode access, stop both forwarder units, disable
-`echoear-opencode-lan.socket`, remove `ECHOEAR_OPENCODE_PAIR_PORT` from `bridge.env`,
+`lark-opencode-lan.socket`, remove `LARK_OPENCODE_PAIR_PORT` from `bridge.env`,
 and restart the bridge.
 
 ### Lark MCP
 
-OpenCode runs the installed `echoear-bridge mcp` stdio proxy, which forwards
+OpenCode runs the installed `lark-bridge mcp` stdio proxy, which forwards
 requests to the bridge's authenticated `POST /mcp` on loopback. The proxy
 reads the token from its environment or the private `bridge.env`; the
 OpenCode config contains only the executable and its argument, no secrets.
 On bridge startup after a change to MCP schemas, instructions, the agent
-prompt, or the runtime contract version, Lark reconnects `echoear` MCP and
+prompt, or the runtime contract version, Lark reconnects `lark` MCP and
 verifies that OpenCode loaded its catalog. While that refresh is pending,
 model turns fail without dispatch; local history and device settings remain
 available. Diagnostics distinguish a verified catalog (`current`) from a
 failed attempt awaiting retry (`waiting`). Startup never compacts sessions or
-sends model prompts. `ECHOEAR_DEFER_MCP_COMPACTION` no longer has an effect.
+sends model prompts. `LARK_DEFER_MCP_COMPACTION` no longer has an effect.
 The authenticated LAN `/api/opencode/compact` still supports explicit
 compaction and MCP reconnects.
 
@@ -376,7 +369,7 @@ unconfirmed prompt may not appear in history. This does not undo work already
 dispatched or guarantee exactly-once behavior inside OpenCode. Timer wakes
 do not repair stale or missing bindings.
 
-Code Mode exposes exactly four MCP tools under `tools.echoear`:
+Code Mode exposes exactly four MCP tools under `tools.lark`:
 
 | Tool | Purpose |
 | --- | --- |
@@ -405,7 +398,7 @@ and `emit.sfx` support `boing`, `pop`, `win`, `buzz`, `ding`, and `whoosh`.
 In JS, `sfx` and `sfxAll` also accept chimes such as `tap`; unknown names are
 silent. App launches return `layout_warnings` for controls that overlap the
 Home button or clip on round displays. Custom exits can use `lark-exit`
-or the legacy `echoear-exit`.
+or the legacy `lark-exit`.
 
 Lark pairs tinted Storybook vectors with Oat chrome. The nine templates share
 24 stickers; you can also show them with no JS or SVG:
@@ -435,7 +428,7 @@ navigation, or return `ui.choices({title, prompt, choices})` from `render`
 for a card or quiz with up to four buttons. Both leave room for Home and
 fit the round screen. `ui.wrap` and `ui.esc` are available for custom SVG.
 Set `timer.app` to a saved app name to launch it on the connected device when
-the reminder goes off. See the [agent guide](agents/echoear.md) for examples.
+the reminder goes off. See the [agent guide](agents/lark.md) for examples.
 
 **One Voice Rule:** Only assistant prose is spoken as the reply, not tool
 output or reasoning. The bridge checks the streamed speech against the final
@@ -445,11 +438,11 @@ or personality hints when applicable. The agent uses `state` for live context.
 ## Bridge data
 
 The bridge uses the embedded Turso Go driver without CGO. Persistent state lives
-in `~/.local/share/echoear/echoear.db` (or `$XDG_DATA_HOME/echoear/echoear.db`);
-`ECHOEAR_DB_PATH` overrides it. Keep the data directory private (0700, database
+in `~/.local/share/lark/lark.db` (or `$XDG_DATA_HOME/lark/lark.db`);
+`LARK_DB_PATH` overrides it. Keep the data directory private (0700, database
 0600). The first boot imports valid rows from the six legacy JSON files in that
 directory in one transaction and never modifies those backups.
-The bridge also writes private daily snapshots to `backups/echoear-YYYY-MM-DD.db`
+The bridge also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
 Active and saved forms are stored in `cats` and `saved_cats`.
@@ -476,16 +469,16 @@ backfills it from legacy bridge chat events and OpenCode session history.
 New rows contain user text, final companion replies, intercom, and display cards,
 not tool traces or prompt headers.
 
-Optional Turso Cloud sync runs every minute when both `ECHOEAR_TURSO_URL`
-and `ECHOEAR_TURSO_AUTH_TOKEN` are set. Use a dedicated private remote and one
+Optional Turso Cloud sync runs every minute when both `LARK_TURSO_URL`
+and `LARK_TURSO_AUTH_TOKEN` are set. Use a dedicated private remote and one
 active bridge per database: the data includes chat events and tunnel credentials,
 and the bridge, not the cloud, performs timer side effects. No cloud credentials
 or connectivity are required for normal local operation.
 
 ## API
 
-Authenticated HTTP requests accept `X-Lark-Token` or `X-EchoEar-Token`. The
-same compatibility applies to `X-Lark-Parent-Token` and `X-EchoEar-Parent-Token`.
+Authenticated HTTP requests require `X-Lark-Token` (and `X-Lark-Parent-Token`
+for parent controls).
 Hardware needs firmware `0.9.0` or newer for playback acknowledgments with an
 audio ID, and announces `proto: 2` in its authenticated `/ws` `hello`.
 Firmware `0.9.2` and newer report `caps` for battery, Call, and drag. Both
@@ -521,16 +514,16 @@ synthesizing sentences while OpenCode streams its reply over SSE. Firmware
 | `GET /api/devices/{id}/messages`, `GET /api/history?device_id={id}` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
 | `POST /api/devices/{id}/photo`, `GET /api/photos/{id}` | Share a PNG, JPEG, or WebP up to 2 MiB, or fetch the stored square PNG |
 | `POST /api/devices/{id}/voice` | `{"voice":"af_heart"}` → saved `device_id` and `voice`; scoped links can change only their own companion |
-| `POST /api/chat` | `{"text":"Explain a circle","device_id":"my-echoear"}` → accepted on a connected device; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
+| `POST /api/chat` | `{"text":"Explain a circle","device_id":"my-lark"}` → accepted on a connected device; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
 | `GET /api/audio/<id>` | Reply PCM from `audio_url`; streams by sentence while synthesis runs |
 | `POST /api/tts` | `{"text":"Hello!"}`, optional `device_id` → complete PCM clip using that device's voice |
-| `POST /api/reset` | `{"device_id":"my-echoear"}` → archive the active form if not already saved, restore the starter, and start a fresh session |
+| `POST /api/reset` | `{"device_id":"my-lark"}` → archive the active form if not already saved, restore the starter, and start a fresh session |
 | `POST /api/opencode/compact` | LAN-only; optional `device_id` selects one session (default: all), optional `reconnect_mcp: true` refreshes MCP first → `ok`, `compacted`, and `skipped` device IDs |
 | `GET /api/memory?scope=…`, `GET /api/memory/scopes`, `DELETE /api/memory?scope=…&key=…` | LAN-only saved JSON and populated scopes |
 | `GET /api/apps`, `DELETE /api/apps/{name}`, `POST /api/apps/run` | List, delete, or run saved apps and drawings (LAN only) |
 | `GET /api/timers?device_id=…`, `DELETE /api/timers/{id}` | List/cancel active timers; scoped links can see and cancel only their own companion's timers |
-| `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/echoear.bin` with SHA-256 |
-| `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/echoear_box3.bin` with SHA-256 |
+| `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
+| `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 
 Use the exact `device_id` in chat requests. To send an intercom without an
 agent turn, say or type “Tell Mint dinner is ready,” substituting a nearby
@@ -546,7 +539,7 @@ companion's name. Intercom requires a connected recipient.
 ## Networking
 
 Devices and browsers need TCP **8765** to the bridge; direct OTA uses TCP
-**80** to the device. Use Avahi (`avahi-resolve -n echoear-XXXX.local`) for
+**80** to the device. Use Avahi (`avahi-resolve -n lark-XXXX.local`) for
 mDNS or the device IP if the container cannot resolve `.local`. HTTP and WS
 are unencrypted; use a trusted LAN and keep configs and firmware images private.
 

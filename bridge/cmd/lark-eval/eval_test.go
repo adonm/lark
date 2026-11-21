@@ -78,9 +78,9 @@ func TestExportIsReadOnlyAndPrivate(t *testing.T) {
 		q := r.URL.Query()
 		switch {
 		case r.URL.Path == "/api/session" && q.Get("cursor") == "":
-			_, _ = w.Write([]byte(`{"data":[{"id":"ses-cake","title":"EchoEar: CAKE (board)"},{"id":"ses-other","title":"EchoEar: Cakewalk (board)"}],"cursor":{"next":"test1"}}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"ses-cake","title":"Lark: CAKE (board)"},{"id":"ses-other","title":"Lark: Cakewalk (board)"}],"cursor":{"next":"test1"}}`))
 		case r.URL.Path == "/api/session" && q.Get("cursor") == "test1":
-			_, _ = w.Write([]byte(`{"data":[{"id":"ses-mint","title":"EchoEar: Mint"},{"id":"ses-greg","title":"EchoEar: greg"}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"ses-mint","title":"Lark: Mint"},{"id":"ses-greg","title":"Lark: greg"}]}`))
 		case (r.URL.Path == "/api/session/ses-mint/message" || r.URL.Path == "/api/session/ses-cake/message" ||
 			r.URL.Path == "/api/session/ses-greg/message") && q.Get("order") == "asc":
 			_, _ = w.Write([]byte(`{"data":[{"id":"first","type":"user","text":"fictional transcript","time":{"created":1000}}],"cursor":{"next":"test2"}}`))
@@ -141,15 +141,15 @@ func TestReplayDisposesOnlyItsSession(t *testing.T) {
 				calls = append(calls, path)
 				switch path {
 				case "GET /api/mcp":
-					_, _ = w.Write([]byte(`{"data":[{"name":"echoear","status":{"status":"connected"}}]}`))
-				case "GET /api/agent/echoear":
-					_, _ = w.Write([]byte(`{"data":{"id":"echoear","model":{"providerID":"user","id":"choice","variant":"low"}}}`))
+					_, _ = w.Write([]byte(`{"data":[{"name":"lark","status":{"status":"connected"}}]}`))
+				case "GET /api/agent/lark":
+					_, _ = w.Write([]byte(`{"data":{"id":"lark","model":{"providerID":"user","id":"choice","variant":"low"}}}`))
 				case "POST /api/session":
 					var in struct {
 						Model agentModel
 						Agent string
 					}
-					if json.NewDecoder(r.Body).Decode(&in) != nil || in.Agent != "echoear" ||
+					if json.NewDecoder(r.Body).Decode(&in) != nil || in.Agent != "lark" ||
 						in.Model != (agentModel{ProviderID: "user", ID: "choice", Variant: "low"}) {
 						t.Error("replay lost the configured actor")
 					}

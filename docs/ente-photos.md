@@ -9,8 +9,8 @@ Use a bridge build containing this feature. Run `./scripts/setup-ente-photos.sh`
 Log in yourself in a terminal on the bridge host. Do not paste your password, OTP or key into chat. Generate the vault key only once:
 
 ```bash
-data=${XDG_DATA_HOME:-$HOME/.local/share}/echoear
-key=${XDG_CONFIG_HOME:-$HOME/.config}/echoear/ente-vault-key
+data=${XDG_DATA_HOME:-$HOME/.local/share}/lark
+key=${XDG_CONFIG_HOME:-$HOME/.config}/lark/ente-vault-key
 (
   umask 077
   if [[ ! -e "$key" ]]; then
@@ -27,11 +27,11 @@ The login is interactive. Use the same vault/key when reauthenticating; do not o
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user start echoear-ente-photos.service
-systemctl --user enable --now echoear-ente-photos.timer
+systemctl --user start lark-ente-photos.service
+systemctl --user enable --now lark-ente-photos.timer
 ```
 
-The first metadata sync can take a while for a large library. Later syncs reuse the CLI's local metadata replica. The bridge reconciles the published snapshot within about 15 seconds; missing photos are removed from its index and off active slides. Failed or partial syncs leave the last complete snapshot intact, and the library stops serving after 72 hours without a successful snapshot. Check `systemctl --user status echoear-ente-photos.service` and the private `$data/ente-photos.log`. Do not share raw CLI logs: they can contain personal metadata.
+The first metadata sync can take a while for a large library. Later syncs reuse the CLI's local metadata replica. The bridge reconciles the published snapshot within about 15 seconds; missing photos are removed from its index and off active slides. Failed or partial syncs leave the last complete snapshot intact, and the library stops serving after 72 hours without a successful snapshot. Check `systemctl --user status lark-ente-photos.service` and the private `$data/ente-photos.log`. Do not share raw CLI logs: they can contain personal metadata.
 
 Open the LAN `/app` with the bridge token and select **Photo Library**. Choose a companion to allow or hide the library. Search by title, caption, album or manually applied label. **Load preview** downloads only that still. Ask a local companion to show photos (e.g. “Show me photos of Grandma at the beach”) and use **Prev**, **Next** or **Exit**. A cache miss shows a loading screen while the bridge downloads one original. If the child is connected through a share link, the library is unavailable.
 
@@ -41,7 +41,7 @@ Run `./scripts/setup-photo-models.sh` to install checksum-verified YuNet (MIT), 
 
 Newly viewed photos are analyzed locally. In **Photo Library → People**, review a cluster's cropped face previews, name the group, and confirm individual matches. A suggested face is never found by person name until you confirm it. Reject, split, or merge groups locally; a merge requires reconfirming moved faces. CLIP supplies scene results when metadata search leaves room. Names and embeddings stay on the host. The cloud model receives the child's request text, a short-lived turn access handle, and bounded photo handles, dates and counts—no original bytes, previews, file paths, or coordinates. The index includes the CLI's city catalog and raw location fields locally; city-to-file matching is not part of this version.
 
-To process the library in the background, set `ECHOEAR_PHOTOS_BACKFILL=1` in the bridge environment before its next start. Do not enable it on a metered connection without checking the cost:
+To process the library in the background, set `LARK_PHOTOS_BACKFILL=1` in the bridge environment before its next start. Do not enable it on a metered connection without checking the cost:
 
 - Ente CLI 0.4.5 has no thumbnail download operation. Each eligible still or Live Photo archive is downloaded locally, decoded, turned into a metadata-free JPEG (≤512 px on its long edge), then deleted. Video, RAW, and inputs over 96 MiB or the decode limits are skipped. Orientation is applied once; HEIC's primary container transform takes priority over EXIF. Live Photos use the still and discard the movie.
 - For 50,000 photos / 300 GB, allow up to about **300 GB of first-pass media traffic** if most originals are eligible, plus metadata and re-fetches. One transfer runs at a time. Backfill prefers favorites and newest photos, resumes from per-file status, and paces transfers at about 1 MiB/s on average. The CLI may burst faster and refreshes its replica before each download. Allow at least **80 hours** at the configured pacing, longer for CLI/network overhead. On-demand views also serialize but aren't paced.

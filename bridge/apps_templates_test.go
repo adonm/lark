@@ -117,7 +117,7 @@ func TestAppTemplatesHitCoordinates(t *testing.T) {
 
 func TestAppTemplateSaveAndMemoryRefresh(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-template"
+	const id = "lark-template"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Reader")
 	out := toolTest(t, base, "app", object{"devices": id, "template": "reader", "save_as": "story",
@@ -152,7 +152,7 @@ func TestAppTemplateSaveAndMemoryRefresh(t *testing.T) {
 
 func TestAppTemplateCountdownRearmsAfterFinish(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-countdown"
+	const id = "lark-countdown"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	toolTest(t, base, "app", object{"devices": id, "template": "timer", "data": object{"seconds": 1}}, false)

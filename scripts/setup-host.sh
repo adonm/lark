@@ -5,10 +5,10 @@ umask 077
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 config=${XDG_CONFIG_HOME:-$HOME/.config}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
-data=$data_home/echoear
+data=$data_home/lark
 units=$config/systemd/user
 oc_root=$data/opencode
-env_file=$config/echoear/bridge.env
+env_file=$config/lark/bridge.env
 pin_gpu=false
 ente_photos=false
 models_only=false
@@ -102,7 +102,7 @@ if "$models_only"; then
     exit 0
 fi
 
-bridge_bin="$data/echoear-bridge"
+bridge_bin="$data/lark-bridge"
 build_tmp=$(mktemp "$bridge_bin.XXXXXXXX")
 stt_stage=$(mktemp -d)
 trap 'rm -f -- "$build_tmp"; rm -rf -- "$stt_stage"' EXIT
@@ -149,7 +149,7 @@ rm -rf -- "$stt_stage"
 trap - EXIT
 
 mkdir -p -- "$oc_root"/{config/opencode/agents,config/opencode/plugins,data/opencode,state,cache,workspace} \
-    "$config/echoear" "$units"
+    "$config/lark" "$units"
 link_file() {
     local source=$1 destination=$2
     if [[ "$destination" -ef "$source" ]]; then
@@ -161,8 +161,8 @@ link_file() {
     fi
     ln -s -- "$source" "$destination"
 }
-link_file "$REPO_DIR/agents/echoear.md" "$oc_root/config/opencode/agents/echoear.md"
-link_file "$REPO_DIR/agents/echoear-builder.md" "$oc_root/config/opencode/agents/echoear-builder.md"
+link_file "$REPO_DIR/agents/lark.md" "$oc_root/config/opencode/agents/lark.md"
+link_file "$REPO_DIR/agents/lark-builder.md" "$oc_root/config/opencode/agents/lark-builder.md"
 python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$bridge_bin"
 
 python3 - "$env_file" "$pin_gpu" <<'PY'
@@ -175,21 +175,21 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 old = path.read_text() if path.exists() else (
-    "ECHOEAR_BRIDGE_HOST=0.0.0.0\nECHOEAR_BRIDGE_PORT=8765\n"
-    f"ECHOEAR_BRIDGE_TOKEN={secrets.token_hex(32)}\n"
+    "LARK_BRIDGE_HOST=0.0.0.0\nLARK_BRIDGE_PORT=8765\n"
+    f"LARK_BRIDGE_TOKEN={secrets.token_hex(32)}\n"
 )
-prior = re.findall(r"^ECHOEAR_OPENCODE_PASSWORD=([a-f0-9]{64})$", old, re.M)
+prior = re.findall(r"^LARK_OPENCODE_PASSWORD=([a-f0-9]{64})$", old, re.M)
 password = prior[-1] if prior else secrets.token_hex(32)
 settings = {
-    "ECHOEAR_OPENCODE_URL": "http://127.0.0.1:49375",
-    "ECHOEAR_OPENCODE_PASSWORD": password,
+    "LARK_OPENCODE_URL": "http://127.0.0.1:49375",
+    "LARK_OPENCODE_PASSWORD": password,
     "OPENCODE_SERVER_PASSWORD": password,
-    "ECHOEAR_OPENCODE_PAIR_PORT": "49376",
+    "LARK_OPENCODE_PAIR_PORT": "49376",
 }
 if sys.argv[2] != "false":
     settings["GGML_VK_VISIBLE_DEVICES"] = sys.argv[2]
 kept = [line for line in old.splitlines(keepends=True)
-        if line.strip().partition("=")[0].rstrip() not in settings.keys() | {"ECHOEAR_STT", "ECHOEAR_SILERO_VAD_MODEL"}]
+        if line.strip().partition("=")[0].rstrip() not in settings.keys() | {"LARK_STT", "LARK_SILERO_VAD_MODEL"}]
 text = "".join(kept)
 if text and not text.endswith("\n"):
     text += "\n"
@@ -218,17 +218,17 @@ repo, data, binary, directory, opencode, env_file, oc_root = sys.argv[1:]
 units = Path(directory)
 paths = {"REPO_DIR": repo, "DATA_HOME": data, "BRIDGE_BIN": binary,
          "OPENCODE_BIN": opencode, "ENV_FILE": env_file}
-for name in ("echoear-bridge.service", "echoear-opencode.service",
-             "echoear-opencode-lan.socket", "echoear-opencode-lan.service"):
+for name in ("lark-bridge.service", "lark-opencode.service",
+             "lark-opencode-lan.socket", "lark-opencode-lan.service"):
     template = Path(repo, "bridge", name).read_text()
     rendered = re.sub(r"@([A-Z_]+)@", lambda m: escape(paths[m[1]]), template)
-    if name == "echoear-opencode.service":
-        if Path(oc_root) != Path.home() / ".local/share/echoear/opencode":
-            rendered = rendered.replace("%h/.local/share/echoear/opencode", escape(oc_root))
+    if name == "lark-opencode.service":
+        if Path(oc_root) != Path.home() / ".local/share/lark/opencode":
+            rendered = rendered.replace("%h/.local/share/lark/opencode", escape(oc_root))
             rendered = rendered.replace(f"WorkingDirectory={escape(oc_root)}/workspace",
                                         f'WorkingDirectory="{escape(oc_root)}/workspace"')
-        if Path(env_file) != Path.home() / ".config/echoear/bridge.env":
-            rendered = rendered.replace("EnvironmentFile=%h/.config/echoear/bridge.env",
+        if Path(env_file) != Path.home() / ".config/lark/bridge.env":
+            rendered = rendered.replace("EnvironmentFile=%h/.config/lark/bridge.env",
                                         f"EnvironmentFile={escape(env_file)}")
     path = units / name
     path.write_text(rendered)
@@ -237,9 +237,9 @@ for name in ("echoear-bridge.service", "echoear-opencode.service",
 PY
 
 systemctl --user daemon-reload
-systemctl --user enable echoear-opencode.service echoear-opencode-lan.socket echoear-bridge.service
-systemctl --user restart echoear-opencode.service echoear-bridge.service
-systemctl --user start echoear-opencode-lan.socket
+systemctl --user enable lark-opencode.service lark-opencode-lan.socket lark-bridge.service
+systemctl --user restart lark-opencode.service lark-bridge.service
+systemctl --user start lark-opencode-lan.socket
 
 python3 - "$env_file" "$oc_root" "$(type -P opencode)" <<'PY'
 import base64
@@ -253,9 +253,9 @@ import urllib.request
 from pathlib import Path
 
 env_file, root, opencode = sys.argv[1:]
-settings = dict(re.findall(r"^\s*(ECHOEAR_OPENCODE_\w+)\s*=([^\n]*)", Path(env_file).read_text(), re.M))
-url = settings["ECHOEAR_OPENCODE_URL"]
-password = settings["ECHOEAR_OPENCODE_PASSWORD"]
+settings = dict(re.findall(r"^\s*(LARK_OPENCODE_\w+)\s*=([^\n]*)", Path(env_file).read_text(), re.M))
+url = settings["LARK_OPENCODE_URL"]
+password = settings["LARK_OPENCODE_PASSWORD"]
 auth = base64.b64encode(f"opencode:{password}".encode()).decode()
 client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -275,17 +275,17 @@ while True:
         time.sleep(0.2)
 
 try:
-    primary = get("/api/agent/echoear")["data"]["model"]["providerID"]
+    primary = get("/api/agent/lark")["data"]["model"]["providerID"]
     router = next(p for entry in get("/api/config")
                   if entry.get("path") == str(Path(root, "config/opencode/opencode.jsonc"))
                   for p in entry["info"]["plugins"]
-                  if isinstance(p, dict) and p.get("package") == "./echoear-model-router")
+                  if isinstance(p, dict) and p.get("package") == "./lark-model-router")
     fallback = router["options"]["fallback"].split("/", 1)[0]
 except (OSError, KeyError, StopIteration, TypeError, ValueError):
-    sys.exit("Could not read the EchoEar model settings from the dedicated OpenCode config")
+    sys.exit("Could not read the Lark model settings from the dedicated OpenCode config")
 for provider in sorted({primary, fallback}):
     if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", provider):
-        sys.exit("Invalid EchoEar model provider")
+        sys.exit("Invalid Lark model provider")
     marker = Path(root, "state", f"imported-provider-{provider}")
     if not marker.exists():
         try:
@@ -301,5 +301,5 @@ for provider in sorted({primary, fallback}):
 PY
 
 printf '%s\n' 'Default voices: Heart (af_heart); Mint uses Fable (bm_fable).'
-printf '%s\n' 'EchoEar MCP includes control for volume and sleep on connected devices.'
+printf '%s\n' 'Lark MCP includes control for volume and sleep on connected devices.'
 printf 'Configure firmware/sdkconfig.local as shown in README.md. The bridge token is in %s.\n' "$env_file"

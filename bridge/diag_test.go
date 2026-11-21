@@ -56,7 +56,7 @@ func TestDiagnosticsProcAndShutdown(t *testing.T) {
 	if got := parseHostCPU("cpu 1 2 3 4 5 6 7 8 9 10\ncpu0 15"); got != (cpuReading{27, 36}) {
 		t.Fatal(got)
 	}
-	path := filepath.Join(t.TempDir(), "echoear.db")
+	path := filepath.Join(t.TempDir(), "lark.db")
 	for _, f := range []string{path, path + "-wal"} {
 		if err := os.WriteFile(f, []byte("telemetry"), 0600); err != nil {
 			t.Fatal(err)
@@ -93,7 +93,7 @@ func TestDiagnosticsProcAndShutdown(t *testing.T) {
 func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	board := testConnectWS(t, base, "unit", false)
-	const id = "echoear-diag"
+	const id = "lark-diag"
 	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "firmware": "0.8.4",
 		"board": "esp-box-3", "width": 320, "height": 240, "shape": "rect", "has_battery": false, "wifi_rssi": -60, "cpu_pct": 27,
 		"free_heap": 65536, "min_free_heap": 32768, "free_psram": 6291456, "uptime_s": 320, "volume": 70})
@@ -237,7 +237,7 @@ func TestAccessibleRecordingControls(t *testing.T) {
 		}
 	})
 	dev := testConnectWS(t, base, "unit", false)
-	const id = "echoear-mic-controls"
+	const id = "lark-mic-controls"
 	dev.hello(t, id, "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
 	mirror.watch(t, id)
@@ -299,7 +299,7 @@ func stopTestHarness(t *testing.T, id string) (*bridge, string, <-chan string) {
 }
 
 func TestThinkingStopRequiresThreeTaps(t *testing.T) {
-	const id = "echoear-stop"
+	const id = "lark-stop"
 	b, base, interrupts := stopTestHarness(t, id)
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
@@ -368,7 +368,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 }
 
 func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
-	const id = "echoear-speaking-stop"
+	const id = "lark-speaking-stop"
 	b, base, interrupts := stopTestHarness(t, id)
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")

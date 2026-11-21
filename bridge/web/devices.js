@@ -6,12 +6,12 @@ import {loadSavedCats} from "./library.js";
 import {canStartCall, renderCurrent, select, startPeerCall} from "./live.js";
 import {state} from "./state.js";
 
-let phone = getLocal("echoear-phone");
+let phone = getLocal("lark-phone");
 if (!/^phone-[0-9a-f]{4}$/.test(phone)) {
   const launch = new URL(location.href).searchParams.get("device_id");
   phone = /^phone-[0-9a-f]{4}$/.test(launch) ? launch :
     "phone-" + crypto.getRandomValues(new Uint16Array(1))[0].toString(16).padStart(4, "0");
-  setLocal("echoear-phone", phone);
+  setLocal("lark-phone", phone);
 }
 
 function renderSidebar() {

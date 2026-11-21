@@ -49,7 +49,7 @@ static esp_err_t json_response(httpd_req_t *request, const char *json)
 
 static bool require_token(httpd_req_t *request)
 {
-    static const char expected[] = CONFIG_ECHOEAR_BRIDGE_TOKEN;
+    static const char expected[] = CONFIG_LARK_BRIDGE_TOKEN;
     char actual[sizeof(expected)];
     size_t len = httpd_req_get_hdr_value_len(request, "X-Lark-Token");
     if (len && len == sizeof(expected) - 1 &&
@@ -180,7 +180,7 @@ static esp_err_t volume_post(httpd_req_t *request)
 
 static esp_err_t pull_headers(esp_http_client_handle_t client)
 {
-    return esp_http_client_set_header(client, "X-Lark-Token", CONFIG_ECHOEAR_BRIDGE_TOKEN);
+    return esp_http_client_set_header(client, "X-Lark-Token", CONFIG_LARK_BRIDGE_TOKEN);
 }
 
 static bool matching_board(const esp_app_desc_t *image)
@@ -193,7 +193,7 @@ static bool matching_board(const esp_app_desc_t *image)
 static esp_err_t ota_pull_post(httpd_req_t *request)
 {
     const esp_http_client_config_t http = {
-        .url = CONFIG_ECHOEAR_BRIDGE_URL BOARD_OTA_PATH,
+        .url = CONFIG_LARK_BRIDGE_URL BOARD_OTA_PATH,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 15000,
         .disable_auto_redirect = true,

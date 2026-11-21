@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-data=${XDG_DATA_HOME:-$HOME/.local/share}/echoear
+data=${XDG_DATA_HOME:-$HOME/.local/share}/lark
 dir=$data/photo-models
 install -d -m 700 -- "$dir"
 tmp=$(mktemp "$dir/.model.XXXXXXXX")

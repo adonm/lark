@@ -50,7 +50,7 @@ func TestWSMainMenuPages(t *testing.T) {
 
 func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-games"
+	const id = "lark-games"
 	board := testConnectWS(t, base, "unit", false)
 	board.hello(t, id, "Cake")
 	web := testConnectWS(t, base, "unit", true)
@@ -191,7 +191,7 @@ func TestWSMenuListDetails(t *testing.T) {
 
 func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-game-sql"
+	const id = "lark-game-sql"
 	board := testConnectWS(t, base, "unit", false)
 	board.hello(t, id, "Cake")
 	web := testConnectWS(t, base, "unit", true)

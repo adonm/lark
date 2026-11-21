@@ -265,7 +265,7 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 				}
 			})
 			d := testConnectWS(t, base, "unit", false)
-			d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": "echoear-ep", "character": "Echo", "caps": object{"bridge_endpoint": tc.cap}})
+			d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": "lark-ep", "character": "Echo", "caps": object{"bridge_endpoint": tc.cap}})
 			d.until(t, isDisplay)
 			d.json(t, object{"ev": "tap", "x": 180, "y": 180})
 			f := d.until(t, hasWS("rec", `"action":"start"`))
@@ -278,7 +278,7 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 
 func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.endpoint = testEndpointSettings() })
-	const id = "echoear-intercom-ep"
+	const id = "lark-intercom-ep"
 	d := testConnectWS(t, base, "unit", false)
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, isDisplay)

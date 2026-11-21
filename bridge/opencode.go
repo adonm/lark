@@ -382,11 +382,11 @@ func (o *openCode) CompactSession(ctx context.Context, device, sid string) (bool
 	return true, nil
 }
 
-func echoEarTitle(device, character string) string {
+func larkTitle(device, character string) string {
 	if character = strings.TrimSpace(character); character != "" && character != device {
-		return "EchoEar: " + character + " (" + device + ")"
+		return "Lark: " + character + " (" + device + ")"
 	}
-	return "EchoEar: " + device
+	return "Lark: " + device
 }
 
 func (o *openCode) configuredSettings(ctx context.Context) (ocSettings, error) {
@@ -406,7 +406,7 @@ func (o *openCode) configuredSettings(ctx context.Context) (ocSettings, error) {
 		return ocSettings{}, o.invalid()
 	}
 	if agent.Model.Provider == "" || agent.Model.ID == "" {
-		return ocSettings{}, problem(502, "Set the EchoEar agent model in the OpenCode configuration")
+		return ocSettings{}, problem(502, "Set the Lark agent model in the OpenCode configuration")
 	}
 	settings.Model = agent.Model
 	return settings, nil
@@ -499,7 +499,7 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 		Title    string `json:"title"`
 		Location object `json:"location"`
 		ocSettings
-	}{echoEarTitle(device, character), object{"directory": o.project}, settings}
+	}{larkTitle(device, character), object{"directory": o.project}, settings}
 	created, err := ocData[session](ctx, o.upstream, http.MethodPost, "/api/session", in)
 	if err != nil {
 		return "", err
@@ -519,7 +519,7 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 }
 
 func sessionMatchesDevice(title, deviceID string) bool {
-	name, ok := strings.CutPrefix(title, "EchoEar: ")
+	name, ok := strings.CutPrefix(title, "Lark: ")
 	if !ok || deviceID == "" {
 		return false
 	}
@@ -591,7 +591,7 @@ type ocMessage struct {
 	ID, Type, Finish, Outcome string
 	Text                      string
 	Time                      struct{ Created int64 }
-	Metadata                  struct{ EchoEarSource string }
+	Metadata                  struct{ LarkSource string }
 	Content                   []*ocMessagePart
 	Parts                     []*ocMessagePart
 	Error                     *struct{ Status int }
@@ -609,7 +609,7 @@ func (m ocMessage) chat(source string) chatEntry {
 	case "user":
 		entry.Sender, entry.Text = "You", m.Text
 	case "assistant":
-		entry.Sender = "EchoEar"
+		entry.Sender = "Lark"
 	case "system":
 		entry.Sender, entry.Text = "System", m.Text
 	default:
@@ -631,7 +631,7 @@ func (m ocMessage) chat(source string) chatEntry {
 		if name == "" {
 			name = p.Tool
 		}
-		if action, ok := strings.CutPrefix(name, "echoear_"); p.Type == "tool" && ok {
+		if action, ok := strings.CutPrefix(name, "lark_"); p.Type == "tool" && ok {
 			label := map[string]string{"state": "Checked live state", "patch": "Changed saved or device state",
 				"app": "Used an app", "emit": "Sent a signal"}[action]
 			if label != "" && !slices.Contains(notes, label) {
@@ -646,7 +646,7 @@ func (m ocMessage) chat(source string) chatEntry {
 		entry.Text = strings.Join(text, "\n")
 	}
 	if m.Type == "user" {
-		entry.Text = stripEchoEarHeader(entry.Text)
+		entry.Text = stripLarkHeader(entry.Text)
 	}
 	if m.Type == "assistant" {
 		entry.Text = fenced.ReplaceAllString(entry.Text, "")
@@ -707,9 +707,9 @@ func (o *openCode) sessionMessagePage(ctx context.Context, sid, cursor, source s
 			continue
 		}
 		if message.Type == "user" {
-			switch message.Metadata.EchoEarSource {
+			switch message.Metadata.LarkSource {
 			case "typed", "voice", "tap":
-				page.source = message.Metadata.EchoEarSource
+				page.source = message.Metadata.LarkSource
 			default:
 				page.source = "text"
 			}

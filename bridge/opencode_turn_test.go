@@ -43,22 +43,22 @@ func expectValue[T comparable](t *testing.T, result <-chan T, want T) {
 }
 
 func TestReconcileSessionUsesCurrentAgentModel(t *testing.T) {
-	const device, sid = "echoear-model-test", "ses-existing"
+	const device, sid = "lark-model-test", "ses-existing"
 	models := []ocModel{{"a", "first", "low"}, {"b", "second", "small"}}
 	changed := make(chan ocModel, len(models))
 	current := make(chan ocModel, 1)
 	current <- models[0]
 	o := testOpenCode(t, t.Context(), t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/agent/echoear":
+		case "/api/agent/lark":
 			if r.URL.Query().Get("location[directory]") == "" {
 				t.Error("model lookup must use the session location")
 			}
 			model := <-current
 			current <- model
-			sendJSON(w, 200, object{"data": object{"id": "echoear", "model": model}})
+			sendJSON(w, 200, object{"data": object{"id": "lark", "model": model}})
 		case "/api/session/" + sid:
-			sendJSON(w, 200, object{"data": object{"id": sid, "agent": "echoear", "model": ocModel{"old", "model", ""}}})
+			sendJSON(w, 200, object{"data": object{"id": sid, "agent": "lark", "model": ocModel{"old", "model", ""}}})
 		case "/api/session/" + sid + "/model":
 			var in struct{ Model ocModel }
 			if json.NewDecoder(r.Body).Decode(&in) != nil {
@@ -70,7 +70,7 @@ func TestReconcileSessionUsesCurrentAgentModel(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	o.settings.Agent = "echoear"
+	o.settings.Agent = "lark"
 	if err := o.save(device, sid); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestOpenCodeAdmitsPromptBeforeEventStreamConnects(t *testing.T) {
 func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 	for _, mode := range []string{"matching", "divergent", "tool"} {
 		t.Run(mode, func(t *testing.T) {
-			const id, sid = "echoear-eager", "ses-eager"
+			const id, sid = "lark-eager", "ses-eager"
 			const prefix, tail = "Ready? ", "Here is another sentence."
 			final := prefix + tail
 			if mode == "divergent" {
@@ -228,7 +228,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 	for _, mode := range []string{"before-final", "after-final", "interrupted"} {
 		t.Run(mode, func(t *testing.T) {
-			const id, sid = "echoear-eager", "ses-eager"
+			const id, sid = "lark-eager", "ses-eager"
 			const first, second = "This is the first sentence.", "Here is the answer."
 			prompted, finish := make(chan struct{}), make(chan struct{})
 			b, base := wsHarness(t, func(b *bridge, dir string) {
@@ -386,7 +386,7 @@ func TestOpenCodeFinalReplyPaginatesToAdmittedPrompt(t *testing.T) {
 func TestOpenCodeCancelAndReset(t *testing.T) {
 	for _, action := range []string{"cancel", "reset", "disconnect"} {
 		t.Run(action, func(t *testing.T) {
-			const id, sid = "echoear-session-test", "ses-test"
+			const id, sid = "lark-session-test", "ses-test"
 			interrupts := make(chan string, 4)
 			release := make(chan struct{})
 			b, base := wsHarness(t, func(b *bridge, dir string) {
@@ -444,7 +444,7 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 }
 
 func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
-	const id, sid = "echoear-order", "ses-order"
+	const id, sid = "lark-order", "ses-order"
 	prompts := make(chan string, 4)
 	interrupt := make(chan bool, 4)
 	allowPrompt, allowStop := make(chan struct{}), make(chan struct{})
@@ -454,7 +454,7 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/session":
 			raw, _ := io.ReadAll(r.Body)
-			if got := testObject(t, raw)["title"]; got != "EchoEar: Cake ("+id+")" {
+			if got := testObject(t, raw)["title"]; got != "Lark: Cake ("+id+")" {
 				t.Error("unexpected character title:", got)
 			}
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q}}`, sid)
@@ -525,7 +525,7 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 }
 
 func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
-	const reply = "Done.\n```echoear-message\n{\"to\":\"Mint\",\"text\":\"Do not deliver\"}\n```"
+	const reply = "Done.\n```lark-message\n{\"to\":\"Mint\",\"text\":\"Do not deliver\"}\n```"
 	titles, prompts := make(chan string, 4), make(chan string, 4)
 	b, base := wsHarness(t, func(b *bridge, dir string) {
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
@@ -547,17 +547,17 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 			}
 		})
 	})
-	for _, item := range []peer{{DeviceID: "echoear-empty"}, {DeviceID: "echoear-equal", Character: "echoear-equal"}} {
+	for _, item := range []peer{{DeviceID: "lark-empty"}, {DeviceID: "lark-equal", Character: "lark-equal"}} {
 		if _, err := b.oc.ensureSession(t.Context(), item.DeviceID, item.Character, true); err != nil {
 			t.Fatal(err)
 		}
-		expectValue(t, titles, "EchoEar: "+item.DeviceID)
+		expectValue(t, titles, "Lark: "+item.DeviceID)
 	}
-	const id = "echoear-ask"
+	const id = "lark-ask"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, id, "Cake")
 	mint := testConnectWS(t, base, "unit", false)
-	mint.hello(t, "echoear-mint", "Mint")
+	mint.hello(t, "lark-mint", "Mint")
 	mirror := testConnectWS(t, base, "unit", true)
 	mirror.watch(t, id)
 	toolTest(t, base, "emit", object{"to": id, "chime": "tap"}, false)
@@ -568,7 +568,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	default:
 	}
 	testRequest(t, "POST", base+"/api/chat", "unit", object{"device_id": id, "text": "Next quiz round!"}, 200)
-	expectValue(t, titles, "EchoEar: Cake (echoear-ask)")
+	expectValue(t, titles, "Lark: Cake (lark-ask)")
 	select {
 	case text := <-prompts:
 		if !strings.HasSuffix(text, "Next quiz round!") {
@@ -580,7 +580,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	if frame := mirror.until(t, hasWS("svg", "Done.")); !hasWS("svg", "Answer")(frame) {
 		t.Fatal("no-audio answer notice was missing")
 	}
-	if got := apiObjects(t, base+"/api/devices/echoear-mint/messages", "messages"); len(got) != 0 {
+	if got := apiObjects(t, base+"/api/devices/lark-mint/messages", "messages"); len(got) != 0 {
 		t.Fatal("fenced prose triggered intercom")
 	}
 }

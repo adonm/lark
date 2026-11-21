@@ -139,7 +139,7 @@ func jsonBody(r *http.Request) (object, error) {
 func deviceID(r *http.Request, obj object, required bool) (string, error) {
 	v, provided := obj["device_id"]
 	if !provided && !required {
-		v = "echoear"
+		v = "lark"
 		if values := r.Header.Values("X-Device-Id"); len(values) > 0 {
 			v = values[0]
 		}

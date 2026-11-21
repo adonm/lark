@@ -3,7 +3,7 @@ const auth = $("parent-auth"), controls = $("parent-controls"), status = $("pare
 const note = text => { status.textContent = text; };
 let access, pending = false;
 
-try { $("bridge-token").value = localStorage.getItem("echoear-token") || ""; } catch {}
+try { $("bridge-token").value = localStorage.getItem("lark-token") || ""; } catch {}
 
 async function request(path, fields) {
   const headers = {"X-Lark-Token": access.bridge, "X-Lark-Parent-Token": access.parent, Accept:"text/html"};

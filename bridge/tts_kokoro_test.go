@@ -21,7 +21,7 @@ func kokoroTestDir(t testing.TB) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := ttsModelDir(filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "echoear"))
+	dir := ttsModelDir(filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "lark"))
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		t.Skip("Kokoro model pack is not installed")
 	} else if err != nil {

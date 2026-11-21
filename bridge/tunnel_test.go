@@ -72,7 +72,7 @@ func TestVirtualClientsPersistenceAndDeviceMerge(t *testing.T) {
 		t.Fatal("virtual client not persisted")
 	}
 	physical := testConnectWS(t, base, "unit", false)
-	physical.hello(t, "echoear-1234", "Cake")
+	physical.hello(t, "lark-1234", "Cake")
 	devices := apiObjects(t, base+"/api/devices", "devices")
 	if len(devices) != 2 || devices[0].(object)["kind"] != "physical" || devices[0].(object)["ws_connected"] != true ||
 		devices[1].(object)["kind"] != "virtual" || devices[1].(object)["online"] != false || devices[1].(object)["device_id"] != id {
@@ -96,7 +96,7 @@ func TestVirtualClientsPersistenceAndDeviceMerge(t *testing.T) {
 
 func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	r := &mockTunnel{}
-	settings := openCodeSettings("echoear")
+	settings := openCodeSettings("lark")
 	settings.Model = ocModel{"unit", "test", ""}
 	var creates atomic.Int32
 	prompts := make(chan string, 3)
@@ -191,9 +191,9 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		t.Fatal("bad scoped share URL")
 	}
 	physical := testConnectWS(t, base, "unit", false)
-	physical.hello(t, "echoear-private", "Cake")
+	physical.hello(t, "lark-private", "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
-	mirror.watch(t, "echoear-private")
+	mirror.watch(t, "lark-private")
 	testRequest(t, "GET", scoped+"/app", "", nil, 200)
 	testRequest(t, "GET", scoped+"/app/client.js", "", nil, 200)
 	testRequest(t, "GET", scoped+"/api/scope", "unit", nil, 401)
@@ -209,8 +209,8 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	testRequest(t, "POST", scoped+"/api/devices/"+id+"/cat", token, object{"name": "No"}, 404)
 	testRequest(t, "DELETE", scoped+"/api/cats/plum", token, nil, 404)
 	testRequest(t, "GET", scoped+"/api/devices/"+id+"/messages", token, nil, 200)
-	testRequest(t, "GET", scoped+"/api/devices/echoear-private/messages", token, nil, 403)
-	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": "echoear-private", "text": "Question?"}, 403)
+	testRequest(t, "GET", scoped+"/api/devices/lark-private/messages", token, nil, 403)
+	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": "lark-private", "text": "Question?"}, 403)
 	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": ""}, 400)
 	chat := testObject(t, testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": "Question?"}, 200))
 	if chat["reply"] != "Hello!" || chat["device_id"] != id || chat["session_id"] != "ses_shared" || chat["audio_url"] != nil {
@@ -221,7 +221,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		t.Helper()
 		select {
 		case got := <-prompts:
-			if got != header+"\n"+text || stripEchoEarHeader(got) != text {
+			if got != header+"\n"+text || stripLarkHeader(got) != text {
 				t.Fatal("virtual cat prompt identity or provenance is incorrect")
 			}
 		default:
@@ -239,9 +239,9 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	if !bytes.Contains(tunneled, []byte("Hello!")) || !bytes.Equal(tunneled, testRequest(t, "GET", base+history, "unit", nil, 200)) {
 		t.Fatal("LAN and tunnel histories differ")
 	}
-	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": "echoear-private"}, 404)
+	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": "lark-private"}, 404)
 	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": id}, 404)
-	testRequest(t, "POST", scoped+"/api/cats/reassign", token, object{"from_device_id": id, "to_device_id": "echoear-private"}, 404)
+	testRequest(t, "POST", scoped+"/api/cats/reassign", token, object{"from_device_id": id, "to_device_id": "lark-private"}, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", token, nil, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", "unit", nil, 404)
 	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": "Tell Cake Hi from HTTP."}, 200)
@@ -260,15 +260,15 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	if upgrade.StatusCode != 101 {
 		t.Fatal(upgrade.StatusCode)
 	}
-	conn.json(t, object{"ev": "hello", "role": "device", "device_id": "echoear-private", "character": "Not allowed"})
+	conn.json(t, object{"ev": "hello", "role": "device", "device_id": "lark-private", "character": "Not allowed"})
 	conn.until(t, hasWS("error", `"status":403`))
 	conn.hello(t, id, "Ignored")
 	peers := conn.until(t, hasWS("peers", id))
-	if !bytes.Contains(peers.data, []byte(`"character":"Cake","device_id":"echoear-private","online":true`)) ||
+	if !bytes.Contains(peers.data, []byte(`"character":"Cake","device_id":"lark-private","online":true`)) ||
 		bytes.Contains(peers.data, []byte(`"ip"`)) {
 		t.Fatal("scoped WebSocket did not expose the minimal online peer list")
 	}
-	conn.json(t, object{"ev": "watch", "device_id": "echoear-private"})
+	conn.json(t, object{"ev": "watch", "device_id": "lark-private"})
 	conn.until(t, hasWS("error", `"status":403`))
 	conn.json(t, object{"ev": "watch", "device_id": id})
 	conn.until(t, hasWS("svg", ""))
@@ -279,7 +279,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	conn.json(t, object{"ev": "text", "text": "Tell Cake Hi from text."})
 	mirror.until(t, hasWS("svg", "Hi from text."))
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "intercom", "target": "echoear-private", "text": "Hi from WS intercom."})
+	conn.json(t, object{"ev": "intercom", "target": "lark-private", "text": "Hi from WS intercom."})
 	mirror.until(t, hasWS("svg", "Hi from WS intercom."))
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
 	conn.json(t, object{"ev": "tap", "id": "cat", "x": 180, "y": 316})
@@ -292,13 +292,13 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		}
 	}
 	conn.json(t, object{"ev": "tap", "x": 115, "y": 130})
-	conn.until(t, hasWS("svg", "intercom-echoear-private"))
+	conn.until(t, hasWS("svg", "intercom-lark-private"))
 	conn.json(t, object{"ev": "tap", "x": 245, "y": 116})
-	conn.until(t, hasWS("rec", `"target":"echoear-private"`))
-	conn.json(t, object{"ev": "rec_start", "target": "echoear-private"})
+	conn.until(t, hasWS("rec", `"target":"lark-private"`))
+	conn.json(t, object{"ev": "rec_start", "target": "lark-private"})
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	conn.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm...)))
-	conn.json(t, object{"ev": "rec_end", "target": "echoear-private"})
+	conn.json(t, object{"ev": "rec_end", "target": "lark-private"})
 	got := physical.until(t, func(f wsFrame) bool { return f.op == wsBinary && f.data[0] == pcmPrefix })
 	if !bytes.Equal(got.data[1:], pcm) {
 		t.Fatal("tunneled menu did not deliver recorded PCM")
@@ -344,7 +344,7 @@ func TestNoSpeakToolAndFinalVoiceIsPersisted(t *testing.T) {
 	var synthesis atomic.Int32
 	var b *bridge
 	var base string
-	const id = "echoear-spoken"
+	const id = "lark-spoken"
 	oc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/session":

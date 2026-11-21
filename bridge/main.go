@@ -29,31 +29,31 @@ const bridgeListeningPrefix = "Lark bridge listening on "
 
 func openCodeSettings(agent string) ocSettings {
 	s := ocSettings{Agent: agent, Permissions: []ocPermission{{"*", "*", "deny"}}}
-	if agent == "echoear" {
+	if agent == "lark" {
 		s.Permissions = append(s.Permissions, ocPermission{"websearch", "*", "allow"},
-			ocPermission{"echoear_*", "*", "allow"}, ocPermission{"execute", "*", "allow"})
+			ocPermission{"lark_*", "*", "allow"}, ocPermission{"execute", "*", "allow"})
 	}
 	return s
 }
 
 func run() error {
 	started := time.Now()
-	token := os.Getenv("ECHOEAR_BRIDGE_TOKEN")
+	token := os.Getenv("LARK_BRIDGE_TOKEN")
 	if !tokenRE.MatchString(token) {
-		return errors.New("set ECHOEAR_BRIDGE_TOKEN to a nonempty ASCII token without whitespace")
+		return errors.New("set LARK_BRIDGE_TOKEN to a nonempty ASCII token without whitespace")
 	}
-	settings := openCodeSettings(env("ECHOEAR_OPENCODE_AGENT", "echoear"))
+	settings := openCodeSettings(env("LARK_OPENCODE_AGENT", "lark"))
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	parentToken, err := loadParentToken(filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "echoear", "parent.token"), token)
+	parentToken, err := loadParentToken(filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark", "parent.token"), token)
 	if err != nil {
 		return err
 	}
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	state := env("XDG_STATE_HOME", filepath.Join(home, ".local/state"))
-	local := filepath.Join(data, "echoear")
+	local := filepath.Join(data, "lark")
 	path := filepath.Join(local, "stt-models", parakeetModel)
 	if err := checkParakeetModel(path); err != nil {
 		return err
@@ -77,32 +77,32 @@ func run() error {
 	vad.close()
 	log.Print("Lark endpoint VAD ready (in-process Silero v5)")
 	endpointConfig := &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(vadPath) }}
-	ocURL, ocPassword := os.Getenv("ECHOEAR_OPENCODE_URL"), os.Getenv("ECHOEAR_OPENCODE_PASSWORD")
+	ocURL, ocPassword := os.Getenv("LARK_OPENCODE_URL"), os.Getenv("LARK_OPENCODE_PASSWORD")
 	ocAPI, err := openCodeUpstream(pooledClient(), state, ocURL, ocPassword)
 	if err != nil {
 		return err
 	}
-	pairPort, err := strconv.Atoi(env("ECHOEAR_OPENCODE_PAIR_PORT", "0"))
+	pairPort, err := strconv.Atoi(env("LARK_OPENCODE_PAIR_PORT", "0"))
 	if err != nil || pairPort < 0 || pairPort > 65535 || pairPort != 0 && (ocURL == "" || ocPassword == "") {
-		return errors.New("ECHOEAR_OPENCODE_PAIR_PORT requires a valid port and a dedicated OpenCode URL and password")
+		return errors.New("LARK_OPENCODE_PAIR_PORT requires a valid port and a dedicated OpenCode URL and password")
 	}
-	ocDir := env("ECHOEAR_OPENCODE_DIR", filepath.Join(local, "opencode/workspace"))
+	ocDir := env("LARK_OPENCODE_DIR", filepath.Join(local, "opencode/workspace"))
 	syscall.Umask(0o077)
 	if !filepath.IsAbs(ocDir) {
-		return errors.New("ECHOEAR_OPENCODE_DIR must be an absolute path")
+		return errors.New("LARK_OPENCODE_DIR must be an absolute path")
 	}
 	if err := os.MkdirAll(ocDir, 0o700); err != nil {
 		return err
 	}
-	project, err := filepath.Abs(env("ECHOEAR_REPO_DIR", "."))
+	project, err := filepath.Abs(env("LARK_REPO_DIR", "."))
 	if err != nil {
 		return err
 	}
-	if os.Getenv("ECHOEAR_REPO_DIR") == "" && filepath.Base(project) == "bridge" {
+	if os.Getenv("LARK_REPO_DIR") == "" && filepath.Base(project) == "bridge" {
 		project = filepath.Dir(project)
 	}
-	// Hash the prompt behind the installed echoear agent symlink.
-	contract, err := readMCPContract(filepath.Join(project, "agents/echoear.md"))
+	// Hash the prompt behind the installed lark agent symlink.
+	contract, err := readMCPContract(filepath.Join(project, "agents/lark.md"))
 	if err != nil {
 		return err
 	}
@@ -112,19 +112,19 @@ func run() error {
 	if err := os.Chmod(local, 0o700); err != nil {
 		return err
 	}
-	fallbackVoice := env("ECHOEAR_TTS_VOICE", heartVoice)
-	dbPath := env("ECHOEAR_DB_PATH", filepath.Join(local, "echoear.db"))
+	fallbackVoice := env("LARK_TTS_VOICE", heartVoice)
+	dbPath := env("LARK_DB_PATH", filepath.Join(local, "lark.db"))
 	db, err := openBridgeDB(context.Background(), dbPath,
-		os.Getenv("ECHOEAR_TURSO_URL"), os.Getenv("ECHOEAR_TURSO_AUTH_TOKEN"))
+		os.Getenv("LARK_TURSO_URL"), os.Getenv("LARK_TURSO_AUTH_TOKEN"))
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	ports := env("ECHOEAR_BRIDGE_PORT", "8765")
+	ports := env("LARK_BRIDGE_PORT", "8765")
 	if port, err := strconv.Atoi(ports); err != nil || port < 0 || port > 65535 {
-		return errors.New("invalid ECHOEAR_BRIDGE_PORT")
+		return errors.New("invalid LARK_BRIDGE_PORT")
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(env("ECHOEAR_BRIDGE_HOST", "0.0.0.0"), ports))
+	listener, err := net.Listen("tcp", net.JoinHostPort(env("LARK_BRIDGE_HOST", "0.0.0.0"), ports))
 	if err != nil {
 		return err
 	}
@@ -158,8 +158,8 @@ func run() error {
 		virtual: virtualStore(db), history: &chatHistory{db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
 			generate: configuredPortraitGenerator(ocAPI, ocURL != "", os.Getenv("OPENCODE_API_KEY"))},
-		ota:     otaFile{path: filepath.Join(env("ECHOEAR_OTA_DIR", filepath.Join(project, "firmware/build")), "echoear.bin")},
-		box3OTA: otaFile{path: filepath.Join(env("ECHOEAR_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "echoear_box3.bin")}}
+		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
+		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
 	b.builders = newBuildManager(b)
 	buildsDone := make(chan struct{})
@@ -170,16 +170,16 @@ func run() error {
 	defer func() { finish(); <-buildsDone }()
 	if _, err := os.Stat(filepath.Join(local, "bin", "ente-photo-job")); err == nil {
 		config := env("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-		p, err := openPhotoLibrary(root, local, filepath.Join(config, "echoear", "ente-vault-key"))
+		p, err := openPhotoLibrary(root, local, filepath.Join(config, "lark", "ente-vault-key"))
 		if err != nil {
-			log.Print("EchoEar could not open the local photo index")
+			log.Print("Lark could not open the local photo index")
 		} else {
 			b.library = p
 			modelDir := filepath.Join(local, "photo-models")
 			if _, err := os.Stat(modelDir); err == nil {
 				model, err := openPhotoML(modelDir, filepath.Join(local, "lib", "libonnxruntime.so"))
 				if err != nil {
-					log.Print("EchoEar photo models unavailable; metadata search and labels still work")
+					log.Print("Lark photo models unavailable; metadata search and labels still work")
 				} else {
 					p.ml = model
 				}
@@ -187,7 +187,7 @@ func run() error {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				p.maintain(root, b.ws.clearInvalidSlides, os.Getenv("ECHOEAR_PHOTOS_BACKFILL") == "1")
+				p.maintain(root, b.ws.clearInvalidSlides, os.Getenv("LARK_PHOTOS_BACKFILL") == "1")
 			}()
 			defer func() {
 				finish()

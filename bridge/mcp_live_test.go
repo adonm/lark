@@ -16,13 +16,13 @@ import (
 	"time"
 )
 
-func TestRealModelEchoEarCodeMode(t *testing.T) {
-	if os.Getenv("ECHOEAR_REAL_MODEL") != "1" {
+func TestRealModelLarkCodeMode(t *testing.T) {
+	if os.Getenv("LARK_REAL_MODEL") != "1" {
 		t.Skip("opt in with scripts/check.sh --real-model")
 	}
-	smokeHome := os.Getenv("ECHOEAR_SMOKE_CONFIG_HOME")
+	smokeHome := os.Getenv("LARK_SMOKE_CONFIG_HOME")
 	if smokeHome == "" {
-		t.Fatal("set ECHOEAR_SMOKE_CONFIG_HOME to the separate config of a disposable bridge and OpenCode pair")
+		t.Fatal("set LARK_SMOKE_CONFIG_HOME to the separate config of a disposable bridge and OpenCode pair")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -30,8 +30,8 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", smokeHome)
 	config := liveConfig(t, home)
-	port := config["ECHOEAR_BRIDGE_PORT"]
-	ocURL, err := url.Parse(config["ECHOEAR_OPENCODE_URL"])
+	port := config["LARK_BRIDGE_PORT"]
+	ocURL, err := url.Parse(config["LARK_OPENCODE_URL"])
 	portNum, portErr := strconv.Atoi(port)
 	if err != nil || portErr != nil || portNum < 1 || portNum > 65535 || portNum == 8765 {
 		t.Fatal("the smoke requires separate loopback ports; never point it at the installed bridge or OpenCode")
@@ -43,7 +43,7 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 	client := pooledClient()
 	client.Timeout = 105 * time.Second
 	defer client.CloseIdleConnections()
-	c := liveClient{client, "http://" + net.JoinHostPort("127.0.0.1", port), config["ECHOEAR_BRIDGE_TOKEN"]}
+	c := liveClient{client, "http://" + net.JoinHostPort("127.0.0.1", port), config["LARK_BRIDGE_TOKEN"]}
 	catalog := liveJSON[struct {
 		Result struct{ Tools []struct{ Name string } }
 	}](t, c, "/mcp", object{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, nil, "", nil)
@@ -84,30 +84,30 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 			t.Fatal(err)
 		}
 		if slices.ContainsFunc(mcp, func(server serverInfo) bool {
-			return server.Name == "echoear" && server.Status.Status == "connected"
+			return server.Name == "lark" && server.Status.Status == "connected"
 		}) {
 			break
 		}
 		select {
 		case <-ready.Done():
-			t.Fatalf("OpenCode echoear MCP server did not connect: %+v", mcp)
+			t.Fatalf("OpenCode lark MCP server did not connect: %+v", mcp)
 		case <-tick.C:
 		}
 	}
-	if config["ECHOEAR_OPENCODE_URL"] != "" {
+	if config["LARK_OPENCODE_URL"] != "" {
 		type plugin struct {
 			ID     string
 			Source struct{ Type string }
 		}
 		plugins, err := ocData[[]plugin](t.Context(), api, http.MethodGet, "/api/plugin", nil)
-		if err != nil || len(mcp) != 1 || slices.ContainsFunc(plugins, func(p plugin) bool { return p.Source.Type != "builtin" && p.ID != "echoear.model-fallback" }) {
-			t.Fatalf("expected only EchoEar MCP and EchoEar or bundled plugins: %v", err)
+		if err != nil || len(mcp) != 1 || slices.ContainsFunc(plugins, func(p plugin) bool { return p.Source.Type != "builtin" && p.ID != "lark.model-fallback" }) {
+			t.Fatalf("expected only Lark MCP and Lark or bundled plugins: %v", err)
 		}
 	}
-	settings := openCodeSettings("echoear")
+	settings := openCodeSettings("lark")
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	prefix := "echoear-live-mcp-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	prefix := "lark-live-mcp-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	liveSessions(t, api, prefix)
 	o := newOpenCode(root, api, testDB(t, ":memory:"), liveOpenCodeDir(home, config), settings)
 	settings, err = o.configuredSettings(t.Context())
@@ -115,9 +115,9 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := turnPrompt(peer{DeviceID: id, Character: character}, false, "typed",
-		"Run a live screen and controls check. Use Code Mode execute to call tools.echoear.state({device_id:'"+id+
-			"',include:['devices']}), tools.echoear.patch({device_id:'"+id+"',device:{sleep:false}}), tools.echoear.emit({to:'"+id+
-			"',chime:'tap'}), and tools.echoear.app({devices:'"+id+
+		"Run a live screen and controls check. Use Code Mode execute to call tools.lark.state({device_id:'"+id+
+			"',include:['devices']}), tools.lark.patch({device_id:'"+id+"',device:{sleep:false}}), tools.lark.emit({to:'"+id+
+			"',chime:'tap'}), and tools.lark.app({devices:'"+id+
 			"',exit:true}). Return all four tool results from execute, then say one short sentence. Do not call any other tool.",
 		blankCat())
 	turn, endTurn := context.WithTimeout(root, 60*time.Second)
@@ -148,7 +148,7 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 			}
 			lastResult = truncate(string(part.State.Content), 512)
 			for tool, field := range want {
-				called := bytes.Contains(part.State.Input, []byte("tools.echoear."+tool)) || bytes.Contains(part.State.Input, []byte(`["`+tool+`"]`))
+				called := bytes.Contains(part.State.Input, []byte("tools.lark."+tool)) || bytes.Contains(part.State.Input, []byte(`["`+tool+`"]`))
 				attempted[tool] = attempted[tool] || called
 				if called && bytes.Contains(part.State.Content, []byte(field)) {
 					delete(want, tool)
@@ -162,5 +162,5 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 	if messages := liveJSON[struct{ Messages []chatEntry }](t, c, "/api/devices/"+id+"/messages", nil, nil, "", nil).Messages; len(messages) != 0 {
 		t.Fatal("Code Mode smoke test wrote to canonical chat history")
 	}
-	t.Log("echoear agent completed state, patch, app, and emit through execute")
+	t.Log("lark agent completed state, patch, app, and emit through execute")
 }

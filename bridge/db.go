@@ -50,7 +50,7 @@ func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	target := filepath.Join(dir, "echoear-"+now.Format(time.DateOnly)+".db")
+	target := filepath.Join(dir, "lark-"+now.Format(time.DateOnly)+".db")
 	_, err := os.Lstat(target)
 	if os.IsNotExist(err) {
 		staging, err := os.MkdirTemp(dir, ".backup-")
@@ -58,7 +58,7 @@ func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error 
 			return err
 		}
 		defer os.RemoveAll(staging)
-		tmp := filepath.Join(staging, "echoear.db")
+		tmp := filepath.Join(staging, "lark.db")
 		// Turso 0.8.4 requires a literal and does not unescape doubled quotes
 		// in the VACUUM path, but accepts either quote delimiter.
 		quote := "'"
@@ -113,7 +113,7 @@ func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error 
 	}
 	var daily []string
 	for _, entry := range entries {
-		date, isBackup := strings.CutPrefix(entry.Name(), "echoear-")
+		date, isBackup := strings.CutPrefix(entry.Name(), "lark-")
 		if !entry.Type().IsRegular() || !isBackup || !strings.HasSuffix(date, ".db") {
 			continue
 		}
@@ -137,7 +137,7 @@ func (d *bridgeDB) backupPeriodically(ctx context.Context, dir string) {
 		err := d.backup(run, dir, time.Now())
 		cancel()
 		if err != nil && ctx.Err() == nil {
-			log.Printf("EchoEar daily backup: %v", err)
+			log.Printf("Lark daily backup: %v", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -215,12 +215,12 @@ func openBridgeDB(ctx context.Context, path, remote, token string) (_ *bridgeDB,
 func (d *bridgeDB) initSchema(ctx context.Context) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("initialize EchoEar schema: %w", err)
+		return fmt.Errorf("initialize Lark schema: %w", err)
 	}
 	defer tx.Rollback()
 	for _, q := range schemaBaseline {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
-			return fmt.Errorf("initialize EchoEar schema: %w", err)
+			return fmt.Errorf("initialize Lark schema: %w", err)
 		}
 	}
 	return tx.Commit()
@@ -233,7 +233,7 @@ func (b *bridge) volumePrefs(id string) (auto bool, level int) {
 	if b.db != nil {
 		err := b.db.QueryRow(`SELECT auto_volume,manual_volume FROM device_prefs WHERE device_id=?`, strings.ToLower(id)).Scan(&auto, &level)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			log.Print("EchoEar could not read volume preferences")
+			log.Print("Lark could not read volume preferences")
 		}
 	}
 	return auto, level
@@ -273,7 +273,7 @@ func (d *bridgeDB) syncPeriodically(ctx context.Context) {
 			return
 		}
 		if err := d.syncCloud(ctx); err != nil && ctx.Err() == nil {
-			log.Print("EchoEar Turso Cloud sync failed")
+			log.Print("Lark Turso Cloud sync failed")
 		}
 		select {
 		case <-ctx.Done():

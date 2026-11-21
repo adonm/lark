@@ -296,7 +296,7 @@ func (m *buildManager) claim(ctx context.Context, job buildJob) bool {
 func (m *buildManager) fail(ctx context.Context, id, message string) {
 	if _, err := m.b.db.ExecContext(ctx, `UPDATE build_jobs SET state='failed',spec='',result=?
 		WHERE id=? AND state IN ('queued','running')`, message, id); err != nil && ctx.Err() == nil {
-		log.Print("EchoEar could not settle a build job")
+		log.Print("Lark could not settle a build job")
 	}
 }
 

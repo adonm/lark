@@ -102,7 +102,7 @@ func fakeTTS(ctx context.Context, requests *atomic.Int32) *synthWorker {
 
 func TestMCPProtocol(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-test"
+	const id = "lark-test"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, id, "Cake")
 	testRequest(t, "GET", base+"/mcp", "unit", nil, 405)
@@ -110,7 +110,7 @@ func TestMCPProtocol(t *testing.T) {
 	testRequest(t, "POST", base+"/mcp", "", object{}, 401)
 	testRequest(t, "POST", base+"/mcp", "unit", []string{"bad"}, 400)
 	init := rpcTest(t, base, "initialize", object{"protocolVersion": "2025-06-18"})
-	if init["protocolVersion"] != "2025-06-18" || init["serverInfo"].(object)["name"] != "echoear" {
+	if init["protocolVersion"] != "2025-06-18" || init["serverInfo"].(object)["name"] != "lark" {
 		t.Fatal(init)
 	}
 	testRequest(t, "POST", base+"/mcp", "unit", object{"jsonrpc": "2.0", "method": "notifications/initialized"}, 202)
@@ -193,7 +193,7 @@ func TestMCPStateSlices(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "echoear-slices"
+	const id = "lark-slices"
 	board := testConnectWS(t, base, "unit", false)
 	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
 	board.until(t, hasWS("hello_ok", ""))
@@ -301,7 +301,7 @@ func TestMCPSavedAppEdits(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "echoear-book"
+	const id = "lark-book"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
 	watcher := testConnectWS(t, base, "unit", false)
@@ -439,7 +439,7 @@ func TestEmitIntercom(t *testing.T) {
 	_, base := wsHarness(t, func(b *bridge, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
-	const from, to, text = "echoear-sender", "phone-bee1", "Dinner is ready."
+	const from, to, text = "lark-sender", "phone-bee1", "Dinner is ready."
 	sender, recipient := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	sender.hello(t, from, "Cake")
 	recipient.hello(t, to, "Mint")
@@ -463,7 +463,7 @@ func TestEmitIntercom(t *testing.T) {
 
 func TestMCPControl(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-control"
+	const id = "lark-control"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, id, "Cake")
 	watcher := testConnectWS(t, base, "unit", false)
@@ -544,11 +544,11 @@ func TestMCPStdioForwards(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "{\n\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"method\":%q}\n}", req.ID, req.Method)
 	}))
 	defer s.Close()
-	t.Setenv("ECHOEAR_BRIDGE_TOKEN", "")
-	t.Setenv("ECHOEAR_BRIDGE_PORT", "")
+	t.Setenv("LARK_BRIDGE_TOKEN", "")
+	t.Setenv("LARK_BRIDGE_PORT", "")
 	file := filepath.Join(t.TempDir(), "bridge.env")
 	port := s.Listener.Addr().(*net.TCPAddr).Port
-	if err := os.WriteFile(file, []byte("ECHOEAR_BRIDGE_TOKEN='unit'\nECHOEAR_BRIDGE_PORT="+strconv.Itoa(port)+"\n"), 0600); err != nil {
+	if err := os.WriteFile(file, []byte("LARK_BRIDGE_TOKEN='unit'\nLARK_BRIDGE_PORT="+strconv.Itoa(port)+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	url, token, err := mcpProxyConfig(file)

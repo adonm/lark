@@ -391,7 +391,7 @@ func (p *photoLibrary) maintain(ctx context.Context, changed func(), backfill bo
 	}
 	for {
 		if err := p.syncSnapshot(ctx); err != nil && ctx.Err() == nil {
-			log.Print("EchoEar could not update the local photo index")
+			log.Print("Lark could not update the local photo index")
 		}
 		p.prunePhotoCapabilities(time.Now())
 		changed()

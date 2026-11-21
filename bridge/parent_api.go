@@ -17,23 +17,23 @@ func loadParentToken(path, bridgeToken string) (string, error) {
 		return "", nil
 	}
 	if err != nil {
-		return "", errors.New("cannot open EchoEar parent.token")
+		return "", errors.New("cannot open Lark parent.token")
 	}
 	if !stat.Mode().IsRegular() || stat.Mode().Perm()&0o077 != 0 || stat.Size() > 256 {
-		return "", errors.New("EchoEar parent.token must be a private file (0600)")
+		return "", errors.New("Lark parent.token must be a private file (0600)")
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", errors.New("cannot open EchoEar parent.token")
+		return "", errors.New("cannot open Lark parent.token")
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, 257))
 	if err != nil {
-		return "", errors.New("cannot read EchoEar parent.token")
+		return "", errors.New("cannot read Lark parent.token")
 	}
 	token := strings.TrimSpace(string(raw))
 	if len(raw) > 256 || len(token) < 32 || !tokenRE.MatchString(token) || token == bridgeToken {
-		return "", errors.New("EchoEar parent.token must contain a distinct ASCII token of at least 32 characters without whitespace")
+		return "", errors.New("Lark parent.token must contain a distinct ASCII token of at least 32 characters without whitespace")
 	}
 	return token, nil
 }

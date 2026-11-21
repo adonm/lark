@@ -40,7 +40,7 @@ func e2eWrite(t *testing.T, path string, data []byte, mode os.FileMode) {
 
 func startE2E(t *testing.T, real bool) *e2eSuite {
 	t.Helper()
-	bin := os.Getenv("ECHOEAR_TEST_BIN")
+	bin := os.Getenv("LARK_TEST_BIN")
 	if !filepath.IsAbs(bin) {
 		t.Fatal("use scripts/check.sh --live or --e2e-real to build the native bridge")
 	}
@@ -50,18 +50,18 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	}
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	root := t.TempDir()
-	local := filepath.Join(root, "data/echoear")
+	local := filepath.Join(root, "data/lark")
 	client := pooledClient()
 	client.Timeout = 100 * time.Second
 	t.Cleanup(client.CloseIdleConnections)
 	s := &e2eSuite{liveClient: liveClient{client: client, token: randomHex(32)},
 		parent: randomHex(32), workspace: filepath.Join(root, "workspace"), prefix: "E2E-" + randomHex(5), real: real}
 	config := filepath.Join(root, "config")
-	e2eWrite(t, filepath.Join(config, "echoear/parent.token"), []byte(s.parent), 0o600)
+	e2eWrite(t, filepath.Join(config, "lark/parent.token"), []byte(s.parent), 0o600)
 	e2eWrite(t, filepath.Join(root, "bin/opentunnel"), []byte(e2eTunnelCLI), 0o700)
 	e2ePhotosFixture(t, local)
 	for _, name := range []string{"stt-models", "tts-models"} {
-		if err := os.Symlink(filepath.Join(data, "echoear", name), filepath.Join(local, name)); err != nil {
+		if err := os.Symlink(filepath.Join(data, "lark", name), filepath.Join(local, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -82,10 +82,10 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		"HOME=" + root, "PATH=" + filepath.Join(root, "bin") + ":/usr/bin:/bin",
 		"XDG_CONFIG_HOME=" + config, "XDG_DATA_HOME=" + filepath.Join(root, "data"),
 		"XDG_STATE_HOME=" + filepath.Join(root, "state"), "XDG_CACHE_HOME=" + filepath.Join(root, "cache"),
-		"ECHOEAR_BRIDGE_HOST=127.0.0.1", "ECHOEAR_BRIDGE_PORT=0", "ECHOEAR_BRIDGE_TOKEN=" + s.token,
-		"ECHOEAR_DB_PATH=" + filepath.Join(root, "echoear.db"), "ECHOEAR_REPO_DIR=" + repo,
-		"ECHOEAR_OTA_DIR=" + root, "ECHOEAR_BOX3_OTA_DIR=" + root,
-		"ECHOEAR_OPENCODE_URL=" + s.model.url, "ECHOEAR_OPENCODE_DIR=" + s.workspace,
+		"LARK_BRIDGE_HOST=127.0.0.1", "LARK_BRIDGE_PORT=0", "LARK_BRIDGE_TOKEN=" + s.token,
+		"LARK_DB_PATH=" + filepath.Join(root, "lark.db"), "LARK_REPO_DIR=" + repo,
+		"LARK_OTA_DIR=" + root, "LARK_BOX3_OTA_DIR=" + root,
+		"LARK_OPENCODE_URL=" + s.model.url, "LARK_OPENCODE_DIR=" + s.workspace,
 	}
 	prefs := e2eInstallation(t, home, false)
 	for _, key := range []string{"TTS_MODEL_DIR", "GGML_VK_VISIBLE_DEVICES"} {
@@ -164,7 +164,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 
 func e2eInstallation(t *testing.T, home string, required bool) map[string]string {
 	t.Helper()
-	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "echoear/bridge.env")
+	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark/bridge.env")
 	raw, err := os.ReadFile(path)
 	if required && err != nil {
 		t.Fatal("cannot read private dedicated OpenCode configuration")
@@ -173,7 +173,7 @@ func e2eInstallation(t *testing.T, home string, required bool) map[string]string
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		k, v, _ := strings.Cut(line, "=")
 		switch strings.TrimSpace(k) {
-		case "ECHOEAR_OPENCODE_PASSWORD":
+		case "LARK_OPENCODE_PASSWORD":
 			if !required {
 				continue
 			}
@@ -274,7 +274,7 @@ func (s *e2eSuite) browser(t *testing.T, name string) *e2eCat {
 func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCat {
 	t.Helper()
 	name := s.prefix + " " + label
-	id := "echoear-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
+	id := "lark-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
 	width, height, shape, battery := 360, 360, "round", variant == "esp-vocat"
 	var pct, mv, charging any
 	if battery {

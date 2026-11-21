@@ -1,17 +1,17 @@
-menu "EchoEar"
-    config ECHOEAR_WIFI_SSID
+menu "Lark"
+    config LARK_WIFI_SSID
         string "Wi-Fi SSID"
         default ""
 
-    config ECHOEAR_WIFI_PASSWORD
+    config LARK_WIFI_PASSWORD
         string "Wi-Fi password"
         default ""
 
-    config ECHOEAR_BRIDGE_URL
+    config LARK_BRIDGE_URL
         string "Bridge base URL (no trailing slash)"
         default ""
 
-    config ECHOEAR_BRIDGE_TOKEN
+    config LARK_BRIDGE_TOKEN
         string "Bridge and device management token"
         default ""
 endmenu

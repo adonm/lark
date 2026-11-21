@@ -55,8 +55,8 @@ func replay(ctx context.Context, f fixture, label, numbers, base, workspace stri
 		if timeout <= 0 || timeout > 90*time.Second {
 			return nil, "", errors.New("live replay timeout must be greater than zero and at most 90s")
 		}
-		if !strings.HasPrefix(label, "Synthetic") && os.Getenv("ECHOEAR_EVAL_ALLOW_PRIVATE") != "1" {
-			return nil, "", errors.New("private replay requires ECHOEAR_EVAL_ALLOW_PRIVATE=1; your provider may receive the selected prompts")
+		if !strings.HasPrefix(label, "Synthetic") && os.Getenv("LARK_EVAL_ALLOW_PRIVATE") != "1" {
+			return nil, "", errors.New("private replay requires LARK_EVAL_ALLOW_PRIVATE=1; your provider may receive the selected prompts")
 		}
 		isolated, err := isolatedReplayURL(base)
 		if err != nil {
@@ -65,7 +65,7 @@ func replay(ctx context.Context, f fixture, label, numbers, base, workspace stri
 		if !filepath.IsAbs(workspace) {
 			return nil, "", errors.New("live replay requires an absolute disposable -workspace")
 		}
-		api := newOpenCode(isolated, os.Getenv("ECHOEAR_EVAL_PASSWORD"))
+		api := newOpenCode(isolated, os.Getenv("LARK_EVAL_PASSWORD"))
 		defer api.client.CloseIdleConnections()
 		agent, err := replayAgent(ctx, api, workspace)
 		if err != nil {
@@ -124,32 +124,32 @@ func replayAgent(ctx context.Context, oc openCode, workspace string) (agentModel
 	if err != nil {
 		return agentModel{}, err
 	}
-	if len(mcps) != 1 || mcps[0].Name != "echoear" || mcps[0].Status.Status != "connected" {
-		return agentModel{}, errors.New("disposable OpenCode must have only the connected echoear MCP")
+	if len(mcps) != 1 || mcps[0].Name != "lark" || mcps[0].Status.Status != "connected" {
+		return agentModel{}, errors.New("disposable OpenCode must have only the connected lark MCP")
 	}
 	a, err := data[struct {
 		ID    string
 		Model agentModel
-	}](ctx, oc, http.MethodGet, "/api/agent/echoear"+query, nil)
+	}](ctx, oc, http.MethodGet, "/api/agent/lark"+query, nil)
 	if err != nil {
 		return agentModel{}, err
 	}
-	if a.ID != "echoear" || a.Model.ProviderID == "" || a.Model.ID == "" {
-		return agentModel{}, errors.New("configure the EchoEar agent's model in disposable OpenCode")
+	if a.ID != "lark" || a.Model.ProviderID == "" || a.Model.ID == "" {
+		return agentModel{}, errors.New("configure the Lark agent's model in disposable OpenCode")
 	}
 	return a.Model, nil
 }
 
 func replayTurn(ctx context.Context, oc openCode, workspace string, model agentModel, text string) (_ []message, err error) {
 	input := map[string]any{
-		"title":    "EchoEar eval (disposable)",
+		"title":    "Lark eval (disposable)",
 		"location": map[string]string{"directory": workspace},
-		"agent":    "echoear",
+		"agent":    "lark",
 		"model":    model,
 		"permissions": []map[string]string{
 			{"action": "*", "resource": "*", "effect": "deny"},
 			{"action": "execute", "resource": "*", "effect": "allow"},
-			{"action": "echoear_*", "resource": "*", "effect": "allow"},
+			{"action": "lark_*", "resource": "*", "effect": "allow"},
 		},
 	}
 	// Don't cancel a create request on Ctrl-C before we know which ID to clean up.
@@ -181,7 +181,7 @@ func replayTurn(ctx context.Context, oc openCode, workspace string, model agentM
 	}()
 	_, err = data[struct{ ID string }](ctx, oc, http.MethodPost, path+"/prompt", map[string]any{
 		"text":     text,
-		"metadata": map[string]string{"echoEarSource": "typed"},
+		"metadata": map[string]string{"larkSource": "typed"},
 	})
 	if err != nil {
 		return nil, err

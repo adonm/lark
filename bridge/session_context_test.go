@@ -93,7 +93,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 			w.WriteHeader(404)
 		case "GET /api/info":
 			sendJSON(w, 200, object{})
-		case "POST /api/experimental/mcp/echoear/connect":
+		case "POST /api/experimental/mcp/lark/connect":
 			reconnects.Add(1)
 			if r.URL.Query().Get("location[directory]") != "/workspace" {
 				t.Error("MCP connect used the wrong workspace")
@@ -114,10 +114,10 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 			if connected.Load() {
 				status = "connected"
 			}
-			sendJSON(w, 200, object{"data": mcpServerStatus("echoear", status)})
+			sendJSON(w, 200, object{"data": mcpServerStatus("lark", status)})
 		case "POST /api/session":
 			var in struct{ Title string }
-			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Title != echoEarTitle(id, "Plum") || !connected.Load() {
+			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Title != larkTitle(id, "Plum") || !connected.Load() {
 				t.Error("session created without the new catalog or correct companion")
 			}
 			creates.Add(1)
@@ -139,7 +139,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 				want = "And what fruit grows there?"
 			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || !seeded.Load() || !connected.Load() ||
-				in.Text != "[Plum ("+id+") · web · typed]\n"+want || in.Metadata["echoEarSource"] != "typed" {
+				in.Text != "[Plum ("+id+") · web · typed]\n"+want || in.Metadata["larkSource"] != "typed" {
 				t.Errorf("current turn changed after handoff: %+v", in)
 			}
 			promptID = fmt.Sprintf("msg-user-%d", n)

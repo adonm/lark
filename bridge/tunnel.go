@@ -43,7 +43,7 @@ func (bin tunnelCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func findTunnelCLI(home string) string {
-	for _, candidate := range []string{os.Getenv("ECHOEAR_OPENTUNNEL_BIN"), "opentunnel", filepath.Join(home, ".local/bin/opentunnel")} {
+	for _, candidate := range []string{os.Getenv("LARK_OPENTUNNEL_BIN"), "opentunnel", filepath.Join(home, ".local/bin/opentunnel")} {
 		if candidate != "" {
 			if bin, err := exec.LookPath(candidate); err == nil {
 				return bin
@@ -68,7 +68,7 @@ var (
 	dnsHost    = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$`)
 	routeURL   = regexp.MustCompile(`https://[a-z0-9.-]+`)
 	scopeKey   = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	profileKey = regexp.MustCompile(`^echoear-[0-9a-f]{24}$`)
+	profileKey = regexp.MustCompile(`^lark-[0-9a-f]{24}$`)
 )
 
 func routeAddress(raw string) (string, string) {
@@ -229,7 +229,7 @@ func (m *tunnelManager) addLocked(ctx context.Context, id string) (object, error
 	if m.runner == nil {
 		return nil, problem(503, "OpenTunnel CLI not found")
 	}
-	record := tunnelRecord{DeviceID: id, Token: randomHex(16), Profile: "echoear-" + randomHex(12), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	record := tunnelRecord{DeviceID: id, Token: randomHex(16), Profile: "lark-" + randomHex(12), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	server, port, err := m.listen(v, record.Token, 0)
 	if err != nil {
 		return nil, problem(502, "Cannot start scoped listener")

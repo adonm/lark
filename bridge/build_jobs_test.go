@@ -32,8 +32,8 @@ func (s *buildStub) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch p {
-		case "/api/agent/echoear":
-			data(w, object{"id": "echoear", "model": s.model})
+		case "/api/agent/lark":
+			data(w, object{"id": "lark", "model": s.model})
 		case "/api/agent/" + builderAgent:
 			data(w, object{"id": builderAgent, "model": s.override})
 		case "/api/session":
@@ -44,7 +44,7 @@ func (s *buildStub) handler(t *testing.T) http.HandlerFunc {
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 				t.Error(err)
 			}
-			if in.ID == "" && in.Agent == "echoear" {
+			if in.ID == "" && in.Agent == "lark" {
 				in.ID = "ses_foreground_stub"
 			}
 			if in.Agent == builderAgent {
@@ -52,7 +52,7 @@ func (s *buildStub) handler(t *testing.T) http.HandlerFunc {
 				if model == (ocModel{}) {
 					model = s.model
 				}
-				if !strings.HasPrefix(in.ID, "ses_echoear_build_") || in.Model != model ||
+				if !strings.HasPrefix(in.ID, "ses_lark_build_") || in.Model != model ||
 					len(in.Permissions) != 1 || in.Permissions[0] != (ocPermission{"*", "*", "deny"}) {
 					t.Errorf("builder was not created with explicit model, ID and deny-all permissions")
 				}
@@ -127,7 +127,7 @@ func stubBuildBridge(t *testing.T, stub *buildStub, enabled bool, tts *atomic.In
 	t.Helper()
 	b, base := wsHarness(t, func(b *bridge, dir string) {
 		b.oc = testOpenCode(t, b.root, dir, stub.handler(t))
-		b.oc.settings = openCodeSettings("echoear")
+		b.oc.settings = openCodeSettings("lark")
 		if enabled {
 			b.builders = newBuildManager(b)
 		}
@@ -394,7 +394,7 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 func TestBuildProposesStorybookCompanion(t *testing.T) {
 	stub := &buildStub{allow: make(chan struct{}), reply: `{"companion":{"species":"owl","palette":"mint","accessory":"scarf"}}`}
 	b, _ := stubBuildBridge(t, stub, true, nil)
-	who := peer{DeviceID: "echoear-storybook-build", Character: "Bean"}
+	who := peer{DeviceID: "lark-storybook-build", Character: "Bean"}
 	job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "face"}, "Make me a mint owl wearing a scarf")
 	if err != nil || job == "" {
 		t.Fatal(job, err)
@@ -419,7 +419,7 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 		}
 		return sheet, nil
 	}}
-	who := peer{DeviceID: "echoear-portrait-build", Character: "Bean"}
+	who := peer{DeviceID: "lark-portrait-build", Character: "Bean"}
 	job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "face"}, "Make your face a hedgehog in a space suit")
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +437,7 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 	for _, kind := range []string{"edit", "face", "new"} {
 		t.Run(kind, func(t *testing.T) {
-			const device = "echoear-stale-build"
+			const device = "lark-stale-build"
 			who := peer{DeviceID: device, Character: "Cat"}
 			edit := `{"title":"Late title"}`
 			intent := buildIntent{kind: kind}
@@ -498,7 +498,7 @@ func TestBuildCancelAndRestartNeverPublish(t *testing.T) {
 			b, _ := stubBuildBridge(t, stub, false, nil)
 			b.builders = newBuildManager(b)
 			stop := runBuildManager(t, b)
-			who := peer{DeviceID: "echoear-build-cancel", Character: "Cat"}
+			who := peer{DeviceID: "lark-build-cancel", Character: "Cat"}
 			job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "new"}, "Make me a quiz")
 			if job == "" || err != nil {
 				t.Fatal(job, err)
@@ -546,7 +546,7 @@ func TestBuildForegroundLatencyStub(t *testing.T) {
 			stub := &buildStub{delay: delay, reply: quizProposal}
 			b, _ := stubBuildBridge(t, stub, background, nil)
 			start := time.Now()
-			result, err := b.turn(t.Context(), peer{DeviceID: "echoear-build-eval", Character: "Synthetic"}, prompt)
+			result, err := b.turn(t.Context(), peer{DeviceID: "lark-build-eval", Character: "Synthetic"}, prompt)
 			elapsed := time.Since(start)
 			t.Logf("stub foreground acknowledgement: %s (fixed model delay %s)", elapsed, delay)
 			if err != nil {

@@ -9,7 +9,7 @@ import (
 func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	d := testConnectWS(t, base, "unit", false)
-	const id = "echoear-rev"
+	const id = "lark-rev"
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
 		"caps": object{"pointer_rev": true}})
 	_, rev, _ := decodeDisplay(t, d.until(t, isDisplay))
@@ -49,7 +49,7 @@ func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
 func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.endpoint = testEndpointSettings() })
 	d := testConnectWS(t, base, "unit", false)
-	const id = "echoear-say-more"
+	const id = "lark-say-more"
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
 		"caps": object{"pointer_rev": true, "bridge_endpoint": true}})
 	d.until(t, hasWS("hello_ok", ""))
@@ -88,7 +88,7 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 func TestNativeWakeWordUsesTalkFlowOnlyWhenEnabled(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	d := testConnectWS(t, base, "unit", false)
-	const id = "echoear-wake"
+	const id = "lark-wake"
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
 		"caps": object{"wake_word": true, "bridge_endpoint": true}})
 	d.until(t, hasWS("hello_ok", ""))

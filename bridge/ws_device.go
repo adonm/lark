@@ -865,7 +865,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			}
 		}
 		if err != nil {
-			log.Printf("EchoEar screen: %v", err)
+			log.Printf("Lark screen: %v", err)
 			continue
 		}
 		d.scene, d.displayApp, d.svg = r.view, r.app, screen

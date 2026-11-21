@@ -50,7 +50,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "echoear-timer"
+	const id = "lark-timer"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
 	web := testConnectWS(t, base, "unit", false)
@@ -111,7 +111,7 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id, name = "echoear-scheduled", "stretch"
+	const id, name = "lark-scheduled", "stretch"
 	dev, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	dev.hello(t, id, "Cake")
 	web.json(t, object{"ev": "hello", "role": "web"})
@@ -136,7 +136,7 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 }
 
 func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echoear.db")
+	path := filepath.Join(t.TempDir(), "lark.db")
 	db := testDB(t, path)
 	now := time.Now().UTC()
 	const device = "virt-01234567"
@@ -203,7 +203,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 }
 
 func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
-	const id = "echoear-timer-retry"
+	const id = "lark-timer-retry"
 	b, base := wsHarness(t, func(b *bridge, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
@@ -235,7 +235,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 }
 
 func TestTimerWakeAgentGuard(t *testing.T) {
-	const device, other, sid = "echoear-timer", "echoear-other", "ses-reminder"
+	const device, other, sid = "lark-timer", "lark-other", "ses-reminder"
 	prompt, release := make(chan string, 1), make(chan struct{})
 	b, base := wsHarness(t, func(b *bridge, dir string) {
 		b.timers = newTimerManager(b)
@@ -276,7 +276,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 	go func() { defer close(finished); b.timers.fire(str(timer["id"]), nil) }()
 	select {
 	case got := <-prompt:
-		if got != "[Cake (echoear-timer) · hardware · timer]\nTimer fired: Timer" {
+		if got != "[Cake (lark-timer) · hardware · timer]\nTimer fired: Timer" {
 			t.Fatal(got)
 		}
 	case <-time.After(5 * time.Second):

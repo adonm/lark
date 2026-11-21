@@ -44,7 +44,7 @@ static esp_err_t set_volume(int level, bool persist)
     esp_err_t err = ESP_OK;
     if (persist && level != saved_volume) {
         nvs_handle_t nvs;
-        err = nvs_open("echoear", NVS_READWRITE, &nvs);
+        err = nvs_open("lark", NVS_READWRITE, &nvs);
         if (err == ESP_OK) {
             err = nvs_set_u8(nvs, "volume", level);
             if (err == ESP_OK) {
@@ -129,7 +129,7 @@ esp_err_t audio_init(void)
     volume_lock = xSemaphoreCreateMutex();
     ESP_GOTO_ON_FALSE(volume_lock, ESP_ERR_NO_MEM, fail, TAG, "Create volume lock");
     nvs_handle_t nvs;
-    if (nvs_open("echoear", NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open("lark", NVS_READONLY, &nvs) == ESP_OK) {
         uint8_t saved;
         if (nvs_get_u8(nvs, "volume", &saved) == ESP_OK && saved <= 100) {
             saved_volume = saved;

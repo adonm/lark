@@ -93,7 +93,7 @@ func (h *wsHub) shutdown() {
 		now := time.Now()
 		for key, p := range h.parents {
 			if err := h.parentAccount(key, p, now, true); err != nil {
-				log.Printf("EchoEar parent usage checkpoint for %s: %v", key, err)
+				log.Printf("Lark parent usage checkpoint for %s: %v", key, err)
 			}
 		}
 		for c := range h.clients {

@@ -270,7 +270,7 @@ func (b *bridge) changeCatPrepared(ctx context.Context, who peer, theme, op stri
 	next := current
 	profilesChanged := false
 	archive := func(c catState, replace bool) error {
-		if strings.HasPrefix(strings.ToLower(c.Name), "live-") || strings.HasPrefix(id, "echoear-live-") || catSlug(c.Name) == "" {
+		if strings.HasPrefix(strings.ToLower(c.Name), "live-") || strings.HasPrefix(id, "lark-live-") || catSlug(c.Name) == "" {
 			return nil
 		}
 		profilesChanged = true
@@ -498,9 +498,9 @@ func (b *bridge) syncCatTitle(ctx context.Context, who peer) {
 	if err != nil || sid == "" {
 		return
 	}
-	title := echoEarTitle(who.DeviceID, b.catFor(who).Name)
+	title := larkTitle(who.DeviceID, b.catFor(who).Name)
 	if err := b.oc.jsonCall(ctx, http.MethodPatch, "/api/session/"+sid, object{"title": title}, nil); err != nil {
-		log.Print("EchoEar could not update a cat session title")
+		log.Print("Lark could not update a cat session title")
 	}
 }
 

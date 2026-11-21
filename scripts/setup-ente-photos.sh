@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-data=${XDG_DATA_HOME:-$HOME/.local/share}/echoear
+data=${XDG_DATA_HOME:-$HOME/.local/share}/lark
 config=${XDG_CONFIG_HOME:-$HOME/.config}
 case "$*" in
     "") mode=sync ;;
@@ -22,7 +22,7 @@ case $(uname -m) in
         binary_checksum=fd5098d3207f407d78bada5862f835ff5b24e3649a0e97914278cc56526de6b3 ;;
     *) printf 'Ente Photos setup supports Linux x86_64 and aarch64.\n' >&2; exit 1 ;;
 esac
-install -d -m 700 -- "$data" "$data/bin" "$data/ente-cli" "$config/echoear"
+install -d -m 700 -- "$data" "$data/bin" "$data/ente-cli" "$config/lark"
 install -d -- "$config/systemd/user"
 stage=$(mktemp -d "$data/.ente-install.XXXXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
@@ -40,7 +40,7 @@ if [[ ! -x "$binary" || -L "$binary" ]] ||
 fi
 ln -sfn -- "ente-$version" "$data/bin/ente"
 install -m 700 -- "$repo/scripts/ente-export-job.sh" "$data/bin/ente-photo-job"
-python3 - "$config/systemd/user" "$data" "$config/echoear/ente-vault-key" "$mode" <<'PY'
+python3 - "$config/systemd/user" "$data" "$config/lark/ente-vault-key" "$mode" <<'PY'
 import sys
 from pathlib import Path
 
@@ -52,8 +52,8 @@ def quoted(path):
         "\\": "\\\\", '"': '\\"', "%": "%%", "$": "$$", "\n": "\\n", "\r": "\\r",
     })) + '"'
 
-(units / "echoear-ente-photos.service").write_text(f"""[Unit]
-Description=Refresh local EchoEar Ente Photos metadata
+(units / "lark-ente-photos.service").write_text(f"""[Unit]
+Description=Refresh local Lark Ente Photos metadata
 
 [Service]
 Type=oneshot
@@ -63,8 +63,8 @@ IOSchedulingClass=idle
 TimeoutStartSec=12h
 ExecStart={quoted(data / 'bin/ente-photo-job')} {mode} {quoted(data)} {quoted(key)}
 """)
-(units / "echoear-ente-photos.timer").write_text("""[Unit]
-Description=Refresh the local EchoEar Ente Photos library nightly
+(units / "lark-ente-photos.timer").write_text("""[Unit]
+Description=Refresh the local Lark Ente Photos library nightly
 
 [Timer]
 OnCalendar=*-*-* 02:30:00

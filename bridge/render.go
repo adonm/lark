@@ -731,12 +731,12 @@ func prepareScene(raw string, exit bool) (preparedScene, error) {
 				return fmt.Errorf("SVG combined transform is too large")
 			}
 		}
-		if n.attr["id"] != "" && !strings.HasPrefix(n.attr["id"], "echoear-paint-") {
-			n.attr["id"] = "echoear-paint-" + n.attr["id"]
+		if n.attr["id"] != "" && !strings.HasPrefix(n.attr["id"], "lark-paint-") {
+			n.attr["id"] = "lark-paint-" + n.attr["id"]
 		}
 		for _, k := range []string{"fill", "stroke"} {
-			if ref := n.attr[k]; strings.HasPrefix(ref, "url(#") && !strings.HasPrefix(ref, "url(#echoear-paint-") {
-				n.attr[k] = "url(#echoear-paint-" + ref[5:]
+			if ref := n.attr[k]; strings.HasPrefix(ref, "url(#") && !strings.HasPrefix(ref, "url(#lark-paint-") {
+				n.attr[k] = "url(#lark-paint-" + ref[5:]
 			}
 		}
 		for i, k := range svgTextAttrs {
@@ -773,10 +773,10 @@ func prepareScene(raw string, exit bool) (preparedScene, error) {
 				hits = append(hits, h)
 				hasExit = hasExit || isExitNode(id)
 				// The browser uses these logical bounds, not DOM geometry, for pointer and keyboard input.
-				n.attr["data-echoear-hit"] = fmt.Sprintf("%d %d %d %d", h.x1, h.y1, h.x2, h.y2)
+				n.attr["data-lark-hit"] = fmt.Sprintf("%d %d %d %d", h.x1, h.y1, h.x2, h.y2)
 			}
 		}
-		if n.attr["data-echoear-hit"] == "" {
+		if n.attr["data-lark-hit"] == "" {
 			if id != "" && !defs && !ok {
 				hitWarnings = append(hitWarnings, fmt.Sprintf(`control %q has data-id but no measurable bounds — add data-hit="x,y,w,h" or put data-id on a rect/circle/text`, id))
 			}
@@ -794,7 +794,7 @@ func prepareScene(raw string, exit bool) (preparedScene, error) {
 	}
 	background := root.background()
 	if exit && !hasExit {
-		pill, _ := parseSVG(`<svg><g data-id="echoear-exit" data-hit="137,304,86,32"><rect x="137" y="304" width="86" height="32" rx="16" ry="16" fill="#FFF2E7" stroke="#76463F" stroke-width="3"/><text x="180" y="326" text-anchor="middle" font-size="19" font-weight="bold" fill="#4C3036">Home</text></g></svg>`)
+		pill, _ := parseSVG(`<svg><g data-id="lark-exit" data-hit="137,304,86,32"><rect x="137" y="304" width="86" height="32" rx="16" ry="16" fill="#FFF2E7" stroke="#76463F" stroke-width="3"/><text x="180" y="326" text-anchor="middle" font-size="19" font-weight="bold" fill="#4C3036">Home</text></g></svg>`)
 		_ = walk(pill, rasterx.Identity, svgTextStyle{}, false, 4)
 		if root.attr["transform"] != "" || root.attr["opacity"] != "" {
 			// Keep the bridge's escape hatch outside the author's transform/opacity.
@@ -932,7 +932,7 @@ func directStyle(n *svgNode) bool {
 	for k, v := range n.attr {
 		switch k {
 		case "x", "y", "width", "height", "viewBox", "xmlns", "transform", "shape-rendering",
-			"aria-label", "data-id", "data-hit", "data-echoear-hit", "data-pose", "data-part", "data-sticker":
+			"aria-label", "data-id", "data-hit", "data-lark-hit", "data-pose", "data-part", "data-sticker":
 		case "d", "data-pixel-runs":
 			if len(n.pixelRuns) == 0 {
 				return false

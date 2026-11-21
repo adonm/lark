@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install EchoEar's OpenCode config without overwriting user model selections."""
+"""Install Lark's OpenCode config without overwriting user model selections."""
 
 import json
 import os
@@ -8,9 +8,9 @@ import tempfile
 from pathlib import Path
 
 directory, bridge = map(Path, sys.argv[1:3])
-source = Path(__file__).resolve().parent.parent / "config/opencode/echoear-fallback.js"
+source = Path(__file__).resolve().parent.parent / "config/opencode/lark-fallback.js"
 config = directory / "opencode.jsonc"
-package = "./echoear-model-router"
+package = "./lark-model-router"
 
 
 def put(path, content):
@@ -31,9 +31,9 @@ put(router / "index.js", source.read_bytes())
 if not config.exists():
     update = {
         "$schema": "https://opencode.ai/config.json",
-        "default_agent": "echoear",
-        "mcp": {"servers": {"echoear": {"type": "local", "command": [str(bridge), "mcp"]}}},
-        "agents": {"echoear": {"model": "opencode/gemini-4-hydrogen#low"}},
+        "default_agent": "lark",
+        "mcp": {"servers": {"lark": {"type": "local", "command": [str(bridge), "mcp"]}}},
+        "agents": {"lark": {"model": "opencode/gemini-4-hydrogen#low"}},
         "plugins": [{"package": package, "options": {"fallback": "opencode/claude-haiku-5-5"}}],
     }
     put(config, (json.dumps(update, indent=2) + "\n").encode())

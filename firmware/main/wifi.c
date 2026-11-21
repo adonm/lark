@@ -26,10 +26,10 @@ char device_mac[18];
 
 const char *wifi_character(void)
 {
-#ifdef ECHOEAR_BOX3
+#ifdef LARK_BOX3
     return "BOX-3";
 #else
-    return "EchoEar";
+    return "Lark";
 #endif
 }
 
@@ -147,11 +147,11 @@ esp_err_t wifi_start(wifi_state_cb_t on_state)
                         TAG, "Register IP events");
 
     wifi_config_t config = { 0 };
-    _Static_assert(sizeof(CONFIG_ECHOEAR_WIFI_SSID) - 1 <= sizeof(config.sta.ssid), "SSID too long");
-    _Static_assert(sizeof(CONFIG_ECHOEAR_WIFI_PASSWORD) - 1 <= sizeof(config.sta.password),
+    _Static_assert(sizeof(CONFIG_LARK_WIFI_SSID) - 1 <= sizeof(config.sta.ssid), "SSID too long");
+    _Static_assert(sizeof(CONFIG_LARK_WIFI_PASSWORD) - 1 <= sizeof(config.sta.password),
                    "Wi-Fi password too long");
-    memcpy(config.sta.ssid, CONFIG_ECHOEAR_WIFI_SSID, sizeof(CONFIG_ECHOEAR_WIFI_SSID) - 1);
-    memcpy(config.sta.password, CONFIG_ECHOEAR_WIFI_PASSWORD, sizeof(CONFIG_ECHOEAR_WIFI_PASSWORD) - 1);
+    memcpy(config.sta.ssid, CONFIG_LARK_WIFI_SSID, sizeof(CONFIG_LARK_WIFI_SSID) - 1);
+    memcpy(config.sta.password, CONFIG_LARK_WIFI_PASSWORD, sizeof(CONFIG_LARK_WIFI_PASSWORD) - 1);
     config.sta.threshold.authmode = config.sta.password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "Set STA mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &config), TAG, "Set STA config");

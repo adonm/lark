@@ -21,7 +21,7 @@ import (
 const e2eVoiceQuestion = "Why is the sky blue? Answer in one short sentence."
 
 func TestVirtualE2E(t *testing.T) {
-	switch mode := os.Getenv("ECHOEAR_E2E_MODE"); mode {
+	switch mode := os.Getenv("LARK_E2E_MODE"); mode {
 	case "stub", "real":
 		s := startE2E(t, mode == "real")
 		t.Run("IdleWake", func(t *testing.T) {

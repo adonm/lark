@@ -12,7 +12,7 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "echoear-timer-edit"
+	const id = "lark-timer-edit"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	timer := patchTimerTest(t, base, object{"device_id": id, "in_seconds": 60, "label": "First", "chime": "tap", "say": "Ready", "notes": "C5:150"}, false)
@@ -38,7 +38,7 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 
 func TestMCPHistoryCursorAndPhotoMetadata(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-history-page"
+	const id = "lark-history-page"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -77,7 +77,7 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	const speaker = "echoear-speaker"
+	const speaker = "lark-speaker"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, speaker, "Speaker")
 	device := func(id string) object { return stateMe(t, base, id)["device"].(object) }
@@ -129,7 +129,7 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 
 func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-face-parts"
+	const id = "lark-face-parts"
 	c := blankCat()
 	c.Name, c.Configured = "Cake", true
 	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)

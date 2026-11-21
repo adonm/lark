@@ -88,7 +88,7 @@ func liveJSON[T any](t *testing.T, c liveClient, path string, input any, raw []b
 
 func liveConfig(t *testing.T, home string) map[string]string {
 	t.Helper()
-	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "echoear/bridge.env")
+	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark/bridge.env")
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal("cannot read deployed bridge configuration")
@@ -96,7 +96,7 @@ func liveConfig(t *testing.T, home string) map[string]string {
 	out := map[string]string{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || (!strings.HasPrefix(key, "ECHOEAR_") && key != "TTS_MODEL_DIR" && key != "GGML_VK_VISIBLE_DEVICES") {
+		if !ok || (!strings.HasPrefix(key, "LARK_") && key != "TTS_MODEL_DIR" && key != "GGML_VK_VISIBLE_DEVICES") {
 			continue
 		}
 		value = strings.TrimSpace(value)
@@ -109,12 +109,12 @@ func liveConfig(t *testing.T, home string) map[string]string {
 		}
 		out[key] = env(key, value)
 	}
-	for _, key := range []string{"ECHOEAR_BRIDGE_TOKEN", "ECHOEAR_BRIDGE_PORT", "ECHOEAR_OPENCODE_AGENT",
-		"ECHOEAR_OPENCODE_URL", "ECHOEAR_OPENCODE_PASSWORD", "ECHOEAR_OPENCODE_DIR",
+	for _, key := range []string{"LARK_BRIDGE_TOKEN", "LARK_BRIDGE_PORT", "LARK_OPENCODE_AGENT",
+		"LARK_OPENCODE_URL", "LARK_OPENCODE_PASSWORD", "LARK_OPENCODE_DIR",
 		"TTS_MODEL_DIR", "GGML_VK_VISIBLE_DEVICES"} {
 		out[key] = env(key, out[key])
 	}
-	if !tokenRE.MatchString(out["ECHOEAR_BRIDGE_TOKEN"]) {
+	if !tokenRE.MatchString(out["LARK_BRIDGE_TOKEN"]) {
 		t.Fatal("missing live bridge token")
 	}
 	return out
@@ -123,7 +123,7 @@ func liveConfig(t *testing.T, home string) map[string]string {
 func liveOpenCode(t *testing.T, client *http.Client, home string, conf map[string]string) upstream {
 	t.Helper()
 	state := env("XDG_STATE_HOME", filepath.Join(home, ".local/state"))
-	api, err := openCodeUpstream(client, state, conf["ECHOEAR_OPENCODE_URL"], conf["ECHOEAR_OPENCODE_PASSWORD"])
+	api, err := openCodeUpstream(client, state, conf["LARK_OPENCODE_URL"], conf["LARK_OPENCODE_PASSWORD"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,10 +131,10 @@ func liveOpenCode(t *testing.T, client *http.Client, home string, conf map[strin
 }
 
 func liveOpenCodeDir(home string, conf map[string]string) string {
-	if dir := conf["ECHOEAR_OPENCODE_DIR"]; dir != "" {
+	if dir := conf["LARK_OPENCODE_DIR"]; dir != "" {
 		return dir
 	}
-	return filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "echoear/opencode/workspace")
+	return filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "lark/opencode/workspace")
 }
 
 func liveHealthy(t *testing.T, c liveClient) {
@@ -176,7 +176,7 @@ func liveSessions(t *testing.T, oc upstream, prefix string) {
 			found, err := ocData[[]session](ctx, oc, http.MethodGet, path, nil)
 			var ids []string
 			for _, s := range found {
-				if strings.HasPrefix(s.Title, "EchoEar: ") && strings.Contains(s.Title, prefix) && sessionIDRE.MatchString(s.ID) {
+				if strings.HasPrefix(s.Title, "Lark: ") && strings.Contains(s.Title, prefix) && sessionIDRE.MatchString(s.ID) {
 					ids = append(ids, s.ID)
 				}
 			}
@@ -220,26 +220,26 @@ func assertLiveActor(t *testing.T, oc upstream, sid string, settings ocSettings)
 func liveIsolated(t *testing.T, data string, conf map[string]string, token string, client *http.Client) liveClient {
 	t.Helper()
 	root := t.TempDir()
-	state := filepath.Join(root, "echoear")
+	state := filepath.Join(root, "lark")
 	if err := os.Mkdir(state, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{"echoear/stt-models", "echoear/tts-models"} {
+	for _, rel := range []string{"lark/stt-models", "lark/tts-models"} {
 		if err := os.Symlink(filepath.Join(data, rel), filepath.Join(root, rel)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	binary := os.Getenv("ECHOEAR_TEST_BIN")
+	binary := os.Getenv("LARK_TEST_BIN")
 	if binary == "" || !filepath.IsAbs(binary) {
 		t.Fatal("run scripts/check.sh --live to build an isolated bridge from this checkout")
 	}
 	cmd := exec.Command(binary)
-	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+root, "ECHOEAR_BRIDGE_TOKEN="+token, "ECHOEAR_BRIDGE_HOST=127.0.0.1",
-		"ECHOEAR_BRIDGE_PORT=0", "ECHOEAR_DB_PATH="+filepath.Join(state, "echoear.db"),
-		"ECHOEAR_TURSO_URL=", "ECHOEAR_TURSO_AUTH_TOKEN=", "ECHOEAR_OTA_DIR="+root, "ECHOEAR_REPO_DIR=..",
-		"ECHOEAR_OPENCODE_AGENT="+conf["ECHOEAR_OPENCODE_AGENT"],
-		"ECHOEAR_OPENCODE_URL="+conf["ECHOEAR_OPENCODE_URL"], "ECHOEAR_OPENCODE_PASSWORD="+conf["ECHOEAR_OPENCODE_PASSWORD"],
-		"ECHOEAR_OPENCODE_DIR="+filepath.Join(root, "workspace"), "ECHOEAR_OPENCODE_PAIR_PORT=0",
+	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+root, "LARK_BRIDGE_TOKEN="+token, "LARK_BRIDGE_HOST=127.0.0.1",
+		"LARK_BRIDGE_PORT=0", "LARK_DB_PATH="+filepath.Join(state, "lark.db"),
+		"LARK_TURSO_URL=", "LARK_TURSO_AUTH_TOKEN=", "LARK_OTA_DIR="+root, "LARK_REPO_DIR=..",
+		"LARK_OPENCODE_AGENT="+conf["LARK_OPENCODE_AGENT"],
+		"LARK_OPENCODE_URL="+conf["LARK_OPENCODE_URL"], "LARK_OPENCODE_PASSWORD="+conf["LARK_OPENCODE_PASSWORD"],
+		"LARK_OPENCODE_DIR="+filepath.Join(root, "workspace"), "LARK_OPENCODE_PAIR_PORT=0",
 		"TTS_MODEL_DIR="+conf["TTS_MODEL_DIR"], "GGML_VK_VISIBLE_DEVICES="+conf["GGML_VK_VISIBLE_DEVICES"])
 	logs, err := cmd.StderrPipe()
 	if err != nil || cmd.Start() != nil {
@@ -296,18 +296,18 @@ func TestLive(t *testing.T) {
 	client := pooledClient()
 	client.Timeout = 115 * time.Second
 	defer client.CloseIdleConnections()
-	port := conf["ECHOEAR_BRIDGE_PORT"]
+	port := conf["LARK_BRIDGE_PORT"]
 	if port == "" {
 		port = "8765"
 	}
-	c := liveClient{client, env("ECHOEAR_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port)), conf["ECHOEAR_BRIDGE_TOKEN"]}
+	c := liveClient{client, env("LARK_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port)), conf["LARK_BRIDGE_TOKEN"]}
 	liveHealthy(t, c)
 	unauthorized := c
 	unauthorized.token = ""
 	unauthorized.read(t, "/api/devices", nil, "", nil, 401)
 	unauthorized.read(t, "/api/chat", []byte("{}"), jsonType, nil, 401)
 	unauthorized.read(t, "/ota/latest.bin", nil, "", nil, 401)
-	run := "echoear-live-" + hex.EncodeToString([]byte(strconv.FormatInt(time.Now().UnixNano(), 36)))
+	run := "lark-live-" + hex.EncodeToString([]byte(strconv.FormatInt(time.Now().UnixNano(), 36)))
 
 	liveDevices := func(t *testing.T) map[string]string {
 		t.Helper()
@@ -372,11 +372,11 @@ func TestLive(t *testing.T) {
 		t.Logf("Parakeet decoded %d ms of synthetic speech in %d ms", probe.ClipMS, probe.STTMS)
 	})
 	t.Run("VoiceAndChat", func(t *testing.T) {
-		settings := openCodeSettings("echoear")
+		settings := openCodeSettings("lark")
 		settings.Model = ocModel{Provider: "test", ID: "deterministic"}
 		stub, oc := liveModelStub(t, settings.Model)
 		conf := maps.Clone(conf)
-		conf["ECHOEAR_OPENCODE_URL"], conf["ECHOEAR_OPENCODE_PASSWORD"], conf["ECHOEAR_OPENCODE_AGENT"] = stub, "", settings.Agent
+		conf["LARK_OPENCODE_URL"], conf["LARK_OPENCODE_PASSWORD"], conf["LARK_OPENCODE_AGENT"] = stub, "", settings.Agent
 		iso := liveIsolated(t, data, conf, run, client)
 		id := run + "-voice"
 		board := testConnectWS(t, iso.base, iso.token, false)
@@ -475,10 +475,10 @@ func liveModelStub(t *testing.T, model ocModel) (string, upstream) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/info":
 			data = object{}
-		case "GET /api/agent/echoear":
-			data = object{"id": "echoear", "model": model}
+		case "GET /api/agent/lark":
+			data = object{"id": "lark", "model": model}
 		case "POST /api/session", "GET " + path:
-			data = object{"id": sid, "agent": "echoear", "model": model, "permissions": openCodeSettings("echoear").Permissions}
+			data = object{"id": sid, "agent": "lark", "model": model, "permissions": openCodeSettings("lark").Permissions}
 		case "POST " + path + "/prompt":
 			var input struct{ Text string }
 			if json.NewDecoder(r.Body).Decode(&input) != nil {
@@ -503,7 +503,7 @@ func liveModelStub(t *testing.T, model ocModel) (string, upstream) {
 				w.WriteHeader(400)
 				return
 			}
-			messages = append(messages, object{"id": "assistant-" + id, "type": "assistant", "agent": "echoear", "model": model,
+			messages = append(messages, object{"id": "assistant-" + id, "type": "assistant", "agent": "lark", "model": model,
 				"finish": "stop", "content": []object{{"type": "text", "text": input.Text}}})
 		case "POST /api/experimental/session/" + sid + "/wait", "POST " + path + "/interrupt":
 			data = object{}

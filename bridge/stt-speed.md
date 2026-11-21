@@ -143,16 +143,16 @@ cd bridge
 CGO_CFLAGS="-I$stage/native/include" CGO_LDFLAGS="-L$stage/native/lib" \
   go test -tags parakeet -c -o "$stage/bakeoff"
 mkdir -p "$stage/audio"
-ECHOEAR_BAKEOFF=fixtures ECHOEAR_BAKEOFF_AUDIO="$stage/audio" \
-  ECHOEAR_REPLAY_KOKORO="$kokoro" "$stage/bakeoff" -test.v -test.run '^TestSTTBakeoff$'
+LARK_BAKEOFF=fixtures LARK_BAKEOFF_AUDIO="$stage/audio" \
+  LARK_REPLAY_KOKORO="$kokoro" "$stage/bakeoff" -test.v -test.run '^TestSTTBakeoff$'
 env -u DISPLAY -u WAYLAND_DISPLAY GGML_VK_VISIBLE_DEVICES=0 \
-  ECHOEAR_BAKEOFF=parakeet ECHOEAR_BAKEOFF_AUDIO="$stage/audio" \
-  ECHOEAR_BAKEOFF_MODEL="$model" "$stage/bakeoff" -test.v -test.run '^TestSTTBakeoff$'
+  LARK_BAKEOFF=parakeet LARK_BAKEOFF_AUDIO="$stage/audio" \
+  LARK_BAKEOFF_MODEL="$model" "$stage/bakeoff" -test.v -test.run '^TestSTTBakeoff$'
 ```
 
-Use `ECHOEAR_BAKEOFF=sherpa|sherpa-stream` for the other
-paths, `ECHOEAR_BAKEOFF_THREADS=1|4|8|16` for Sherpa, and
-`ECHOEAR_BAKEOFF_ONNX_EXT=.onnx` for FP32.
+Use `LARK_BAKEOFF=sherpa|sherpa-stream` for the other
+paths, `LARK_BAKEOFF_THREADS=1|4|8|16` for Sherpa, and
+`LARK_BAKEOFF_ONNX_EXT=.onnx` for FP32.
 For the current endpoint replay, use the documented
 [`TestEndpointReplay` command](turn-taking.md#synthetic-replay).
 

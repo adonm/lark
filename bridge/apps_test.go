@@ -78,7 +78,7 @@ func (s *testWS) helloV2(t *testing.T, id, cat string) wsFrame {
 func isDisplay(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 0 && f.data[0] == 0x03 }
 
 func TestAppSandboxAndErrors(t *testing.T) {
-	players := []appPlayer{{"echoear-test", "Cake", 0}}
+	players := []appPlayer{{"lark-test", "Cake", 0}}
 	for _, tc := range []struct{ code, want string }{
 		{`while (true) {}`, "timeout"},
 		{`function init(){for(;;){}} function render(){return "<svg/>"}`, "timeout"},
@@ -117,7 +117,7 @@ func TestAppSandboxAndErrors(t *testing.T) {
 
 func TestWhackAMonsterOnV2Board(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-monster"
+	const id = "lark-monster"
 	device := testConnectWS(t, base, "unit", false)
 	first := device.helloV2(t, id, "Cake")
 	r, _, _ := decodeDisplay(t, first)
@@ -176,7 +176,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 
 func TestBrowserAppDragAndUp(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-slider"
+	const id = "lark-slider"
 	board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	board.helloV2(t, id, "Cake")
 	web.json(t, object{"ev": "hello", "role": "web"})
@@ -246,7 +246,7 @@ func TestNativeAppDragAndUp(t *testing.T) {
 	} {
 		t.Run(tc.board, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
-			const id = "echoear-gesture"
+			const id = "lark-gesture"
 			board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 			board.json(t, object{"ev": "hello", "role": "device", "device_id": id, "proto": 2,
 				"board": tc.board, "width": tc.width, "height": tc.height, "shape": tc.shape})
@@ -308,7 +308,7 @@ func TestNativeAppDragAndUp(t *testing.T) {
 
 func TestAppStatePatchAcrossPlayers(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const boardID, webID = "echoear-player", "phone-cafe"
+	const boardID, webID = "lark-player", "phone-cafe"
 	board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	board.helloV2(t, boardID, "Cake")
 	web.hello(t, webID, "Mint")
@@ -382,7 +382,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 
 func TestAppAndEmitNamedSFX(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-sfx"
+	const id = "lark-sfx"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, id, "Cake")
 	const code = `
@@ -440,7 +440,7 @@ func TestAppAndEmitNamedSFX(t *testing.T) {
 
 func TestAppSFXChimeAndUnknownSoundKeepGameRunning(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-game"
+	const id = "lark-game"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	const code = `
@@ -479,7 +479,7 @@ func TestAppSFXChimeAndUnknownSoundKeepGameRunning(t *testing.T) {
 
 func TestAppExitAcceptsBothControlIDs(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-app-exit"
+	const id = "lark-app-exit"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	for _, exit := range []string{exitNode, "lark-exit"} {
@@ -497,7 +497,7 @@ func TestAppExitAcceptsBothControlIDs(t *testing.T) {
 
 func TestAppLaunchReportsLayoutWarnings(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const roundID, rectID = "echoear-round", "box3-rect"
+	const roundID, rectID = "lark-round", "box3-rect"
 	for _, dev := range []struct{ id, board string }{{roundID, "esp-vocat"}, {rectID, "esp-box-3"}} {
 		c := testConnectWS(t, base, "unit", false)
 		c.json(t, object{"ev": "hello", "role": "device", "device_id": dev.id, "proto": 2, "board": dev.board})
@@ -526,7 +526,7 @@ func TestAppLaunchReportsLayoutWarnings(t *testing.T) {
 
 func TestAppLaunchWarnsOnDataIDWithoutBounds(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-monsters"
+	const id = "lark-monsters"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Mint")
 	const warning = `control "m0" has data-id but no measurable bounds — add data-hit="x,y,w,h" or put data-id on a rect/circle/text`
@@ -548,7 +548,7 @@ func TestAppSaveDoesNotCommitStaleLaunch(t *testing.T) {
 	for _, change := range []string{"view changed", "disconnected"} {
 		t.Run(change, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
-			const id, name = "echoear-stale", "stale-app"
+			const id, name = "lark-stale", "stale-app"
 			board := testConnectWS(t, base, "unit", false)
 			board.helloV2(t, id, "Cake")
 			conn, err := b.db.Conn(t.Context())
@@ -591,7 +591,7 @@ func TestAppSaveDoesNotCommitStaleLaunch(t *testing.T) {
 
 func TestAppStoreEffectsRollBackOnWriteFailure(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-storage-full"
+	const id = "lark-storage-full"
 	const code = `function render(){return "<svg/>"} function onTap(){storeSet("k1",true); storeSet("overflow",true);}`
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, id, "Cake")
@@ -672,7 +672,7 @@ func TestTicTacToePersonalizedAndAuthoritative(t *testing.T) {
 
 func TestSVGDirtyFrameMatchesBrowserAndExit(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-rect"
+	const id = "lark-rect"
 	board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	first, _, initial := decodeDisplay(t, board.helloV2(t, id, "Cake"))
 	if first != image.Rect(0, 0, 360, 360) {

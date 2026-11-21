@@ -24,6 +24,6 @@ target_link_options(${COMPONENT_LIB} INTERFACE
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror=return-type -Wno-unused-parameter)
 idf_build_get_property(project_name PROJECT_NAME)
-if(project_name STREQUAL "echoear_box3")
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE ECHOEAR_BOX3=1)
+if(project_name STREQUAL "lark_box3")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE LARK_BOX3=1)
 endif()

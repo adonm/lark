@@ -55,13 +55,13 @@ type e2eSession struct {
 
 func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 	t.Helper()
-	m := &e2eModel{client: s.client, settings: openCodeSettings("echoear"), sessions: map[string]*e2eSession{},
+	m := &e2eModel{client: s.client, settings: openCodeSettings("lark"), sessions: map[string]*e2eSession{},
 		photo: map[string]bool{}, build: make(chan struct{}), followUp: make(chan struct{}),
 		events: make(chan ocEvent, 64), usage: map[ocModel]int{}, tools: map[string]int{}}
 	m.settings.Model = ocModel{Provider: "test", ID: "deterministic"}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.stub(w, r, s) })
 	if s.real {
-		pass := env("ECHOEAR_OPENCODE_PASSWORD", e2eInstallation(t, home, true)["ECHOEAR_OPENCODE_PASSWORD"])
+		pass := env("LARK_OPENCODE_PASSWORD", e2eInstallation(t, home, true)["LARK_OPENCODE_PASSWORD"])
 		if pass == "" {
 			t.Fatal("dedicated OpenCode password is missing")
 		}
@@ -70,7 +70,7 @@ func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 		if err != nil {
 			t.Fatal("cannot configure the dedicated OpenCode upstream")
 		}
-		m.alias = "echoear_e2e_" + randomHex(5)
+		m.alias = "lark_e2e_" + randomHex(5)
 		m.permission = []ocPermission{{"*", "*", "deny"}, {"execute", "*", "allow"},
 			{m.alias + "_*", "*", "allow"}}
 		q := e2eLocation(s.workspace)
@@ -82,13 +82,13 @@ func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 			configured, err := ocData[struct {
 				ID    string
 				Model ocModel
-			}](t.Context(), m.api, "GET", "/api/agent/echoear"+q, nil)
-			if err == nil && configured.ID == "echoear" && configured.Model.Provider != "" && configured.Model.ID != "" {
+			}](t.Context(), m.api, "GET", "/api/agent/lark"+q, nil)
+			if err == nil && configured.ID == "lark" && configured.Model.Provider != "" && configured.Model.ID != "" {
 				m.settings.Model = configured.Model
 				break
 			}
 			if time.Now().After(until) {
-				t.Fatal("cannot read agents.echoear.model in the dedicated OpenCode location")
+				t.Fatal("cannot read agents.lark.model in the dedicated OpenCode location")
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -218,7 +218,7 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	query := r.URL.Query()
 	switch {
 	case path == "/api/info" && method == "GET":
-	case path == "/api/experimental/mcp/echoear/connect" && method == "POST":
+	case path == "/api/experimental/mcp/lark/connect" && method == "POST":
 		// The bridge may reconnect only this fixture's MCP in its own workspace.
 		path = "/api/experimental/mcp/" + m.alias + "/connect"
 		query.Set("location[directory]", s.workspace)
@@ -233,19 +233,19 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		}
 		for _, row := range rows {
 			if row.Name == m.alias {
-				writeStubJSON(w, mcpServerStatus("echoear", row.Status.Status))
+				writeStubJSON(w, mcpServerStatus("lark", row.Status.Status))
 				return
 			}
 		}
 		writeStubJSON(w, []object{})
 		return
-	case (path == "/api/agent/echoear" || path == "/api/agent/"+builderAgent || path == "/api/event") && method == "GET":
+	case (path == "/api/agent/lark" || path == "/api/agent/"+builderAgent || path == "/api/event") && method == "GET":
 		query.Set("location[directory]", s.workspace)
 	case create:
 		in := readInput()
 		location, _ := in["location"].(object)
 		title, agent, id := str(in["title"]), str(in["agent"]), str(in["id"])
-		foreground := agent == "echoear" && strings.HasPrefix(title, "EchoEar: "+s.prefix+" ") && id == ""
+		foreground := agent == "lark" && strings.HasPrefix(title, "Lark: "+s.prefix+" ") && id == ""
 		builder := agent == builderAgent && title == builderTitle && strings.HasPrefix(id, builderSessionPrefix) && sessionIDRE.MatchString(id)
 		if location["directory"] != s.workspace || !foreground && !builder {
 			w.WriteHeader(403)
@@ -456,11 +456,11 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	case "GET /api/info":
 		writeStubJSON(w, object{})
 		return
-	case "POST /api/experimental/mcp/echoear/connect":
+	case "POST /api/experimental/mcp/lark/connect":
 		w.WriteHeader(204)
 		return
 	case "GET /api/mcp":
-		writeStubJSON(w, mcpServerStatus("echoear", "connected"))
+		writeStubJSON(w, mcpServerStatus("lark", "connected"))
 		return
 	case "GET /api/event":
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -480,8 +480,8 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	case "GET /api/session":
 		writeStubJSON(w, []object{})
 		return
-	case "GET /api/agent/echoear":
-		writeStubJSON(w, object{"id": "echoear", "model": m.settings.Model})
+	case "GET /api/agent/lark":
+		writeStubJSON(w, object{"id": "lark", "model": m.settings.Model})
 		return
 	case "GET /api/agent/" + builderAgent:
 		writeStubJSON(w, object{"id": builderAgent})

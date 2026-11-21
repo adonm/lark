@@ -1,5 +1,5 @@
 [Unit]
-Description=EchoEar OpenCode pairing on the LAN
+Description=Lark OpenCode pairing on the LAN
 
 [Socket]
 ListenStream=0.0.0.0:49376

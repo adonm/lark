@@ -90,7 +90,7 @@ func (b *bridge) runSchemaUpgrade(ctx context.Context, delay, maxDelay time.Dura
 			b.diag.mu.Unlock()
 			return
 		}
-		log.Printf("EchoEar MCP schema upgrade pending: %v", err)
+		log.Printf("Lark MCP schema upgrade pending: %v", err)
 		next := time.Now().Add(delay).UTC()
 		b.diag.mu.Lock()
 		b.diag.refresh.State, b.diag.refresh.RetryAt = "waiting", &next
@@ -125,7 +125,7 @@ func (b *bridge) syncSchemaUpgrade(ctx context.Context) error {
 	}
 	refresh, stop := context.WithTimeout(ctx, 15*time.Second)
 	defer stop()
-	if err := b.oc.ReconnectMCP(refresh, "echoear"); err != nil {
+	if err := b.oc.ReconnectMCP(refresh, "lark"); err != nil {
 		return err
 	}
 	return b.db.setMeta(ctx, mcpSchemaMeta, current)
@@ -175,7 +175,7 @@ func (b *bridge) compactAPI(w http.ResponseWriter, r *http.Request) (any, error)
 	var reconnectErr error
 	if reconnect {
 		refresh, stop := context.WithTimeout(ctx, 15*time.Second)
-		reconnectErr = b.oc.ReconnectMCP(refresh, "echoear")
+		reconnectErr = b.oc.ReconnectMCP(refresh, "lark")
 		stop()
 	}
 	result, err := b.oc.compactActiveSessions(ctx, device)

@@ -123,7 +123,7 @@ var publicLabel = regexp.MustCompile(`^(Cake|Mint|greg|Synthetic)(/[1-9][0-9]*)?
 var cats = []string{"Cake", "Mint", "greg"}
 
 func catMatches(label, title string) bool {
-	cat, ok := strings.CutPrefix(title, "EchoEar: ")
+	cat, ok := strings.CutPrefix(title, "Lark: ")
 	if !ok {
 		return false
 	}
@@ -182,14 +182,14 @@ func productionClient() (openCode, error) {
 		}
 		config = filepath.Join(home, ".config")
 	}
-	raw, err := os.ReadFile(filepath.Join(config, "echoear", "bridge.env"))
+	raw, err := os.ReadFile(filepath.Join(config, "lark", "bridge.env"))
 	if err != nil {
-		return openCode{}, errors.New("cannot read private EchoEar configuration")
+		return openCode{}, errors.New("cannot read private Lark configuration")
 	}
 	pass := ""
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		k, value, _ := strings.Cut(line, "=")
-		if strings.TrimSpace(k) == "ECHOEAR_OPENCODE_PASSWORD" {
+		if strings.TrimSpace(k) == "LARK_OPENCODE_PASSWORD" {
 			value = strings.TrimSpace(value)
 			if len(value) >= 2 && (value[0] == '\'' || value[0] == '"') && value[0] == value[len(value)-1] {
 				value = value[1 : len(value)-1]
@@ -198,7 +198,7 @@ func productionClient() (openCode, error) {
 		}
 	}
 	if pass == "" {
-		return openCode{}, errors.New("EchoEar OpenCode password is missing")
+		return openCode{}, errors.New("Lark OpenCode password is missing")
 	}
 	return newOpenCode(productionOC, pass), nil
 }

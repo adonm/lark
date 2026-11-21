@@ -195,7 +195,7 @@ func wsHarness(t *testing.T, setup func(*bridge, string)) (*bridge, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
-	db := testDB(t, filepath.Join(dir, "echoear.db"))
+	db := testDB(t, filepath.Join(dir, "lark.db"))
 	b := &bridge{root: ctx, token: "unit", db: db, peers: peers{deviceStore(db)}, history: &chatHistory{db}}
 	if setup != nil {
 		setup(b, dir)
@@ -284,7 +284,7 @@ func (s *testWS) watch(t *testing.T, id string) wsFrame {
 func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	dev := testConnectWS(t, base, "unit", false)
-	const id = "echoear-hello"
+	const id = "lark-hello"
 	dev.json(t, object{"ev": "hello", "role": "device", "proto": 1, "device_id": id, "character": "Cake"})
 	dev.until(t, hasWS("error", "firmware upgrade required"))
 	if list := apiObjects(t, base+"/api/devices", "devices"); len(list) != 0 {
@@ -315,7 +315,7 @@ func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 
 func TestWSMirrorAndControls(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-mirror"
+	const id = "lark-mirror"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
 	_, rev, _ := decodeDisplay(t, dev.until(t, isDisplay))
@@ -461,7 +461,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			name = "fail-safe"
 		}
 		t.Run(name, func(t *testing.T) {
-			const id = "echoear-dma"
+			const id = "lark-dma"
 			const samples = sampleRate * 80 / 1000
 			first := bytes.Repeat([]byte{12, 0}, samples)
 			tail := bytes.Repeat([]byte{23, 0}, samples)
@@ -517,7 +517,7 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &bridge{root: t.Context()}
 		c := &wsClient{role: "device", ctx: t.Context(), out: make(chan wsFrame, 8)}
-		d := &wsDevice{client: c, key: "echoear-no-ack", screen: roundScreen, cat: blankCat()}
+		d := &wsDevice{client: c, key: "lark-no-ack", screen: roundScreen, cat: blankCat()}
 		d.recording.start(time.Now(), "", false)
 		h := &wsHub{b: b, devices: map[string]*wsDevice{d.key: d}}
 		h.mu.Lock()
@@ -561,7 +561,7 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 		}
 	}()
 	from, to := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
-	from.hello(t, "echoear-a", "Cake")
+	from.hello(t, "lark-a", "Cake")
 	to.hello(t, "phone-000b", "Mint")
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	from.json(t, object{"ev": "rec_start", "target": "phone-000b"})
@@ -582,7 +582,7 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	closed = true
 	to.until(t, hasWS("svg", "Voice caption."))
 	to.json(t, object{"ev": "tap", "id": "reply", "x": 180, "y": 240})
-	to.until(t, hasWS("rec", `"target":"echoear-a"`))
+	to.until(t, hasWS("rec", `"target":"lark-a"`))
 	to.json(t, object{"ev": "rec_end", "cancelled": true})
 }
 
@@ -608,7 +608,7 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		defer cancel()
 		c := &wsClient{wire: &websocket{conn: server}, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 12)}
 		dev := &testWS{conn: client, in: bufio.NewReader(client)}
-		d := &wsDevice{client: c, key: "echoear-slow", screen: roundScreen, cat: blankCat()}
+		d := &wsDevice{client: c, key: "lark-slow", screen: roundScreen, cat: blankCat()}
 		h := &wsHub{devices: map[string]*wsDevice{d.key: d}}
 		go c.write()
 		start := time.Now()
@@ -691,7 +691,7 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 
 func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-abort"
+	const id = "lark-abort"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
 	play := func() json.Number {
@@ -758,7 +758,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	kick := make(chan struct{})
 	const first = "Stars release their own light. "
 	const last = "That lights nearby planets."
-	const raw = first + last + "\n```echoear-screen\n{\"title\":\"Night sky\",\"shapes\":[{\"t\":\"btn\",\"x\":121,\"y\":212,\"w\":118,\"h\":34,\"c\":\"#ffaa33\",\"s\":\"Fact\",\"tap\":\"Stars are bright.\"}]}\n```"
+	const raw = first + last + "\n```lark-screen\n{\"title\":\"Night sky\",\"shapes\":[{\"t\":\"btn\",\"x\":121,\"y\":212,\"w\":118,\"h\":34,\"c\":\"#ffaa33\",\"s\":\"Fact\",\"tap\":\"Stars are bright.\"}]}\n```"
 	b, base := wsHarness(t, func(b *bridge, dir string) {
 		b.stt = func(_ context.Context, got []byte) (string, error) {
 			if !bytes.Equal(got, pcm) {
@@ -811,7 +811,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 			case "/api/session/ses-ws/prompt":
 				var prompt struct{ Text string }
 				if err := json.NewDecoder(r.Body).Decode(&prompt); err != nil ||
-					prompt.Text != "[Cake (echoear-a) · hardware · voice]\nWhat are stars?" {
+					prompt.Text != "[Cake (lark-a) · hardware · voice]\nWhat are stars?" {
 					t.Errorf("unexpected voice prompt: %q (%v)", prompt.Text, err)
 				}
 				close(kick)
@@ -838,9 +838,9 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 			b.db, dir, ocSettings{})
 	})
 	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, "echoear-a", "Cake")
+	dev.hello(t, "lark-a", "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
-	mirror.watch(t, "echoear-a")
+	mirror.watch(t, "lark-a")
 	dev.json(t, object{"ev": "rec_start"})
 	dev.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm...)))
 	dev.json(t, object{"ev": "rec_end", "cancelled": false})
@@ -862,7 +862,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		if testObject(t, abort.data)["audio"] != testObject(t, start.data)["audio"] {
 			t.Fatal("one Stop tap must abort the audio that is playing")
 		}
-		entries := apiObjects(t, base+"/api/devices/echoear-a/messages", "messages")
+		entries := apiObjects(t, base+"/api/devices/lark-a/messages", "messages")
 		if len(entries) != 1 {
 			t.Fatal("Stop during eager playback must not commit a reply")
 		}
@@ -878,10 +878,10 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	eventually(t, func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()
-		d := b.ws.devices["echoear-a"]
+		d := b.ws.devices["lark-a"]
 		return !d.busy && !d.awaitAck && d.scene.title == ""
 	})
-	entries := apiObjects(t, base+"/api/devices/echoear-a/messages", "messages")
+	entries := apiObjects(t, base+"/api/devices/lark-a/messages", "messages")
 	if len(entries) != 2 || !slices.ContainsFunc(entries, func(v any) bool {
 		e := v.(object)
 		return e["id"] == "msg2" && e["text"] == first+last
@@ -896,7 +896,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		t.Fatalf("one voice turn expected, got %+v", diag.Turns)
 	}
 	turn := diag.Turns[0]
-	if turn.Device != "echoear-a" || turn.Source != "voice" || turn.STT == nil || turn.First == nil ||
+	if turn.Device != "lark-a" || turn.Source != "voice" || turn.STT == nil || turn.First == nil ||
 		turn.Total == nil || turn.TTS == nil || turn.E2E == nil || *turn.First > *turn.Total {
 		t.Fatalf("voice milestones missing or out of order: %+v", turn)
 	}

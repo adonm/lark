@@ -294,7 +294,7 @@ func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, str
 	path := "/api/session/" + sid
 	input := object{"text": prompt}
 	if source != "" {
-		input["metadata"] = object{"echoEarSource": source}
+		input["metadata"] = object{"larkSource": source}
 	}
 	if ctx.Err() != nil {
 		return "", o.unavailable(ctx.Err())

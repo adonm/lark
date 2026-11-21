@@ -360,7 +360,7 @@ func (m *timerManager) claim(id string, expected *timerHandle) (savedTimer, bool
 		case errors.Is(err, sql.ErrNoRows):
 			m.stopLocked(id)
 		case m.ctx.Err() == nil:
-			log.Print("EchoEar could not claim timer")
+			log.Print("Lark could not claim timer")
 			// The callback may already have fired; a lone map entry cannot retry.
 			m.stopLocked(id)
 			m.armLocked(id, timerGrace)
@@ -491,7 +491,7 @@ func (b *bridge) deliverTimer(ctx context.Context, t savedTimer) {
 		if t.AppName != "" {
 			defer func() {
 				if _, err := b.runSavedApp(ctx, t.DeviceID, t.AppName, nil); err != nil && ctx.Err() == nil {
-					log.Printf("EchoEar could not launch timer app %q: %v", t.AppName, err)
+					log.Printf("Lark could not launch timer app %q: %v", t.AppName, err)
 				}
 			}()
 		}

@@ -7,8 +7,8 @@ Clients without bridge endpoint support keep their own VAD.
 ## Policy
 
 `scripts/setup-host.sh` installs `silero_vad_v5.onnx` from the Sherpa ONNX
-`asr-models` release at `$XDG_DATA_HOME/echoear/stt-models/` (defaults to
-`~/.local/share/echoear/stt-models/`). Setup and bridge startup verify SHA-256
+`asr-models` release at `$XDG_DATA_HOME/lark/stt-models/` (defaults to
+`~/.local/share/lark/stt-models/`). Setup and bridge startup verify SHA-256
 `6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396`.
 The bridge does not download models or need an endpoint environment flag.
 Install the model before upgrading the bridge binary.
@@ -125,9 +125,9 @@ Run with the `stage` prefix from the [STT build](stt-speed.md#build-and-reproduc
 source scripts/go-bin.sh
 GO_BIN=$(resolve_go)
 cd bridge
-ECHOEAR_REPLAY_SILERO=/path/to/silero_vad_v5.onnx \
-ECHOEAR_REPLAY_KOKORO=/path/to/kokoro-multi-lang-v1_0 \
-ECHOEAR_BAKEOFF_MODEL="$stage/models/parakeet-unified-en-0.6b-Q8_0.gguf" \
+LARK_REPLAY_SILERO=/path/to/silero_vad_v5.onnx \
+LARK_REPLAY_KOKORO=/path/to/kokoro-multi-lang-v1_0 \
+LARK_BAKEOFF_MODEL="$stage/models/parakeet-unified-en-0.6b-Q8_0.gguf" \
 CGO_CFLAGS="-I$stage/native/include" CGO_LDFLAGS="-L$stage/native/lib" \
   "$GO_BIN" test -tags parakeet -count=1 -v -run '^TestEndpointReplay$'
 ```

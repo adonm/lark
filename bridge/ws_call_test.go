@@ -190,8 +190,8 @@ func TestWSCallDeclineBusyTimeoutAndDisconnect(t *testing.T) {
 	checkCallStates(t, b.ws, callNone, callNone)
 
 	old := testConnectWS(t, base, "unit", false)
-	old.hello(t, "echoear-legacy", "Legacy")
-	cake.json(t, object{"ev": "call", "target": "echoear-legacy"})
+	old.hello(t, "lark-legacy", "Legacy")
+	cake.json(t, object{"ev": "call", "target": "lark-legacy"})
 	cake.until(t, hasWS("svg", "firmware"))
 	cake.json(t, object{"ev": "call", "target": "offline"})
 	cake.until(t, hasWS("svg", "offline is offline"))

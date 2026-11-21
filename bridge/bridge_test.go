@@ -26,7 +26,7 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		id, source, kind string
 		web              bool
 	}{
-		{"echoear-33d8", "voice", "hardware", false},
+		{"lark-33d8", "voice", "hardware", false},
 		{"virt-1234abcd", "typed", "web", false},
 		{"phone-1234", "tap", "web", false},
 		{"other-id", "tap", "web", true},
@@ -45,7 +45,7 @@ func TestSentencesAndFence(t *testing.T) {
 	}
 	var s sentenceExtractor
 	var streamed []string
-	for _, delta := range []string{"**Whoa!** Dr. Lee found a 3.", "2-inch shell. ", "Ooh, awesome question!", " What made it spiral in circles?\n", "``", "`echoear-screen", "\nNever say this. \n```", "Not eager even after fence. "} {
+	for _, delta := range []string{"**Whoa!** Dr. Lee found a 3.", "2-inch shell. ", "Ooh, awesome question!", " What made it spiral in circles?\n", "``", "`lark-screen", "\nNever say this. \n```", "Not eager even after fence. "} {
 		streamed = append(streamed, s.add(delta)...)
 	}
 	want[2] = "Ooh, awesome question! What made it spiral in circles?"
@@ -218,10 +218,10 @@ func TestAudioStream(t *testing.T) {
 
 func TestStateAndDirectMessage(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "echoear.db")
+	path := filepath.Join(dir, "lark.db")
 	db := testDB(t, path)
 	p := peers{deviceStore(db)}
-	mint := peer{"echoear-mint", "Mint", "127.0.0.2", 8080, time.Now().Unix()}
+	mint := peer{"lark-mint", "Mint", "127.0.0.2", 8080, time.Now().Unix()}
 	if err := p.register(mint); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestStateAndDirectMessage(t *testing.T) {
 	if err != nil || !slices.Equal(targets(others, "everyone"), []peer{mint}) {
 		t.Fatalf("bad peer snapshot %+v %v", others, err)
 	}
-	for _, cmd := range []string{"Hey EchoEar, tell MINT: dinner is ready!", "Tell Mint — dinner is ready!", "Send echoear-mint, dinner is ready!"} {
+	for _, cmd := range []string{"Hey Lark, tell MINT: dinner is ready!", "Tell Mint — dinner is ready!", "Send lark-mint, dinner is ready!"} {
 		m := directMessage(others, directBody(cmd))
 		if m == nil || m.text != "dinner is ready!" || len(targets(others, m.target)) != 1 {
 			t.Fatalf("didn't match direct relay: %s", cmd)
@@ -331,7 +331,7 @@ func TestOpenCodeStreamingAndFallback(t *testing.T) {
 			defer cancel()
 			kick, early := make(chan struct{}), make(chan struct{})
 			const first = "Some ocean animals make their own light."
-			const reply = first + " They use it to find food.\n```echoear-screen\n{\"title\":\"Ocean\"}\n```"
+			const reply = first + " They use it to find food.\n```lark-screen\n{\"title\":\"Ocean\"}\n```"
 			var waits atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {

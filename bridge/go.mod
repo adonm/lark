@@ -1,4 +1,4 @@
-module echoear-bridge
+module lark-bridge
 
 go 1.26.0
 

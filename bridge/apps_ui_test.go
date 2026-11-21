@@ -147,7 +147,7 @@ func TestAppUIPagedTextPreservesContent(t *testing.T) {
 
 func TestAppUIPagedTextRawTaps(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-reader"
+	const id = "lark-reader"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Reader")
 	const code = `app = ui.pagedText({title:"Story",pages:["First",{title:"Second & <Last>",text:"Last"}],page:-3,fontSize:99});

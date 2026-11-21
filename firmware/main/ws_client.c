@@ -659,9 +659,9 @@ void ws_client_network_changed(bool online)
 
 esp_err_t ws_client_init(void)
 {
-    static char url[sizeof(CONFIG_ECHOEAR_BRIDGE_URL) + 5];
-    static const char headers[] = "X-Lark-Token: " CONFIG_ECHOEAR_BRIDGE_TOKEN "\r\n";
-    const char *base = CONFIG_ECHOEAR_BRIDGE_URL, *host, *scheme;
+    static char url[sizeof(CONFIG_LARK_BRIDGE_URL) + 5];
+    static const char headers[] = "X-Lark-Token: " CONFIG_LARK_BRIDGE_TOKEN "\r\n";
+    const char *base = CONFIG_LARK_BRIDGE_URL, *host, *scheme;
     if (!strncmp(base, "http://", 7)) {
         host = base + 7;
         scheme = "ws";

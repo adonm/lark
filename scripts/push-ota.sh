@@ -21,9 +21,9 @@ if [[ -z "$host" ]]; then
     exit 2
 fi
 
-env_file="${XDG_CONFIG_HOME:-$HOME/.config}/echoear/bridge.env"
-if [[ -z ${ECHOEAR_BRIDGE_TOKEN:-} && -r "$env_file" ]]; then
-    ECHOEAR_BRIDGE_TOKEN=$(python3 - "$env_file" <<'PY'
+env_file="${XDG_CONFIG_HOME:-$HOME/.config}/lark/bridge.env"
+if [[ -z ${LARK_BRIDGE_TOKEN:-} && -r "$env_file" ]]; then
+    LARK_BRIDGE_TOKEN=$(python3 - "$env_file" <<'PY'
 import shlex
 import sys
 from pathlib import Path
@@ -31,7 +31,7 @@ from pathlib import Path
 value = ""
 for line in Path(sys.argv[1]).read_text().splitlines():
     name, sep, raw = line.partition("=")
-    if sep and name.strip() == "ECHOEAR_BRIDGE_TOKEN":
+    if sep and name.strip() == "LARK_BRIDGE_TOKEN":
         value = raw
 try:
     parts = shlex.split(value)
@@ -43,8 +43,8 @@ print(parts[0] if parts else "")
 PY
     )
 fi
-if [[ ! ${ECHOEAR_BRIDGE_TOKEN:-} =~ ^[[:graph:]]+$ ]]; then
-    echo "Set ECHOEAR_BRIDGE_TOKEN or add it to $env_file." >&2
+if [[ ! ${LARK_BRIDGE_TOKEN:-} =~ ^[[:graph:]]+$ ]]; then
+    echo "Set LARK_BRIDGE_TOKEN or add it to $env_file." >&2
     exit 1
 fi
 base="http://$host"
@@ -87,7 +87,7 @@ PY
 )
 
 # Pass the header via stdin so the token is not an argument in the process list.
-printf 'X-Lark-Token: %s\n' "$ECHOEAR_BRIDGE_TOKEN" |
+printf 'X-Lark-Token: %s\n' "$LARK_BRIDGE_TOKEN" |
     curl --noproxy '*' -fsS --max-time 180 -H @- -H 'Expect:' -H 'Content-Type: application/octet-stream' \
         --data-binary "@$image" "$base/ota/upload"
 

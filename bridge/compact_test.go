@@ -57,11 +57,11 @@ func TestCompactAPIOnlyOnAuthenticatedLAN(t *testing.T) {
 			sendJSON(w, 200, object{"data": object{"id": "msg-test", "sessionID": "ses-cake", "type": "compaction"}})
 		case "/api/session/ses-cake/message/msg-test":
 			sendJSON(w, 200, object{"data": object{"id": "msg-test", "type": "compaction", "status": "completed"}})
-		case "/api/experimental/mcp/echoear/connect":
+		case "/api/experimental/mcp/lark/connect":
 			connects.Add(1)
 			w.WriteHeader(204)
 		case "/api/mcp":
-			sendJSON(w, 200, object{"data": mcpServerStatus("echoear", "connected")})
+			sendJSON(w, 200, object{"data": mcpServerStatus("lark", "connected")})
 		case "/api/experimental/session/ses-cake/wait":
 			w.WriteHeader(204)
 		default:

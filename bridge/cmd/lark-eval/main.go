@@ -19,13 +19,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "echoear-eval:", err)
+		fmt.Fprintln(os.Stderr, "lark-eval:", err)
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	usage := func() error { return errors.New("usage: echoear-eval {export|score|replay} [flags]") }
+	usage := func() error { return errors.New("usage: lark-eval {export|score|replay} [flags]") }
 	if len(args) == 0 {
 		return usage()
 	}
@@ -76,7 +76,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if err := saveFixture(root, f); err != nil {
 			return err
 		}
-		fmt.Fprintf(stderr, "Saved %d private session histories to the EchoEar eval store.\n", len(f.Sessions))
+		fmt.Fprintf(stderr, "Saved %d private session histories to the Lark eval store.\n", len(f.Sessions))
 	} else {
 		if input == "" {
 			root, err := storePath()
@@ -126,7 +126,7 @@ func storePath() (string, error) {
 	if !filepath.IsAbs(data) {
 		return "", errors.New("XDG_DATA_HOME must be absolute")
 	}
-	return filepath.Join(data, "echoear", "evals"), nil
+	return filepath.Join(data, "lark", "evals"), nil
 }
 
 func resolvedPath(abs string) (string, error) {

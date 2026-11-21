@@ -34,7 +34,7 @@ func facePoseSVGs() []string {
 func TestCallScreenTouchTargets(t *testing.T) {
 	cat := blankCat()
 	cat.Name = "Mint & Friends"
-	card := intercomCard{sender: peer{DeviceID: "echoear-mint", Character: cat.Name}, text: "A message for you!", cat: cat}
+	card := intercomCard{sender: peer{DeviceID: "lark-mint", Character: cat.Name}, text: "A message for you!", cat: cat}
 	for _, tc := range []struct {
 		name string
 		view sceneView
@@ -455,10 +455,10 @@ func TestPreparedSceneBrowserControlsMatchHits(t *testing.T) {
 	const raw = `<svg transform="translate(20 10)">
 		<defs><linearGradient id="paint" data-id="hidden" data-hit="0 0 200 200"/></defs>
 		<g data-id="no-bounds"><path data-id="no-hit" d="M0 0L3 4"/></g>
-		<g data-id="back" data-hit="15 20 30 35" data-echoear-hit="0 0 359 359">
+		<g data-id="back" data-hit="15 20 30 35" data-lark-hit="0 0 359 359">
 			<circle data-id="front" cx="25" cy="30" r="5"/>
 		</g>
-		<rect data-id="echoear-exit" x="700" y="700" width="5" height="5"/>
+		<rect data-id="lark-exit" x="700" y="700" width="5" height="5"/>
 	</svg>`
 	scene, err := prepareScene(raw, true)
 	if err != nil {
@@ -473,7 +473,7 @@ func TestPreparedSceneBrowserControlsMatchHits(t *testing.T) {
 				switch attr.Name.Local {
 				case "data-id":
 					id = attr.Value
-				case "data-echoear-hit":
+				case "data-lark-hit":
 					bounds = attr.Value
 				}
 			}
@@ -860,7 +860,7 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	box := testConnectWS(t, base, "unit", false)
 	round := testConnectWS(t, base, "unit", false)
 	web := testConnectWS(t, base, "unit", true)
-	const boxID, roundID = "box3-test", "echoear-round"
+	const boxID, roundID = "box3-test", "lark-round"
 	box.json(t, object{"ev": "hello", "role": "device", "device_id": boxID, "proto": 2, "firmware": "0.8.0",
 		"width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); r != image.Rect(0, 0, 320, 240) {

@@ -238,7 +238,7 @@ func (h *wsHub) parentRefresh(key string, now time.Time) parentReason {
 		}
 	}
 	if err != nil {
-		log.Printf("EchoEar parent controls unavailable for %s: %v", key, err)
+		log.Printf("Lark parent controls unavailable for %s: %v", key, err)
 	}
 	d := h.devices[key]
 	if d != nil && h.active(d) && d.parentReason != r {
@@ -290,7 +290,7 @@ func parentFrame(d *wsDevice) object {
 func (h *wsHub) parentFinishActivity(key string, now time.Time) {
 	if p := h.parents[key]; p != nil {
 		if err := h.parentAccount(key, p, now, true); err != nil {
-			log.Printf("EchoEar parent usage checkpoint for %s: %v", key, err)
+			log.Printf("Lark parent usage checkpoint for %s: %v", key, err)
 		}
 		p.using = h.parentUsing(h.devices[key], p)
 	}
@@ -301,7 +301,7 @@ func (h *wsHub) parentObserve(d *wsDevice, now time.Time) {
 		using := h.parentUsing(d, p)
 		if p.using != using {
 			if err := h.parentAccount(d.key, p, now, false); err != nil {
-				log.Printf("EchoEar parent usage for %s: %v", d.key, err)
+				log.Printf("Lark parent usage for %s: %v", d.key, err)
 			}
 			p.using = using
 		}

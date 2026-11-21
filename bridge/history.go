@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-func stripEchoEarHeader(text string) string {
+func stripLarkHeader(text string) string {
 	first, rest, ok := strings.Cut(text, "\n")
 	if ok && strings.HasPrefix(first, "[") && strings.HasSuffix(strings.TrimSuffix(first, "\r"), "]") {
-		if strings.HasPrefix(first, "[EchoEar: ") || strings.Contains(first, ") · hardware · ") || strings.Contains(first, ") · web · ") {
+		if strings.HasPrefix(first, "[Lark: ") || strings.Contains(first, ") · hardware · ") || strings.Contains(first, ") · web · ") {
 			return rest
 		}
 	}
@@ -56,7 +56,7 @@ const insertMessage = `INSERT INTO messages (id,device_id,role,sender,text,sourc
 	VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`
 
 func canonicalMessage(e chatEntry) (chatEntry, bool) {
-	e.Text = strings.TrimSpace(stripEchoEarHeader(e.Text))
+	e.Text = strings.TrimSpace(stripLarkHeader(e.Text))
 	switch e.Role {
 	case "user":
 		if e.Source == "timer" {
@@ -91,7 +91,7 @@ func messageValues(id string, e chatEntry) []any {
 func (h *chatHistory) add(id string, e chatEntry) {
 	if e, ok := canonicalMessage(e); ok {
 		if _, err := h.db.Exec(insertMessage, messageValues(id, e)...); err != nil {
-			log.Printf("EchoEar could not persist message: %v", err)
+			log.Printf("Lark could not persist message: %v", err)
 		}
 	}
 }

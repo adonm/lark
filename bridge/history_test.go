@@ -30,7 +30,7 @@ func TestDeviceResetHistory(t *testing.T) {
 	watcher := testConnectWS(t, base, "unit", true)
 	watcher.json(t, object{"ev": "hello", "role": "web"})
 	watcher.until(t, hasWS("peers", ""))
-	const other = "echoear-other"
+	const other = "lark-other"
 	for _, e := range []chatEntry{newChat("user", "You", "Hi", "typed"), newChat("cat", "Milo", "Hello", "typed")} {
 		b.history.add(id, e)
 		b.history.add(other, newChat(e.Role, e.Sender, "Other chat", e.Source))
@@ -98,7 +98,7 @@ func TestDeviceResetHistory(t *testing.T) {
 
 func TestHistoryCursorPagination(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-history"
+	const id = "lark-history"
 	tx, err := b.db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -156,15 +156,15 @@ func TestSessionMatchesDevice(t *testing.T) {
 		title, device string
 		want          bool
 	}{
-		{"EchoEar: echoear-33d8", "echoear-33d8", true},
-		{"EchoEar: scope-virt-1234", "virt-1234", true},
-		{"EchoEar: Cake (echoear-33d8)", "ECHOEAR-33D8", true},
-		{"EchoEar: echoear-33d80", "echoear-33d8", false},
-		{"EchoEar: scope-echoear-33d80", "echoear-33d8", false},
-		{"EchoEar: Cake (echoear-33d80)", "echoear-33d8", false},
-		{"EchoEar: Cake (echoear-33d8) archived", "echoear-33d8", false},
-		{"EchoEar: Cake(echoear-33d8)", "echoear-33d8", false},
-		{"Other: Cake (echoear-33d8)", "echoear-33d8", false},
+		{"Lark: lark-33d8", "lark-33d8", true},
+		{"Lark: scope-virt-1234", "virt-1234", true},
+		{"Lark: Cake (lark-33d8)", "LARK-33D8", true},
+		{"Lark: lark-33d80", "lark-33d8", false},
+		{"Lark: scope-lark-33d80", "lark-33d8", false},
+		{"Lark: Cake (lark-33d80)", "lark-33d8", false},
+		{"Lark: Cake (lark-33d8) archived", "lark-33d8", false},
+		{"Lark: Cake(lark-33d8)", "lark-33d8", false},
+		{"Other: Cake (lark-33d8)", "lark-33d8", false},
 	} {
 		if got := sessionMatchesDevice(tc.title, tc.device); got != tc.want {
 			t.Errorf("sessionMatchesDevice(%q, %q) = %t, want %t", tc.title, tc.device, got, tc.want)
@@ -191,9 +191,9 @@ func TestListDeviceSessionsFallback(t *testing.T) {
 					t.Error("unexpected path", r.URL.Path)
 				}
 				w.WriteHeader(tc.status)
-				fmt.Fprint(w, `{"data":[{"id":"ses_old","title":"EchoEar: echoear-history","time":{"created":100}}]}`)
+				fmt.Fprint(w, `{"data":[{"id":"ses_old","title":"Lark: lark-history","time":{"created":100}}]}`)
 			})
-			got, err := o.ListDeviceSessions(t.Context(), "echoear-history", tc.activeSID)
+			got, err := o.ListDeviceSessions(t.Context(), "lark-history", tc.activeSID)
 			if !slices.Equal(got, tc.want) || (err != nil) != tc.wantError {
 				t.Fatalf("ListDeviceSessions = %v, %v; want %v (error: %t)", got, err, tc.want, tc.wantError)
 			}

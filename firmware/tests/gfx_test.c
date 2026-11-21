@@ -14,7 +14,7 @@ static void expect_pixel(unsigned x, unsigned y, uint8_t hi, uint8_t lo)
 
 static void expect_art(unsigned x, unsigned y, uint8_t hi, uint8_t lo)
 {
-#ifdef ECHOEAR_BOX3
+#ifdef LARK_BOX3
     x = 40 + x * 2 / 3;
     y = y * 2 / 3;
 #endif

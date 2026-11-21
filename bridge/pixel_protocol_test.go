@@ -8,7 +8,7 @@ import (
 
 func TestMCPRejectsCompanionSprite(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-pixel-test"
+	const id = "lark-pixel-test"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "")
 	raw := str(stateMe(t, base, id)["cat"].(object)["face_svg"])
@@ -38,11 +38,11 @@ func TestMCPDeclarativeScreen(t *testing.T) {
 	_, base := wsHarness(t, nil)
 	round := testConnectWS(t, base, "unit", false)
 	box := testConnectWS(t, base, "unit", false)
-	round.helloV2(t, "echoear-pixel-round", "")
-	box.json(t, object{"ev": "hello", "role": "device", "device_id": "echoear-pixel-box", "proto": 2,
+	round.helloV2(t, "lark-pixel-round", "")
+	box.json(t, object{"ev": "hello", "role": "device", "device_id": "lark-pixel-box", "proto": 2,
 		"firmware": "0.9.5", "width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
 	box.until(t, isDisplay)
-	ids := []string{"echoear-pixel-round", "echoear-pixel-box"}
+	ids := []string{"lark-pixel-round", "lark-pixel-box"}
 	spec, err := decodeObject([]byte(screenTestSpec))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,6 @@ func TestMCPDeclarativeScreen(t *testing.T) {
 		`{"body":[{"type":"grid","items":[{"id":"a","label":"A","typo":false}]}]}`,
 		`{"body":[{"type":"meter","label":"bad","value":2,"max":0}]}`,
 		`{"body":[],"actions":[{"id":"lark-exit","label":"Bad"}]}`,
-		`{"body":[],"actions":[{"id":"echoear-exit","label":"Bad"}]}`,
 		`{"body":[{"type":"sprite","rows":["ww","ww"],"id":"a"}],"actions":[{"id":"a","label":"Dup"}]}`,
 		`{"body":[{"type":"sprite","rows":["ww","ww"],"palette":{"bad":"#112233"}}]}`,
 		`{"body":[{"type":"sprite","rows":["ww","wk"],"mirror":true}]}`,
@@ -92,7 +91,7 @@ func TestJSDeclarativeScreen(t *testing.T) {
 		if (!fullRows.includes('data-hit="0,0,12,6"') || !fullRows.includes('x="9"')) throw Error("sprite width");
 		try { ui.sprite(["kk","k."], {mirror:true}); throw Error("accepted mirror"); }
 		catch (e) { if (!e.message.includes("sprite options.mirror: unknown argument")) throw e; }
-		for (const id of ["lark-exit","echoear-exit"]) {
+		for (const id of ["lark-exit"]) {
 			try { ui.choices({choices:[{id,label:"no"}]}); throw Error("accepted reserved id"); }
 			catch (e) { if (!e.message.includes("reserved")) throw e; }
 		}

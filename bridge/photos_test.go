@@ -18,7 +18,7 @@ import (
 )
 
 func TestPhotoUploadDisplayAndScope(t *testing.T) {
-	const hardware = "echoear-photo"
+	const hardware = "lark-photo"
 	virtual := virtualClient{ID: "virt-12345678", Character: "Mint", CreatedAt: time.Now()}
 	b, base := wsHarness(t, func(b *bridge, _ string) {
 		b.virtual = virtualStore(b.db)

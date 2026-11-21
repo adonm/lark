@@ -19,9 +19,9 @@ import (
 const (
 	mcpProtocol = "2025-11-25"
 	mcpLimit    = 128 << 10
-	exitNode    = "echoear-exit"
+	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact EchoEar device IDs. Read keyed snapshots with state, change devices/cats/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
+	mcpInstructions = "Use exact Lark device IDs. Read keyed snapshots with state, change devices/cats/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
 )
 
 type rpcRequest struct {
@@ -115,7 +115,7 @@ func (b *bridge) serveMCP(w http.ResponseWriter, r *http.Request) {
 			version = mcpProtocol
 		}
 		result = object{"protocolVersion": version, "capabilities": object{"tools": object{}},
-			"serverInfo":   object{"name": "echoear", "version": "2.0.0"},
+			"serverInfo":   object{"name": "lark", "version": "2.0.0"},
 			"instructions": mcpInstructions}
 	case "ping":
 		result = object{}

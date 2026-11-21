@@ -8,7 +8,7 @@ import (
 
 func TestMCPSaveCurrentAndUpdateWithoutRelaunch(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-save"
+	const id = "lark-save"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	toolTest(t, base, "app", object{"devices": id, "template": "reader",
@@ -49,7 +49,7 @@ func TestMCPSaveCurrentAndUpdateWithoutRelaunch(t *testing.T) {
 
 func TestMCPDeviceLastAppError(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-broken"
+	const id = "lark-broken"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	const code = `function render(){return '<svg><rect x="130" y="140" width="100" height="50" data-id="broken"/></svg>'}

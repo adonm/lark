@@ -33,7 +33,7 @@ node --test config/opencode/*.test.mjs
     "$GO_BIN" test -race ./...
 )
 
-host_tests=$(mktemp -d "${TMPDIR:-/tmp}/echoear-check.XXXXXXXX")
+host_tests=$(mktemp -d "${TMPDIR:-/tmp}/lark-check.XXXXXXXX")
 trap 'rm -rf -- "$host_tests"' EXIT
 host_cc=(gcc -std=c11 -Wall -Wextra -Werror -I firmware/main "-fsanitize=address,undefined"
          -fno-sanitize-recover=all -fno-pie -no-pie)
@@ -49,7 +49,7 @@ printf 'PASS host VAD tests\n'
 
 for board in vocat box3; do
     flags=()
-    if [[ "$board" == box3 ]]; then flags+=(-DECHOEAR_BOX3=1); fi
+    if [[ "$board" == box3 ]]; then flags+=(-DLARK_BOX3=1); fi
     printf 'Host frame and graphics tests (%s)\n' "$board"
     "${host_cc[@]}" "${flags[@]}" firmware/tests/frame_test.c firmware/main/frame.c -o "$host_tests/frame"
     "$host_tests/frame"
@@ -73,12 +73,12 @@ done
 printf 'PASS tracked-file hygiene\n'
 
 if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
-    native=${ECHOEAR_PARAKEET_NATIVE:-}
+    native=${LARK_PARAKEET_NATIVE:-}
     if [[ -z $native ]]; then
         data_home=${XDG_DATA_HOME:-$HOME/.local/share}
         model=parakeet-unified-en-0.6b-Q8_0.gguf
         mkdir "$host_tests/models"
-        ln -s -- "$data_home/echoear/stt-models/$model" "$host_tests/models/$model"
+        ln -s -- "$data_home/lark/stt-models/$model" "$host_tests/models/$model"
         ./scripts/build-parakeet.sh "$host_tests" "$host_tests/models"
         native=$host_tests/native
     else
@@ -87,20 +87,20 @@ if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
     (cd -- "$native"; sha256sum --check --status SHA256SUMS)
     (
         cd bridge
-        test_bin="$host_tests/echoear-bridge"
+        test_bin="$host_tests/lark-bridge"
         CGO_CFLAGS="\"-I$native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}" \
         CGO_LDFLAGS="\"-L$native/lib\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" \
             "$GO_BIN" build -tags parakeet -o "$test_bin" .
         case "$1" in
             --live)
-                ECHOEAR_TEST_BIN="$test_bin" ECHOEAR_E2E_MODE=stub "$GO_BIN" test -tags=live -v -count=1 -run '^TestVirtualE2E$' . ;;
+                LARK_TEST_BIN="$test_bin" LARK_E2E_MODE=stub "$GO_BIN" test -tags=live -v -count=1 -run '^TestVirtualE2E$' . ;;
             --e2e-real)
-                ECHOEAR_TEST_BIN="$test_bin" ECHOEAR_E2E_MODE=real "$GO_BIN" test -tags=live -v -count=1 -run '^TestVirtualE2E$' . ;;
+                LARK_TEST_BIN="$test_bin" LARK_E2E_MODE=real "$GO_BIN" test -tags=live -v -count=1 -run '^TestVirtualE2E$' . ;;
             --deployed)
                 # Read-only installed-service and OTA checks. Never uploads or flashes.
-                ECHOEAR_TEST_BIN="$test_bin" "$GO_BIN" test -tags=live -v -count=1 -run '^TestLive' . ;;
+                LARK_TEST_BIN="$test_bin" "$GO_BIN" test -tags=live -v -count=1 -run '^TestLive' . ;;
         esac
     )
 elif [[ ${1-} == --real-model ]]; then
-    (cd bridge && ECHOEAR_REAL_MODEL=1 "$GO_BIN" test -tags=live -v -count=1 -run '^TestRealModelEchoEarCodeMode$' .)
+    (cd bridge && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
 fi

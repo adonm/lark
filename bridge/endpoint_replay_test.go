@@ -98,14 +98,14 @@ const replayBytesPerMS = sampleRate / 1000 * 2
 
 // Run explicitly: all audio is synthesized and kept in memory.
 func TestEndpointReplay(t *testing.T) {
-	path := os.Getenv("ECHOEAR_REPLAY_SILERO")
+	path := os.Getenv("LARK_REPLAY_SILERO")
 	if path == "" {
-		t.Skip("set ECHOEAR_REPLAY_SILERO to run local synthetic shadow replay")
+		t.Skip("set LARK_REPLAY_SILERO to run local synthetic shadow replay")
 	}
 	if err := checkEndpointModel(path); err != nil {
 		t.Fatal(err)
 	}
-	model := os.Getenv("ECHOEAR_BAKEOFF_MODEL")
+	model := os.Getenv("LARK_BAKEOFF_MODEL")
 	if err := checkParakeetModel(model); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestEndpointReplay(t *testing.T) {
 	if _, err := parakeet.transcribe(t.Context(), make([]byte, sampleRate*2)); err != nil {
 		t.Fatal(err)
 	}
-	kokoro := os.Getenv("ECHOEAR_REPLAY_KOKORO")
+	kokoro := os.Getenv("LARK_REPLAY_KOKORO")
 	tts := sherpa.NewOfflineTts(&sherpa.OfflineTtsConfig{
 		Model: sherpa.OfflineTtsModelConfig{Provider: "cpu", NumThreads: 2, Kokoro: sherpa.OfflineTtsKokoroModelConfig{
 			Model: filepath.Join(kokoro, "model.onnx"), Voices: filepath.Join(kokoro, "voices.bin"),
@@ -125,7 +125,7 @@ func TestEndpointReplay(t *testing.T) {
 		}}, MaxNumSentences: 1,
 	})
 	if tts == nil {
-		t.Fatal("set ECHOEAR_REPLAY_KOKORO to the local Kokoro model directory")
+		t.Fatal("set LARK_REPLAY_KOKORO to the local Kokoro model directory")
 	}
 	defer sherpa.DeleteOfflineTts(tts)
 	type score struct {

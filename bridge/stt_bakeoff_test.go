@@ -18,16 +18,16 @@ import (
 )
 
 func TestSTTBakeoff(t *testing.T) {
-	mode := os.Getenv("ECHOEAR_BAKEOFF")
+	mode := os.Getenv("LARK_BAKEOFF")
 	if mode == "" {
-		t.Skip("set ECHOEAR_BAKEOFF and ECHOEAR_BAKEOFF_AUDIO to run the local bake-off")
+		t.Skip("set LARK_BAKEOFF and LARK_BAKEOFF_AUDIO to run the local bake-off")
 	}
 	if mode == "fixtures" {
 		generateBakeoffAudio(t)
 		return
 	}
 	var audio [][]byte
-	files, err := filepath.Glob(filepath.Join(os.Getenv("ECHOEAR_BAKEOFF_AUDIO"), "*.wav"))
+	files, err := filepath.Glob(filepath.Join(os.Getenv("LARK_BAKEOFF_AUDIO"), "*.wav"))
 	if err != nil || len(files) == 0 {
 		t.Fatal("supply a directory of 16 kHz mono PCM WAV files")
 	}
@@ -42,8 +42,8 @@ func TestSTTBakeoff(t *testing.T) {
 		}
 		audio = append(audio, pcm)
 	}
-	threads, _ := strconv.Atoi(env("ECHOEAR_BAKEOFF_THREADS", "8"))
-	model := os.Getenv("ECHOEAR_BAKEOFF_MODEL")
+	threads, _ := strconv.Atoi(env("LARK_BAKEOFF_THREADS", "8"))
+	model := os.Getenv("LARK_BAKEOFF_MODEL")
 	var transcribe func(context.Context, []byte) (string, error)
 	var stream func(context.Context, []byte) (time.Duration, time.Duration, time.Duration, error)
 	initStart := time.Now()
@@ -176,7 +176,7 @@ func bakeoffVRAM(pid int) string {
 
 func bakeoffSherpa(t *testing.T, dir string, threads int) func(context.Context, []byte) (string, error) {
 	t.Helper()
-	ext := env("ECHOEAR_BAKEOFF_ONNX_EXT", ".int8.onnx")
+	ext := env("LARK_BAKEOFF_ONNX_EXT", ".int8.onnx")
 	r := sherpa.NewOfflineRecognizer(&sherpa.OfflineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{SampleRate: sampleRate, FeatureDim: 80},
 		ModelConfig: sherpa.OfflineModelConfig{
@@ -242,10 +242,10 @@ func bakeoffSherpaStream(r *sherpa.OnlineRecognizer, pcm []byte) (first, final, 
 }
 
 func generateBakeoffAudio(t *testing.T) {
-	dir := os.Getenv("ECHOEAR_BAKEOFF_AUDIO")
-	k := os.Getenv("ECHOEAR_REPLAY_KOKORO")
+	dir := os.Getenv("LARK_BAKEOFF_AUDIO")
+	k := os.Getenv("LARK_REPLAY_KOKORO")
 	if dir == "" || k == "" {
-		t.Fatal("set ECHOEAR_BAKEOFF_AUDIO (scratch output) and ECHOEAR_REPLAY_KOKORO")
+		t.Fatal("set LARK_BAKEOFF_AUDIO (scratch output) and LARK_REPLAY_KOKORO")
 	}
 	r := sherpa.NewOfflineTts(&sherpa.OfflineTtsConfig{
 		Model: sherpa.OfflineTtsModelConfig{Provider: "cpu", NumThreads: 2, Kokoro: sherpa.OfflineTtsKokoroModelConfig{

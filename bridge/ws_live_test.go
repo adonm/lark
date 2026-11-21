@@ -21,12 +21,12 @@ func TestLiveWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	conf := liveConfig(t, home)
-	port := conf["ECHOEAR_BRIDGE_PORT"]
+	port := conf["LARK_BRIDGE_PORT"]
 	if port == "" {
 		port = "8765"
 	}
-	base := env("ECHOEAR_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port))
-	token := conf["ECHOEAR_BRIDGE_TOKEN"]
+	base := env("LARK_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port))
+	token := conf["LARK_BRIDGE_TOKEN"]
 	client := pooledClient()
 	client.Timeout = 115 * time.Second
 	defer client.CloseIdleConnections()
@@ -44,16 +44,16 @@ func TestLiveWebSocket(t *testing.T) {
 		c.read(t, asset, nil, "", nil, 200)
 	}
 	c.read(t, "/api/diagnostics", nil, "", nil, 200)
-	token = "echoear-live-ws-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	token = "lark-live-ws-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	stub, _ := liveModelStub(t, ocModel{Provider: "test", ID: "deterministic"})
-	conf["ECHOEAR_OPENCODE_URL"], conf["ECHOEAR_OPENCODE_PASSWORD"] = stub, ""
+	conf["LARK_OPENCODE_URL"], conf["LARK_OPENCODE_PASSWORD"] = stub, ""
 	iso := liveIsolated(t, env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), conf, token, client)
 	base = iso.base
 
 	var suffix [2]byte
 	_, _ = rand.Read(suffix[:])
 	phoneID := "phone-" + hex.EncodeToString(suffix[:])
-	deviceID := "echoear-ws-test-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	deviceID := "lark-ws-test-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	from := testConnectWS(t, base, token, false)
 	first, rev, _ := decodeDisplay(t, from.helloV2(t, deviceID, "Cake"))
 	if first != image.Rect(0, 0, 360, 360) {

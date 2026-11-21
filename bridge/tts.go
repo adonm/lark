@@ -69,7 +69,7 @@ func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)
 	defer close(w.done)
 	engine, err := open()
 	if err != nil {
-		log.Printf("EchoEar TTS unavailable: %v", err)
+		log.Printf("Lark TTS unavailable: %v", err)
 		return
 	}
 	defer engine.close()

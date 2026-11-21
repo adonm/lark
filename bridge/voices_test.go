@@ -45,7 +45,7 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 		b.voices = deviceVoiceStore(b.db, "")
 		b.virtual = virtualStore(b.db)
 	})
-	const id = "echoear-legacy"
+	const id = "lark-legacy"
 	for old, want := range map[string]string{
 		"bf_alice": emmaVoice, "bf_isabella": emmaVoice, "bf_lily": emmaVoice,
 		"bm_daniel": fableVoice, "bm_lewis": fableVoice, "retired": heartVoice,
@@ -118,9 +118,9 @@ func TestDeviceVoiceDefaults(t *testing.T) {
 		device, character string
 		want              string
 	}{
-		{"echoear-33d8", "Cake", heartVoice},
-		{"ECHOEAR-2CAC", "Other", heartVoice},
-		{"echoear-other", "Mint", fableVoice},
+		{"lark-33d8", "Cake", heartVoice},
+		{"LARK-2CAC", "Other", heartVoice},
+		{"lark-other", "Mint", fableVoice},
 		{"virt-01234567", "Green Cat", fableVoice},
 		{"virt-1234abcd", "Greg", heartVoice},
 	} {
@@ -130,8 +130,8 @@ func TestDeviceVoiceDefaults(t *testing.T) {
 	}
 	configured := deviceVoiceStore(b.db, emmaVoice)
 	if !configured.allowed(heartVoice) ||
-		configured.get("echoear-33d8", "cake") != emmaVoice ||
-		configured.get("echoear-2cac", "mint") != fableVoice {
+		configured.get("lark-33d8", "cake") != emmaVoice ||
+		configured.get("lark-2cac", "mint") != fableVoice {
 		t.Fatal("explicit fallback voice or the Mint default was not respected")
 	}
 }
@@ -142,22 +142,22 @@ func TestDeviceVoiceAPI(t *testing.T) {
 		b.virtual = virtualStore(b.db)
 	})
 	cake := testConnectWS(t, base, "unit", false)
-	cake.hello(t, "echoear-33d8", "Cake")
+	cake.hello(t, "lark-33d8", "Cake")
 	profile := testObject(t, testRequest(t, "GET", base+"/api/scope", "unit", nil, 200))
 	if profile["scoped"] != false {
 		t.Fatal("LAN listener reported itself as scoped")
 	}
-	path := "/api/devices/ECHOEAR-33D8/voice"
+	path := "/api/devices/LARK-33D8/voice"
 	testRequest(t, "POST", base+path, "", object{"voice": fableVoice}, 401)
 	for _, voice := range []any{"bad", "bf_alice", 1, nil} {
 		testRequest(t, "POST", base+path, "unit", object{"voice": voice}, 400)
 	}
 	testRequest(t, "POST", base+path, "unit", object{"voice": heartVoice}, 200)
 	got := testObject(t, testRequest(t, "POST", base+path, "unit", object{"voice": fableVoice}, 200))
-	if got["device_id"] != "ECHOEAR-33D8" || got["voice"] != fableVoice {
+	if got["device_id"] != "LARK-33D8" || got["voice"] != fableVoice {
 		t.Fatalf("unexpected update response: %v", got)
 	}
-	if voice, _, err := voiceStore(b.db).get("echoear-33d8"); err != nil || voice != fableVoice {
+	if voice, _, err := voiceStore(b.db).get("lark-33d8"); err != nil || voice != fableVoice {
 		t.Fatal("override not persisted under lowercase device ID")
 	}
 	if d := apiObjects(t, base+"/api/devices", "devices")[0].(object); d["voice"] != fableVoice {
@@ -180,12 +180,12 @@ func TestDeviceVoiceAPI(t *testing.T) {
 	defer scoped.Close()
 	path = "/api/devices/" + id + "/voice"
 	testRequest(t, "POST", scoped.URL+path, "unit", object{"voice": emmaVoice}, 401)
-	testRequest(t, "POST", scoped.URL+"/api/devices/echoear-33d8/voice", "scoped-test", object{"voice": emmaVoice}, 403)
+	testRequest(t, "POST", scoped.URL+"/api/devices/lark-33d8/voice", "scoped-test", object{"voice": emmaVoice}, 403)
 	testRequest(t, "POST", scoped.URL+"/api/devices/virt-1234abcd/voice", "scoped-test", object{"voice": emmaVoice}, 403)
 	testRequest(t, "GET", scoped.URL+path, "scoped-test", nil, 404)
 	testRequest(t, "POST", scoped.URL+path, "scoped-test", object{"voice": heartVoice}, 200)
 	scope := testObject(t, testRequest(t, "GET", scoped.URL+"/api/scope", "scoped-test", nil, 200))
-	if scope["voice"] != heartVoice || !reflect.DeepEqual(profile["voices"], scope["voices"]) || len(scope["voices"].([]any)) != len(voiceCatalog) || b.voices.get("echoear-33d8", "cake") != fableVoice {
+	if scope["voice"] != heartVoice || !reflect.DeepEqual(profile["voices"], scope["voices"]) || len(scope["voices"].([]any)) != len(voiceCatalog) || b.voices.get("lark-33d8", "cake") != fableVoice {
 		t.Fatal("scoped update did not stay on the scoped cat")
 	}
 }
@@ -194,7 +194,7 @@ func TestMenuVoicePicker(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, dir string) {
 		b.voices = deviceVoiceStore(b.db, heartVoice)
 	})
-	const id = "echoear-33d8"
+	const id = "lark-33d8"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, id, "Cake")
 	web := testConnectWS(t, base, "unit", true)

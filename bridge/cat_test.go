@@ -103,7 +103,7 @@ func TestCatToolAndLiveFace(t *testing.T) {
 		!strings.Contains(clean, `data-pose="idle"`) {
 		t.Fatal("unexpected configured cat", cosmo)
 	}
-	expectValue(t, title, "EchoEar: Cosmo ("+id+")")
+	expectValue(t, title, "Lark: Cosmo ("+id+")")
 	frame := dev.until(t, hasWS("svg", "#172344"))
 	if !hasWS("svg", "#C0FFEE")(frame) || !hasWS("svg", "#1A1926")(frame) {
 		t.Fatal("live cat lost an extra or an animated eye")
@@ -130,13 +130,13 @@ func TestCatToolAndLiveFace(t *testing.T) {
 	if c := call(false, "reset_blank", object{})["cat"].(object); c["configured"] != false || c["personality"] != "" || c["face_svg"] != blankCat().FaceSVG {
 		t.Fatal("reset_blank left configured state", c)
 	}
-	expectValue(t, title, "EchoEar: New Cat ("+id+")")
+	expectValue(t, title, "Lark: New Cat ("+id+")")
 	dev.until(t, hasWS("svg", "Say hi to meet me!"))
 	got := call(false, "load_saved", object{"slug": "cosmo"})["cat"]
 	if !reflect.DeepEqual(cosmo, got) {
 		t.Fatal("profile did not round-trip", got)
 	}
-	expectValue(t, title, "EchoEar: Cosmo ("+id+")")
+	expectValue(t, title, "Lark: Cosmo ("+id+")")
 	dev.until(t, hasWS("svg", "#172344"))
 	catPath := "/api/devices/" + id + "/cat"
 	if out := post(catPath, object{"personality": "stargazer"}, 200); out["cat"].(object)["personality"] != "stargazer" {
@@ -326,7 +326,7 @@ func TestFaceSVGPaletteChanges(t *testing.T) {
 
 func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-33d8"
+	const id = "lark-33d8"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.json(t, object{"ev": "hello", "role": "device", "device_id": id, "character": "Cake", "proto": 2})
 	dev.until(t, hasWS("volume", `"level":55`))
@@ -362,7 +362,7 @@ func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 func TestCatReassign(t *testing.T) {
 	for _, mode := range []string{"swap", "move"} {
 		t.Run(mode, func(t *testing.T) {
-			const fromID, fromSID, toSID = "echoear-from", "ses_from", "ses_to"
+			const fromID, fromSID, toSID = "lark-from", "ses_from", "ses_to"
 			interrupts := make(chan string, 2)
 			titles := make(chan string, 2)
 			b, base := wsHarness(t, func(b *bridge, dir string) {
@@ -428,9 +428,9 @@ func TestCatReassign(t *testing.T) {
 			if mode == "move" {
 				wantName, wantBG, wantVoice, wantSID = "New Cat", "#FFF2E7", heartVoice, ""
 			} else {
-				expectValue(t, titles, toSID+":EchoEar: Target ("+fromID+")")
+				expectValue(t, titles, toSID+":Lark: Target ("+fromID+")")
 			}
-			expectValue(t, titles, fromSID+":EchoEar: Source ("+toID+")")
+			expectValue(t, titles, fromSID+":Lark: Source ("+toID+")")
 			mirror.until(t, hasWS("svg", wantBG))
 			to.until(t, hasWS("svg", "#654321"))
 			if gets := catObject(t, b, toID); !reflect.DeepEqual(gets, testObject(t, source)["cat"]) {

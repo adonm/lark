@@ -46,7 +46,7 @@ func parentRequest(t *testing.T, base, method, path string, args any, want int) 
 }
 
 func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
-	const id, peerID = "echoear-managed", "echoear-friend"
+	const id, peerID = "lark-managed", "lark-friend"
 	const path = "/api/devices/" + id + "/parent"
 	for _, reason := range []parentReason{parentQuiet, parentLimit, parentPause} {
 		t.Run(string(reason), func(t *testing.T) {
@@ -153,7 +153,7 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 func TestParentAdminAndChildPause(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.parentToken = testParentToken })
 	d := testConnectWS(t, base, "unit", false)
-	const id, text = "echoear-mint", "Stop working for five minutes so I can’t use you."
+	const id, text = "lark-mint", "Stop working for five minutes so I can’t use you."
 	const path = "/api/devices/" + id + "/parent"
 	d.hello(t, id, "Mint")
 	d.json(t, object{"ev": "text", "text": text})
@@ -229,7 +229,7 @@ func TestParentTokenSeparateAndPrivate(t *testing.T) {
 
 func TestParentTearsDownActiveAppCallAndOfflineChat(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.parentToken = testParentToken })
-	const id, peerID = "echoear-active", "echoear-partner"
+	const id, peerID = "lark-active", "lark-partner"
 	const path = "/api/devices/" + id + "/parent"
 	d := testConnectWS(t, base, "unit", false)
 	peer := testConnectWS(t, base, "unit", false)
@@ -277,7 +277,7 @@ func TestParentCivilTimeAndPersistence(t *testing.T) {
 	ctx := t.Context()
 	db := testDB(t, ":memory:")
 	h := &wsHub{b: &bridge{db: db}}
-	key := "echoear-clock"
+	key := "lark-clock"
 	for _, tc := range []struct {
 		zone   string
 		before string

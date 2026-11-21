@@ -1,0 +1,8 @@
+[Unit]
+Description=Forward LAN clients to Lark's authenticated OpenCode API
+Requires=lark-opencode.service
+After=lark-opencode.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:49375
+NoNewPrivileges=true

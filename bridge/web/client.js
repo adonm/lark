@@ -42,7 +42,7 @@ async function authorize(token) {
   try {
     const res = await request(token, "/api/scope");
     if (res.status === 401 || res.status === 403) {
-      if (!state.app) setLocal("echoear-token", "");
+      if (!state.app) setLocal("lark-token", "");
       credentials("That token wasn’t accepted. Check it and try again.");
       return;
     }
@@ -52,7 +52,7 @@ async function authorize(token) {
     }
     const scope = profile?.scoped ? profile : null;
     stop();
-    setLocal("echoear-token", token);
+    setLocal("lark-token", token);
     state.app = {token, scope, devices:[], deviceVersion:0, sidebar:!scope && wide.matches, tunnel:null};
     if (!scope) state.app.historyDevice = new URL(location.href).searchParams.get("device_id");
     loadVoiceCatalog(profile.voices);
@@ -150,7 +150,7 @@ $("pair-opencode").onclick = async e => {
 
 onUnauthorized(() => {
   stop();
-  setLocal("echoear-token", "");
+  setLocal("lark-token", "");
   credentials("Your token is no longer accepted.");
 });
 onAudioActivityChanged(renderCurrent);

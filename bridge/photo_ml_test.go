@@ -12,7 +12,7 @@ import (
 )
 
 func TestPhotoModelSmoke(t *testing.T) {
-	dir, lib := os.Getenv("ECHOEAR_TEST_PHOTO_MODELS"), os.Getenv("ECHOEAR_TEST_PHOTO_ORT")
+	dir, lib := os.Getenv("LARK_TEST_PHOTO_MODELS"), os.Getenv("LARK_TEST_PHOTO_ORT")
 	if dir == "" || lib == "" {
 		t.Skip("optional local photo models not configured")
 	}

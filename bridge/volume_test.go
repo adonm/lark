@@ -78,7 +78,7 @@ func TestAmbientVolumePrecedesPlaybackWithoutPersisting(t *testing.T) {
 
 func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "echoear-33d8"
+	const id = "lark-33d8"
 	board := testConnectWS(t, base, "unit", false)
 	board.json(t, object{"ev": "hello", "role": "device", "device_id": id, "character": "Cake", "proto": 2, "volume": 95})
 	level := func(want string, auto, persist bool) {
@@ -141,7 +141,7 @@ func TestVolumeAPIAndScopedPersistence(t *testing.T) {
 	scoped := httptest.NewServer(b.scoped(client, "private"))
 	defer scoped.Close()
 	path := "/api/devices/" + id + "/volume"
-	testRequest(t, http.MethodPost, scoped.URL+"/api/devices/echoear-other/volume", "private", object{"auto": true}, 403)
+	testRequest(t, http.MethodPost, scoped.URL+"/api/devices/lark-other/volume", "private", object{"auto": true}, 403)
 	testRequest(t, http.MethodPost, base+path, "unit", object{"auto": false, "volume": 101}, 400)
 	testRequest(t, http.MethodPost, scoped.URL+path, "private", object{"auto": false, "volume": 65}, 200)
 	f := testObject(t, testRequest(t, http.MethodGet, scoped.URL+"/api/scope", "private", nil, 200))

@@ -24,7 +24,7 @@ func TestParakeetClipInput(t *testing.T) {
 		t.Fatal("2 s clip failed Hex padding/scaling")
 	}
 	if n := len(parakeetSamples(make([]byte, 2*sampleRate*2))); n != sampleRate*2400/1000 {
-		t.Fatalf("silent clip unexpectedly got EchoEar padding: %d", n)
+		t.Fatalf("silent clip unexpectedly got Lark padding: %d", n)
 	}
 }
 

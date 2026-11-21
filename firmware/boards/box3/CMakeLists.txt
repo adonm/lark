@@ -4,6 +4,6 @@ set(firmware "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(PROJECT_VER "0.9.5")
 set(EXTRA_COMPONENT_DIRS "${firmware}/main")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(echoear_box3)
+project(lark_box3)
 
 include("${firmware}/cjson.cmake")

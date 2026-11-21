@@ -51,8 +51,8 @@ test("renders the selected live device after the dashboard modules load", async 
       },
     },
     matchMedia: () => ({matches:true, addEventListener() {}}),
-    localStorage: {getItem: key => key === "echoear-phone" ? "phone-1234" : null},
-    location: {href:"https://echoear.test/app"},
+    localStorage: {getItem: key => key === "lark-phone" ? "phone-1234" : null},
+    location: {href:"https://lark.test/app"},
     Option: class {},
     WebSocket: {OPEN:1},
     window: {isSecureContext:true, AudioWorkletNode:class {}, addEventListener() {}},
@@ -71,7 +71,7 @@ test("renders the selected live device after the dashboard modules load", async 
   Object.defineProperty(globalThis, "navigator", {configurable:true, value:{mediaDevices:{getUserMedia() {}}}});
   const {renderDevices} = await import("./devices.js");
   const {state} = await import("./state.js");
-  const d = {device_id:"echoear-cake", character:"Cake", ws_connected:true};
+  const d = {device_id:"lark-cake", character:"Cake", ws_connected:true};
   state.app = {devices:[d]};
   state.view = {id:d.device_id, device:d};
   renderDevices();

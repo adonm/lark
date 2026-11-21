@@ -302,7 +302,7 @@ function command(msg) {
       if (svg.localName !== "svg" || svg.namespaceURI !== svgNS || svg.getAttribute("viewBox") !== "0 0 360 360") return;
       const focusedID = nodes.contains(document.activeElement) && document.activeElement.dataset.id;
       const imported = document.importNode(svg, true);
-      const selector = "[data-id][data-echoear-hit]";
+      const selector = "[data-id][data-lark-hit]";
       const controls = [...imported.querySelectorAll(selector)];
       if (imported.matches(selector)) controls.unshift(imported);
       screenHits = controls.map(control => [control.dataset.id, ...hitBounds(control)]).reverse();
@@ -389,7 +389,7 @@ function xy(e) {
   const int = v => Math.max(0,Math.min(359,Math.round(v)));
   return {x:int(p.x), y:int(p.y)};
 }
-function hitBounds(control) { return control.dataset.echoearHit.split(" ").map(Number); }
+function hitBounds(control) { return control.dataset.larkHit.split(" ").map(Number); }
 
 screen.addEventListener("pointerdown", e => {
   if (e.button !== 0 || state.pointer != null || !state.rev) return;

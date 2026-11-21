@@ -26,19 +26,19 @@ func testDB(t *testing.T, path string) *bridgeDB {
 
 func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	root := t.TempDir()
-	d := testDB(t, filepath.Join(root, "echoear.db"))
+	d := testDB(t, filepath.Join(root, "lark.db"))
 	dir := filepath.Join(root, "it's backed up")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 11, 21, 15, 0, 0, 0, time.UTC)
 	for i := range 9 {
-		name := "echoear-" + now.AddDate(0, 0, -1-i).Format(time.DateOnly) + ".db"
+		name := "lark-" + now.AddDate(0, 0, -1-i).Format(time.DateOnly) + ".db"
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	unrelated := filepath.Join(dir, "echoear-keep.db")
+	unrelated := filepath.Join(dir, "lark-keep.db")
 	if err := os.WriteFile(unrelated, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if err := d.backup(t.Context(), dir, now); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(dir, "echoear-2026-11-21.db")
+	target := filepath.Join(dir, "lark-2026-11-21.db")
 	info, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if err != nil || len(entries) != 8 {
 		t.Fatalf("expected 7 daily files and unrelated file: %v %v", entries, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "echoear-2026-11-14.db")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "lark-2026-11-14.db")); !os.IsNotExist(err) {
 		t.Fatalf("expected eighth daily backup pruned, stat: %v", err)
 	}
 	if _, err := os.Stat(unrelated); err != nil {
@@ -93,7 +93,7 @@ func writeMap(path string, value any) error {
 }
 
 func TestTursoDriver(t *testing.T) {
-	db, err := sql.Open("turso", filepath.Join(t.TempDir(), "echoear.db"))
+	db, err := sql.Open("turso", filepath.Join(t.TempDir(), "lark.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestTursoDriver(t *testing.T) {
 }
 
 func TestCloudOptionWorksOffline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echoear.db")
+	path := filepath.Join(t.TempDir(), "lark.db")
 	local := testDB(t, path)
 	if err := voiceStore(local).save("offline", heartVoice, false); err != nil {
 		t.Fatal(err)

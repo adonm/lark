@@ -1,15 +1,15 @@
 [Unit]
-Description=EchoEar isolated OpenCode V2 API
+Description=Lark isolated OpenCode V2 API
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=%h/.local/share/echoear/opencode/workspace
-EnvironmentFile=%h/.config/echoear/bridge.env
-Environment="XDG_CONFIG_HOME=%h/.local/share/echoear/opencode/config"
-Environment="XDG_DATA_HOME=%h/.local/share/echoear/opencode/data"
-Environment="XDG_STATE_HOME=%h/.local/share/echoear/opencode/state"
-Environment="XDG_CACHE_HOME=%h/.local/share/echoear/opencode/cache"
+WorkingDirectory=%h/.local/share/lark/opencode/workspace
+EnvironmentFile=%h/.config/lark/bridge.env
+Environment="XDG_CONFIG_HOME=%h/.local/share/lark/opencode/config"
+Environment="XDG_DATA_HOME=%h/.local/share/lark/opencode/data"
+Environment="XDG_STATE_HOME=%h/.local/share/lark/opencode/state"
+Environment="XDG_CACHE_HOME=%h/.local/share/lark/opencode/cache"
 Environment=OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_CLAUDE_CODE=1
 # OpenCode logs HTTP paths, including the one-time code in redemption URLs.
 Environment=OPENCODE_LOG_LEVEL=none

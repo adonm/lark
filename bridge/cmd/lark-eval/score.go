@@ -1,4 +1,4 @@
-// echoear-eval scores Lark's private OpenCode histories without printing text.
+// lark-eval scores Lark's private OpenCode histories without printing text.
 package main
 
 import (
@@ -236,7 +236,7 @@ func toolMetrics(p part) (int, int) {
 	if p.State.Status != "completed" || json.Unmarshal(p.State.Content, &payload) != nil {
 		return 0, 0
 	}
-	warnings := p.Name == "app" || p.Name == "echoear_app" || p.Name == "execute"
+	warnings := p.Name == "app" || p.Name == "lark_app" || p.Name == "execute"
 	return resultMetrics(payload, warnings, 0)
 }
 

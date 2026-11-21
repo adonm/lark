@@ -10,7 +10,7 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 
-static const char *TAG = "echoear";
+static const char *TAG = "lark";
 
 static void on_wifi(bool online, const char *ip)
 {

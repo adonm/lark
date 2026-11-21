@@ -59,7 +59,7 @@ func TestStorybookSpeciesAndStickersRender(t *testing.T) {
 
 func TestStorybookThroughMCP(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "echoear-storybook"
+	const id = "lark-storybook"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Bean")
 	out := toolTest(t, base, "patch", object{"device_id": id, "cat": object{"save_profile": false, "companion": object{

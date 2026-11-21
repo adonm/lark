@@ -1463,7 +1463,7 @@ func (h *wsHub) storeAppEffects(a *appInstance) error {
 	defer cancel()
 	tx, err := h.b.db.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("EchoEar could not open storage for app %q: %v", a.spec.Name, err)
+		log.Printf("Lark could not open storage for app %q: %v", a.spec.Name, err)
 		return errors.New("Could not save app storage")
 	}
 	defer tx.Rollback()
@@ -1474,12 +1474,12 @@ func (h *wsHub) storeAppEffects(a *appInstance) error {
 		}
 		edit := memoryEdit{memoryWrite: memoryWrite{a.scope, e.text, string(e.value)}}
 		if _, err := editMemory(ctx, tx, edit, now); err != nil {
-			log.Printf("EchoEar could not persist app %q key %q: %v", a.spec.Name, e.text, err)
+			log.Printf("Lark could not persist app %q key %q: %v", a.spec.Name, e.text, err)
 			return fmt.Errorf("Could not save app key %q", e.text)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("EchoEar could not commit storage for app %q: %v", a.spec.Name, err)
+		log.Printf("Lark could not commit storage for app %q: %v", a.spec.Name, err)
 		return errors.New("Could not save app storage")
 	}
 	for _, e := range effects {

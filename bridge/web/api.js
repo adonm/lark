@@ -2,11 +2,11 @@ import {getLocal, setLocal} from "./dom.js";
 import {state} from "./state.js";
 
 const params = new URL(location.href);
-const initialToken = params.searchParams.has("token") ? params.searchParams.get("token") : getLocal("echoear-token");
+const initialToken = params.searchParams.has("token") ? params.searchParams.get("token") : getLocal("lark-token");
 if (params.searchParams.has("token")) {
   params.searchParams.delete("token");
   history.replaceState(null, "", params.pathname + params.search + params.hash);
-  setLocal("echoear-token", initialToken);
+  setLocal("lark-token", initialToken);
 }
 
 function request(token, path, {method = "GET", body, signal} = {}) {

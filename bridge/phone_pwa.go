@@ -17,12 +17,12 @@ const phonePWAPath = "/app/pwa/"
 
 func (b *bridge) phoneCookie() string {
 	mac := hmac.New(sha256.New, []byte(b.token))
-	mac.Write([]byte("echoear phone cat install artwork"))
+	mac.Write([]byte("lark phone cat install artwork"))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (b *bridge) setPhoneCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "echoear-pwa", Value: b.phoneCookie(), Path: phonePWAPath,
+	http.SetCookie(w, &http.Cookie{Name: "lark-pwa", Value: b.phoneCookie(), Path: phonePWAPath,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 }
 
@@ -101,7 +101,7 @@ func (b *bridge) servePhonePWA(w http.ResponseWriter, r *http.Request, path stri
 		start.RawQuery = iconQuery.Encode()
 		cat = b.catFor(peer{DeviceID: id, Character: scope.Character})
 	} else {
-		cookie, err := r.Cookie("echoear-pwa")
+		cookie, err := r.Cookie("lark-pwa")
 		if b.token == "" || err != nil || !tokenMatches([]string{cookie.Value}, b.phoneCookie()) {
 			sendError(w, problem(401, "Unauthorized"))
 			return true

@@ -201,7 +201,7 @@ func TestPhotoLibraryReconcile(t *testing.T) {
 	if err != nil || len(labels) != 1 || labels[0].id != "32" {
 		t.Fatalf("manual people filter: %v", err)
 	}
-	ids := p.newPhotoHandles(ctx, "echoear-test", "", out, now)
+	ids := p.newPhotoHandles(ctx, "lark-test", "", out, now)
 	data := testJPEG(t, imagecolor.Black)
 	if err := p.storeDerivative(ctx, out[0].photoKey, data); err != nil {
 		t.Fatal(err)
@@ -212,10 +212,10 @@ func TestPhotoLibraryReconcile(t *testing.T) {
 	s.Files = s.Files[1:2]
 	s.Files[0].Caption = "metadata edited"
 	ingestTestPhotos(t, p, s, now.Add(time.Second))
-	if _, ok := p.getPhotoHandle(ctx, "echoear-test", ids[0]); ok {
+	if _, ok := p.getPhotoHandle(ctx, "lark-test", ids[0]); ok {
 		t.Fatal("deleted photo retained its handle")
 	}
-	if _, ok := p.getPhotoHandle(ctx, "echoear-test", ids[1]); !ok {
+	if _, ok := p.getPhotoHandle(ctx, "lark-test", ids[1]); !ok {
 		t.Fatal("caption edit revoked unchanged photo")
 	}
 	if gone, err := p.derivative(ctx, out[0].photoKey); err != nil || len(gone) != 0 {
@@ -226,21 +226,21 @@ func TestPhotoLibraryReconcile(t *testing.T) {
 	}
 	s.Files[0].Hash = "new pixels"
 	ingestTestPhotos(t, p, s, now.Add(2*time.Second))
-	if _, ok := p.getPhotoHandle(ctx, "echoear-test", ids[1]); ok {
+	if _, ok := p.getPhotoHandle(ctx, "lark-test", ids[1]); ok {
 		t.Fatal("changed original retained its handle")
 	}
 	ingestTestPhotos(t, p, fakeEnteSnapshot(), now.Add(3*time.Second))
-	if _, ok := p.getPhotoHandle(ctx, "echoear-test", ids[0]); ok {
+	if _, ok := p.getPhotoHandle(ctx, "lark-test", ids[0]); ok {
 		t.Fatal("restored photo revived a revoked handle")
 	}
 	p.fresh.Store(now.Add(-photoFreshFor - time.Second).UnixNano())
-	if p.allowed(ctx, "echoear-test") {
+	if p.allowed(ctx, "lark-test") {
 		t.Fatal("stale sync served photos")
 	}
 }
 
 func TestPhotoLibrarySlideshowAndScope(t *testing.T) {
-	const hardware = "echoear-libtest"
+	const hardware = "lark-libtest"
 	const virtual = "virt-12345678"
 	p := testLibrary(t)
 	now := time.Now()

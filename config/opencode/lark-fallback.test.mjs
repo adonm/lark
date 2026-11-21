@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import plugin from "./echoear-fallback.js"
+import plugin from "./lark-fallback.js"
 
 const gemini = { providerID: "opencode", id: "gemini-4-hydrogen", variant: "low" }
 const haiku = { providerID: "opencode", id: "claude-haiku-5-5" }
 const rateLimit = { status: 429, type: "provider.rate-limit" }
-const base = { sessionID: "ses_smoke", agent: "echoear", kind: "primary", model: gemini }
-const user = { id: "msg_user", type: "user", metadata: { echoEarSource: "typed" } }
+const base = { sessionID: "ses_smoke", agent: "lark", kind: "primary", model: gemini }
+const user = { id: "msg_user", type: "user", metadata: { larkSource: "typed" } }
 
 async function setup(initial = [user], primary = gemini, fallback = "opencode/claude-haiku-5-5") {
   const hooks = new Map()

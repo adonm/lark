@@ -18,7 +18,7 @@ import (
 )
 
 func mcpProxyConfig(path string) (string, string, error) {
-	token, port := os.Getenv("ECHOEAR_BRIDGE_TOKEN"), os.Getenv("ECHOEAR_BRIDGE_PORT")
+	token, port := os.Getenv("LARK_BRIDGE_TOKEN"), os.Getenv("LARK_BRIDGE_PORT")
 	if token == "" || port == "" {
 		f, err := os.Open(path)
 		if err == nil {
@@ -34,31 +34,31 @@ func mcpProxyConfig(path string) (string, string, error) {
 					value = value[1 : len(value)-1]
 				}
 				switch strings.TrimSpace(key) {
-				case "ECHOEAR_BRIDGE_TOKEN":
+				case "LARK_BRIDGE_TOKEN":
 					if token == "" {
 						token = value
 					}
-				case "ECHOEAR_BRIDGE_PORT":
+				case "LARK_BRIDGE_PORT":
 					if port == "" {
 						port = value
 					}
 				}
 			}
 			if s.Err() != nil {
-				return "", "", errors.New("Cannot read EchoEar bridge.env")
+				return "", "", errors.New("Cannot read Lark bridge.env")
 			}
 		} else if !os.IsNotExist(err) {
-			return "", "", errors.New("Cannot open EchoEar bridge.env")
+			return "", "", errors.New("Cannot open Lark bridge.env")
 		}
 	}
 	if !tokenRE.MatchString(token) {
-		return "", "", errors.New("Set ECHOEAR_BRIDGE_TOKEN in the environment or EchoEar bridge.env")
+		return "", "", errors.New("Set LARK_BRIDGE_TOKEN in the environment or Lark bridge.env")
 	}
 	if port == "" {
 		port = "8765"
 	}
 	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
-		return "", "", errors.New("Invalid ECHOEAR_BRIDGE_PORT")
+		return "", "", errors.New("Invalid LARK_BRIDGE_PORT")
 	}
 	return "http://" + net.JoinHostPort("127.0.0.1", port) + "/mcp", token, nil
 }
@@ -69,7 +69,7 @@ func runMCPStdio() error {
 		return err
 	}
 	config := env("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	endpoint, token, err := mcpProxyConfig(filepath.Join(config, "echoear", "bridge.env"))
+	endpoint, token, err := mcpProxyConfig(filepath.Join(config, "lark", "bridge.env"))
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func proxyMCP(ctx context.Context, client *http.Client, endpoint, token string, 
 		case slots <- struct{}{}:
 		default:
 			if id != "" {
-				failure(msg.ID, "EchoEar MCP proxy is busy")
+				failure(msg.ID, "Lark MCP proxy is busy")
 			}
 			continue
 		}
@@ -180,7 +180,7 @@ func proxyMCP(ctx context.Context, client *http.Client, endpoint, token string, 
 				}
 			}
 			if id != "" && reqCtx.Err() != context.Canceled {
-				failure(msg.ID, "EchoEar bridge did not return a JSON-RPC response")
+				failure(msg.ID, "Lark bridge did not return a JSON-RPC response")
 			}
 		})
 	}

@@ -1,6 +1,6 @@
 function modelRef(spec) {
   const match = typeof spec === "string" && /^([^/#\s]+)\/([^#\s]+)(?:#([^#\s]+))?$/.exec(spec)
-  if (!match) throw new Error("EchoEar fallback must be provider/model or provider/model#variant")
+  if (!match) throw new Error("Lark fallback must be provider/model or provider/model#variant")
   const [, providerID, id, variant] = match
   return variant ? { providerID, id, variant } : { providerID, id }
 }
@@ -8,7 +8,7 @@ function modelRef(spec) {
 const sameModel = (a, b) =>
   a && b && a.providerID === b.providerID && a.id === b.id && a.variant === b.variant
 const sources = new Set(["typed", "voice", "tap", "timer"])
-const echoear = (event) => event.kind === "primary" && event.agent === "echoear"
+const lark = (event) => event.kind === "primary" && event.agent === "lark"
 const rejected = (status) => status === 429 || status === 503 || status === 403
 const isTurnBoundary = (row) => ["user", "idle", "synthetic", "shell"].includes(row.type)
 const transient = ({ status, type }) =>
@@ -29,7 +29,7 @@ function unavailable({ status, type, response }) {
 }
 
 export default {
-  id: "echoear.model-fallback",
+  id: "lark.model-fallback",
   async setup({ agent, session, options }) {
     const fallback = modelRef(options?.fallback)
     const responses = new Map()
@@ -37,14 +37,14 @@ export default {
     const history = ({ sessionID }) => session.context({ sessionID }).catch(() => [])
 
     await session.hook("http.request", (event) => {
-      if (echoear(event)) responses.delete(event.sessionID)
+      if (lark(event)) responses.delete(event.sessionID)
     })
     await session.hook("http.response", (event) => {
-      if (echoear(event) && rejected(event.response.status))
+      if (lark(event) && rejected(event.response.status))
         responses.set(event.sessionID, { status: event.response.status, model: event.model })
     })
     await session.hook("retry", async (event) => {
-      if (event.agent !== "echoear") return
+      if (event.agent !== "lark") return
       const { sessionID, model } = event
       if (turns.has(sessionID) && sameModel(model, fallback)) {
         event.decision = { retry: false }
@@ -54,14 +54,14 @@ export default {
       if (!sameModel(model, response?.model) || response.status !== event.error.status) return
       responses.delete(sessionID)
       if (!transient(event.error) && !(model.providerID === "opencode" && unavailable(event.error))) return
-      const selected = await agent.get({ agentID: "echoear" }).catch(() => undefined)
+      const selected = await agent.get({ agentID: "lark" }).catch(() => undefined)
       const primary = selected?.model ?? selected?.data?.model
       // OpenCode's request-level routing cannot change providers.
       if (!sameModel(model, primary) || primary.providerID !== fallback.providerID || sameModel(model, fallback)) return
       const rows = await history(event)
       const index = rows.findLastIndex(isTurnBoundary)
       const user = rows[index]
-      if (user?.type !== "user" || !sources.has(user.metadata?.echoEarSource)) return
+      if (user?.type !== "user" || !sources.has(user.metadata?.larkSource)) return
       event.decision = { retry: false }
       // A non-stream HTTP rejection cannot deliver a tool call. Any row after the
       // user means this may be a continuation or already have published output.
@@ -76,7 +76,7 @@ export default {
     })
     await session.hook("experimental.model.resolve", async (event) => {
       const turn = turns.get(event.sessionID)
-      if (!turn || !echoear(event) || !sameModel(event.model, turn.primary)) return
+      if (!turn || !lark(event) || !sameModel(event.model, turn.primary)) return
       const rows = await history(event)
       if (rows.findLast(isTurnBoundary)?.id === turn.id) event.model = { ...fallback }
     })
