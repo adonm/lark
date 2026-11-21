@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log"
@@ -138,7 +139,7 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 			return
 		}
 		select {
-		case ep.packets <- micPacket{pcm, time.Now()}:
+		case ep.packets <- micPacket{bytes.Clone(pcm), time.Now()}:
 		default:
 			h.recordingControl(d, time.Now(), true)
 		}
@@ -599,9 +600,7 @@ func (h *wsHub) streamPlayback(ctx context.Context, d *wsDevice, id uint64, stre
 				}
 			}
 			if d.client.native != nil {
-				chunk := make([]byte, n)
-				copy(chunk, pcm[:n])
-				if !d.client.native.enqueueWait(ctx, msgTTSPCM, chunk) {
+				if !d.client.native.enqueueWait(ctx, msgTTSPCM, pcm[:n]) {
 					return context.Canceled
 				}
 			} else {

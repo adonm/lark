@@ -296,34 +296,37 @@ func (s *deviceServer) udpReadLoop() {
 			}
 			continue
 		}
-		if n < rtpHeaderSize+2 || (n-rtpHeaderSize)%2 != 0 {
-			continue
-		}
-		pt, _, _, ssrc, ok := decodeRTPHeader(buf[:n])
-		if !ok || ssrc == 0 {
-			continue
-		}
-		s.peersMu.RLock()
-		nc := s.peers[ssrc]
-		s.peersMu.RUnlock()
-		if nc == nil || remote.Addr().Unmap() != nc.remoteIP {
-			continue
-		}
+		s.handleUDP(buf[:n], remote)
+	}
+}
 
-		nc.udpMu.Lock()
-		if nc.udpAddr == nil || nc.udpAddr.Port != int(remote.Port()) {
-			nc.udpAddr = net.UDPAddrFromAddrPort(remote)
-		}
-		nc.udpMu.Unlock()
+func (s *deviceServer) handleUDP(pkt []byte, remote netip.AddrPort) {
+	if len(pkt) < rtpHeaderSize+2 || (len(pkt)-rtpHeaderSize)%2 != 0 {
+		return
+	}
+	pt, _, _, ssrc, ok := decodeRTPHeader(pkt)
+	if !ok || ssrc == 0 {
+		return
+	}
+	s.peersMu.RLock()
+	nc := s.peers[ssrc]
+	s.peersMu.RUnlock()
+	if nc == nil || remote.Addr().Unmap() != nc.remoteIP {
+		return
+	}
 
-		pcm := make([]byte, n-rtpHeaderSize)
-		copy(pcm, buf[rtpHeaderSize:n])
-		switch pt {
-		case rtpPTRecPCM:
-			s.hub.micChunkPCM(nc.client, micPrefix, pcm)
-		case rtpPTCallUp:
-			s.hub.micChunkPCM(nc.client, callMicPrefix, pcm)
-		}
+	nc.udpMu.Lock()
+	if nc.udpAddr == nil || nc.udpAddr.Port != int(remote.Port()) {
+		nc.udpAddr = net.UDPAddrFromAddrPort(remote)
+	}
+	nc.udpMu.Unlock()
+
+	pcm := pkt[rtpHeaderSize:]
+	switch pt {
+	case rtpPTRecPCM:
+		s.hub.micChunkPCM(nc.client, micPrefix, pcm)
+	case rtpPTCallUp:
+		s.hub.micChunkPCM(nc.client, callMicPrefix, pcm)
 	}
 }
 

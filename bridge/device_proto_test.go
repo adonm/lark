@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -331,4 +332,112 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 		t.Fatalf("expected MSG_CALL_CTRL end, got %v", callEnd)
 	}
 	web.until(t, hasWS("call", `"reason":"hung up"`))
+}
+
+func TestNativeUDPEndpointCopyRace(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	ds, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.shutdown()
+	_, _ = dialNativeDevice(t, ds, "lark-udprace", "unit", capBridgeEndpoint)
+
+	b.ws.mu.Lock()
+	d := b.ws.devices["lark-udprace"]
+	ep := &endpointCapture{
+		cancel:    func() {},
+		packets:   make(chan micPacket, 16),
+		result:    make(chan captureResult, 1),
+		listening: make(chan struct{}),
+		deadline:  time.NewTimer(time.Minute),
+	}
+	d.recording.phase = captureOpen
+	d.recording.endpoint = ep
+	ssrc := d.client.native.ssrc
+	b.ws.mu.Unlock()
+
+	remote := netip.MustParseAddrPort("127.0.0.1:40000")
+	pkt := make([]byte, rtpPacketBytes)
+	pcmPayload := make([]byte, rtpPCMBytes)
+
+	const packets = 8
+	for i := range packets {
+		fill := byte(0x10 + i)
+		for j := range pcmPayload {
+			pcmPayload[j] = fill
+		}
+		encodeRTPPacket(pkt, rtpPTRecPCM, uint16(i+1), uint32(i*rtpSamples), ssrc, pcmPayload)
+		ds.handleUDP(pkt, remote)
+		// Immediately overwrite the shared buffer to catch any retained slice.
+		clear(pkt[rtpHeaderSize:])
+	}
+
+	for i := range packets {
+		p := <-ep.packets
+		want := bytes.Repeat([]byte{byte(0x10 + i)}, rtpPCMBytes)
+		if !bytes.Equal(p.pcm, want) {
+			t.Fatalf("packet %d corrupted: got first byte 0x%02x, want 0x%02x", i, p.pcm[0], want[0])
+		}
+	}
+}
+
+func TestNativeUDPZeroAlloc(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	ds, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.shutdown()
+	_, _ = dialNativeDevice(t, ds, "lark-udpalloc", "unit", 0)
+
+	b.ws.mu.Lock()
+	d := b.ws.devices["lark-udpalloc"]
+	d.recording.phase = captureOpen
+	d.recording.pcm = make([]byte, 0, 128*rtpPCMBytes)
+	ssrc := d.client.native.ssrc
+	b.ws.mu.Unlock()
+
+	remote := netip.MustParseAddrPort("127.0.0.1:40000")
+	pkt := make([]byte, rtpPacketBytes)
+	encodeRTPPacket(pkt, rtpPTRecPCM, 1, 0, ssrc, make([]byte, rtpPCMBytes))
+
+	allocs := testing.AllocsPerRun(50, func() {
+		ds.handleUDP(pkt, remote)
+	})
+	if allocs > 0 {
+		t.Fatalf("handleUDP allocated %.2f times per packet, want 0", allocs)
+	}
+}
+
+func BenchmarkNativeUDPHandle(b *testing.B) {
+	h := newWSHub(&bridge{root: b.Context()}, false)
+	defer h.shutdown()
+	ds := &deviceServer{hub: h, peers: make(map[uint32]*nativeClient)}
+	remote := netip.MustParseAddrPort("127.0.0.1:40000")
+	const ssrc = uint32(0x12345678)
+	nc := &nativeClient{
+		ssrc:     ssrc,
+		remoteIP: remote.Addr(),
+		udpAddr:  net.UDPAddrFromAddrPort(remote),
+	}
+	d := &wsDevice{
+		key:       "lark-udpbench",
+		recording: deviceCapture{phase: captureOpen, started: time.Now(), pcm: make([]byte, 0, maxPCM)},
+		client:    &wsClient{native: nc, ctx: b.Context()},
+	}
+	d.client.device = d
+	nc.client = d.client
+	h.devices["lark-udpbench"] = d
+	ds.peers[ssrc] = nc
+
+	pkt := make([]byte, rtpPacketBytes)
+	encodeRTPPacket(pkt, rtpPTRecPCM, 1, 0, ssrc, make([]byte, rtpPCMBytes))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		d.recording.pcm = d.recording.pcm[:0]
+		ds.handleUDP(pkt, remote)
+	}
 }
