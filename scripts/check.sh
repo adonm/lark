@@ -19,14 +19,14 @@ printf 'PASS shell checks\n'
 source scripts/go-bin.sh
 GO_BIN=$(resolve_go)
 export CGO_ENABLED=1
-for module in bridge/web/*.js; do
+for module in lark/web/*.js; do
     node --check "$module"
 done
 # mic.test.mjs imports the mic and playback CJS suites.
-node --test bridge/web/*.test.mjs
+node --test lark/web/*.test.mjs
 node --test config/opencode/*.test.mjs
 (
-    cd bridge
+    cd lark
     "$GO_BIN" mod verify
     # No Vulkan toolchain, weights or GPU are needed for the offline suite.
     "$GO_BIN" vet ./...
@@ -89,8 +89,8 @@ if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
     fi
     (cd -- "$native"; sha256sum --check --status SHA256SUMS)
     (
-        cd bridge
-        test_bin="$host_tests/lark-bridge"
+        cd lark
+        test_bin="$host_tests/lark"
         CGO_CFLAGS="\"-I$native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}" \
         CGO_LDFLAGS="\"-L$native/lib\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" \
             "$GO_BIN" build -tags parakeet -o "$test_bin" .
@@ -105,5 +105,5 @@ if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
         esac
     )
 elif [[ ${1-} == --real-model ]]; then
-    (cd bridge && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
+    (cd lark && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
 fi

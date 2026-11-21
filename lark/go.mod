@@ -1,4 +1,4 @@
-module lark-bridge
+module lark
 
 go 1.26.0
 

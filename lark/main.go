@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +16,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"lark/eval"
 )
 
 func env(key, fallback string) string {
@@ -98,7 +102,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if os.Getenv("LARK_REPO_DIR") == "" && filepath.Base(project) == "bridge" {
+	if os.Getenv("LARK_REPO_DIR") == "" && filepath.Base(project) == "lark" {
 		project = filepath.Dir(project)
 	}
 	// Hash the prompt behind the installed lark agent symlink.
@@ -254,14 +258,46 @@ func productionDB(path string) bool {
 	return err == nil && !filepath.IsLocal(rel)
 }
 
+func usage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: lark <command> [args]")
+	fmt.Fprintln(w, "Commands: serve, eval, ota, mcp")
+}
+
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "mcp" {
-		if err := runMCPStdio(); err != nil {
-			log.Fatal(err)
-		}
-		return
+	if len(os.Args) < 2 {
+		usage(os.Stderr)
+		os.Exit(2)
 	}
-	if err := run(); err != nil {
+	var err error
+	switch os.Args[1] {
+	case "serve":
+		if len(os.Args) > 2 {
+			fmt.Fprintln(os.Stderr, "Usage: lark serve")
+			os.Exit(2)
+		}
+		err = run()
+	case "eval":
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		err = eval.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		cancel()
+	case "ota":
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		err = runOTA(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		cancel()
+	case "mcp":
+		if len(os.Args) > 2 {
+			fmt.Fprintln(os.Stderr, "Usage: lark mcp")
+			os.Exit(2)
+		}
+		err = runMCPStdio()
+	case "-h", "--help", "help":
+		usage(os.Stdout)
+		return
+	default:
+		usage(os.Stderr)
+		os.Exit(2)
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,5 +1,5 @@
-// lark-eval scores Lark's private OpenCode histories without printing text.
-package main
+// Package eval scores Lark's private OpenCode histories without printing text.
+package eval
 
 import (
 	"encoding/json"

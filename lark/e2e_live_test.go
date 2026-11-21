@@ -75,7 +75,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		t.Fatal(err)
 	}
 	s.model = startE2EModel(t, s, home)
-	cmd := exec.Command(bin)
+	cmd := exec.Command(bin, "serve")
 	// Never inherit cloud credentials, the installed bridge token/DB, or the actual CLI home.
 	cmd.Env = []string{
 		"HOME=" + root, "PATH=" + filepath.Join(root, "bin") + ":/usr/bin:/bin",

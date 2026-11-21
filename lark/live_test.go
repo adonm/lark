@@ -233,7 +233,7 @@ func liveIsolated(t *testing.T, data string, conf map[string]string, token strin
 	if binary == "" || !filepath.IsAbs(binary) {
 		t.Fatal("run scripts/check.sh --live to build an isolated bridge from this checkout")
 	}
-	cmd := exec.Command(binary)
+	cmd := exec.Command(binary, "serve")
 	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+root, "LARK_BRIDGE_TOKEN="+token, "LARK_BRIDGE_HOST=127.0.0.1",
 		"LARK_BRIDGE_PORT=0", "LARK_DB_PATH="+filepath.Join(state, "lark.db"),
 		"LARK_OTA_DIR="+root, "LARK_REPO_DIR=..",

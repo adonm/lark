@@ -1,4 +1,4 @@
-package main
+package eval
 
 import (
 	"context"
@@ -8,24 +8,19 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"time"
 )
 
 const fixtureName = "sessions.json"
 
-func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "lark-eval:", err)
-		os.Exit(1)
-	}
+// Run executes the lark eval subcommand.
+func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return run(ctx, args, stdout, stderr)
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	usage := func() error { return errors.New("usage: lark-eval {export|score|replay} [flags]") }
+	usage := func() error { return errors.New("usage: lark eval {export|score|replay} [flags]") }
 	if len(args) == 0 {
 		return usage()
 	}
