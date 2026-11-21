@@ -1,144 +1,16 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestCatMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echoear.db")
-	db := testDB(t, path, "")
-	cats := []struct{ id, slug, name, bg, mark, accent, voice string }{
-		{"echoear-33d8", "cake", "Cake", "#FFF3D1", "#F59E0B", "#FACC15", heartVoice},
-		{"echoear-2cac", "mint", "Mint", "#7BE3C6", "#228E81", "#FFD166", fableVoice},
-		{"virt-0123abcd", "greg", "greg", "#FCD34D", "#EA580C", "#FFBB6E", fableVoice},
-	}
-	for _, c := range cats {
-		if virtualID.MatchString(c.id) {
-			if err := virtualStore(db).save(c.id, virtualClient{ID: c.id, Character: c.name, Theme: "sunny", CreatedAt: time.Now()}, false); err != nil {
-				t.Fatal(err)
-			}
-		} else if err := deviceStore(db).save(c.id, peer{DeviceID: c.id, Character: c.name, IP: "192.0.2.9", Port: 80}, false); err != nil {
-			t.Fatal(err)
-		}
-		if err := sessionStore(db).save(c.id, "ses_"+c.slug, false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := voiceStore(db).save(cats[0].id, heartVoice, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := voiceStore(db).save(cats[2].id, fableVoice, false); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`ALTER TABLE sessions DROP COLUMN contract_hash`,
-		`ALTER TABLE sessions DROP COLUMN context_after_ms`,
-		`DELETE FROM schema_version WHERE version >= 6`,
-	} {
-		if _, err := db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db = testDB(t, path, "")
-	b := &bridge{db: db, peers: peers{deviceStore(db)}, virtual: virtualStore(db), voices: deviceVoiceStore(db, heartVoice)}
-	for _, c := range cats {
-		got, err := b.catTool(t.Context(), object{"op": "get", "device_id": c.id})
-		want := catState{catLook: catLook{Name: c.name, Configured: true, FaceBG: c.bg, MarkColor: c.mark, AccentColor: c.accent}, Voice: c.voice}
-		want.FaceSVG = defaultFaceArtwork(want.FaceBG, want.MarkColor, want.AccentColor, want.Configured, true)
-		if err != nil || !reflect.DeepEqual(got["cat"], want) {
-			t.Fatalf("active %s: got %+v, want %+v: %v", c.name, got, want, err)
-		}
-		p, err := readSavedCat(db.QueryRow("SELECT "+savedCatColumns+" FROM saved_cats WHERE slug=?", c.slug))
-		if err != nil || !reflect.DeepEqual(p.catState, want) {
-			t.Fatalf("saved %s: got %+v, want %+v: %v", c.name, p, want, err)
-		}
-		if sid, ok, err := sessionStore(db).get(c.id); err != nil || !ok || sid != "ses_"+c.slug {
-			t.Fatalf("session changed for %s: %s: %v", c.name, sid, err)
-		}
-		var auto bool
-		var level int
-		if err := db.QueryRow("SELECT auto_volume,manual_volume FROM device_prefs WHERE device_id=?", c.id).Scan(&auto, &level); err != nil || !auto || level != 55 {
-			t.Fatalf("missing auto-volume defaults for %s: %t %d (%v)", c.name, auto, level, err)
-		}
-	}
-	if _, err := db.Exec("UPDATE cats SET name='Edited' WHERE device_id=?", cats[0].id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("DELETE FROM saved_cats WHERE slug='mint'"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db = testDB(t, path, "")
-	var name string
-	var count int
-	err := db.QueryRow("SELECT name,(SELECT count(*) FROM saved_cats) FROM cats WHERE device_id=?", cats[0].id).Scan(&name, &count)
-	if err != nil || name != "Edited" || count != 2 {
-		t.Fatalf("migration re-ran: %q %d %v", name, count, err)
-	}
-}
-
-func TestFaceSVGMigratesOldCakeAndKeepsEdits(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echoear.db")
-	legacy, err := sql.Open("turso", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer legacy.Close()
-	for _, q := range schemaBaseline {
-		if _, err := legacy.Exec(strings.Replace(q, ", face_svg TEXT NOT NULL DEFAULT ''", "", 1)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const stuck = `<svg><path d="M95 142H129 M231 142H265"/></svg>`
-	for _, q := range []string{
-		`INSERT INTO cats (device_id,name,configured,face_bg,mark_color,accent_color,updated_at,svg_extras,extras_json)
-		 VALUES ('echoear-33d8','Cake',1,'#FFF3D1','#F59E0B','#FACC15',1,?,'[{}]')`,
-		`INSERT INTO saved_cats (slug,name,face_bg,mark_color,accent_color,updated_at,svg_extras,extras_json)
-		 VALUES ('cake','Cake','#FFF3D1','#F59E0B','#FACC15',1,?,'[{}]')`,
-	} {
-		if _, err := legacy.Exec(q, stuck); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db := testDB(t, path, "")
-	for _, table := range []string{"cats", "saved_cats"} {
-		var face, overlay, extras string
-		err := db.QueryRow("SELECT face_svg,svg_extras,extras_json FROM "+table).Scan(&face, &overlay, &extras)
-		if err != nil || face != legacyCat("Cake", "cake").FaceSVG || overlay != "" || extras != "[]" {
-			t.Fatalf("%s: face=%t legacy overlay=%q extras=%q err=%v", table, face != "", overlay, extras, err)
-		}
-	}
-	const custom = `<svg><circle r="20"/></svg>`
-	if _, err := db.Exec("UPDATE cats SET face_svg=?", custom); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db = testDB(t, path, "")
-	var face string
-	if err := db.QueryRow("SELECT face_svg FROM cats").Scan(&face); err != nil || face != custom {
-		t.Fatalf("migration overwrote an edited face: %q (%v)", face, err)
-	}
-}
 
 func catObject(t *testing.T, b *bridge, id string) object {
 	t.Helper()
@@ -357,7 +229,7 @@ func TestCatResetArchivesAndClearsScene(t *testing.T) {
 			w.WriteHeader(404)
 		})
 	})
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Keepsake", "theme": "mint"}, 201))
+	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Keepsake", "voice": fableVoice}, 201))
 	id := str(v["id"])
 	if err := b.oc.save(id, "ses_reset"); err != nil {
 		t.Fatal(err)
@@ -365,7 +237,7 @@ func TestCatResetArchivesAndClearsScene(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Ignored")
 	toolTest(t, base, "app", object{"devices": id, "svg": `<svg><text x="180" y="180">Party</text></svg>`}, false)
-	testRequest(t, "POST", base+"/api/reset", "unit", object{"device_id": id}, 200)
+	testRequest(t, "POST", base+"/api/devices/"+id+"/reset", "unit", object{}, 200)
 	dev.until(t, hasWS("svg", "Say hi to meet me!"))
 	s := stateMe(t, base, id)
 	if s["active_app"] != nil || s["device"].(object)["screen"].(object)["title"] != "Cat" {
@@ -378,13 +250,14 @@ func TestCatResetArchivesAndClearsScene(t *testing.T) {
 		t.Fatal("reset did not update virtual client character", v.Character)
 	}
 	profiles := apiObjects(t, base+"/api/cats", "cats")
-	if len(profiles) != 1 || profiles[0].(object)["name"] != "Keepsake" || profiles[0].(object)["face_bg"] != "#7BE3C6" || profiles[0].(object)["voice"] != fableVoice {
+	if len(profiles) != 1 || profiles[0].(object)["name"] != "Keepsake" || profiles[0].(object)["face_bg"] != storybookPalettes["peach"].bg || profiles[0].(object)["voice"] != fableVoice {
 		t.Fatal("reset did not archive cat", profiles)
 	}
 }
 
 func TestFaceSVGPoseFilterAndChrome(t *testing.T) {
-	cat := legacyCat("Cake", "cake")
+	cat := blankCat()
+	cat.Name, cat.Configured = "Cake", true
 	cat.FaceSVG = `<svg>
 		<rect width="360" height="360" fill="#AAAAAA" data-id="fake" data-hit="0,0,360,360"/>
 		<g><circle data-pose="idle" r="15" fill="#111111"/><circle data-pose="blink" r="15" fill="#222222"/></g>
@@ -459,12 +332,8 @@ func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 	dev.until(t, hasWS("volume", `"level":55`))
 	before := stateMe(t, base, id)
 	device, look := before["device"].(object), before["cat"].(object)
-	old := `<rect x="95" y="123" width="34" height="38" rx="17" fill="#1A1926"/>
-    <rect x="231" y="123" width="34" height="38" rx="17" fill="#1A1926"/>
-    <circle cx="107" cy="134" r="5" fill="#FFFAEE"/>
-    <circle cx="243" cy="134" r="5" fill="#FFFAEE"/>`
 	face := str(look["face_svg"])
-	edit := strings.Replace(face, old, `<circle cx="112" cy="142" r="17" fill="#123ABC"/><circle cx="248" cy="142" r="17" fill="#123ABC"/>`, 1)
+	edit := strings.Replace(face, "</svg>", `<circle cx="112" cy="142" r="17" fill="#123ABC"/><circle cx="248" cy="142" r="17" fill="#123ABC"/></svg>`, 1)
 	if face == edit || device["auto_volume"] != true || device["sleeping"] != false || look["configured"] != true {
 		t.Fatal("state didn't return the editable starter face and device state")
 	}
@@ -480,7 +349,8 @@ func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 	if device["sleeping"] != true || device["mode"] != "sleepy" || look["face_svg"] == face {
 		t.Fatal("appearance edit woke the cat or failed to save")
 	}
-	cat := legacyCat("Cake", "cake")
+	cat := blankCat()
+	cat.Name, cat.Configured = "Cake", true
 	cat.FaceSVG = str(look["face_svg"])
 	awake := catSVG(cat, catPose{mood: "idle"})
 	if strings.Count(awake, "#123ABC") != 2 || strings.Contains(awake, `x="95" y="123"`) ||
@@ -515,7 +385,7 @@ func TestCatReassign(t *testing.T) {
 			post := func(path string, data object, status int) []byte {
 				return testRequest(t, "POST", base+path, "unit", data, status)
 			}
-			target := testObject(t, post("/api/virtual-clients", object{"character": "Target", "theme": "mint", "voice": "bm_george"}, 201))
+			target := testObject(t, post("/api/virtual-clients", object{"character": "Target", "voice": "bm_george"}, 201))
 			toID := str(target["id"])
 			from := testConnectWS(t, base, "unit", false)
 			to := testConnectWS(t, base, "unit", false)
@@ -554,7 +424,7 @@ func TestCatReassign(t *testing.T) {
 			expectValue(t, interrupts, toSID+"/interrupt")
 			expectValue(t, canceled, fromID)
 			expectValue(t, canceled, toID)
-			wantName, wantBG, wantVoice, wantSID := "Target", "#7BE3C6", "bm_george", toSID
+			wantName, wantBG, wantVoice, wantSID := "Target", storybookPalettes["peach"].bg, "bm_george", toSID
 			if mode == "move" {
 				wantName, wantBG, wantVoice, wantSID = "New Cat", "#FFF2E7", heartVoice, ""
 			} else {

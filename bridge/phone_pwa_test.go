@@ -12,14 +12,14 @@ import (
 
 func TestPhonePWAInstallAssets(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.virtual = virtualStore(b.db) })
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Violet", "theme": "plum"}, 201))
+	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Violet"}, 201))
 	id := str(v["id"])
 	cat, ok := b.virtualByID(id)
 	if !ok {
 		t.Fatal("virtual cat not created")
 	}
 	login := httptest.NewRequest("GET", "/api/scope", nil)
-	login.Header.Set("X-EchoEar-Token", b.token)
+	login.Header.Set("X-Lark-Token", b.token)
 	w := httptest.NewRecorder()
 	b.ServeHTTP(w, login)
 	cookies := w.Result().Cookies()
@@ -75,7 +75,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 			u, err := url.Parse(str(obj["start_url"]))
 			if err != nil || u.IsAbs() || u.Path != "/app" || u.RawQuery != tc.query[1:] || obj["scope"] != "/app" ||
 				obj["name"] != "Violet" || obj["id"] != "/app?device_id="+id || obj["display"] != "standalone" ||
-				obj["orientation"] != "portrait" || obj["theme_color"] != "#9F7AEA" || obj["background_color"] != "#D8C7FF" {
+				obj["orientation"] != "portrait" || obj["theme_color"] != storybookPalettes["peach"].furShadow || obj["background_color"] != storybookPalettes["peach"].bg {
 				t.Fatal("manifest metadata or launch scope is incorrect")
 			}
 			icons, _ := obj["icons"].([]any)
@@ -96,7 +96,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 				}
 				corner := img.At(0, 0)
 				red, green, blue, alpha := corner.RGBA()
-				if alpha != 65535 || red>>8 != 0xd8 || green>>8 != 0xc7 || blue>>8 != 0xff {
+				if alpha != 65535 || red>>8 != 0xff || green>>8 != 0xf2 || blue>>8 != 0xe7 {
 					t.Fatal("icon must have an opaque palette background")
 				}
 				hasArt := false

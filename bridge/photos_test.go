@@ -19,7 +19,7 @@ import (
 
 func TestPhotoUploadDisplayAndScope(t *testing.T) {
 	const hardware = "echoear-photo"
-	virtual := virtualClient{ID: "virt-12345678", Character: "Mint", Theme: "mint", CreatedAt: time.Now()}
+	virtual := virtualClient{ID: "virt-12345678", Character: "Mint", CreatedAt: time.Now()}
 	b, base := wsHarness(t, func(b *bridge, _ string) {
 		b.virtual = virtualStore(b.db)
 		if err := b.virtual.save(virtual.ID, virtual, false); err != nil {
@@ -51,7 +51,7 @@ func TestPhotoUploadDisplayAndScope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set("X-EchoEar-Token", token)
+		req.Header.Set("X-Lark-Token", token)
 		req.Header.Set("Content-Type", media)
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {

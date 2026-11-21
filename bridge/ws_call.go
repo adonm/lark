@@ -49,9 +49,6 @@ func (h *wsHub) interruptForCall(d *wsDevice, now time.Time) {
 func (h *wsHub) abortCallRecording(d *wsDevice) {
 	rec := &d.recording
 	if rec.active() {
-		// Legacy browser notes are at most 20 ms; a native note can end with
-		// a 40 ms frame indistinguishable from a legacy call until rec_end.
-		rec.legacyCallTail = rec.legacyCallTail || rec.open() && d.client.role == "device" && !d.caps.CallPCM
 		h.push(d, object{"op": "rec", "action": "stop", "target": rec.target, "cancelled": true}, false)
 		rec.clear()
 	}

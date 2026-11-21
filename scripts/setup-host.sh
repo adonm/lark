@@ -163,10 +163,7 @@ link_file() {
 }
 link_file "$REPO_DIR/agents/echoear.md" "$oc_root/config/opencode/agents/echoear.md"
 link_file "$REPO_DIR/agents/echoear-builder.md" "$oc_root/config/opencode/agents/echoear-builder.md"
-python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$bridge_bin" "$env_file"
-if [[ -f "$data_home/opencode/auth.json" ]]; then
-    link_file "$data_home/opencode/auth.json" "$oc_root/data/opencode/auth.json"
-fi
+python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$bridge_bin"
 
 python3 - "$env_file" "$pin_gpu" <<'PY'
 import os
@@ -244,7 +241,6 @@ systemctl --user enable echoear-opencode.service echoear-opencode-lan.socket ech
 systemctl --user restart echoear-opencode.service echoear-bridge.service
 systemctl --user start echoear-opencode-lan.socket
 
-# V2 stores current logins in its DB; auth.json only seeds legacy logins.
 python3 - "$env_file" "$oc_root" "$(type -P opencode)" <<'PY'
 import base64
 import json

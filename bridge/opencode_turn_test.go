@@ -15,7 +15,7 @@ import (
 
 func testOpenCode(t *testing.T, ctx context.Context, dir string, handle http.HandlerFunc) *openCode {
 	t.Helper()
-	return testOpenCodeOnDB(t, ctx, dir, testDB(t, ":memory:", ""), handle)
+	return testOpenCodeOnDB(t, ctx, dir, testDB(t, ":memory:"), handle)
 }
 
 func testOpenCodeOnDB(t *testing.T, ctx context.Context, dir string, db *bridgeDB, handle http.HandlerFunc) *openCode {
@@ -421,9 +421,8 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 				b.ws.mu.Unlock()
 			case "reset":
 				go func() {
-					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/reset", strings.NewReader(`{"device_id":"`+id+`"}`))
-					req.Header.Set("Content-Type", jsonType)
-					_, err := b.chatAPI(req, "/api/reset", "")
+					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/devices/"+id+"/reset", nil)
+					_, err := b.route(httptest.NewRecorder(), req, "/api/devices/"+id+"/reset")
 					reset <- err
 				}()
 			case "disconnect":

@@ -55,7 +55,7 @@ func TestPairOpenCodeOnlyOnAuthenticatedLAN(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Host = "not-the-lan.example"
-	req.Header.Set("X-EchoEar-Token", "admin")
+	req.Header.Set("X-Lark-Token", "admin")
 	res, err := lan.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -95,9 +95,6 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		switch ev.Event {
 		case "status", "tap", "call", "call_end", "tts_ack":
 		case "rec_start":
-			if native && !d.caps.CallPCM {
-				d.recording.legacyCallTail = true
-			}
 			return
 		case "rec_end":
 			d.recording.receivedEnd()
@@ -133,7 +130,6 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		}
 	case "rec_start":
 		if target, ok := recordTarget(ev.Target); ok && d.recording.acceptsStart() {
-			d.recording.legacyCallTail = false
 			if d.recording.active() {
 				d.recording.acknowledge()
 			} else {

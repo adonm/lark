@@ -114,8 +114,8 @@ func run() error {
 	}
 	fallbackVoice := env("ECHOEAR_TTS_VOICE", heartVoice)
 	dbPath := env("ECHOEAR_DB_PATH", filepath.Join(local, "echoear.db"))
-	db, err := openBridgeDB(context.Background(), dbPath, local,
-		os.Getenv("ECHOEAR_TURSO_URL"), os.Getenv("ECHOEAR_TURSO_AUTH_TOKEN"), fallbackVoice)
+	db, err := openBridgeDB(context.Background(), dbPath,
+		os.Getenv("ECHOEAR_TURSO_URL"), os.Getenv("ECHOEAR_TURSO_AUTH_TOKEN"))
 	if err != nil {
 		return err
 	}
@@ -196,27 +196,7 @@ func run() error {
 			}()
 		}
 	}
-	// Session history is a one-time, retryable backfill; the LAN service and
-	// local history remain available while OpenCode is offline.
-	historyDone := make(chan struct{})
-	go func() {
-		defer close(historyDone)
-		for {
-			ctx, cancel := context.WithTimeout(root, 45*time.Second)
-			err := b.migrateSessionMessages(ctx)
-			cancel()
-			if err == nil || root.Err() != nil {
-				return
-			}
-			log.Printf("EchoEar history backfill pending: %v", err)
-			select {
-			case <-root.Done():
-				return
-			case <-time.After(time.Minute):
-			}
-		}
-	}()
-	defer func() { finish(); <-historyDone }()
+	// Serialize shutdown cleanly.
 	bin := findTunnelCLI(home)
 	var runner tunnelRunner
 	if bin != "" {

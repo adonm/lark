@@ -46,7 +46,7 @@ func (c liveClient) open(t *testing.T, path string, body []byte, media string, h
 		t.Fatalf("construct request for %s: %v", path, err)
 	}
 	if c.token != "" {
-		req.Header.Set("X-EchoEar-Token", c.token)
+		req.Header.Set("X-Lark-Token", c.token)
 	}
 	if media != "" {
 		req.Header.Set("Content-Type", media)

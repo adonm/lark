@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -51,13 +50,6 @@ type historyPage struct {
 	Messages []chatEntry    `json:"messages"`
 	HasMore  bool           `json:"has_more"`
 	Next     *historyCursor `json:"next_cursor,omitempty"`
-}
-
-const insertChat = `INSERT INTO chat_events (id,device_id,role,sender,text,source,scene_title,tool_summary,ts_ms)
-	VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`
-
-func chatValues(id string, e chatEntry) []any {
-	return []any{e.ID, id, e.Role, e.Sender, e.Text, e.Source, e.SceneTitle, e.ToolSummary, e.Timestamp.UnixMilli()}
 }
 
 const insertMessage = `INSERT INTO messages (id,device_id,role,sender,text,source,card_title,ts_ms)
@@ -228,7 +220,7 @@ func (b *bridge) readHistoryPage(ctx context.Context, id string, limit int, befo
 	return out, nil
 }
 
-func (b *bridge) chatAPI(r *http.Request, path, scope string) (any, error) {
+func (b *bridge) chatAPI(r *http.Request, scope string) (any, error) {
 	obj, err := jsonBody(r)
 	if err != nil {
 		return nil, err
@@ -236,27 +228,12 @@ func (b *bridge) chatAPI(r *http.Request, path, scope string) (any, error) {
 	if scope != "" && str(obj["device_id"]) != scope {
 		return nil, problem(403, "Device out of scope")
 	}
-	id, err := deviceID(r, obj, path == "/api/chat")
+	id, err := deviceID(r, obj, true)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
-	if path == "/api/reset" {
-		if b.oc == nil {
-			return nil, problem(503, "Chat unavailable")
-		}
-		who, err := b.lookupDevice(id)
-		var status *apiError
-		if errors.As(err, &status) && status.status == 404 && !virtualID.MatchString(strings.ToLower(id)) {
-			// Legacy HTTP-only sessions can exist without a registered device.
-			return object{"ok": true}, b.oc.reset(ctx, id)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return object{"ok": true}, b.startNewCatSession(ctx, who, false)
-	}
 	text := strings.TrimSpace(str(obj["text"]))
 	if text == "" || len(text) > 4096 {
 		return nil, problem(400, "Expected nonempty text of at most 4096 bytes")

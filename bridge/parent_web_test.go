@@ -23,8 +23,8 @@ func TestParentPage(t *testing.T) {
 	fragment := func(method, path, token, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.RemoteAddr = "127.0.0.1:12345"
-		r.Header.Set("X-EchoEar-Token", "unit")
-		r.Header.Set("X-EchoEar-Parent-Token", token)
+		r.Header.Set("X-Lark-Token", "unit")
+		r.Header.Set("X-Lark-Parent-Token", token)
 		r.Header.Set("HX-Request", "true")
 		r.Header.Set("Accept", "text/html")
 		if body != "" {

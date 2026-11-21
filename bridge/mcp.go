@@ -301,9 +301,6 @@ func (h *wsHub) deviceStatus(entry object, id string, full bool) {
 			entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev, "hit_ids": appHitIDs(d.svg)}
 			entry["width"], entry["height"] = d.screen.width, d.screen.height
 			entry["wifi_rssi"], entry["cpu_pct"] = d.telemetry.WiFi, d.telemetry.CPU
-			if d.telemetry.WiFi == nil {
-				entry["wifi_rssi"] = d.telemetry.RSSI
-			}
 			if a := d.app; a != nil {
 				entry["active_app"] = h.activeAppState(a)
 				if a.snapshot != nil {

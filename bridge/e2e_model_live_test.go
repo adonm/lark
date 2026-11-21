@@ -113,7 +113,7 @@ func (m *e2eModel) connectMCP(t *testing.T, s *e2eSuite) {
 	// The dedicated server disallows project files. Register an in-memory,
 	// unique MCP in this test location only; never overwrite its normal MCP.
 	config := object{"config": object{"type": "remote", "url": m.url + "/mcp-test", "oauth": false,
-		"headers": object{"X-EchoEar-Token": s.token}}}
+		"headers": object{"X-Lark-Token": s.token}}}
 	if err := m.api.jsonCall(t.Context(), "PUT", route+q, config, nil); err != nil {
 		t.Fatal("cannot register isolated OpenCode MCP:", err)
 	}
@@ -387,7 +387,7 @@ func (m *e2eModel) rememberPhoto(text string) string {
 }
 
 func (m *e2eModel) relayMCP(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
-	if !tokenMatches(r.Header.Values("X-EchoEar-Token"), s.token) || r.Method != "POST" {
+	if !tokenMatches(r.Header.Values("X-Lark-Token"), s.token) || r.Method != "POST" {
 		w.WriteHeader(405)
 		return
 	}
@@ -409,7 +409,7 @@ func (m *e2eModel) relayMCP(w http.ResponseWriter, r *http.Request, s *e2eSuite)
 		return
 	}
 	req, _ := http.NewRequestWithContext(r.Context(), "POST", s.base+"/mcp", bytes.NewReader(raw))
-	req.Header.Set("X-EchoEar-Token", s.token)
+	req.Header.Set("X-Lark-Token", s.token)
 	req.Header.Set("Content-Type", jsonType)
 	req.Header.Set("Accept", r.Header.Get("Accept"))
 	res, err := m.client.Do(req)
@@ -617,7 +617,7 @@ func (m *e2eModel) stubPhotos(s *e2eSuite, id, token string) bool {
 	call := func(name string, args object) object {
 		raw, _ := json.Marshal(object{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": object{"name": name, "arguments": args}})
 		req, _ := http.NewRequest("POST", s.base+"/mcp", bytes.NewReader(raw))
-		req.Header.Set("X-EchoEar-Token", s.token)
+		req.Header.Set("X-Lark-Token", s.token)
 		req.Header.Set("Content-Type", jsonType)
 		res, err := m.client.Do(req)
 		if err != nil {

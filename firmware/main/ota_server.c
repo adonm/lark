@@ -51,9 +51,9 @@ static bool require_token(httpd_req_t *request)
 {
     static const char expected[] = CONFIG_ECHOEAR_BRIDGE_TOKEN;
     char actual[sizeof(expected)];
-    size_t len = httpd_req_get_hdr_value_len(request, "X-EchoEar-Token");
+    size_t len = httpd_req_get_hdr_value_len(request, "X-Lark-Token");
     if (len && len == sizeof(expected) - 1 &&
-        httpd_req_get_hdr_value_str(request, "X-EchoEar-Token", actual, sizeof(actual)) == ESP_OK) {
+        httpd_req_get_hdr_value_str(request, "X-Lark-Token", actual, sizeof(actual)) == ESP_OK) {
         unsigned diff = 0;
         for (size_t i = 0; i < len; ++i) {
             diff |= (unsigned char)expected[i] ^ (unsigned char)actual[i];
@@ -180,23 +180,14 @@ static esp_err_t volume_post(httpd_req_t *request)
 
 static esp_err_t pull_headers(esp_http_client_handle_t client)
 {
-    return esp_http_client_set_header(client, "X-EchoEar-Token", CONFIG_ECHOEAR_BRIDGE_TOKEN);
+    return esp_http_client_set_header(client, "X-Lark-Token", CONFIG_ECHOEAR_BRIDGE_TOKEN);
 }
 
 static bool matching_board(const esp_app_desc_t *image)
 {
     const char *project = esp_app_get_description()->project_name;
     const char *incoming = image->project_name;
-    if (strncmp(incoming, project, sizeof(image->project_name)) == 0) return true;
-    if (strcmp(project, "echoear") == 0 || strcmp(project, "lark") == 0) {
-        return strncmp(incoming, "echoear", sizeof(image->project_name)) == 0 ||
-               strncmp(incoming, "lark", sizeof(image->project_name)) == 0;
-    }
-    if (strcmp(project, "echoear_box3") == 0 || strcmp(project, "lark_box3") == 0) {
-        return strncmp(incoming, "echoear_box3", sizeof(image->project_name)) == 0 ||
-               strncmp(incoming, "lark_box3", sizeof(image->project_name)) == 0;
-    }
-    return false;
+    return strncmp(incoming, project, sizeof(image->project_name)) == 0;
 }
 
 static esp_err_t ota_pull_post(httpd_req_t *request)

@@ -44,24 +44,6 @@ func (c catState) defaultFace() string {
 	return defaultFaceSVG(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured)
 }
 
-// Only legacy identities and old API callers use these initial colors. The
-// renderer never derives a cat's appearance from its name or theme.
-var legacyCatColors = map[string][3]string{
-	"cake":  {"#FFF3D1", "#F59E0B", "#FACC15"},
-	"mint":  {"#7BE3C6", "#228E81", "#FFD166"},
-	"plum":  {"#D8C7FF", "#9F7AEA", "#DCB5FF"},
-	"sunny": {"#FCD34D", "#EA580C", "#FFBB6E"},
-}
-
-func legacyCat(name, theme string) catState {
-	c := blankCat()
-	c.Name, c.Configured = name, true
-	p := legacyCatColors[deviceTheme(theme)]
-	c.FaceBG, c.MarkColor, c.AccentColor = p[0], p[1], p[2]
-	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
-	return c
-}
-
 var (
 	catSlugRE    = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	catSlugSpace = regexp.MustCompile(`[^a-z0-9]+`)
@@ -125,49 +107,6 @@ func saveCatProfile(ctx context.Context, tx *sql.Tx, c catState, replace bool) e
 	return err
 }
 
-func migrateCats(ctx context.Context, tx *sql.Tx, voices deviceVoices) error {
-	if done, err := legacyMigrationDone(ctx, tx, "migrated_cats_v1"); err != nil || done {
-		return err
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,character,theme,COALESCE(v.voice,prior.voice,'')
-		FROM (SELECT device_id AS id, character, '' AS theme, '' AS voice FROM devices
-		      UNION ALL SELECT id,character,theme,voice FROM virtual_clients) prior
-		LEFT JOIN voices v ON v.device_id=lower(prior.id)
-		WHERE NOT EXISTS (SELECT 1 FROM cats WHERE device_id=lower(prior.id))
-		ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	type seed struct{ id, name, theme, voice string }
-	var seeds []seed
-	for rows.Next() {
-		var s seed
-		if err := rows.Scan(&s.id, &s.name, &s.theme, &s.voice); err != nil {
-			rows.Close()
-			return err
-		}
-		seeds = append(seeds, s)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	for _, s := range seeds {
-		s.id = strings.ToLower(s.id)
-		if s.theme == "" {
-			s.theme = deviceTheme(s.name)
-		}
-		c := legacyCat(s.name, s.theme)
-		c.Voice = voices.resolve(s.voice, s.theme)
-		if err := writeCat(ctx, tx, s.id, c); err != nil {
-			return err
-		}
-		if err := saveCatProfile(ctx, tx, c, false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type catQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
@@ -179,7 +118,9 @@ func (b *bridge) readActiveCat(ctx context.Context, q catQuery, who peer) (catSt
 	if errors.Is(err, sql.ErrNoRows) {
 		c = blankCat()
 		if who.Character != "" && who.Character != c.Name && !strings.EqualFold(who.Character, id) && !webDeviceID(id) {
-			c = legacyCat(who.Character, who.Character)
+			c.Name = who.Character
+			c.Configured = true
+			c.FaceSVG = c.defaultFace()
 		}
 		err = q.QueryRowContext(ctx, "SELECT "+catVoiceSQL, id, id).Scan(&c.Voice)
 	}
@@ -273,16 +214,9 @@ func updateCat(c catState, args object, voices deviceVoices) (catState, bool, er
 		}
 		c.FaceSVG, err = sanitizeFaceSVG(str(raw))
 	} else if editParts || oldPalette != newPalette || c.Configured != before.Configured {
-		var legacy bool
-		untagged := !strings.Contains(c.FaceSVG, "data-part=")
-		if untagged && c.FaceSVG != "" {
-			if root, parseErr := parseFaceSVG(c.FaceSVG); parseErr == nil {
-				legacy = before.legacyDefaultFace(root)
-			}
-		}
 		if c.FaceSVG == "" || c.FaceSVG == before.defaultFace() {
 			c.FaceSVG = c.defaultFace()
-		} else if legacy || c.FaceSVG == defaultFaceArtwork(before.FaceBG, before.MarkColor, before.AccentColor, before.Configured, true) {
+		} else if c.FaceSVG == defaultFaceArtwork(before.FaceBG, before.MarkColor, before.AccentColor, before.Configured, true) {
 			c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
 		} else if oldPalette != newPalette {
 			c.FaceSVG, err = recolorFaceSVG(c.FaceSVG, oldPalette, newPalette)
@@ -318,11 +252,12 @@ func (b *bridge) changeCatPrepared(ctx context.Context, who peer, theme, op stri
 	}
 	defer tx.Rollback()
 	if virtualID.MatchString(id) {
-		if err := tx.QueryRowContext(ctx, `SELECT theme FROM virtual_clients WHERE id=?`, id).Scan(&theme); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return catState{}, false, problem(404, "Device not found")
-			}
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM virtual_clients WHERE id=?)`, id).Scan(&exists); err != nil {
 			return catState{}, false, unavailable
+		}
+		if !exists {
+			return catState{}, false, problem(404, "Device not found")
 		}
 	}
 	current, err := b.readActiveCat(ctx, tx, who)
@@ -652,8 +587,12 @@ func (b *bridge) transferCats(ctx context.Context, from, to peer, mode string) (
 		var a assignment
 		key := strings.ToLower(who.DeviceID)
 		if virtualID.MatchString(key) {
-			if err := tx.QueryRowContext(ctx, "SELECT theme FROM virtual_clients WHERE id=?", key).Scan(&theme); err != nil {
+			var exists bool
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM virtual_clients WHERE id=?)", key).Scan(&exists); err != nil {
 				return a, err
+			}
+			if !exists {
+				return a, sql.ErrNoRows
 			}
 		}
 		var err error

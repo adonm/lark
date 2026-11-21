@@ -16,7 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 type mockTunnel struct {
@@ -59,14 +58,14 @@ func TestVirtualClientsPersistenceAndDeviceMerge(t *testing.T) {
 		t.Fatal(got)
 	}
 	for _, input := range []object{
-		{"character": "##", "theme": "plum"},
-		{"character": "Plum", "theme": "chartreuse"},
+		{"character": "##"},
+		{"character": "Plum", "voice": "unknown"},
 	} {
 		testRequest(t, "POST", base+"/api/virtual-clients", "unit", input, 400)
 	}
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "  Violet  ", "theme": "plum"}, 201))
+	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "  Violet  "}, 201))
 	id := str(v["id"])
-	if v["character"] != "Violet" || v["theme"] != "plum" || v["online"] != false || !virtualID.MatchString(id) || v["created_at"] == "" {
+	if v["character"] != "Violet" || v["online"] != false || !virtualID.MatchString(id) || v["created_at"] == "" {
 		t.Fatal(v)
 	}
 	if v, _, err := virtualStore(b.db).get(id); err != nil || v.Character != "Violet" {
@@ -81,8 +80,8 @@ func TestVirtualClientsPersistenceAndDeviceMerge(t *testing.T) {
 	}
 	virtual := testConnectWS(t, base, "unit", false)
 	scene := virtual.hello(t, id, "Ignored")
-	if !bytes.Contains(scene.data, []byte("#D8C7FF")) {
-		t.Fatal("configured theme ignored")
+	if !bytes.Contains(scene.data, []byte(storybookPalettes["peach"].bg)) {
+		t.Fatal("configured cat palette ignored")
 	}
 	if v := apiObjects(t, base+"/api/virtual-clients", "virtual_clients")[0].(object); v["ws_connected"] != true {
 		t.Fatal(v)
@@ -152,7 +151,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 			b.db, dir, settings)
 	})
 	defer b.tunnels.shutdown()
-	id := str(testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Plum", "theme": "plum"}, 201))["id"])
+	id := str(testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Plum"}, 201))["id"])
 	status := testObject(t, testRequest(t, "GET", base+"/api/tunnel/status", "unit", nil, 200))
 	if len(status) != 4 || status["installed"] != true || status["service_running"] != true || status["hostname"] != "home.opentunnel.example" {
 		t.Fatal(status)
@@ -199,8 +198,8 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	testRequest(t, "GET", scoped+"/app/client.js", "", nil, 200)
 	testRequest(t, "GET", scoped+"/api/scope", "unit", nil, 401)
 	scope := testObject(t, testRequest(t, "GET", scoped+"/api/scope?token="+token, "", nil, 200))
-	if scope["scoped"] != true || scope["device_id"] != id || scope["character"] != "Plum" || scope["theme"] != "plum" ||
-		scope["cat"].(object)["face_bg"] != "#D8C7FF" {
+	if scope["scoped"] != true || scope["device_id"] != id || scope["character"] != "Plum" ||
+		scope["cat"].(object)["face_bg"] != storybookPalettes["peach"].bg {
 		t.Fatal(scope)
 	}
 	for _, path := range []string{"/api/devices", "/api/tunnels", "/api/virtual-clients", "/api/tunnel/status", "/ota/version.json", "/mcp", "/health", "/api/audio/abcd", "/api/cats"} {
@@ -311,8 +310,8 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	conn.json(t, object{"ev": "reset", "device_id": id})
 	conn.json(t, object{"ev": "tap", "id": "new", "x": 230, "y": 104})
 	conn.json(t, object{"ev": "watch", "device_id": id})
-	conn.until(t, hasWS("svg", "#D8C7FF"))
-	testRequest(t, "POST", base+"/api/reset", "unit", object{"device_id": id}, 200)
+	conn.until(t, hasWS("svg", storybookPalettes["peach"].bg))
+	testRequest(t, "POST", base+"/api/devices/"+id+"/reset", "unit", object{}, 200)
 	faceSeen, catSeen := false, false
 	conn.until(t, func(f wsFrame) bool {
 		faceSeen = faceSeen || hasWS("svg", "#FFF2E7")(f)
@@ -338,160 +337,6 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		!slices.Equal(r.calls[1], []string{"route", "add", "127.0.0.1:" + port, "--profile", before.Profile}) ||
 		!slices.Equal(r.calls[2], []string{"route", "remove", "scoped", "--profile", before.Profile}) {
 		t.Fatal("unexpected OpenTunnel CLI calls")
-	}
-}
-
-func TestVirtualCatSessionAliasMigration(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sessions.json")
-	initial := map[string]string{
-		"scope-virt-12345678": "ses_tunnel",
-		"scope-virt-abcdef12": "ses_old",
-		"virt-abcdef12":       "ses_lan",
-		"echoear-physical":    "ses_cake",
-	}
-	if err := writeMap(path, initial); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	db := testDB(t, ":memory:", dir)
-	o := newOpenCode(ctx, upstream{}, db, "", ocSettings{})
-	for id, want := range map[string]string{"virt-12345678": "ses_tunnel", "virt-abcdef12": "ses_lan", "echoear-physical": "ses_cake"} {
-		got, err := o.get(id)
-		if err != nil || got != want {
-			t.Fatalf("%s did not keep its existing session", id)
-		}
-	}
-	if got, err := sessionStore(db).all(); err != nil || len(got) != 5 {
-		t.Fatal("legacy aliases were not preserved alongside canonical sessions")
-	}
-}
-
-func TestCanonicalMessagesMigrationAndSQLRead(t *testing.T) {
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		sendPage := func(data []object, next any) {
-			_ = json.NewEncoder(w).Encode(object{"data": data, "cursor": object{"next": next}})
-		}
-		switch r.URL.Path {
-		case "/api/session":
-			if q.Get("limit") != "200" {
-				t.Error("unexpected session page size", q)
-			}
-			switch q.Get("cursor") {
-			case "":
-				sendPage([]object{
-					{"id": "ses_latest", "title": "EchoEar: Cake (ECHOEAR-HISTORY)", "time": object{"created": 300}},
-					{"id": "ses_other", "title": "EchoEar: echoear-history2", "time": object{"created": 100}},
-					{"id": "ses_active", "title": "Manually renamed", "time": object{"created": 300}},
-				}, "session+next=")
-			case "session+next=":
-				sendPage([]object{
-					{"id": "ses_empty", "title": "EchoEar: scope-echoear-history", "time": object{"created": 200}},
-					{"id": "ses_oldest", "title": "EchoEar: echoear-history", "time": object{"created": 100}},
-				}, nil)
-			default:
-				t.Error("unexpected session cursor", q)
-			}
-			return
-		case "/api/session/ses_empty/message":
-			sendPage([]object{{"id": "msg_idle", "type": "idle"}}, nil)
-			return
-		case "/api/session/ses_active/message":
-			sendPage([]object{
-				{"id": "msg_active", "type": "user", "text": "[EchoEar: Cake (echoear-history), hardware, tap]\nContinuing.",
-					"metadata": object{"echoEarSource": "tap"}, "time": object{"created": 4000}},
-				{"id": "msg2", "type": "user", "text": "Duplicate.", "time": object{"created": 4100}},
-			}, nil)
-			return
-		case "/api/session/ses_latest/message":
-			sendPage([]object{{"id": "msg_latest", "type": "user", "text": "[EchoEar: you are Cake (device_id=echoear-history)]\nLatest.",
-				"time": object{"created": 5000}}}, nil)
-			return
-		case "/api/session/ses_other/message":
-			t.Error("requested messages for a different device")
-			http.NotFound(w, r)
-			return
-		case "/api/session/ses_oldest/message":
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		if q.Get("limit") != "50" {
-			t.Error("unexpected page size", q)
-		}
-		var data []object
-		var next any
-		switch q.Get("cursor") {
-		case "":
-			if q.Get("order") != "asc" {
-				t.Error("first page not ascending", q)
-			}
-			data = []object{{"id": "msg1", "type": "user", "time": object{"created": 1000},
-				"metadata": object{"echoEarSource": "voice"},
-				"text":     "[EchoEar: Cake (echoear-history), hardware, voice]\nWhy is the sky blue?"}}
-			next = "opaque+next="
-		case "opaque+next=":
-			if q.Has("order") {
-				t.Error("cursor must omit order", q)
-			}
-			data = []object{{"id": "msg2", "type": "assistant", "time": object{"created": 3000}, "content": []object{
-				{"type": "reasoning", "text": "Private thoughts"},
-				{"type": "text", "text": "Air scatters blue light.\n```echoear-screen\n{}\n```"},
-				{"type": "tool", "name": "echoear_scene", "state": object{"input": object{"title": "Blue sky"}}},
-			}}}
-		default:
-			t.Error("unexpected opaque cursor", q)
-		}
-		sendPage(data, next)
-	}))
-	defer upstreamServer.Close()
-	b, base := wsHarness(t, func(b *bridge, dir string) {
-		b.history = &chatHistory{b.db}
-		file := filepath.Join(dir, "service.json")
-		if err := writeMap(file, object{"url": upstreamServer.URL, "password": "unit"}); err != nil {
-			t.Fatal(err)
-		}
-		b.oc = newOpenCode(b.root, upstream{"OpenCode", pooledClient(), &fileCache[endpoint]{path: file, read: openCodeEndpoint}},
-			b.db, dir, ocSettings{})
-		if err := b.oc.save("echoear-history", "ses_active"); err != nil {
-			t.Fatal(err)
-		}
-		entry := newChat("intercom", "Mint", "Dinner is ready!", "intercom")
-		entry.ID = "bridge-dinner"
-		entry.Timestamp = time.Unix(2, 0).UTC()
-		b.history.add("echoear-history", entry)
-		b.history.add("echoear-history", entry)
-	})
-	c := testConnectWS(t, base, "unit", false)
-	c.hello(t, "echoear-history", "Cake")
-	for range 2 {
-		if err := b.migrateSessionMessages(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	upstreamServer.Close()
-	raw := testRequest(t, "GET", base+"/api/devices/echoear-history/messages", "unit", nil, 200)
-	var data struct{ Messages []chatEntry }
-	if err := json.Unmarshal(raw, &data); err != nil {
-		t.Fatal(err)
-	}
-	var ids []string
-	for _, message := range data.Messages {
-		ids = append(ids, message.ID)
-	}
-	if want := []string{"msg1", "bridge-dinner", "msg2", "msg_active", "msg_latest"}; !slices.Equal(ids, want) {
-		t.Fatalf("message order = %v, want %v", ids, want)
-	}
-	messages := data.Messages
-	if messages[0].Text != "Why is the sky blue?" || messages[0].Source != "voice" ||
-		messages[1].Role != "intercom" || messages[1].Text != "Dinner is ready!" ||
-		messages[2].Role != "cat" || messages[2].Sender != "Cake" || messages[2].Text != "Air scatters blue light." ||
-		messages[2].SceneTitle != "" || messages[2].ToolSummary != "" ||
-		messages[3].Text != "Continuing." || messages[3].Source != "tap" ||
-		messages[4].Text != "Latest." || messages[4].Source != "text" {
-		t.Fatal(string(raw))
 	}
 }
 

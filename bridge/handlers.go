@@ -64,11 +64,7 @@ func sendJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func tokenHeaderMatches(h http.Header, name, want string) bool {
-	lark, legacy := h.Values("X-Lark-"+name), h.Values("X-EchoEar-"+name)
-	if len(lark) != 0 {
-		return len(legacy) == 0 && tokenMatches(lark, want)
-	}
-	return tokenMatches(legacy, want)
+	return tokenMatches(h.Values("X-Lark-"+name), want)
 }
 
 func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +158,7 @@ func (b *bridge) voiceFor(who peer) string {
 func (b *bridge) voiceTheme(who peer) string {
 	theme := deviceTheme(who.Character)
 	if v, ok := b.virtualByID(strings.ToLower(who.DeviceID)); ok {
-		return v.Theme
+		return deviceTheme(v.Character)
 	}
 	if b.peers.store != nil {
 		if p, ok, _ := b.peers.get(who.DeviceID); ok {
@@ -504,11 +500,11 @@ func (b *bridge) route(w http.ResponseWriter, r *http.Request, path string) (any
 		return b.virtualAPI(w, r, path)
 	case path == "/api/tunnel/status" || path == "/api/tunnels" || strings.HasPrefix(path, "/api/tunnels/"):
 		return b.tunnelAPI(w, r, path)
-	case r.Method == http.MethodPost && (path == "/api/chat" || path == "/api/reset"):
+	case r.Method == http.MethodPost && path == "/api/chat":
 		if !libraryLAN(r) {
 			r = r.WithContext(withoutPhotoAccess(ctx))
 		}
-		return b.chatAPI(r, path, "")
+		return b.chatAPI(r, "")
 	}
 	switch r.Method {
 	case http.MethodGet:
@@ -543,8 +539,6 @@ func (b *bridge) route(w http.ResponseWriter, r *http.Request, path string) (any
 		case path == "/api/scope":
 			b.setPhoneCookie(w)
 			return object{"scoped": false, "auto_volume": true, "voices": voiceCatalog}, nil
-		case path == "/api/history":
-			return b.messages(r, r.URL.Query().Get("device_id"))
 		case strings.HasSuffix(path, "/messages"):
 			if id, ok := messagesDevice(path); ok {
 				return b.messages(r, id)

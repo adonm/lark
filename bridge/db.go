@@ -15,25 +15,17 @@ import (
 	turso "turso.tech/database/tursogo"
 )
 
-const createHistoryBackfill = `CREATE TABLE IF NOT EXISTS history_backfill (
-	device_id TEXT NOT NULL, session_id TEXT NOT NULL, next TEXT NOT NULL, source TEXT NOT NULL,
-	PRIMARY KEY (device_id, session_id))`
-
 var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, character TEXT NOT NULL, ip TEXT NOT NULL, port INTEGER NOT NULL, last_seen INTEGER NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS sessions (device_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS virtual_clients (id TEXT PRIMARY KEY, character TEXT NOT NULL, theme TEXT NOT NULL, voice TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS sessions (device_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE TABLE IF NOT EXISTS virtual_clients (id TEXT PRIMARY KEY, character TEXT NOT NULL, voice TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS voices (device_id TEXT PRIMARY KEY, voice TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS device_prefs (device_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
-	`CREATE TABLE IF NOT EXISTS cats (device_id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', extras_json TEXT NOT NULL DEFAULT '[]', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '', svg_extras TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE IF NOT EXISTS saved_cats (slug TEXT PRIMARY KEY, name TEXT NOT NULL, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', extras_json TEXT NOT NULL DEFAULT '[]', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '', svg_extras TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS cats (device_id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS saved_cats (slug TEXT PRIMARY KEY, name TEXT NOT NULL, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS tunnels (device_id TEXT PRIMARY KEY, route_name TEXT NOT NULL, url TEXT NOT NULL, local_port INTEGER NOT NULL, scoped_token TEXT NOT NULL, profile TEXT NOT NULL, created_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS chat_events (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, scene_title TEXT NOT NULL DEFAULT '', tool_summary TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
-	`CREATE INDEX IF NOT EXISTS chat_device_ts ON chat_events (device_id, ts_ms)`,
 	`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
-	// Extend the old device/timestamp index with the cursor's tie-breaker so
-	// LIMIT can stop the ordered scan instead of sorting the whole transcript.
 	`CREATE INDEX IF NOT EXISTS messages_device_ts_id ON messages (device_id, ts_ms, id)`,
 	`CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL, caption TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS memory (scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key))`,
@@ -44,7 +36,6 @@ var schemaBaseline = []string{
 	`CREATE INDEX IF NOT EXISTS build_jobs_state ON build_jobs (state, device_id)`,
 	`CREATE TABLE IF NOT EXISTS parent_settings (device_id TEXT PRIMARY KEY, timezone TEXT NOT NULL, quiet_start TEXT NOT NULL, quiet_end TEXT NOT NULL, daily_minutes INTEGER NOT NULL, pause_until_ms INTEGER NOT NULL, override_until_ms INTEGER NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS parent_usage (device_id TEXT NOT NULL, day TEXT NOT NULL, used_ms INTEGER NOT NULL, PRIMARY KEY (device_id, day))`,
-	createHistoryBackfill,
 }
 
 type bridgeDB struct {
@@ -170,7 +161,7 @@ func (d *bridgeDB) setMeta(ctx context.Context, key, value string) error {
 	return err
 }
 
-func openBridgeDB(ctx context.Context, path, legacy, remote, token, fallbackVoice string) (_ *bridgeDB, err error) {
+func openBridgeDB(ctx context.Context, path, remote, token string) (_ *bridgeDB, err error) {
 	if path != ":memory:" {
 		path, err = filepath.Abs(path)
 		if err != nil {
@@ -215,10 +206,24 @@ func openBridgeDB(ctx context.Context, path, legacy, remote, token, fallbackVoic
 	}()
 	// Serialize SQL writers and keep one connection alive for :memory:.
 	d.SetMaxOpenConns(1)
-	if err := d.upgradeSchema(ctx, legacy, fallbackVoice); err != nil {
+	if err := d.initSchema(ctx); err != nil {
 		return nil, err
 	}
 	return d, nil
+}
+
+func (d *bridgeDB) initSchema(ctx context.Context) error {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("initialize EchoEar schema: %w", err)
+	}
+	defer tx.Rollback()
+	for _, q := range schemaBaseline {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("initialize EchoEar schema: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 const initialAutoVolume = 55
@@ -377,18 +382,18 @@ func sessionStore(d *bridgeDB) *store[string] {
 }
 
 func virtualStore(d *bridgeDB) *store[virtualClient] {
-	return &store[virtualClient]{db: d.DB, table: "virtual_clients", key: "id", columns: "id,character,theme,voice,created_at",
-		upsert: "character=excluded.character,theme=excluded.theme,voice=excluded.voice,created_at=excluded.created_at",
+	return &store[virtualClient]{db: d.DB, table: "virtual_clients", key: "id", columns: "id,character,voice,created_at",
+		upsert: "character=excluded.character,voice=excluded.voice,created_at=excluded.created_at",
 		scan: func(r rowScanner) (string, virtualClient, error) {
 			var v virtualClient
 			var at string
-			err := r.Scan(&v.ID, &v.Character, &v.Theme, &v.Voice, &at)
+			err := r.Scan(&v.ID, &v.Character, &v.Voice, &at)
 			if err == nil {
 				v.CreatedAt, err = time.Parse(time.RFC3339Nano, at)
 			}
 			return v.ID, v, err
 		}, values: func(id string, v virtualClient) []any {
-			return []any{id, v.Character, v.Theme, v.Voice, v.CreatedAt.Format(time.RFC3339Nano)}
+			return []any{id, v.Character, v.Voice, v.CreatedAt.Format(time.RFC3339Nano)}
 		}}
 }
 

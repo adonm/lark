@@ -66,7 +66,7 @@ func TestSTTProbeRequiresLoopbackAndBridgeToken(t *testing.T) {
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/api/diagnostics/stt", nil)
 		r.RemoteAddr = tc.addr
-		r.Header.Set("X-EchoEar-Token", tc.token)
+		r.Header.Set("X-Lark-Token", tc.token)
 		w := httptest.NewRecorder()
 		b.ServeHTTP(w, r)
 		if w.Code != tc.want {

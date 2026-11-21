@@ -52,7 +52,7 @@ func dialTestWS(t *testing.T, base, token string, query bool, headers object) (*
 	req.Header.Set("Sec-WebSocket-Version", "13")
 	req.Header.Set("Sec-WebSocket-Key", testKey)
 	if !query && token != "" {
-		req.Header.Set("X-EchoEar-Token", token)
+		req.Header.Set("X-Lark-Token", token)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, str(v))
@@ -195,7 +195,7 @@ func wsHarness(t *testing.T, setup func(*bridge, string)) (*bridge, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
-	db := testDB(t, filepath.Join(dir, "echoear.db"), "")
+	db := testDB(t, filepath.Join(dir, "echoear.db"))
 	b := &bridge{root: ctx, token: "unit", db: db, peers: peers{deviceStore(db)}, history: &chatHistory{db}}
 	if setup != nil {
 		setup(b, dir)
@@ -317,13 +317,14 @@ func TestWSMirrorAndControls(t *testing.T) {
 	_, base := wsHarness(t, nil)
 	const id = "echoear-mirror"
 	dev := testConnectWS(t, base, "unit", false)
-	_, rev, _ := decodeDisplay(t, dev.hello(t, id, "Cake"))
+	dev.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
+	_, rev, _ := decodeDisplay(t, dev.until(t, isDisplay))
 	web := testConnectWS(t, base, "unit", true)
 	first := web.watch(t, id)
 	if testObject(t, first.data)["rev"] != json.Number(strconv.FormatUint(uint64(rev), 10)) || !hasWS("svg", "120,292,120,48")(first) {
 		t.Fatal("watch did not receive current frame with centered Menu control")
 	}
-	dev.json(t, object{"ev": "status", "battery_pct": 25, "battery_mv": 3530, "charging": false, "volume": 80, "rssi": -45})
+	dev.json(t, object{"ev": "status", "battery_pct": 25, "battery_mv": 3530, "charging": false, "volume": 80, "wifi_rssi": -45})
 	web.until(t, hasWS("svg", menuSuccess))
 	web.json(t, object{"ev": "tap", "x": 180, "y": 300})
 	web.until(t, hasWS("svg", "menu-next"))

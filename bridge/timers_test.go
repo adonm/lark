@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,44 +135,12 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 	}
 }
 
-func TestTimerAppMigrationPreservesExistingTimer(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echoear.db")
-	raw, err := sql.Open("turso", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	for _, stmt := range schemaBaseline {
-		stmt = strings.Replace(stmt, ", app_name TEXT NOT NULL DEFAULT ''", "", 1)
-		if _, err := raw.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := raw.Exec(`INSERT INTO timers (id,device_id,label,say,chime,created_at,fire_at,notes_json)
-		VALUES ('old','echoear-old','Keep me','','tap','2026-01-01T00:00:00Z','2026-01-01T01:00:00Z','["C5:80"]')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		db := testDB(t, path, "")
-		got, err := scanTimer(db.QueryRow("SELECT " + timerColumns + " FROM timers WHERE id='old'"))
-		if err != nil || got.Label != "Keep me" || got.AppName != "" || len(got.Notes) != 1 || got.Notes[0] != "C5:80" {
-			t.Fatalf("legacy timer changed: %+v (%v)", got, err)
-		}
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "echoear.db")
-	db := testDB(t, path, "")
+	db := testDB(t, path)
 	now := time.Now().UTC()
 	const device = "virt-01234567"
-	if err := virtualStore(db).save(device, virtualClient{ID: device, Character: "Greg", Theme: "mint", CreatedAt: now}, false); err != nil {
+	if err := virtualStore(db).save(device, virtualClient{ID: device, Character: "Greg", CreatedAt: now}, false); err != nil {
 		t.Fatal(err)
 	}
 	b := &bridge{db: db, root: t.Context()}
@@ -194,7 +161,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	db = testDB(t, path, "")
+	db = testDB(t, path)
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	b = &bridge{db: db, root: root, virtual: virtualStore(db), history: &chatHistory{db}, peers: peers{deviceStore(db)}}
@@ -336,7 +303,7 @@ func TestScopedTimerIsolationAndCaps(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 		for _, id := range []string{owner, other} {
-			if err := b.virtual.save(id, virtualClient{ID: id, Character: "Greg", Theme: "mint", CreatedAt: time.Now()}, false); err != nil {
+			if err := b.virtual.save(id, virtualClient{ID: id, Character: "Greg", CreatedAt: time.Now()}, false); err != nil {
 				t.Fatal(err)
 			}
 		}

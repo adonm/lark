@@ -13,16 +13,15 @@ const (
 )
 
 // Owned by the hub lock. Stopping still accepts PCM after the board has
-// acknowledged rec_start. The legacy tail can outlive capture during a call.
+// acknowledged rec_start.
 type deviceCapture struct {
-	phase          capturePhase
-	started        time.Time
-	target         string
-	pcm            []byte
-	stopTimer      *time.Timer
-	endpoint       *endpointCapture
-	ignoreStart    bool
-	legacyCallTail bool
+	phase       capturePhase
+	started     time.Time
+	target      string
+	pcm         []byte
+	stopTimer   *time.Timer
+	endpoint    *endpointCapture
+	ignoreStart bool
 }
 
 func (c *deviceCapture) active() bool { return c.phase != captureIdle }
@@ -63,7 +62,7 @@ func (c *deviceCapture) requestStop() bool {
 
 func (c *deviceCapture) suppressLateStart() { c.ignoreStart = !c.open() }
 
-func (c *deviceCapture) receivedEnd() { c.ignoreStart, c.legacyCallTail = false, false }
+func (c *deviceCapture) receivedEnd() { c.ignoreStart = false }
 
 func (c *deviceCapture) clear() {
 	if e := c.endpoint; e != nil {

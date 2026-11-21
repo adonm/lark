@@ -386,10 +386,10 @@ static bool send_telemetry(uint32_t session, bool hello)
     }
     char text[1024];
     int len = snprintf(text, sizeof(text), "{\"ev\":\"%s\"%s,\"free_heap\":%zu,\"min_free_heap\":%zu,"
-                       "\"free_psram\":%zu,\"wifi_rssi\":%d,\"rssi\":%d,\"uptime_s\":%" PRIu64 ",\"cpu_pct\":%u,"
+                       "\"free_psram\":%zu,\"wifi_rssi\":%d,\"uptime_s\":%" PRIu64 ",\"cpu_pct\":%u,"
                        "\"battery_pct\":%s,\"battery_mv\":%s,\"charging\":%s,\"volume\":%d" TELEMETRY_IO_JSON "}",
                        hello ? "hello" : "status", extra, hw.free_heap, hw.min_free_heap, hw.free_psram,
-                       hw.wifi_rssi, hw.wifi_rssi, hw.uptime_s, hw.cpu_pct, pct, mv,
+                       hw.wifi_rssi, hw.uptime_s, hw.cpu_pct, pct, mv,
                        BOARD_HAS_BATTERY ? (battery.charging ? "true" : "false") : "null", audio_get_volume(),
                        TELEMETRY_IO_VALUES(hw));
     if (len <= 0 || (size_t)len >= sizeof(text)) return false;
@@ -660,7 +660,7 @@ void ws_client_network_changed(bool online)
 esp_err_t ws_client_init(void)
 {
     static char url[sizeof(CONFIG_ECHOEAR_BRIDGE_URL) + 5];
-    static const char headers[] = "X-EchoEar-Token: " CONFIG_ECHOEAR_BRIDGE_TOKEN "\r\n";
+    static const char headers[] = "X-Lark-Token: " CONFIG_ECHOEAR_BRIDGE_TOKEN "\r\n";
     const char *base = CONFIG_ECHOEAR_BRIDGE_URL, *host, *scheme;
     if (!strncmp(base, "http://", 7)) {
         host = base + 7;

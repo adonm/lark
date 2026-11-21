@@ -109,7 +109,7 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 	defer cancel()
 	prefix := "echoear-live-mcp-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	liveSessions(t, api, prefix)
-	o := newOpenCode(root, api, testDB(t, ":memory:", ""), liveOpenCodeDir(home, config), settings)
+	o := newOpenCode(root, api, testDB(t, ":memory:"), liveOpenCodeDir(home, config), settings)
 	settings, err = o.configuredSettings(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestRealModelEchoEarCodeMode(t *testing.T) {
 			"',include:['devices']}), tools.echoear.patch({device_id:'"+id+"',device:{sleep:false}}), tools.echoear.emit({to:'"+id+
 			"',chime:'tap'}), and tools.echoear.app({devices:'"+id+
 			"',exit:true}). Return all four tool results from execute, then say one short sentence. Do not call any other tool.",
-		legacyCat(character, "cake"))
+		blankCat())
 	turn, endTurn := context.WithTimeout(root, 60*time.Second)
 	defer endTurn()
 	_, sid, err := o.askPrepared(turn, prefix, func() (string, string) { return character, prompt }, turnStream{}, "typed", nil, nil)

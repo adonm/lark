@@ -163,12 +163,6 @@ func (p *peer) UnmarshalJSON(raw []byte) error {
 
 type peers struct{ *store[peer] }
 
-func validLegacyPeer(id string, p peer) bool {
-	_, err := lanIP(p.IP, true)
-	return id == p.DeviceID && err == nil && (characterRE.MatchString(p.Character) || p.Character == truncate(id, 40)) &&
-		p.Port > 0 && p.Port <= 65535 && p.LastSeen >= 0
-}
-
 func (p peers) register(who peer) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

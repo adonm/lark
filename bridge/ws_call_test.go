@@ -14,7 +14,7 @@ const callCake = "phone-000a"
 const callMint = "phone-000b"
 
 func callClient(t *testing.T, b *bridge, base, id, name string) *testWS {
-	return callClientCaps(t, b, base, id, name, false)
+	return callClientCaps(t, b, base, id, name, true)
 }
 
 func callClientCaps(t *testing.T, b *bridge, base, id, name string, tagged bool) *testWS {
@@ -24,7 +24,10 @@ func callClientCaps(t *testing.T, b *bridge, base, id, name string, tagged bool)
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err = writeCat(t.Context(), tx, id, legacyCat(name, name)); err == nil {
+	cat := blankCat()
+	cat.Name, cat.Configured = name, true
+	cat.FaceSVG = cat.defaultFace()
+	if err = writeCat(t.Context(), tx, id, cat); err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
@@ -93,7 +96,7 @@ func TestWSCallDuplex(t *testing.T) {
 	checkCallStates(t, b.ws, callActive, callActive)
 	pcm := bytes.Repeat([]byte{100, 5}, callPCMBytes/2)
 	sendPCM := func(c *testWS, sample []byte) {
-		c.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, sample...)))
+		c.write(t, maskedFrame(wsBinary, true, append([]byte{callMicPrefix}, sample...)))
 	}
 	for _, pair := range [][2]*testWS{{cake, mint}, {mint, cake}} {
 		sendPCM(pair[0], pcm)
@@ -444,28 +447,6 @@ func TestCallPCMBackpressure(t *testing.T) {
 	}
 }
 
-func TestLegacyCallWaitsForRecordingTail(t *testing.T) {
-	h := &wsHub{devices: make(map[string]*wsDevice)}
-	d := &wsDevice{key: callCake, callPeer: callMint, callID: 1, callState: callActive,
-		client: &wsClient{role: "device", ctx: t.Context(), out: make(chan wsFrame, 8)}}
-	d.recording.start(time.Now(), "", false)
-	p := &wsDevice{key: callMint, callPeer: callCake, callID: 1, callState: callActive,
-		client: &wsClient{ctx: t.Context(), out: make(chan wsFrame, 8)}}
-	d.client.device = d
-	h.devices[callCake], h.devices[callMint] = d, p
-	h.abortCallRecording(d)
-	packet := func() []byte { return append([]byte{micPrefix}, make([]byte, callPCMBytes)...) }
-	h.micChunk(d.client, packet())
-	if len(p.client.out) != 0 || d.recording.open() {
-		t.Fatal("legacy note tail was not stopped")
-	}
-	h.handle(d.client, wsEvent{Event: "rec_end", Cancelled: true})
-	h.micChunk(d.client, packet())
-	if len(p.client.out) != 1 {
-		t.Fatal("legacy call PCM was not restored after rec_end")
-	}
-}
-
 func TestWSPagedVoiceMenu(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
@@ -498,17 +479,15 @@ func TestWSPagedVoiceMenu(t *testing.T) {
 func TestHelloCallCapabilities(t *testing.T) {
 	for _, tc := range []struct {
 		event wsEvent
-		board string
 		want  deviceCaps
 	}{
-		{wsEvent{Role: "device"}, "esp-vocat", deviceCaps{Battery: true, HeadPads: true, Drag: true}},
-		{wsEvent{Role: "device"}, "esp-box-3", deviceCaps{Drag: true}},
-		{wsEvent{Role: "web", Caps: wsCaps{Call: new(true), Drag: new(true)}}, "", deviceCaps{Call: true, Drag: true}},
-		{wsEvent{Role: "device", Caps: wsCaps{Battery: new(false), HeadPads: new(false), Call: new(true), Drag: new(false)}},
-			"esp-vocat", deviceCaps{Call: true}},
+		{wsEvent{Role: "device"}, deviceCaps{Drag: true}},
+		{wsEvent{Role: "web", Caps: wsCaps{Call: new(true), Drag: new(true)}}, deviceCaps{Call: true, Drag: true}},
+		{wsEvent{Role: "device", Caps: wsCaps{Battery: new(true), HeadPads: new(true), Call: new(true), Drag: new(false)}},
+			deviceCaps{Battery: true, HeadPads: true, Call: true}},
 	} {
-		if got := helloCaps(tc.event, tc.board); got != tc.want {
-			t.Errorf("%s %s: got %+v; want %+v", tc.event.Role, tc.board, got, tc.want)
+		if got := helloCaps(tc.event); got != tc.want {
+			t.Errorf("%s: got %+v; want %+v", tc.event.Role, got, tc.want)
 		}
 	}
 }

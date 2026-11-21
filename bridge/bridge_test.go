@@ -31,7 +31,7 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		{"phone-1234", "tap", "web", false},
 		{"other-id", "tap", "web", true},
 	} {
-		if got := turnPrompt(peer{DeviceID: tc.id}, tc.web, tc.source, "Hi", legacyCat("Cake", "cake")); got !=
+		if got := turnPrompt(peer{DeviceID: tc.id}, tc.web, tc.source, "Hi", catState{catLook: catLook{Name: "Cake", Configured: true}}); got !=
 			"[Cake ("+tc.id+") · "+tc.kind+" · "+tc.source+"]\nHi" {
 			t.Fatal(got)
 		}
@@ -144,7 +144,7 @@ func TestAudioStream(t *testing.T) {
 	open := func(id string) *http.Response {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/audio/"+id, nil)
-		req.Header.Set("X-EchoEar-Token", "unit")
+		req.Header.Set("X-Lark-Token", "unit")
 		res, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -219,7 +219,7 @@ func TestAudioStream(t *testing.T) {
 func TestStateAndDirectMessage(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "echoear.db")
-	db := testDB(t, path, "")
+	db := testDB(t, path)
 	p := peers{deviceStore(db)}
 	mint := peer{"echoear-mint", "Mint", "127.0.0.2", 8080, time.Now().Unix()}
 	if err := p.register(mint); err != nil {
@@ -255,16 +255,15 @@ func TestStateAndDirectMessage(t *testing.T) {
 }
 
 func TestBridgeAuthAndBody(t *testing.T) {
-	b := &bridge{token: "correct", peers: peers{deviceStore(testDB(t, ":memory:", ""))}}
+	b := &bridge{token: "correct", peers: peers{deviceStore(testDB(t, ":memory:"))}}
 	for _, tc := range []struct {
 		lark, legacy []string
 		want         int
 	}{
 		{[]string{"correct"}, nil, 200},
-		{nil, []string{"correct"}, 200},
+		{nil, []string{"correct"}, 401},
 		{[]string{"wrong"}, nil, 401},
 		{[]string{"correct", "correct"}, nil, 401},
-		{[]string{"correct"}, []string{"wrong"}, 401},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/api/scope", nil)
 		for _, token := range tc.lark {
@@ -279,9 +278,9 @@ func TestBridgeAuthAndBody(t *testing.T) {
 			t.Fatalf("bridge auth: HTTP %d, want %d", res.Code, tc.want)
 		}
 	}
-	for _, path := range []string{"/api/register", "/api/text", "/api/voice", "/api/intercom", "/api/assets"} {
+	for _, path := range []string{"/api/register", "/api/text", "/api/voice", "/api/intercom", "/api/assets", "/api/history", "/api/reset"} {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
-		req.Header.Set("X-EchoEar-Token", "correct")
+		req.Header.Set("X-Lark-Token", "correct")
 		req.Header.Set("Content-Type", jsonType)
 		res := httptest.NewRecorder()
 		b.ServeHTTP(res, req)
@@ -293,7 +292,7 @@ func TestBridgeAuthAndBody(t *testing.T) {
 		for _, tokens := range [][]string{nil, {"wrong"}, {"correct", "correct"}} {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			for _, token := range tokens {
-				req.Header.Add("X-EchoEar-Token", token)
+				req.Header.Add("X-Lark-Token", token)
 			}
 			res := httptest.NewRecorder()
 			b.ServeHTTP(res, req)
@@ -316,7 +315,7 @@ func TestBridgeAuthAndBody(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/tts", strings.NewReader(c.body))
 		req.RemoteAddr = "127.0.0.1:10000"
 		req.Header.Set("Content-Type", c.kind)
-		req.Header.Set("X-EchoEar-Token", "correct")
+		req.Header.Set("X-Lark-Token", "correct")
 		res := httptest.NewRecorder()
 		b.ServeHTTP(res, req)
 		if res.Code != c.code {
@@ -385,7 +384,7 @@ func TestOpenCodeStreamingAndFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			o := newOpenCode(ctx, upstream{"OpenCode", pooledClient(), &fileCache[endpoint]{path: path, read: openCodeEndpoint}},
-				testDB(t, ":memory:", ""), t.TempDir(), ocSettings{})
+				testDB(t, ":memory:"), t.TempDir(), ocSettings{})
 			eventually(t, func() bool {
 				o.feed.mu.Lock()
 				defer o.feed.mu.Unlock()

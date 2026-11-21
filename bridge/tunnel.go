@@ -101,13 +101,6 @@ func newTunnelManager(b *bridge, bin string, runner tunnelRunner) *tunnelManager
 	return &tunnelManager{b: b, bin: bin, runner: runner, live: make(map[string]*scopeServer), store: tunnelStore(b.db)}
 }
 
-func validLegacyTunnel(id string, r tunnelRecord) bool {
-	name, address := routeAddress(r.URL)
-	return id == r.DeviceID && virtualID.MatchString(id) && dnsLabel.MatchString(r.RouteName) &&
-		name == r.RouteName && address == r.URL && r.LocalPort > 0 && r.LocalPort <= 65535 &&
-		scopeKey.MatchString(r.Token) && profileKey.MatchString(r.Profile)
-}
-
 func (m *tunnelManager) restore() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,9 +110,6 @@ func (m *tunnelManager) restore() {
 		return
 	}
 	for id, record := range data {
-		if !validLegacyTunnel(id, record) {
-			continue
-		}
 		if v, ok := m.b.virtualByID(id); ok {
 			if scope, _, err := m.listen(v, record.Token, record.LocalPort); err == nil {
 				m.live[id] = scope
@@ -227,9 +217,6 @@ func (m *tunnelManager) addLocked(ctx context.Context, id string) (object, error
 		return nil, err
 	}
 	if exists {
-		if !validLegacyTunnel(id, values) {
-			return nil, problem(502, "Invalid saved tunnel")
-		}
 		if m.live[id] == nil {
 			server, _, err := m.listen(v, values.Token, values.LocalPort)
 			if err != nil {
@@ -276,9 +263,6 @@ func (m *tunnelManager) removeLocked(ctx context.Context, id string, required bo
 	}
 	if m.runner == nil {
 		return problem(503, "OpenTunnel CLI not found")
-	}
-	if !validLegacyTunnel(id, v) {
-		return problem(502, "Invalid saved tunnel")
 	}
 	if _, err := m.runner.run(ctx, "route", "remove", v.RouteName, "--profile", v.Profile); err != nil {
 		return problem(502, "OpenTunnel route remove failed")
@@ -354,9 +338,6 @@ func (b *bridge) scoped(v virtualClient, token string) http.Handler {
 			}
 		}
 		messageID, messages := messagesDevice(path)
-		if path == "/api/history" {
-			messageID, messages = r.URL.Query().Get("device_id"), true
-		}
 		voiceID, voice := voiceDevice(path)
 		volumeID, volume := deviceSettingID(path, "volume")
 		photoDevice, uploadPhoto := deviceSettingID(path, "photo")
@@ -391,8 +372,8 @@ func (b *bridge) scoped(v virtualClient, token string) http.Handler {
 			sendResult(w, value, err)
 		case path == "/api/scope":
 			cat := b.catFor(peer{DeviceID: v.ID, Character: v.Character})
-			out := object{"scoped": true, "device_id": v.ID, "character": cat.Name, "cat": cat.catLook, "theme": v.Theme, "voices": voiceCatalog,
-				"voice": b.voices.get(v.ID, v.Theme)}
+			out := object{"scoped": true, "device_id": v.ID, "character": cat.Name, "cat": cat.catLook, "voices": voiceCatalog,
+				"voice": b.voices.get(v.ID, deviceTheme(cat.Name))}
 			if b.ws != nil {
 				b.ws.deviceStatus(out, v.ID, false)
 			} else {
@@ -425,7 +406,7 @@ func (b *bridge) scoped(v virtualClient, token string) http.Handler {
 			value, err := b.volumeAPI(r, volumeID)
 			sendResult(w, value, err)
 		case post:
-			value, err := b.chatAPI(r, path, v.ID)
+			value, err := b.chatAPI(r, v.ID)
 			sendResult(w, value, err)
 		default:
 			sendError(w, problem(404, "Not found"))

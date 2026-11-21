@@ -278,7 +278,7 @@ func TestPhotoLibrarySlideshowAndScope(t *testing.T) {
 	verifyHTTP := func(method, base, path, token, body string, status int) {
 		t.Helper()
 		req, _ := http.NewRequestWithContext(t.Context(), method, base+path, strings.NewReader(body))
-		req.Header.Set("X-EchoEar-Token", token)
+		req.Header.Set("X-Lark-Token", token)
 		req.Header.Set("Content-Type", "application/json")
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {

@@ -36,7 +36,7 @@ func recoveryMCP(ctx context.Context, base, method string, params object) (objec
 		return nil, err
 	}
 	req.Header.Set("Content-Type", jsonType)
-	req.Header.Set("X-EchoEar-Token", "unit")
+	req.Header.Set("X-Lark-Token", "unit")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -160,9 +160,9 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	defer api.Close()
 
 	path := filepath.Join(t.TempDir(), "bridge.db")
-	db := testDB(t, path, "")
+	db := testDB(t, path)
 	b := recoveryBridge(t, db, api, current)
-	v := virtualClient{ID: id, Character: "Plum", Theme: "plum", CreatedAt: time.Now()}
+	v := virtualClient{ID: id, Character: "Plum", CreatedAt: time.Now()}
 	if err := b.virtual.save(id, v, false); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 
 	// The failed/verified catalog attempts and still-stale binding survive a
 	// reopen. The old scoped credential still resolves the same companion.
-	db = testDB(t, path, "")
+	db = testDB(t, path)
 	b = recoveryBridge(t, db, api, current)
 	if err := b.syncSchemaUpgrade(t.Context()); err != nil || reconnects.Load() != 2 {
 		t.Fatalf("verified catalog was lost after restart: %v", err)
@@ -261,7 +261,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db = testDB(t, path, "")
+	db = testDB(t, path)
 	b = recoveryBridge(t, db, api, current)
 	scope = httptest.NewServer(b.scoped(v, "scoped-token"))
 	defer scope.Close()
@@ -343,14 +343,14 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 				}
 			}))
 			defer api.Close()
-			db := testDB(t, ":memory:", "")
+			db := testDB(t, ":memory:")
 			b := recoveryBridge(t, db, api, "current")
 			b.timers = newTimerManager(b)
 			defer b.timers.close()
 			if err := db.setMeta(t.Context(), mcpSchemaMeta, b.oc.contract); err != nil {
 				t.Fatal(err)
 			}
-			if err := b.virtual.save(id, virtualClient{ID: id, Character: "Plum", Theme: "plum"}, false); err != nil {
+			if err := b.virtual.save(id, virtualClient{ID: id, Character: "Plum"}, false); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now().Add(-time.Minute)

@@ -35,7 +35,7 @@ func testRequest(t *testing.T, method, url, token string, data any, want int) []
 		t.Fatal(err)
 	}
 	r.Header.Set("Content-Type", jsonType)
-	r.Header.Set("X-EchoEar-Token", token)
+	r.Header.Set("X-Lark-Token", token)
 	res, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,8 @@ func TestMCPStateSlices(t *testing.T) {
 	})
 	const id = "echoear-slices"
 	board := testConnectWS(t, base, "unit", false)
-	board.hello(t, id, "Cake")
+	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
+	board.until(t, hasWS("hello_ok", ""))
 	board.json(t, object{"ev": "status", "wifi_rssi": -62, "cpu_pct": 24, "battery_pct": 73})
 	eventually(t, func() bool {
 		b.ws.mu.Lock()

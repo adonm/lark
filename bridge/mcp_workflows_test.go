@@ -130,8 +130,9 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "echoear-face-parts"
-	c := legacyCat("Cake", "cake")
-	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, false)
+	c := blankCat()
+	c.Name, c.Configured = "Cake", true
+	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
 	tx, err := b.db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)

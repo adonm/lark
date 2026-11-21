@@ -24,14 +24,8 @@ func syncVirtualCharacter(ctx context.Context, tx *sql.Tx, id, name string) erro
 type virtualClient struct {
 	ID        string    `json:"id"`
 	Character string    `json:"character"`
-	Theme     string    `json:"theme"`
 	Voice     string    `json:"voice,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
-}
-
-func validLegacyVirtual(id string, v virtualClient) bool {
-	_, theme := legacyCatColors[v.Theme]
-	return id == v.ID && virtualID.MatchString(id) && characterRE.MatchString(v.Character) && theme && !v.CreatedAt.IsZero()
 }
 
 func (b *bridge) virtualSnapshot() (map[string]virtualClient, error) {
@@ -69,42 +63,30 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 		if err != nil {
 			return nil, err
 		}
-		name, theme := strings.TrimSpace(str(obj["character"])), strings.TrimSpace(str(obj["theme"]))
+		name := strings.TrimSpace(str(obj["character"]))
 		if value, supplied := obj["character"]; supplied {
 			if _, ok := value.(string); !ok || name != "" && !characterRE.MatchString(name) {
 				return nil, problem(400, "Invalid character name")
 			}
-		}
-		if value, supplied := obj["theme"]; supplied {
-			if _, ok := value.(string); !ok {
-				return nil, problem(400, "Invalid theme")
-			}
-		}
-		if _, ok := legacyCatColors[theme]; theme != "" && !ok {
-			return nil, problem(400, "Expected theme cake, mint, plum, or sunny")
 		}
 		voice := str(obj["voice"])
 		if _, supplied := obj["voice"]; supplied && !b.voices.allowed(voice) {
 			return nil, problem(400, "Unsupported voice")
 		}
 		cat := blankCat()
-		if name != "" || theme != "" {
-			if name == "" {
-				name = strings.ToUpper(theme[:1]) + theme[1:]
-			}
-			if theme == "" {
-				theme = deviceTheme(name)
-			}
-			cat = legacyCat(name, theme)
+		if name != "" {
+			cat.Name = name
+			cat.Configured = true
+			cat.FaceSVG = cat.defaultFace()
 		}
-		v := virtualClient{ID: "virt-" + randomHex(4), Character: cat.Name, Theme: theme, Voice: voice, CreatedAt: time.Now().UTC()}
+		v := virtualClient{ID: "virt-" + randomHex(4), Character: cat.Name, Voice: voice, CreatedAt: time.Now().UTC()}
 		ctx := r.Context()
 		tx, err := b.db.BeginTx(ctx, nil)
 		if err != nil {
 			return nil, problem(502, "Cannot create virtual client")
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO virtual_clients (id,character,theme,voice,created_at) VALUES (?,?,?,?,?)`, b.virtual.values(v.ID, v)...); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO virtual_clients (id,character,voice,created_at) VALUES (?,?,?,?)`, b.virtual.values(v.ID, v)...); err != nil {
 			return nil, problem(502, "Cannot create virtual client")
 		}
 		if err := writeCat(ctx, tx, v.ID, cat); err != nil || tx.Commit() != nil {
@@ -158,8 +140,8 @@ func (b *bridge) publicVirtual(v virtualClient) object {
 		b.ws.mu.Unlock()
 	}
 	cat := b.catFor(peer{DeviceID: v.ID, Character: v.Character})
-	out := object{"id": v.ID, "character": cat.Name, "cat": cat.catLook, "theme": v.Theme, "created_at": v.CreatedAt,
-		"online": connected, "ws_connected": connected, "voice": b.voices.resolve(cat.Voice, v.Theme)}
+	out := object{"id": v.ID, "character": cat.Name, "cat": cat.catLook, "created_at": v.CreatedAt,
+		"online": connected, "ws_connected": connected, "voice": b.voices.resolve(cat.Voice, deviceTheme(cat.Name))}
 	if details := b.tunnels.info(v.ID); details != nil {
 		out["tunnel"] = details
 	}
@@ -167,9 +149,8 @@ func (b *bridge) publicVirtual(v virtualClient) object {
 }
 
 func deviceTheme(character string) string {
-	theme := strings.ToLower(character)
-	if _, ok := legacyCatColors[theme]; ok {
-		return theme
+	if strings.EqualFold(character, "mint") {
+		return "mint"
 	}
 	return "cake"
 }
@@ -247,7 +228,6 @@ func (b *bridge) deviceEntry(who peer, v virtualClient, full bool) object {
 		delete(entry, "ip")
 	}
 	if v.ID != "" {
-		entry["theme"] = v.Theme
 		delete(entry, "port")
 		delete(entry, "last_seen")
 	}

@@ -45,21 +45,20 @@ type deviceCaps struct {
 	Drag           bool `json:"drag"`
 }
 
-func helloCaps(ev wsEvent, board string) deviceCaps {
+func helloCaps(ev wsEvent) deviceCaps {
 	value := func(flag *bool, fallback bool) bool {
 		if flag != nil {
 			return *flag
 		}
 		return fallback
 	}
-	vocat := ev.Role == "device" && board == "esp-vocat"
 	return deviceCaps{
 		WakeWord:       value(ev.Caps.WakeWord, false),
 		PanelSleep:     value(ev.Caps.PanelSleep, false),
 		PointerRev:     value(ev.Caps.PointerRev, false),
 		BridgeEndpoint: value(ev.Caps.BridgeEndpoint, false),
-		Battery:        value(ev.Caps.Battery, value(ev.HasBattery, vocat)),
-		HeadPads:       value(ev.Caps.HeadPads, vocat),
+		Battery:        value(ev.Caps.Battery, false),
+		HeadPads:       value(ev.Caps.HeadPads, false),
 		Call:           value(ev.Caps.Call, false),
 		CallPCM:        value(ev.Caps.Call, false) && value(ev.Caps.CallPCM, false),
 		Drag:           value(ev.Caps.Drag, true),
@@ -70,7 +69,6 @@ type wsStatus struct {
 	Battery        *int     `json:"battery_pct"`
 	MV             *int     `json:"battery_mv"`
 	Charge         *bool    `json:"charging"`
-	RSSI           *int     `json:"rssi,omitempty"`
 	WiFi           *int     `json:"wifi_rssi"`
 	HasBattery     *bool    `json:"has_battery"`
 	Volume         *int     `json:"volume"`
@@ -96,7 +94,6 @@ type wsDevice struct {
 	screen     screenGeometry
 	board      string
 	caps       deviceCaps
-	theme      string
 	voice      string
 	announcing bool
 	cat        catState
@@ -512,7 +509,7 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 	}
 	d := &wsDevice{client: c, key: strings.ToLower(ev.DeviceID), who: who,
 		firmware: shortText(ev.Firmware, 24, false), screen: screen, board: board,
-		caps: helloCaps(ev, board), theme: v.Theme, pct: -1, last: now, moodAt: now, announcing: true}
+		caps: helloCaps(ev), pct: -1, last: now, moodAt: now, announcing: true}
 	h.b.catMu.Lock()
 	defer h.b.catMu.Unlock()
 	d.cat = h.b.catFor(d.who)
@@ -590,9 +587,6 @@ func (d *wsDevice) status(s wsStatus) {
 			t.Charge = s.Charge
 		}
 	}
-	if s.WiFi == nil {
-		s.WiFi = s.RSSI
-	}
 	if s.WiFi != nil && *s.WiFi < 0 {
 		t.WiFi = new(max(-127, *s.WiFi))
 	}
@@ -638,9 +632,6 @@ func (d *wsDevice) status(s wsStatus) {
 }
 
 func (d *wsDevice) voiceTheme() string {
-	if d.theme != "" {
-		return d.theme
-	}
 	return deviceTheme(d.who.Character)
 }
 

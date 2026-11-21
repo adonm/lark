@@ -133,7 +133,7 @@ func TestHistoryCursorPagination(t *testing.T) {
 	if p := read(path); len(p.Messages) != 100 || p.Next == nil || p.Next.ID != "msg-405" || p.Messages[99].ID != "msg-504" {
 		t.Fatalf("unexpected default page: %d messages, cursor %v", len(p.Messages), p.Next)
 	}
-	p := read("/api/history?device_id=" + id + "&limit=900")
+	p := read("/api/devices/" + id + "/messages?limit=900")
 	if len(p.Messages) != 500 || p.Next == nil || p.Next.ID != "msg-005" {
 		t.Fatalf("unexpected max page: %d messages, cursor %v", len(p.Messages), p.Next)
 	}

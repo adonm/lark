@@ -61,7 +61,7 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 		}
 	}
 	const virtual = "virt-01234567"
-	if err := b.virtual.save(virtual, virtualClient{ID: virtual, Character: "Story Cat", Theme: "mint", Voice: "bf_lily"}, false); err != nil {
+	if err := b.virtual.save(virtual, virtualClient{ID: virtual, Character: "Story Cat", Voice: "bf_lily"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := b.voices.get(virtual, "mint"); got != emmaVoice {
@@ -110,7 +110,7 @@ func TestDeviceVoiceDefaults(t *testing.T) {
 	b, _ := wsHarness(t, func(b *bridge, dir string) {
 		b.voices = deviceVoiceStore(b.db, "")
 		b.virtual = virtualStore(b.db)
-		if err := b.virtual.save("virt-01234567", virtualClient{ID: "virt-01234567", Character: "Green Cat", Theme: "mint"}, false); err != nil {
+		if err := b.virtual.save("virt-01234567", virtualClient{ID: "virt-01234567", Character: "Green Cat", Voice: fableVoice}, false); err != nil {
 			t.Fatal(err)
 		}
 	})

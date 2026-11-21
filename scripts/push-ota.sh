@@ -53,8 +53,6 @@ checked_partition() {
 import json, sys
 status = json.load(sys.stdin)
 board = status.get("board")
-if board is None and status.get("device", "").startswith("echoear-"):
-    board = "esp-vocat"  # Legacy vocat 0.8.0 did not report its board.
 if board != sys.argv[1]:
     actual = board or "unknown board"
     raise SystemExit(f"OTA refused: expected {sys.argv[1]}, got {actual}")
@@ -89,7 +87,7 @@ PY
 )
 
 # Pass the header via stdin so the token is not an argument in the process list.
-printf 'X-EchoEar-Token: %s\n' "$ECHOEAR_BRIDGE_TOKEN" |
+printf 'X-Lark-Token: %s\n' "$ECHOEAR_BRIDGE_TOKEN" |
     curl --noproxy '*' -fsS --max-time 180 -H @- -H 'Expect:' -H 'Content-Type: application/octet-stream' \
         --data-binary "@$image" "$base/ota/upload"
 

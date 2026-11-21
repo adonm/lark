@@ -30,8 +30,8 @@ func parentRequest(t *testing.T, base, method, path string, args any, want int) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Header.Set("X-EchoEar-Token", "unit")
-	r.Header.Set("X-EchoEar-Parent-Token", testParentToken)
+	r.Header.Set("X-Lark-Token", "unit")
+	r.Header.Set("X-Lark-Parent-Token", testParentToken)
 	r.Header.Set("Content-Type", jsonType)
 	res, err := http.DefaultClient.Do(r)
 	if err != nil {
@@ -170,8 +170,8 @@ func TestParentAdminAndChildPause(t *testing.T) {
 	parentRequest(t, scoped.URL, "POST", path, object{"action": "unlock", "minutes": 5}, 404)
 	public := httptest.NewRequest("GET", "/api/parent", nil)
 	public.RemoteAddr = "203.0.113.1:42"
-	public.Header.Set("X-EchoEar-Token", "unit")
-	public.Header.Set("X-EchoEar-Parent-Token", testParentToken)
+	public.Header.Set("X-Lark-Token", "unit")
+	public.Header.Set("X-Lark-Parent-Token", testParentToken)
 	public.Header.Set("X-Forwarded-For", "127.0.0.1")
 	res := httptest.NewRecorder()
 	b.ServeHTTP(res, public)
@@ -275,7 +275,7 @@ func TestParentTearsDownActiveAppCallAndOfflineChat(t *testing.T) {
 
 func TestParentCivilTimeAndPersistence(t *testing.T) {
 	ctx := t.Context()
-	db := testDB(t, ":memory:", "")
+	db := testDB(t, ":memory:")
 	h := &wsHub{b: &bridge{db: db}}
 	key := "echoear-clock"
 	for _, tc := range []struct {

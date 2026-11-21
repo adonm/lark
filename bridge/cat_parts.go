@@ -5,11 +5,6 @@ import "slices"
 var faceParts = []string{"eyes", "mouth", "nose", "whiskers", "cheeks", "forehead"}
 var faceEditPoses = []string{"base", "idle", "blink", "talk", "listen", "think", "sleep"}
 
-func (c catState) legacyDefaultFace(raw *svgNode) bool {
-	old, err := parseFaceSVG(defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, false))
-	return err == nil && svgString(old) == svgString(raw)
-}
-
 func editFaceParts(raw string, edits any) (string, error) {
 	list, ok := edits.([]any)
 	if !ok || len(list) == 0 || len(list) > 24 {

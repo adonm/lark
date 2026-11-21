@@ -31,7 +31,7 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 	d.until(t, hasWS("rec", `"action":"start"`))
 }
 
-func TestDestructiveNativeRevisionWrapAndLegacy(t *testing.T) {
+func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
 	d := wsDevice{caps: deviceCaps{PointerRev: true}}
 	for _, action := range []string{"stop", "rec-cancel", "rec-send", "listen", "reply", "call-peer",
 		"call-answer", "call-decline", "call-hangup", "call-mute"} {
@@ -42,7 +42,7 @@ func TestDestructiveNativeRevisionWrapAndLegacy(t *testing.T) {
 	}
 	d.caps.PointerRev = false
 	if !d.acceptPointerRevision("stop", nil) {
-		t.Fatal("legacy firmware must continue to work without rev_lo")
+		t.Fatal("browser virtual clients must continue to work without rev_lo")
 	}
 }
 

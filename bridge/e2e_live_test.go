@@ -213,9 +213,9 @@ func e2eRequest(t *testing.T, c liveClient, method, path, parent string, body an
 	if err != nil {
 		t.Fatal("cannot construct isolated API request")
 	}
-	req.Header.Set("X-EchoEar-Token", c.token)
+	req.Header.Set("X-Lark-Token", c.token)
 	if parent != "" {
-		req.Header.Set("X-EchoEar-Parent-Token", parent)
+		req.Header.Set("X-Lark-Parent-Token", parent)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", jsonType)
@@ -483,7 +483,7 @@ func (s *e2eSuite) scope(t *testing.T, id string) liveClient {
 	t.Cleanup(func() {
 		// The subtest context is already canceled when Cleanup runs.
 		req, _ := http.NewRequest("DELETE", s.base+"/api/tunnels/"+id, nil)
-		req.Header.Set("X-EchoEar-Token", s.token)
+		req.Header.Set("X-Lark-Token", s.token)
 		res, err := s.client.Do(req)
 		if err != nil {
 			t.Error("could not remove isolated scoped listener")

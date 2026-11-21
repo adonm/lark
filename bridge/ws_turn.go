@@ -111,9 +111,7 @@ func (h *wsHub) micChunk(c *wsClient, data []byte) {
 		return
 	}
 	if d.callState != callNone {
-		tagged := d.caps.CallPCM && data[0] == callMicPrefix
-		legacy := !d.caps.CallPCM && !d.recording.legacyCallTail && data[0] == micPrefix
-		if d.callState == callActive && (tagged || legacy) {
+		if d.callState == callActive && d.caps.CallPCM && data[0] == callMicPrefix {
 			h.relayCallPCM(d, data)
 		}
 		return
