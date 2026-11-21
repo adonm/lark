@@ -941,6 +941,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			continue
 		}
 		d.scene, d.displayApp, d.svg = r.view, r.app, screen
+		h.sig.notify()
 		if svgWire.data == nil {
 			continue
 		}

@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -199,11 +198,13 @@ func TestMCPStateSlices(t *testing.T) {
 	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
 	board.until(t, hasWS("hello_ok", ""))
 	board.json(t, object{"ev": "status", "wifi_rssi": -62, "cpu_pct": 24, "battery_pct": 73})
-	eventually(t, func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		return b.ws.devices[id].telemetry.WiFi != nil
-	})
+	board.barrier(t)
+	b.ws.mu.Lock()
+	wifiOK := b.ws.devices[id].telemetry.WiFi != nil
+	b.ws.mu.Unlock()
+	if !wifiOK {
+		t.Fatal("missing telemetry wifi")
+	}
 	toolTest(t, base, "patch", object{"device_id": id, "companion": object{"name": "Slices", "save_profile": true}, "timer": object{"in_seconds": 300, "chime": "tap"},
 		"memory": []object{{"scope": "shared", "key": "score", "value": object{"points": 7}}, {"scope": id, "key": "seen", "value": []any{true, nil}}}}, false)
 	const code = `function render(s){return '<svg><text x="80" y="180">'+s.n+'</text></svg>';}`
@@ -511,14 +512,42 @@ func TestMCPControl(t *testing.T) {
 	checkStatus("idle", "42")
 }
 
-func eventually(t *testing.T, f func() bool) {
+func (c *condSignal) wait(t *testing.T, ready func() bool) {
 	t.Helper()
-	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); runtime.Gosched() {
-		if f() {
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		c.mu.Lock()
+		ch := c.ch
+		if ch == nil {
+			ch = make(chan struct{})
+			c.ch = ch
+		}
+		c.mu.Unlock()
+		if ready() {
 			return
 		}
+		select {
+		case <-ch:
+		case <-deadline.C:
+			t.Fatal("condition did not become true")
+		}
 	}
-	t.Fatal("condition did not become true")
+}
+
+func waitPool(t *testing.T, ready func() bool) {
+	t.Helper()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for !ready() {
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("condition did not become true")
+		}
+	}
 }
 
 func chatFrame(text string) func(wsFrame) bool {

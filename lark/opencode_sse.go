@@ -33,12 +33,12 @@ type ocEvent struct {
 type eventFeed struct {
 	mu        sync.Mutex
 	connected bool
+	sig       condSignal
 	bySession map[string]map[chan ocEvent]struct{}
 }
 
 func (f *eventFeed) setConnected(connected bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.connected = connected
 	if !connected {
 		for _, subs := range f.bySession {
@@ -48,6 +48,8 @@ func (f *eventFeed) setConnected(connected bool) {
 		}
 		clear(f.bySession)
 	}
+	f.mu.Unlock()
+	f.sig.notify()
 }
 
 func (f *eventFeed) subscribe(sid string) (<-chan ocEvent, func()) {

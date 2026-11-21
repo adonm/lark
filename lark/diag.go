@@ -124,6 +124,7 @@ type diagFrame struct {
 
 type diagnostics struct {
 	mu      sync.Mutex
+	sig     condSignal
 	metrics [diagMetricCount]diagRing[float64]
 	turns   diagRing[*diagTurn]
 	system  diagSystem
@@ -143,6 +144,7 @@ func (b *larkServer) traceTurn(ctx context.Context, device, character, source st
 	b.diag.mu.Lock()
 	b.diag.turns.add(t.record, 20)
 	b.diag.mu.Unlock()
+	b.diag.sig.notify()
 	return context.WithValue(ctx, traceKey{}, t)
 }
 
@@ -161,7 +163,6 @@ func (t *turnTrace) measure(metric diagMetric, elapsed time.Duration) {
 	}
 	value := milliseconds(elapsed)
 	t.d.mu.Lock()
-	defer t.d.mu.Unlock()
 	field := [diagMetricCount]**float64{
 		diagSTT: &t.record.STT, diagLLMFirst: &t.record.First, diagLLMTotal: &t.record.Total,
 		diagTTSFirst: &t.record.TTS, diagE2E: &t.record.E2E, diagRender: &t.record.Render,
@@ -176,6 +177,8 @@ func (t *turnTrace) measure(metric diagMetric, elapsed time.Duration) {
 			t.d.metrics[metric].add(value, 32)
 		}
 	}
+	t.d.mu.Unlock()
+	t.d.sig.notify()
 }
 
 func (t *turnTrace) audioEnqueued(at time.Time) {

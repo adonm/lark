@@ -96,6 +96,7 @@ type openCode struct {
 	turns    [64]chan struct{}
 
 	mu         sync.Mutex
+	sig        condSignal
 	active     map[string]context.CancelFunc
 	interrupts map[string]bool
 	resets     map[string]*ocReset
@@ -124,7 +125,9 @@ func (o *openCode) get(device string) (string, error) {
 }
 
 func (o *openCode) save(device, sid string) error {
-	return o.store.save(device, sid, sid == "")
+	err := o.store.save(device, sid, sid == "")
+	o.sig.notify()
+	return err
 }
 
 func (o *openCode) lock(ctx context.Context, device string) (func(), error) {

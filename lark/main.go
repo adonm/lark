@@ -14,11 +14,26 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"lark/eval"
 )
+
+type condSignal struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+func (c *condSignal) notify() {
+	c.mu.Lock()
+	if c.ch != nil {
+		close(c.ch)
+		c.ch = nil
+	}
+	c.mu.Unlock()
+}
 
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

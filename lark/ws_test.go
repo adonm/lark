@@ -298,7 +298,7 @@ func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 		t.Fatal("unexpected initial framebuffer", frame)
 	}
 	dev.conn.Close()
-	eventually(t, func() bool {
+	b.ws.sig.wait(t, func() bool {
 		list := apiObjects(t, base+"/api/devices", "devices")
 		return len(list) == 1 && list[0].(object)["ws_connected"] == false
 	})
@@ -849,7 +849,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	if got.data[0] != pcmPrefix || !bytes.Equal(got.data[1:], speech) {
 		t.Fatal("did not receive eager Kokoro frame")
 	}
-	eventually(t, func() bool {
+	b.diag.sig.wait(t, func() bool {
 		turns := b.diagnosticReport().Turns
 		return len(turns) == 1 && turns[0].TTS != nil && turns[0].E2E != nil && turns[0].Total == nil
 	})
@@ -875,12 +875,14 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	}
 	end := dev.until(t, hasWS("tts", `"state":"end"`))
 	dev.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
-	eventually(t, func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		d := b.ws.devices["lark-a"]
-		return !d.busy && !d.awaitAck && d.scene.title == ""
-	})
+	dev.barrier(t)
+	b.ws.mu.Lock()
+	d := b.ws.devices["lark-a"]
+	settled := !d.busy && !d.awaitAck && d.scene.title == ""
+	b.ws.mu.Unlock()
+	if !settled {
+		t.Fatal("device did not settle after tts_ack")
+	}
 	entries := apiObjects(t, base+"/api/devices/lark-a/messages", "messages")
 	if len(entries) != 2 || !slices.ContainsFunc(entries, func(v any) bool {
 		e := v.(object)

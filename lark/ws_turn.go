@@ -209,6 +209,7 @@ func (h *wsHub) cancelLocalTurn(d *wsDevice) {
 		d.cancel()
 		d.cancel = nil
 	}
+	h.sig.notify()
 }
 
 func (h *wsHub) startTurn(d *wsDevice, now time.Time, keepView bool, source string, run func(context.Context, uint64)) bool {
@@ -254,7 +255,10 @@ type turnAudio struct {
 
 func (h *wsHub) finishTurn(d *wsDevice, id uint64, view *sceneView, audio *AudioStream) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	defer func() {
+		h.mu.Unlock()
+		h.sig.notify()
+	}()
 	if !h.active(d) || d.turn != id {
 		return
 	}

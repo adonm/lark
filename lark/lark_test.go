@@ -382,7 +382,7 @@ func TestOpenCodeStreamingAndFallback(t *testing.T) {
 			}
 			o := newOpenCode(ctx, upstream{"OpenCode", pooledClient(), &fileCache[endpoint]{path: path, read: openCodeEndpoint}},
 				testDB(t, ":memory:"), t.TempDir(), ocSettings{})
-			eventually(t, func() bool {
+			o.feed.sig.wait(t, func() bool {
 				o.feed.mu.Lock()
 				defer o.feed.mu.Unlock()
 				return o.feed.connected

@@ -244,7 +244,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	}
 	d.until(t, hasWS("rec", `"action":"stop"`))
 	d.json(t, object{"ev": "rec_end"})
-	eventually(t, func() bool {
+	b.diag.sig.wait(t, func() bool {
 		b.diag.mu.Lock()
 		defer b.diag.mu.Unlock()
 		return len(b.diag.metrics[diagEndpoint].items) == 1
@@ -400,7 +400,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	close(finishFirst)
 	expectValue(t, prompts, "and add stars")
 	d.until(t, hasWS("mode", `"mode":"idle"`))
-	eventually(t, func() bool {
+	b.ws.sig.wait(t, func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()
 		return !b.ws.devices[id].busy

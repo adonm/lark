@@ -490,8 +490,10 @@ func TestAppExitAcceptsBothControlIDs(t *testing.T) {
 		}
 		board.until(t, isDisplay)
 		board.json(t, object{"ev": "tap", "x": 180, "y": 302})
-		eventually(t, func() bool { return stateMe(t, base, id)["active_app"] == nil })
 		board.until(t, isDisplay)
+		if stateMe(t, base, id)["active_app"] != nil {
+			t.Fatal("app remained active after exit tap")
+		}
 	}
 }
 
@@ -564,7 +566,7 @@ func TestAppSaveDoesNotCommitStaleLaunch(t *testing.T) {
 				done <- err
 			}()
 			// Memory loads after the launch captures its device generation.
-			eventually(t, func() bool { return b.db.readDB().Stats().WaitCount > before })
+			waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > before })
 			if change == "disconnected" {
 				b.ws.disconnectDevice(id)
 			} else {

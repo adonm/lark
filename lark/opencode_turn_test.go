@@ -176,7 +176,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 					}
 				})
 			})
-			eventually(t, func() bool {
+			b.oc.feed.sig.wait(t, func() bool {
 				b.oc.feed.mu.Lock()
 				defer b.oc.feed.mu.Unlock()
 				return b.oc.feed.connected
@@ -187,7 +187,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 			start := testObject(t, device.until(t, hasWS("tts", `"state":"start"`)).data)
 			pcm := func(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 1 && f.data[0] == pcmPrefix }
 			device.until(t, pcm) // The upstream is still blocked on finishSSE.
-			eventually(t, func() bool {
+			b.diag.sig.wait(t, func() bool {
 				turns := b.diagnosticReport().Turns
 				return len(turns) != 0 && turns[0].TTS != nil && turns[0].Total == nil
 			})
@@ -292,7 +292,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			nextSpeech(first).done <- ttsResult{pcm: make([]byte, 640)}
 			start := testObject(t, board.until(t, hasWS("tts", `"state":"start"`)).data)
 			board.until(t, isPlayback)
-			eventually(t, func() bool {
+			b.diag.sig.wait(t, func() bool {
 				report := b.diagnosticReport()
 				return len(report.Turns) == 1 && report.Turns[0].FirstPCM != nil && report.Turns[0].Render != nil
 			})
@@ -309,7 +309,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				close(finish)
 			case "after-final":
 				close(finish)
-				eventually(t, func() bool {
+				b.ws.sig.wait(t, func() bool {
 					b.ws.mu.Lock()
 					defer b.ws.mu.Unlock()
 					return !b.ws.devices[id].busy
@@ -321,7 +321,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				board.barrier(t)
 				tail.done <- ttsResult{err: errTTS}
 				close(finish)
-				eventually(t, idle)
+				b.ws.sig.wait(t, idle)
 				b.ws.mu.Lock()
 				view, pending := b.ws.devices[id].view, b.ws.devices[id].pending
 				b.ws.mu.Unlock()
@@ -330,7 +330,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				}
 				return
 			}
-			eventually(t, func() bool {
+			b.ws.sig.wait(t, func() bool {
 				b.ws.mu.Lock()
 				defer b.ws.mu.Unlock()
 				d := b.ws.devices[id]
@@ -437,7 +437,7 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 				expectValue[error](t, reset, nil)
 			}
 			if action == "reset" {
-				eventually(t, func() bool { saved, _ := b.oc.get(id); return saved == "" })
+				b.oc.sig.wait(t, func() bool { saved, _ := b.oc.get(id); return saved == "" })
 			}
 		})
 	}

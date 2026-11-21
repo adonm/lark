@@ -69,6 +69,7 @@ type wsClient struct {
 type wsHub struct {
 	b             *larkServer
 	mu            sync.Mutex
+	sig           condSignal
 	settingsMu    sync.Mutex
 	conns         sync.WaitGroup
 	clients       map[*wsClient]struct{}
@@ -469,6 +470,7 @@ func (h *wsHub) teardownDevice(d *wsDevice) {
 	h.stopPlayback(d, false)
 	h.parentFinishActivity(d.key, time.Now())
 	h.broadcastPeers()
+	h.sig.notify()
 }
 
 func (h *wsHub) detach(c *wsClient) {

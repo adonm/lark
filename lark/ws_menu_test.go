@@ -211,7 +211,7 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 		defer conn.Close()
 		wait := b.db.readDB().Stats().WaitCount
 		web.json(t, object{"ev": "tap", "id": control})
-		eventually(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
+		waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
 		if control == "game-0" {
 			board.json(t, object{"ev": "tap", "x": 180, "y": 316}) // Leave Games while the app is still loading.
 		} else {
