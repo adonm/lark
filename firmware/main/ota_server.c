@@ -23,7 +23,8 @@
 #include "sdkconfig.h"
 #include "telemetry.h"
 #include "wifi.h"
-#include "ws_client.h"
+#include "net_client.h"
+#include "proto.h"
 
 static const char *TAG = "ota";
 
@@ -116,7 +117,7 @@ static esp_err_t status_get(httpd_req_t *request)
              "\"free_heap\":%zu,\"min_free_heap\":%zu,\"free_psram\":%zu,\"uptime_s\":%" PRIu64 ",\"cpu_pct\":%u,"
              "\"firmware\":\"%s\",\"running_partition\":\"%s\","
              "\"board\":\"" BOARD_NAME "\",\"width\":%d,\"height\":%d,\"has_battery\":%s,"
-             "\"volume\":%d,\"battery_pct\":%s,\"battery_mv\":%s,\"charging\":%s,\"sleeping\":%s,\"ws_connected\":%s,"
+             "\"volume\":%d,\"battery_pct\":%s,\"battery_mv\":%s,\"charging\":%s,\"sleeping\":%s,\"connected\":%s,"
              "\"ota_pending\":%s"
              TELEMETRY_IO_JSON "}",
              device_id, wifi_character(), device_mac, ip, hw.wifi_rssi,
@@ -124,7 +125,7 @@ static esp_err_t status_get(httpd_req_t *request)
              esp_app_get_description()->version, running->label,
              FRAME_WIDTH, FRAME_HEIGHT, BOARD_HAS_BATTERY ? "true" : "false",
              audio_get_volume(), pct, mv, BOARD_HAS_BATTERY ? (battery.charging ? "true" : "false") : "null",
-             display_is_sleeping() ? "true" : "false", ws_client_connected() ? "true" : "false",
+             display_is_sleeping() ? "true" : "false", net_client_connected() ? "true" : "false",
              pending_verification() ? "true" : "false",
              TELEMETRY_IO_VALUES(hw));
     if (len < 0 || (size_t)len >= sizeof(json)) {
@@ -192,8 +193,24 @@ static bool matching_board(const esp_app_desc_t *image)
 
 static esp_err_t ota_pull_post(httpd_req_t *request)
 {
+    char url[256];
+    if (!strncmp(CONFIG_LARK_BRIDGE_URL, "http://", 7) || !strncmp(CONFIG_LARK_BRIDGE_URL, "https://", 8)) {
+        snprintf(url, sizeof(url), "%s%s", CONFIG_LARK_BRIDGE_URL, BOARD_OTA_PATH);
+    } else {
+        char host[128];
+        uint16_t unused_port = 0;
+        if (!lark_parse_bridge_url(CONFIG_LARK_BRIDGE_URL, host, sizeof(host), &unused_port)) {
+            return text_response(request, "500 Internal Server Error", "Invalid bridge URL\n");
+        }
+        const char *scheme = !strncmp(CONFIG_LARK_BRIDGE_URL, "wss://", 6) ? "https" : "http";
+        int len = strchr(host, ':') ? snprintf(url, sizeof(url), "%s://[%s]:%d%s", scheme, host, LARK_DEFAULT_HTTP_PORT, BOARD_OTA_PATH)
+                                    : snprintf(url, sizeof(url), "%s://%s:%d%s", scheme, host, LARK_DEFAULT_HTTP_PORT, BOARD_OTA_PATH);
+        if (len < 0 || (size_t)len >= sizeof(url)) {
+            return text_response(request, "500 Internal Server Error", "OTA URL too large\n");
+        }
+    }
     const esp_http_client_config_t http = {
-        .url = CONFIG_LARK_BRIDGE_URL BOARD_OTA_PATH,
+        .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 15000,
         .disable_auto_redirect = true,
@@ -320,7 +337,7 @@ void ota_check_boot(int64_t boot_us)
     if (!pending_verification()) return;
     if (media_audio_ready()) {
         while (esp_timer_get_time() - boot_us < 45 * 1000000LL) {
-            if (ws_client_connected()) {
+            if (net_client_connected()) {
                 esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
                 if (err == ESP_OK) {
                     ESP_LOGI(TAG, "Confirmed OTA image after bridge hello and audio initialization");
@@ -332,7 +349,7 @@ void ota_check_boot(int64_t boot_us)
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
-    ESP_LOGE(TAG, "OTA boot health check failed (audio=%d, bridge=%d)", media_audio_ready(), ws_client_connected());
+    ESP_LOGE(TAG, "OTA boot health check failed (audio=%d, bridge=%d)", media_audio_ready(), net_client_connected());
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     ESP_LOGE(TAG, "Roll back OTA image: %s", esp_err_to_name(err));
     // USB flashes may have no known-good OTA image. Keep local recovery reachable.

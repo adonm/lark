@@ -123,7 +123,13 @@ func run() error {
 	if port, err := strconv.Atoi(ports); err != nil || port < 0 || port > 65535 {
 		return errors.New("invalid LARK_BRIDGE_PORT")
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(env("LARK_BRIDGE_HOST", "0.0.0.0"), ports))
+	devicePorts := env("LARK_DEVICE_PORT", defaultDevPort)
+	devicePort, err := strconv.Atoi(devicePorts)
+	if err != nil || devicePort < 0 || devicePort > 65535 {
+		return errors.New("invalid LARK_DEVICE_PORT")
+	}
+	host := env("LARK_BRIDGE_HOST", "0.0.0.0")
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, ports))
 	if err != nil {
 		return err
 	}
@@ -152,6 +158,18 @@ func run() error {
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
+	var devSrv *deviceServer
+	if devicePort != 0 {
+		devSrv, err = newDeviceServer(b.ws, host, devicePorts)
+		if err != nil {
+			b.ws.shutdown()
+			finish()
+			_ = listener.Close()
+			<-worker.done
+			return err
+		}
+		log.Printf("Lark native device listener on %s", devSrv.tcpLn.Addr().String())
+	}
 	b.builders = newBuildManager(b)
 	buildsDone := make(chan struct{})
 	go func() {
@@ -202,6 +220,7 @@ func run() error {
 		b.timers.close()
 		b.tunnels.shutdown()
 		b.ws.shutdown()
+		devSrv.shutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
@@ -214,6 +233,7 @@ func run() error {
 	b.timers.close()
 	b.tunnels.shutdown()
 	b.ws.shutdown()
+	devSrv.shutdown()
 	<-worker.done
 	oc.client.CloseIdleConnections()
 	if errors.Is(err, http.ErrServerClosed) {

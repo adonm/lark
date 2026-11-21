@@ -58,7 +58,7 @@ if board != sys.argv[1]:
     raise SystemExit(f"OTA refused: expected {sys.argv[1]}, got {actual}")
 print(status["running_partition"])
 if len(sys.argv) > 2 and (status.get("firmware") != sys.argv[2] or
-                          status.get("ws_connected") is not True or
+                          status.get("connected") is not True or
                           status.get("ota_pending") is True):
     raise SystemExit(1)
 ' "$board_name" "$@"

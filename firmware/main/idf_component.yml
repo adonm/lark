@@ -2,7 +2,6 @@ dependencies:
   idf: ">=5.5,<5.6"
   espressif/esp_lcd_touch: "^1.2.0"
   espressif/mdns: "^1.8.0"
-  espressif/esp_websocket_client: "^1.4.0"
   espressif/esp-sr: "2.4.0"
   espressif/lz4: "^1.10.0"
   espressif/esp_new_jpeg: "^1.0.2"

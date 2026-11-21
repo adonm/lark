@@ -47,6 +47,9 @@ printf 'PASS host VAD tests\n'
 "${host_cc[@]}" firmware/tests/touch_gesture_test.c firmware/main/touch_gesture.c -o "$host_tests/touch_gesture"
 "$host_tests/touch_gesture"
 
+"${host_cc[@]}" firmware/tests/proto_test.c -o "$host_tests/proto"
+"$host_tests/proto"
+
 for board in vocat box3; do
     flags=()
     if [[ "$board" == box3 ]]; then flags+=(-DLARK_BOX3=1); fi

@@ -170,7 +170,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 old = path.read_text() if path.exists() else (
-    "LARK_BRIDGE_HOST=0.0.0.0\nLARK_BRIDGE_PORT=8765\n"
+    "LARK_BRIDGE_HOST=0.0.0.0\nLARK_BRIDGE_PORT=8765\nLARK_DEVICE_PORT=8766\n"
     f"LARK_BRIDGE_TOKEN={secrets.token_hex(32)}\n"
 )
 prior = re.findall(r"^LARK_OPENCODE_PASSWORD=([a-f0-9]{64})$", old, re.M)

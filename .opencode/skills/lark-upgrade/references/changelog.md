@@ -4,6 +4,22 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Native Binary Device Protocol (TCP + UDP/RTP on `:8766`)
+
+### Affects
+- Bridge (`LARK_DEVICE_PORT`, default `8766`) and `bridge.env` / `lark-bridge.service`
+- ESP32 firmware (`vocat` and `box3`) and `scripts/push-ota.sh`
+
+### Breaking Changes
+- **Hardware transport**: Firmware replaces WebSocket + cJSON (`espressif/esp_websocket_client`) with a packed binary TCP control/frame/TTS protocol and 20 ms 16 kHz PCM over UDP/RTP on `LARK_DEVICE_PORT` (default `8766`, `0` disables). Browser clients continue using `/ws` WebSocket.
+- **Device `/status` field**: Firmware `/status` now reports `connected` instead of `ws_connected` (updated in `scripts/push-ota.sh`).
+
+### Upgrade Steps
+1. Ensure `LARK_DEVICE_PORT=8766` is allowed on the LAN firewall (TCP + UDP) and rebuild/restart `lark-bridge.service`.
+2. Rebuild and flash/OTA firmware for `vocat` and `box3` (`./scripts/build.sh` / `./scripts/push-ota.sh`).
+
+---
+
 ## 2026-11-22 — EchoEar → Lark Rename, Compat-Shim Removal, and Companion Unification (`e95476d`, `f4a5912`, `206da8c`)
 
 ### Affects

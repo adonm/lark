@@ -536,6 +536,12 @@ func (h *wsHub) chime(d *wsDevice, kind string) bool {
 	if kind == "celebrate" {
 		kind = "intercom" // Existing firmware's happy tone.
 	}
+	if d.client.native != nil {
+		if code, ok := encodeChimePayload(kind); ok {
+			return d.client.native.enqueue(msgChime, []byte{code})
+		}
+		return false
+	}
 	return d.client.enqueue(textFrame(object{"op": "chime", "kind": kind}))
 }
 

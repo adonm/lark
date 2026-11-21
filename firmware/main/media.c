@@ -16,7 +16,7 @@
 #include "freertos/task.h"
 #include "telemetry.h"
 #include "wake_word.h"
-#include "ws_client.h"
+#include "net_client.h"
 
 enum { TTS_BYTES = 1024 * 1024, TTS_BLOCK = 1280, CALL_FRAME = AUDIO_10MS * sizeof(int16_t) };
 typedef enum { RECORD, STREAM, CHIME, CALL, WAKE_CONTROL } job_kind_t;
@@ -24,7 +24,8 @@ typedef struct {
     job_kind_t kind;
     uint32_t session;
     unsigned chime_epoch;
-    char target[MEDIA_TARGET_CAP];
+    uint16_t rec_session;
+    uint8_t target;
     audio_tone_t tone;
     bool bridge_endpoint;
 } job_t;
@@ -45,7 +46,6 @@ static atomic_uint chime_epoch;
 static atomic_uint call_id;
 static atomic_bool call_muted;
 static bool call_queued;
-static uint8_t call_mic_prefix;
 
 bool media_audio_ready(void)
 {
@@ -71,7 +71,7 @@ static void interrupt_locked(void)
         audio_stop_playback();
         stream.open = false;
         xTaskNotifyGive(media_task);
-        ws_client_tts_ack(stream.session, stream.audio_id, true);
+        net_client_tts_ack(stream.session, stream.audio_id, true);
     }
 }
 
@@ -91,11 +91,16 @@ void media_link_lost(void)
     media_interrupt();
 }
 
-bool media_record_start(const char *target, bool bridge_endpoint)
+bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoint)
 {
-    if (!jobs || !target || strlen(target) >= MEDIA_TARGET_CAP) return false;
-    job_t job = { .kind = RECORD, .session = ws_client_session(), .bridge_endpoint = bridge_endpoint };
-    snprintf(job.target, sizeof(job.target), "%s", target);
+    if (!jobs) return false;
+    job_t job = {
+        .kind = RECORD,
+        .session = net_client_session(),
+        .rec_session = rec_session,
+        .target = target,
+        .bridge_endpoint = bridge_endpoint,
+    };
     xSemaphoreTake(lock, portMAX_DELAY);
     bool accepted = !recording && !media_call_active() && submit(&job);
     if (accepted) {
@@ -123,7 +128,7 @@ bool media_tts_start(uint32_t audio_id)
 {
     if (!jobs) return false;
     xSemaphoreTake(lock, portMAX_DELAY);
-    uint32_t session = ws_client_session();
+    uint32_t session = net_client_session();
     bool accepted = session && !recording && !media_call_active() && !stream.open && xStreamBufferReset(tts) == pdPASS &&
                     (stream.queued || submit(&(job_t){ .kind = STREAM }));
     if (accepted) {
@@ -180,12 +185,12 @@ void media_chime(audio_tone_t tone)
     xSemaphoreGive(lock);
 }
 
-bool media_call_start(uint32_t id, bool muted, uint8_t mic_prefix)
+bool media_call_start(uint32_t id, bool muted)
 {
     if (!jobs || !id) return false;
     xSemaphoreTake(lock, portMAX_DELAY);
     bool accepted = call_id == id;
-    if (!accepted && ws_client_session() && !media_call_active() && (call_queued || submit(&(job_t){ .kind = CALL }))) {
+    if (!accepted && net_client_session() && !media_call_active() && (call_queued || submit(&(job_t){ .kind = CALL }))) {
         interrupt_locked();
         atomic_store(&cancel_recording, true);
         // Invalidate queued tones and stop the current tone at the next 10 ms write.
@@ -193,7 +198,6 @@ bool media_call_start(uint32_t id, bool muted, uint8_t mic_prefix)
         xStreamBufferReset(tts);
         call_queued = true;
         call_muted = muted;
-        call_mic_prefix = mic_prefix;
         call_id = id;
         accepted = true;
     }
@@ -241,8 +245,7 @@ static void run_call(void)
 {
     xSemaphoreTake(lock, portMAX_DELAY);
     call_queued = false;
-    uint32_t id = call_id, session = ws_client_session();
-    uint8_t prefix = call_mic_prefix;
+    uint32_t id = call_id, session = net_client_session();
     xSemaphoreGive(lock);
     if (!id) return;
     if (!session) {
@@ -290,7 +293,7 @@ static void run_call(void)
             call_uplink_gain(mic, AUDIO_10MS);
             memcpy(chunk + used, mic, sizeof(mic));
             if ((used += AUDIO_10MS) == AUDIO_CALL_SAMPLES) {
-                ws_client_call_pcm(session, id, chunk, prefix);
+                net_client_call_pcm(session, id, chunk);
                 used = 0;
             }
         }
@@ -299,7 +302,7 @@ static void run_call(void)
 
 failed:
     media_call_end(id);
-    ws_client_call_failed(session, id);
+    net_client_call_failed(session, id);
 drain:
     audio_fade_out(last, NULL);
 }
@@ -318,12 +321,12 @@ static bool capture_cancelled(const void *ctx)
 static esp_err_t upload_pcm(const int16_t *pcm, size_t samples, void *ctx)
 {
     const job_t *job = ctx;
-    return !atomic_load(&cancel_recording) && ws_client_rec_pcm(job->session, pcm, samples) ? ESP_OK : ESP_FAIL;
+    return !atomic_load(&cancel_recording) && net_client_rec_pcm(job->session, pcm, samples) ? ESP_OK : ESP_FAIL;
 }
 
 static void record(job_t *job)
 {
-    bool started = !atomic_load(&cancel_recording) && ws_client_rec_start(job->session, job->target);
+    bool started = !atomic_load(&cancel_recording) && net_client_rec_start(job->session, job->rec_session, job->target);
     bool cancelled = true;
     if (started) {
         audio_tone(AUDIO_START_TONE, capture_cancelled, NULL);
@@ -335,7 +338,7 @@ static void record(job_t *job)
     xSemaphoreTake(lock, portMAX_DELAY);
     recording = false;
     xSemaphoreGive(lock);
-    if (started) ws_client_rec_end(job->session, job->target, cancelled);
+    if (started) net_client_rec_end(job->session, job->rec_session, job->target, cancelled);
 }
 
 static bool owns_stream(uint32_t serial)
@@ -385,7 +388,7 @@ static void play(void)
     xSemaphoreTake(lock, portMAX_DELAY);
     if (owns_stream(serial)) {
         stream.open = false;
-        ws_client_tts_ack(stream.session, stream.audio_id, err != ESP_OK || end != ESP_OK);
+        net_client_tts_ack(stream.session, stream.audio_id, err != ESP_OK || end != ESP_OK);
     }
     xSemaphoreGive(lock);
 }
@@ -402,7 +405,7 @@ static void worker(void *arg)
     bool detecting = false, drain_before_wake = true;
     int64_t wake_after_us = 0;
     for (;;) {
-        bool enabled = atomic_load(&wake_enabled) && ws_client_connected();
+        bool enabled = atomic_load(&wake_enabled) && net_client_connected();
         if (detecting && !enabled) {
             wake_word_stop();
             detecting = false;
@@ -428,7 +431,7 @@ static void worker(void *arg)
             }
             int64_t now = esp_timer_get_time();
             if (detected && now >= wake_after_us && atomic_load(&wake_enabled) &&
-                !media_is_recording() && !media_call_active() && ws_client_wake_word()) {
+                !media_is_recording() && !media_call_active() && net_client_wake_word()) {
                 display_wake();
                 wake_after_us = now + 2000000;
             }

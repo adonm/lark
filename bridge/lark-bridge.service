@@ -4,6 +4,7 @@ Wants=network-online.target lark-opencode.service
 After=network-online.target lark-opencode.service
 
 [Service]
+Environment="LARK_DEVICE_PORT=8766"
 EnvironmentFile=@ENV_FILE@
 Environment="XDG_DATA_HOME=@DATA_HOME@"
 Environment="LARK_REPO_DIR=@REPO_DIR@"

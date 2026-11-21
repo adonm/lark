@@ -3,7 +3,7 @@
 [Lark](https://github.com/adonm/lark) is a tap-to-talk companion with interactive diagrams, voice notes, live calls, and a browser mirror. It starts as a friendly cat, then can shift into any creature or character a child imagines.
 
 ```text
-Device  <-- /ws: RGB565 frames, touch, PCM --> Go bridge :8765 <-- /app: SVG --> Browser
+Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Go bridge :8765 <-- /ws, /app: SVG --> Browser
                                               |-- Parakeet (in-process Vulkan speech to text)
                                               |-- OpenCode :49375 (loopback, reply deltas over SSE)
                                               `-- Kokoro   (FP32, embedded via sherpa-onnx)
@@ -61,7 +61,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    ```
 
    Set `CONFIG_LARK_WIFI_SSID`, `CONFIG_LARK_WIFI_PASSWORD`,
-   `CONFIG_LARK_BRIDGE_URL` (`http://<bridge-host>:8765`, no trailing slash), and
+   `CONFIG_LARK_BRIDGE_URL` (`http://<bridge-host>:8765` or `lark://<bridge-host>:8766`, no trailing slash), and
    `CONFIG_LARK_BRIDGE_TOKEN` (copy `LARK_BRIDGE_TOKEN` from
    `~/.config/lark/bridge.env`, or use `$XDG_CONFIG_HOME`).
    Both board builds use the ESP-IDF 5.5 container and read the same
@@ -525,14 +525,14 @@ companion's name. Intercom requires a connected recipient.
 
 | Device · port 80 | Request → response |
 | --- | --- |
-| `GET /status` | Identity, board, display size, firmware, partition, CPU, memory, RSSI, uptime, battery, volume, sleeping, and `ws_connected` |
+| `GET /status` | Identity, board, display size, firmware, partition, CPU, memory, RSSI, uptime, battery, volume, sleeping, and `connected` |
 | `POST /volume` | `{"level":65}` → saved volume (0–100) |
 | `POST /ota`, `POST /ota/upload` | Pull or upload the board's firmware (`application/octet-stream`); reboot on success |
 | `POST /reboot` | Reboot |
 
 ## Networking
 
-Devices and browsers need TCP **8765** to the bridge; direct OTA uses TCP
+Devices need TCP and UDP **8766** (`LARK_DEVICE_PORT`) for the native device protocol and TCP **8765** for OTA pull; browsers need TCP **8765** to the bridge; direct OTA uses TCP
 **80** to the device. Use Avahi (`avahi-resolve -n lark-XXXX.local`) for
 mDNS or the device IP if the container cannot resolve `.local`. HTTP and WS
 are unencrypted; use a trusted LAN and keep configs and firmware images private.

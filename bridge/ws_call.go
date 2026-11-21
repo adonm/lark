@@ -366,6 +366,13 @@ func (h *wsHub) relayCallPCM(d *wsDevice, packet []byte) {
 	if len(packet) != callPCMBytes+1 {
 		return
 	}
+	h.relayCallPCMBytes(d, packet[1:])
+}
+
+func (h *wsHub) relayCallPCMBytes(d *wsDevice, pcm []byte) {
+	if len(pcm) != callPCMBytes && len(pcm) != rtpPCMBytes {
+		return
+	}
 	d.callFramesIn++
 	if d.callMuted {
 		return
@@ -375,11 +382,18 @@ func (h *wsHub) relayCallPCM(d *wsDevice, packet []byte) {
 		return
 	}
 	c := p.client
+	if c.native != nil {
+		if c.native.sendCallDownUDP(pcm) {
+			d.callFramesOut++
+		}
+		return
+	}
 	c.outMu.Lock()
 	defer c.outMu.Unlock()
 	if c.ctx.Err() == nil && len(c.out) < min(6, cap(c.out)) {
-		// The read loop transfers ownership of the unmasked packet to the queue.
+		packet := make([]byte, len(pcm)+1)
 		packet[0] = pcmPrefix
+		copy(packet[1:], pcm)
 		c.out <- wsFrame{wsBinary, packet}
 		d.callFramesOut++
 	}

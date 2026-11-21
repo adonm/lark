@@ -1,0 +1,334 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"net"
+	"testing"
+	"time"
+)
+
+type testNativeClient struct {
+	t        *testing.T
+	conn     net.Conn
+	udpConn  *net.UDPConn
+	udpPort  uint16
+	srvAddr  *net.UDPAddr
+	ssrc     uint32
+	txSeq    uint16
+	rtpSeq   uint16
+	rtpTS    uint32
+}
+
+func dialNativeDevice(t *testing.T, srv *deviceServer, id, token string, caps uint32) (*testNativeClient, []byte) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", srv.tcpLn.Addr().String(), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { udpConn.Close() })
+	localUDPPort := uint16(udpConn.LocalAddr().(*net.UDPAddr).Port)
+
+	board := "esp-vocat"
+	fw := "1.0.0-test"
+	var hello bytes.Buffer
+	_ = binary.Write(&hello, binary.LittleEndian, caps)
+	_ = binary.Write(&hello, binary.LittleEndian, uint16(360))
+	_ = binary.Write(&hello, binary.LittleEndian, uint16(360))
+	_ = binary.Write(&hello, binary.LittleEndian, localUDPPort)
+	hello.WriteByte(byte(len(id)))
+	hello.WriteByte(byte(len(board)))
+	hello.WriteByte(byte(len(fw)))
+	hello.WriteByte(byte(len(token)))
+	hello.WriteString(id)
+	hello.WriteString(board)
+	hello.WriteString(fw)
+	hello.WriteString(token)
+
+	nc := &testNativeClient{
+		t:       t,
+		conn:    conn,
+		udpConn: udpConn,
+		udpPort: localUDPPort,
+	}
+	nc.send(msgHello, hello.Bytes())
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	mType, _, payload, err := readProtoFrame(conn)
+	if err != nil {
+		return nil, nil
+	}
+	if mType != msgHelloOK || len(payload) < 12 {
+		t.Fatalf("expected MSG_HELLO_OK, got type=0x%02x len=%d", mType, len(payload))
+	}
+	srvPort := binary.LittleEndian.Uint16(payload[0:2])
+	nc.ssrc = binary.LittleEndian.Uint32(payload[4:8])
+	nc.srvAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srvPort)}
+	return nc, payload
+}
+
+func (nc *testNativeClient) send(msgType uint8, payload []byte) {
+	nc.t.Helper()
+	pkt := packProtoPacket(msgType, nc.txSeq, payload)
+	nc.txSeq++
+	if _, err := nc.conn.Write(pkt); err != nil {
+		nc.t.Fatal(err)
+	}
+}
+
+func (nc *testNativeClient) readUntil(wantType uint8) []byte {
+	nc.t.Helper()
+	_ = nc.conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+	for {
+		mType, _, payload, err := readProtoFrame(nc.conn)
+		if err != nil {
+			nc.t.Fatalf("readUntil(0x%02x): %v", wantType, err)
+		}
+		if mType == msgPing && len(payload) == 4 {
+			nc.send(msgPong, payload)
+			continue
+		}
+		if mType == wantType {
+			return payload
+		}
+	}
+}
+
+func (nc *testNativeClient) sendRTP(pt uint8, pcm []byte) {
+	nc.t.Helper()
+	pkt := make([]byte, rtpHeaderSize+len(pcm))
+	n := encodeRTPPacket(pkt, pt, nc.rtpSeq, nc.rtpTS, nc.ssrc, pcm)
+	nc.rtpSeq++
+	nc.rtpTS += uint32(len(pcm) / 2)
+	if _, err := nc.udpConn.WriteToUDP(pkt[:n], nc.srvAddr); err != nil {
+		nc.t.Fatal(err)
+	}
+}
+
+func (nc *testNativeClient) readRTP(wantPT uint8) []byte {
+	nc.t.Helper()
+	_ = nc.udpConn.SetReadDeadline(time.Now().Add(4 * time.Second))
+	buf := make([]byte, 1500)
+	for {
+		n, _, err := nc.udpConn.ReadFromUDP(buf)
+		if err != nil {
+			nc.t.Fatalf("readRTP(pt=%d): %v", wantPT, err)
+		}
+		pt, _, _, ssrc, ok := decodeRTPHeader(buf[:n])
+		if ok && pt == wantPT && ssrc == nc.ssrc {
+			out := make([]byte, n-rtpHeaderSize)
+			copy(out, buf[rtpHeaderSize:n])
+			return out
+		}
+	}
+}
+
+func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	srv, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.shutdown()
+
+	// Bad token must be rejected and connection closed.
+	bad, _ := dialNativeDevice(t, srv, "lark-bad", "wrong-token", capDrag)
+	if bad != nil {
+		t.Fatal("expected bad token to be rejected")
+	}
+
+	// Valid handshake returns MSG_HELLO_OK and initial MSG_FRAME.
+	caps := capBattery | capCall | capCallPCM | capDrag | capPointerRev | capBridgeEndpoint | capPanelSleep | capWakeWord
+	nc, okPayload := dialNativeDevice(t, srv, "lark-nat1", "unit", caps)
+	if nc == nil || nc.ssrc == 0 || binary.LittleEndian.Uint16(okPayload[0:2]) != srv.udpPort {
+		t.Fatal("invalid MSG_HELLO_OK")
+	}
+	frame := nc.readUntil(msgFrame)
+	if len(frame) < 12 || frame[0] != frameTag {
+		t.Fatalf("expected valid MSG_FRAME, got len=%d", len(frame))
+	}
+	codec := frame[9]
+	if codec != frameCodecRaw && codec != frameCodecRLE565 && codec != frameCodecJPEG && codec != frameCodecLZ4 {
+		t.Fatalf("unexpected frame codec %d", codec)
+	}
+}
+
+func TestNativeProtoControlAndMessages(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	srv, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.shutdown()
+
+	nc, _ := dialNativeDevice(t, srv, "lark-nat2", "unit", capDrag|capPointerRev|capBattery|capWakeWord)
+	frame := nc.readUntil(msgFrame)
+	revLo := binary.LittleEndian.Uint16(frame[10:12])
+
+	// Send MSG_STATUS
+	var st [16]byte
+	rssi := int16(-52)
+	binary.LittleEndian.PutUint16(st[0:2], uint16(rssi))
+	binary.LittleEndian.PutUint16(st[2:4], uint16(88))
+	st[4] = 1
+	st[5] = 23
+	binary.LittleEndian.PutUint32(st[8:12], 512000)
+	binary.LittleEndian.PutUint32(st[12:16], 42)
+	nc.send(msgStatus, st[:])
+
+	// Send MSG_POINTER (tap) -> triggers MSG_REC_CTRL start
+	var ptr [8]byte
+	ptr[0] = ptrTap
+	binary.LittleEndian.PutUint16(ptr[2:4], 180)
+	binary.LittleEndian.PutUint16(ptr[4:6], 150)
+	binary.LittleEndian.PutUint16(ptr[6:8], revLo)
+	nc.send(msgPointer, ptr[:])
+	recCtrl := nc.readUntil(msgRecCtrl)
+	if len(recCtrl) != 4 || recCtrl[0] != recOpStart {
+		t.Fatalf("expected MSG_REC_CTRL start, got %v", recCtrl)
+	}
+
+	// Cancel recording cleanly
+	nc.send(msgRecStart, encodeRecCtrl(0, 0, binary.LittleEndian.Uint16(recCtrl[2:4])))
+	nc.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 0, 1})
+	chime := nc.readUntil(msgChime)
+	if len(chime) != 1 || chime[0] != chimeCancel {
+		t.Fatalf("expected MSG_CHIME cancel, got %v", chime)
+	}
+
+	// Test TTS control + PCM + ACK, power, and volume
+	b.ws.mu.Lock()
+	dev := b.ws.devices["lark-nat2"]
+	if dev == nil || dev.telemetry.Battery == nil || *dev.telemetry.Battery != 88 || *dev.telemetry.WiFi != -52 {
+		b.ws.mu.Unlock()
+		t.Fatal("MSG_STATUS telemetry was not applied")
+	}
+	b.ws.setSleeping(dev, true)
+	b.ws.push(dev, dev.volumeFrame(true), false)
+	stream := newAudioStream()
+	pcm := bytes.Repeat([]byte{0x12, 0x34}, 320)
+	stream.append(pcm)
+	stream.finish(nil)
+	b.ws.play(dev, stream)
+	b.ws.mu.Unlock()
+
+	pwr := nc.readUntil(msgPower)
+	if len(pwr) != 1 || pwr[0] != 1 {
+		t.Fatalf("expected MSG_POWER sleep=1, got %v", pwr)
+	}
+	vol := nc.readUntil(msgVolume)
+	if len(vol) != 2 || vol[1] != 1 {
+		t.Fatalf("expected MSG_VOLUME with persist=1, got %v", vol)
+	}
+	ttsStart := nc.readUntil(msgTTSCtrl)
+	if len(ttsStart) < 3 || ttsStart[0] != ttsOpStart {
+		t.Fatalf("expected MSG_TTS_CTRL start, got %v", ttsStart)
+	}
+	ttsPCM := nc.readUntil(msgTTSPCM)
+	if !bytes.Equal(ttsPCM, pcm) {
+		t.Fatal("MSG_TTS_PCM payload mismatch")
+	}
+	ttsEnd := nc.readUntil(msgTTSCtrl)
+	if len(ttsEnd) < 3 || ttsEnd[0] != ttsOpEnd {
+		t.Fatalf("expected MSG_TTS_CTRL end, got %v", ttsEnd)
+	}
+	nc.send(msgTTSAck, append([]byte{0, ttsStart[1]}, ttsStart[2:]...))
+}
+
+func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
+	gotPCM := make(chan []byte, 1)
+	b, base := wsHarness(t, func(b *bridge, _ string) {
+		b.stt = func(_ context.Context, pcm []byte) (string, error) {
+			cp := make([]byte, len(pcm))
+			copy(cp, pcm)
+			select {
+			case gotPCM <- cp:
+			default:
+			}
+			return "", nil
+		}
+	})
+	srv, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.shutdown()
+
+	// 1. Native device UDP 20 ms REC_PCM
+	nat, _ := dialNativeDevice(t, srv, "lark-natcall", "unit", capCall|capCallPCM|capDrag|capPointerRev)
+	frame := nat.readUntil(msgFrame)
+	revLo := binary.LittleEndian.Uint16(frame[10:12])
+
+	var ptr [8]byte
+	ptr[0] = ptrTap
+	binary.LittleEndian.PutUint16(ptr[2:4], 180)
+	binary.LittleEndian.PutUint16(ptr[4:6], 150)
+	binary.LittleEndian.PutUint16(ptr[6:8], revLo)
+	nat.send(msgPointer, ptr[:])
+	recCtrl := nat.readUntil(msgRecCtrl)
+	nat.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0, 0})
+	time.Sleep(15 * time.Millisecond)
+
+	recChunk := bytes.Repeat([]byte{0x2A, 0x00}, rtpSamples) // 640 B = 20 ms
+	nat.sendRTP(rtpPTRecPCM, recChunk)
+	time.Sleep(30 * time.Millisecond)
+	nat.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 0, 0})
+
+	select {
+	case pcm := <-gotPCM:
+		if !bytes.Equal(pcm, recChunk) {
+			t.Fatalf("UDP REC_PCM mismatch: got %d bytes", len(pcm))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for UDP REC_PCM")
+	}
+
+	// 2. Cross-transport duplex call: Native TCP+UDP <-> Browser WS virtual client
+	web := callClient(t, b, base, callMint, "Mint")
+	b.ws.mu.Lock()
+	b.ws.startCall(b.ws.devices["lark-natcall"], callMint)
+	b.ws.mu.Unlock()
+
+	nat.readUntil(msgChime)
+	web.until(t, hasWS("chime", `"kind":"ring"`))
+	web.until(t, hasWS("svg", "call-answer"))
+	tapCallControl(t, web, "call-answer")
+
+	callStart := nat.readUntil(msgCallCtrl)
+	if len(callStart) < 3 || callStart[0] != callOpStart {
+		t.Fatalf("expected MSG_CALL_CTRL start, got %v", callStart)
+	}
+	web.until(t, hasWS("call", `"state":"start"`))
+	web.until(t, hasWS("svg", "call-hangup"))
+
+	// Native -> Browser WS (20 ms RTP -> WS binary)
+	upSample := bytes.Repeat([]byte{0x11, 0x22}, rtpSamples)
+	nat.sendRTP(rtpPTCallUp, upSample)
+	if got := web.until(t, isPlayback); !bytes.Equal(got.data[1:], upSample) {
+		t.Fatal("native -> web call PCM mismatch")
+	}
+
+	// Browser WS -> Native (40 ms WS binary -> 2x 20 ms UDP RTP)
+	downSample := bytes.Repeat([]byte{0x33, 0x44}, callPCMBytes/2)
+	web.write(t, maskedFrame(wsBinary, true, append([]byte{callMicPrefix}, downSample...)))
+	p1 := nat.readRTP(rtpPTCallDown)
+	p2 := nat.readRTP(rtpPTCallDown)
+	if !bytes.Equal(append(p1, p2...), downSample) {
+		t.Fatal("web -> native UDP RTP call PCM mismatch")
+	}
+
+	// End call cleanly
+	tapCallControl(t, web, "call-hangup")
+	callEnd := nat.readUntil(msgCallCtrl)
+	if len(callEnd) < 3 || callEnd[0] != callOpEnd {
+		t.Fatalf("expected MSG_CALL_CTRL end, got %v", callEnd)
+	}
+	web.until(t, hasWS("call", `"reason":"hung up"`))
+}

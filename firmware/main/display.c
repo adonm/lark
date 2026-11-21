@@ -19,7 +19,8 @@
 #include "telemetry.h"
 #include "touch_gesture.h"
 #include "wifi.h"
-#include "ws_client.h"
+#include "net_client.h"
+#include "proto.h"
 
 enum { STRIP_ROWS = 24, STRIP_BYTES = STRIP_ROWS * FRAME_WIDTH * sizeof(uint16_t), BRIGHT = 85, DIM = 12 };
 _Static_assert(BSP_LCD_H_RES == FRAME_WIDTH && BSP_LCD_V_RES == FRAME_HEIGHT && BSP_LCD_BIGENDIAN,
@@ -211,9 +212,9 @@ static void touch_task(void *arg)
         touch_event_t event = touch_gesture_update(&gesture, pressed, p.x, p.y, now_ms());
         switch (event.kind) {
         case TOUCH_PRESS: press_rev = atomic_load(&shown_rev); display_wake(); break;
-        case TOUCH_TAP: ws_client_pointer("tap", event.x, event.y, press_rev); break;
-        case TOUCH_DRAG: ws_client_pointer("drag", event.x, event.y, atomic_load(&shown_rev)); break;
-        case TOUCH_UP: ws_client_pointer("up", event.x, event.y, atomic_load(&shown_rev)); break;
+        case TOUCH_TAP: net_client_pointer(LARK_PTR_TAP, event.x, event.y, press_rev); break;
+        case TOUCH_DRAG: net_client_pointer(LARK_PTR_DRAG, event.x, event.y, atomic_load(&shown_rev)); break;
+        case TOUCH_UP: net_client_pointer(LARK_PTR_UP, event.x, event.y, atomic_load(&shown_rev)); break;
         case TOUCH_NONE: break;
         }
     }

@@ -107,6 +107,13 @@ func (h *wsHub) micChunk(c *wsClient, data []byte) {
 	if len(data) < 3 || len(data)%2 != 1 {
 		return
 	}
+	h.micChunkPCM(c, data[0], data[1:])
+}
+
+func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
+	if len(pcm) < 2 || len(pcm)%2 != 0 {
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	d := c.device
@@ -114,32 +121,32 @@ func (h *wsHub) micChunk(c *wsClient, data []byte) {
 		return
 	}
 	if d.callState != callNone {
-		if d.callState == callActive && d.caps.CallPCM && data[0] == callMicPrefix {
-			h.relayCallPCM(d, data)
+		if d.callState == callActive && d.caps.CallPCM && prefix == callMicPrefix {
+			h.relayCallPCMBytes(d, pcm)
 		}
 		return
 	}
 	rec := &d.recording
-	if data[0] != micPrefix || !rec.open() {
+	if prefix != micPrefix || !rec.open() {
 		return
 	}
-	if c := rec.endpoint; c != nil {
+	if ep := rec.endpoint; ep != nil {
 		// Bound bytes as well as entries. The limit leaves headroom over DMA and
 		// worklet frames while preventing oversized frames from filling the queue.
-		if len(data)-1 > 2*pcmPacket {
+		if len(pcm) > 2*pcmPacket {
 			h.recordingControl(d, time.Now(), true)
 			return
 		}
 		select {
-		case c.packets <- micPacket{data[1:], time.Now()}:
+		case ep.packets <- micPacket{pcm, time.Now()}:
 		default:
 			h.recordingControl(d, time.Now(), true)
 		}
 		return
 	}
 	room := (maxPCM - len(rec.pcm)) &^ 1
-	n := min(len(data)-1, room)
-	rec.pcm = append(rec.pcm, data[1:1+n]...)
+	n := min(len(pcm), room)
+	rec.pcm = append(rec.pcm, pcm[:n]...)
 	if n == room {
 		h.stopRecordingAtLimit(d, time.Now())
 	}
@@ -526,6 +533,16 @@ func (h *wsHub) playTraced(d *wsDevice, stream *AudioStream, trace *turnTrace, t
 
 func (h *wsHub) streamPlayback(ctx context.Context, d *wsDevice, id uint64, stream *AudioStream, trace *turnTrace, ttsStart time.Time) error {
 	control := func(state string) bool {
+		if d.client.native != nil {
+			op := ttsOpStop
+			switch state {
+			case "start":
+				op = ttsOpStart
+			case "end":
+				op = ttsOpEnd
+			}
+			return d.client.native.enqueueWait(ctx, msgTTSCtrl, encodeIDCtrl(op, id))
+		}
 		return d.client.enqueueWait(ctx, textFrame(object{"op": "tts", "state": state, "audio": id}))
 	}
 	var until time.Time
@@ -581,11 +598,19 @@ func (h *wsHub) streamPlayback(ctx context.Context, d *wsDevice, id uint64, stre
 					return ctx.Err()
 				}
 			}
-			packet := make([]byte, n+1)
-			packet[0] = pcmPrefix
-			copy(packet[1:], pcm[:n])
-			if !d.client.enqueueWait(ctx, wsFrame{wsBinary, packet}) {
-				return context.Canceled
+			if d.client.native != nil {
+				chunk := make([]byte, n)
+				copy(chunk, pcm[:n])
+				if !d.client.native.enqueueWait(ctx, msgTTSPCM, chunk) {
+					return context.Canceled
+				}
+			} else {
+				packet := make([]byte, n+1)
+				packet[0] = pcmPrefix
+				copy(packet[1:], pcm[:n])
+				if !d.client.enqueueWait(ctx, wsFrame{wsBinary, packet}) {
+					return context.Canceled
+				}
 			}
 			now := time.Now()
 			if until.IsZero() {
