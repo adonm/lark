@@ -21,12 +21,12 @@ func TestLiveWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	conf := liveConfig(t, home)
-	port := conf["LARK_BRIDGE_PORT"]
+	port := conf["LARK_PORT"]
 	if port == "" {
 		port = "8765"
 	}
 	base := env("LARK_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port))
-	token := conf["LARK_BRIDGE_TOKEN"]
+	token := conf["LARK_TOKEN"]
 	client := pooledClient()
 	client.Timeout = 115 * time.Second
 	defer client.CloseIdleConnections()

@@ -8,7 +8,7 @@ data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 data=$data_home/lark
 units=$config/systemd/user
 oc_root=$data/opencode
-env_file=$config/lark/bridge.env
+env_file=$config/lark/lark.env
 pin_gpu=false
 models_only=false
 usage() {
@@ -97,13 +97,13 @@ if "$models_only"; then
     exit 0
 fi
 
-bridge_bin="$data/lark-bridge"
-build_tmp=$(mktemp "$bridge_bin.XXXXXXXX")
+lark_bin="$data/lark"
+build_tmp=$(mktemp "$lark_bin.XXXXXXXX")
 stt_stage=$(mktemp -d)
 trap 'rm -f -- "$build_tmp"; rm -rf -- "$stt_stage"' EXIT
 "$REPO_DIR/scripts/build-parakeet.sh" "$stt_stage" "$data/stt-models"
 (
-    cd -- "$REPO_DIR/bridge"
+    cd -- "$REPO_DIR/lark"
     export CGO_ENABLED=1
     export CGO_CFLAGS="\"-I$stt_stage/native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}"
     export CGO_LDFLAGS="\"-L$stt_stage/native/lib\" -Wl,-rpath,\$ORIGIN/lib${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
@@ -139,7 +139,7 @@ trap 'rm -f -- "$build_tmp"; rm -rf -- "$stt_stage"' EXIT
     install -D -m 644 -- "$stt_stage/native/share/licenses/transcribe/LICENSE.silero_vad" "$notices/silero-vad.txt"
 )
 chmod 700 -- "$build_tmp"
-mv -f -- "$build_tmp" "$bridge_bin"
+mv -f -- "$build_tmp" "$lark_bin"
 rm -rf -- "$stt_stage"
 trap - EXIT
 
@@ -158,7 +158,7 @@ link_file() {
 }
 link_file "$REPO_DIR/agents/lark.md" "$oc_root/config/opencode/agents/lark.md"
 link_file "$REPO_DIR/agents/lark-builder.md" "$oc_root/config/opencode/agents/lark-builder.md"
-python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$bridge_bin"
+python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$lark_bin"
 
 python3 - "$env_file" "$pin_gpu" <<'PY'
 import os
@@ -170,8 +170,8 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 old = path.read_text() if path.exists() else (
-    "LARK_BRIDGE_HOST=0.0.0.0\nLARK_BRIDGE_PORT=8765\nLARK_DEVICE_PORT=8766\n"
-    f"LARK_BRIDGE_TOKEN={secrets.token_hex(32)}\n"
+    "LARK_HOST=0.0.0.0\nLARK_PORT=8765\nLARK_DEVICE_PORT=8766\n"
+    f"LARK_TOKEN={secrets.token_hex(32)}\n"
 )
 prior = re.findall(r"^LARK_OPENCODE_PASSWORD=([a-f0-9]{64})$", old, re.M)
 password = prior[-1] if prior else secrets.token_hex(32)
@@ -198,7 +198,7 @@ with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
         Path(f.name).unlink(missing_ok=True)
 PY
 
-python3 - "$REPO_DIR" "$data_home" "$bridge_bin" "$units" \
+python3 - "$REPO_DIR" "$data_home" "$lark_bin" "$units" \
     "$(type -P opencode)" "$env_file" "$oc_root" <<'PY'
 import re
 import sys
@@ -211,19 +211,19 @@ def escape(value):
 
 repo, data, binary, directory, opencode, env_file, oc_root = sys.argv[1:]
 units = Path(directory)
-paths = {"REPO_DIR": repo, "DATA_HOME": data, "BRIDGE_BIN": binary,
+paths = {"REPO_DIR": repo, "DATA_HOME": data, "LARK_BIN": binary,
          "OPENCODE_BIN": opencode, "ENV_FILE": env_file}
-for name in ("lark-bridge.service", "lark-opencode.service",
+for name in ("lark.service", "lark-opencode.service",
              "lark-opencode-lan.socket", "lark-opencode-lan.service"):
-    template = Path(repo, "bridge", name).read_text()
+    template = Path(repo, "lark", name).read_text()
     rendered = re.sub(r"@([A-Z_]+)@", lambda m: escape(paths[m[1]]), template)
     if name == "lark-opencode.service":
         if Path(oc_root) != Path.home() / ".local/share/lark/opencode":
             rendered = rendered.replace("%h/.local/share/lark/opencode", escape(oc_root))
             rendered = rendered.replace(f"WorkingDirectory={escape(oc_root)}/workspace",
                                         f'WorkingDirectory="{escape(oc_root)}/workspace"')
-        if Path(env_file) != Path.home() / ".config/lark/bridge.env":
-            rendered = rendered.replace("EnvironmentFile=%h/.config/lark/bridge.env",
+        if Path(env_file) != Path.home() / ".config/lark/lark.env":
+            rendered = rendered.replace("EnvironmentFile=%h/.config/lark/lark.env",
                                         f"EnvironmentFile={escape(env_file)}")
     path = units / name
     path.write_text(rendered)
@@ -232,8 +232,8 @@ for name in ("lark-bridge.service", "lark-opencode.service",
 PY
 
 systemctl --user daemon-reload
-systemctl --user enable lark-opencode.service lark-opencode-lan.socket lark-bridge.service
-systemctl --user restart lark-opencode.service lark-bridge.service
+systemctl --user enable lark-opencode.service lark-opencode-lan.socket lark.service
+systemctl --user restart lark-opencode.service lark.service
 systemctl --user start lark-opencode-lan.socket
 
 python3 - "$env_file" "$oc_root" "$(type -P opencode)" <<'PY'
@@ -298,4 +298,4 @@ PY
 
 printf '%s\n' 'Default voices: Heart (af_heart); Mint uses Fable (bm_fable).'
 printf '%s\n' 'Lark MCP includes control for volume and sleep on connected devices.'
-printf 'Configure firmware/sdkconfig.local as shown in README.md. The bridge token is in %s.\n' "$env_file"
+printf 'Configure firmware/sdkconfig.local as shown in README.md. The Lark token is in %s.\n' "$env_file"

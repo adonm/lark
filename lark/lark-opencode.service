@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=%h/.local/share/lark/opencode/workspace
-EnvironmentFile=%h/.config/lark/bridge.env
+EnvironmentFile=%h/.config/lark/lark.env
 Environment="XDG_CONFIG_HOME=%h/.local/share/lark/opencode/config"
 Environment="XDG_DATA_HOME=%h/.local/share/lark/opencode/data"
 Environment="XDG_STATE_HOME=%h/.local/share/lark/opencode/state"

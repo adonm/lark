@@ -545,11 +545,11 @@ func TestMCPStdioForwards(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "{\n\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"method\":%q}\n}", req.ID, req.Method)
 	}))
 	defer s.Close()
-	t.Setenv("LARK_BRIDGE_TOKEN", "")
-	t.Setenv("LARK_BRIDGE_PORT", "")
-	file := filepath.Join(t.TempDir(), "bridge.env")
+	t.Setenv("LARK_TOKEN", "")
+	t.Setenv("LARK_PORT", "")
+	file := filepath.Join(t.TempDir(), "lark.env")
 	port := s.Listener.Addr().(*net.TCPAddr).Port
-	if err := os.WriteFile(file, []byte("LARK_BRIDGE_TOKEN='unit'\nLARK_BRIDGE_PORT="+strconv.Itoa(port)+"\n"), 0600); err != nil {
+	if err := os.WriteFile(file, []byte("LARK_TOKEN='unit'\nLARK_PORT="+strconv.Itoa(port)+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	url, token, err := mcpProxyConfig(file)

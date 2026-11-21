@@ -7,11 +7,11 @@ menu "Lark"
         string "Wi-Fi password"
         default ""
 
-    config LARK_BRIDGE_URL
-        string "Bridge base URL (no trailing slash)"
+    config LARK_URL
+        string "Lark server URL (no trailing slash)"
         default ""
 
-    config LARK_BRIDGE_TOKEN
-        string "Bridge and device management token"
+    config LARK_TOKEN
+        string "Lark server and device management token"
         default ""
 endmenu

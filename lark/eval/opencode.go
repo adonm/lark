@@ -182,7 +182,7 @@ func productionClient() (openCode, error) {
 		}
 		config = filepath.Join(home, ".config")
 	}
-	raw, err := os.ReadFile(filepath.Join(config, "lark", "bridge.env"))
+	raw, err := os.ReadFile(filepath.Join(config, "lark", "lark.env"))
 	if err != nil {
 		return openCode{}, errors.New("cannot read private Lark configuration")
 	}

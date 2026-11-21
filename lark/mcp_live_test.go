@@ -30,7 +30,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", smokeHome)
 	config := liveConfig(t, home)
-	port := config["LARK_BRIDGE_PORT"]
+	port := config["LARK_PORT"]
 	ocURL, err := url.Parse(config["LARK_OPENCODE_URL"])
 	portNum, portErr := strconv.Atoi(port)
 	if err != nil || portErr != nil || portNum < 1 || portNum > 65535 || portNum == 8765 {
@@ -43,7 +43,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	client := pooledClient()
 	client.Timeout = 105 * time.Second
 	defer client.CloseIdleConnections()
-	c := liveClient{client, "http://" + net.JoinHostPort("127.0.0.1", port), config["LARK_BRIDGE_TOKEN"]}
+	c := liveClient{client, "http://" + net.JoinHostPort("127.0.0.1", port), config["LARK_TOKEN"]}
 	catalog := liveJSON[struct {
 		Result struct{ Tools []struct{ Name string } }
 	}](t, c, "/mcp", object{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, nil, "", nil)

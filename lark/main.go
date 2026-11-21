@@ -42,9 +42,9 @@ func openCodeSettings(agent string) ocSettings {
 
 func run() error {
 	started := time.Now()
-	token := os.Getenv("LARK_BRIDGE_TOKEN")
+	token := os.Getenv("LARK_TOKEN")
 	if !tokenRE.MatchString(token) {
-		return errors.New("set LARK_BRIDGE_TOKEN to a nonempty ASCII token without whitespace")
+		return errors.New("set LARK_TOKEN to a nonempty ASCII token without whitespace")
 	}
 	settings := openCodeSettings(env("LARK_OPENCODE_AGENT", "lark"))
 	home, err := os.UserHomeDir()
@@ -123,16 +123,16 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	ports := env("LARK_BRIDGE_PORT", "8765")
+	ports := env("LARK_PORT", "8765")
 	if port, err := strconv.Atoi(ports); err != nil || port < 0 || port > 65535 {
-		return errors.New("invalid LARK_BRIDGE_PORT")
+		return errors.New("invalid LARK_PORT")
 	}
 	devicePorts := env("LARK_DEVICE_PORT", defaultDevPort)
 	devicePort, err := strconv.Atoi(devicePorts)
 	if err != nil || devicePort < 0 || devicePort > 65535 {
 		return errors.New("invalid LARK_DEVICE_PORT")
 	}
-	host := env("LARK_BRIDGE_HOST", "0.0.0.0")
+	host := env("LARK_HOST", "0.0.0.0")
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, ports))
 	if err != nil {
 		return err

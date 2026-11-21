@@ -88,7 +88,7 @@ func liveJSON[T any](t *testing.T, c liveClient, path string, input any, raw []b
 
 func liveConfig(t *testing.T, home string) map[string]string {
 	t.Helper()
-	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark/bridge.env")
+	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark/lark.env")
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal("cannot read deployed bridge configuration")
@@ -109,12 +109,12 @@ func liveConfig(t *testing.T, home string) map[string]string {
 		}
 		out[key] = env(key, value)
 	}
-	for _, key := range []string{"LARK_BRIDGE_TOKEN", "LARK_BRIDGE_PORT", "LARK_OPENCODE_AGENT",
+	for _, key := range []string{"LARK_TOKEN", "LARK_PORT", "LARK_OPENCODE_AGENT",
 		"LARK_OPENCODE_URL", "LARK_OPENCODE_PASSWORD", "LARK_OPENCODE_DIR",
 		"TTS_MODEL_DIR", "GGML_VK_VISIBLE_DEVICES"} {
 		out[key] = env(key, out[key])
 	}
-	if !tokenRE.MatchString(out["LARK_BRIDGE_TOKEN"]) {
+	if !tokenRE.MatchString(out["LARK_TOKEN"]) {
 		t.Fatal("missing live bridge token")
 	}
 	return out
@@ -234,8 +234,8 @@ func liveIsolated(t *testing.T, data string, conf map[string]string, token strin
 		t.Fatal("run scripts/check.sh --live to build an isolated bridge from this checkout")
 	}
 	cmd := exec.Command(binary, "serve")
-	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+root, "LARK_BRIDGE_TOKEN="+token, "LARK_BRIDGE_HOST=127.0.0.1",
-		"LARK_BRIDGE_PORT=0", "LARK_DB_PATH="+filepath.Join(state, "lark.db"),
+	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+root, "LARK_TOKEN="+token, "LARK_HOST=127.0.0.1",
+		"LARK_PORT=0", "LARK_DB_PATH="+filepath.Join(state, "lark.db"),
 		"LARK_OTA_DIR="+root, "LARK_REPO_DIR=..",
 		"LARK_OPENCODE_AGENT="+conf["LARK_OPENCODE_AGENT"],
 		"LARK_OPENCODE_URL="+conf["LARK_OPENCODE_URL"], "LARK_OPENCODE_PASSWORD="+conf["LARK_OPENCODE_PASSWORD"],
@@ -296,11 +296,11 @@ func TestLive(t *testing.T) {
 	client := pooledClient()
 	client.Timeout = 115 * time.Second
 	defer client.CloseIdleConnections()
-	port := conf["LARK_BRIDGE_PORT"]
+	port := conf["LARK_PORT"]
 	if port == "" {
 		port = "8765"
 	}
-	c := liveClient{client, env("LARK_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port)), conf["LARK_BRIDGE_TOKEN"]}
+	c := liveClient{client, env("LARK_TEST_URL", "http://"+net.JoinHostPort("127.0.0.1", port)), conf["LARK_TOKEN"]}
 	liveHealthy(t, c)
 	unauthorized := c
 	unauthorized.token = ""

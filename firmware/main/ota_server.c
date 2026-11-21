@@ -49,7 +49,7 @@ static esp_err_t json_response(httpd_req_t *request, const char *json)
 
 static bool require_token(httpd_req_t *request)
 {
-    static const char expected[] = CONFIG_LARK_BRIDGE_TOKEN;
+    static const char expected[] = CONFIG_LARK_TOKEN;
     char actual[sizeof(expected)];
     size_t len = httpd_req_get_hdr_value_len(request, "X-Lark-Token");
     if (len && len == sizeof(expected) - 1 &&
@@ -204,7 +204,7 @@ static esp_err_t volume_post(httpd_req_t *request)
 
 static esp_err_t pull_headers(esp_http_client_handle_t client)
 {
-    return esp_http_client_set_header(client, "X-Lark-Token", CONFIG_LARK_BRIDGE_TOKEN);
+    return esp_http_client_set_header(client, "X-Lark-Token", CONFIG_LARK_TOKEN);
 }
 
 static bool matching_board(const esp_app_desc_t *image)
@@ -217,15 +217,15 @@ static bool matching_board(const esp_app_desc_t *image)
 static esp_err_t ota_pull_post(httpd_req_t *request)
 {
     char url[256];
-    if (!strncmp(CONFIG_LARK_BRIDGE_URL, "http://", 7) || !strncmp(CONFIG_LARK_BRIDGE_URL, "https://", 8)) {
-        snprintf(url, sizeof(url), "%s%s", CONFIG_LARK_BRIDGE_URL, BOARD_OTA_PATH);
+    if (!strncmp(CONFIG_LARK_URL, "http://", 7) || !strncmp(CONFIG_LARK_URL, "https://", 8)) {
+        snprintf(url, sizeof(url), "%s%s", CONFIG_LARK_URL, BOARD_OTA_PATH);
     } else {
         char host[128];
         uint16_t unused_port = 0;
-        if (!lark_parse_bridge_url(CONFIG_LARK_BRIDGE_URL, host, sizeof(host), &unused_port)) {
+        if (!lark_parse_bridge_url(CONFIG_LARK_URL, host, sizeof(host), &unused_port)) {
             return text_response(request, "500 Internal Server Error", "Invalid bridge URL\n");
         }
-        const char *scheme = !strncmp(CONFIG_LARK_BRIDGE_URL, "wss://", 6) ? "https" : "http";
+        const char *scheme = !strncmp(CONFIG_LARK_URL, "wss://", 6) ? "https" : "http";
         int len = strchr(host, ':') ? snprintf(url, sizeof(url), "%s://[%s]:%d%s", scheme, host, LARK_DEFAULT_HTTP_PORT, BOARD_OTA_PATH)
                                     : snprintf(url, sizeof(url), "%s://%s:%d%s", scheme, host, LARK_DEFAULT_HTTP_PORT, BOARD_OTA_PATH);
         if (len < 0 || (size_t)len >= sizeof(url)) {

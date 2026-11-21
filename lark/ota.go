@@ -111,9 +111,9 @@ func runOTA(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 }
 
 func loadOTAToken() (string, error) {
-	if token := os.Getenv("LARK_BRIDGE_TOKEN"); token != "" {
+	if token := os.Getenv("LARK_TOKEN"); token != "" {
 		if !tokenRE.MatchString(token) {
-			return "", errors.New("invalid LARK_BRIDGE_TOKEN")
+			return "", errors.New("invalid LARK_TOKEN")
 		}
 		return token, nil
 	}
@@ -121,16 +121,16 @@ func loadOTAToken() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	envPath := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark", "bridge.env")
+	envPath := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark", "lark.env")
 	f, err := os.Open(envPath)
 	if err != nil {
-		return "", fmt.Errorf("set LARK_BRIDGE_TOKEN or add it to %s: %w", envPath, err)
+		return "", fmt.Errorf("set LARK_TOKEN or add it to %s: %w", envPath, err)
 	}
 	defer f.Close()
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		key, raw, ok := strings.Cut(strings.TrimSpace(s.Text()), "=")
-		if !ok || strings.TrimSpace(key) != "LARK_BRIDGE_TOKEN" {
+		if !ok || strings.TrimSpace(key) != "LARK_TOKEN" {
 			continue
 		}
 		val := strings.TrimSpace(raw)
@@ -138,14 +138,14 @@ func loadOTAToken() (string, error) {
 			val = val[1 : len(val)-1]
 		}
 		if !tokenRE.MatchString(val) {
-			return "", fmt.Errorf("invalid LARK_BRIDGE_TOKEN in %s", envPath)
+			return "", fmt.Errorf("invalid LARK_TOKEN in %s", envPath)
 		}
 		return val, nil
 	}
 	if err := s.Err(); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("set LARK_BRIDGE_TOKEN or add it to %s", envPath)
+	return "", fmt.Errorf("set LARK_TOKEN or add it to %s", envPath)
 }
 
 func repoRoot() (string, error) {

@@ -352,7 +352,7 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
     }
     const char *board = BOARD_NAME;
     const char *fw = esp_app_get_description()->version;
-    const char *tok = CONFIG_LARK_BRIDGE_TOKEN;
+    const char *tok = CONFIG_LARK_TOKEN;
     size_t id_len = strlen(device_id);
     size_t board_len = strlen(board);
     size_t fw_len = strlen(fw);
@@ -868,7 +868,7 @@ void net_client_network_changed(bool online)
 
 esp_err_t net_client_init(void)
 {
-    if (!lark_parse_bridge_url(CONFIG_LARK_BRIDGE_URL, bridge_host, sizeof(bridge_host), &bridge_port)) {
+    if (!lark_parse_bridge_url(CONFIG_LARK_URL, bridge_host, sizeof(bridge_host), &bridge_port)) {
         return ESP_ERR_INVALID_ARG;
     }
     rx_buffer = heap_caps_malloc(FRAME_PACKET_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

@@ -60,8 +60,8 @@ for board in vocat box3; do
     "$host_tests/gfx"
 done
 
-if [[ -n $(git ls-files -- ':(glob)**/sdkconfig.local' ':(glob)**/bridge.env') ]]; then
-    printf 'sdkconfig.local and bridge.env must not be tracked\n' >&2
+if [[ -n $(git ls-files -- ':(glob)**/sdkconfig.local' ':(glob)**/lark.env') ]]; then
+    printf 'sdkconfig.local and lark.env must not be tracked\n' >&2
     exit 1
 fi
 for view in --cached --; do

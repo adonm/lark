@@ -53,7 +53,7 @@ func TestRunOTAFlow(t *testing.T) {
 
 	// Pre-create firmware/build dir before writing.
 	t.Setenv("LARK_REPO_DIR", repo)
-	t.Setenv("LARK_BRIDGE_TOKEN", "secret-token")
+	t.Setenv("LARK_TOKEN", "secret-token")
 
 	var polls atomic.Int32
 	var uploaded atomic.Bool

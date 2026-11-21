@@ -81,7 +81,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		"HOME=" + root, "PATH=" + filepath.Join(root, "bin") + ":/usr/bin:/bin",
 		"XDG_CONFIG_HOME=" + config, "XDG_DATA_HOME=" + filepath.Join(root, "data"),
 		"XDG_STATE_HOME=" + filepath.Join(root, "state"), "XDG_CACHE_HOME=" + filepath.Join(root, "cache"),
-		"LARK_BRIDGE_HOST=127.0.0.1", "LARK_BRIDGE_PORT=0", "LARK_BRIDGE_TOKEN=" + s.token,
+		"LARK_HOST=127.0.0.1", "LARK_PORT=0", "LARK_TOKEN=" + s.token,
 		"LARK_DB_PATH=" + filepath.Join(root, "lark.db"), "LARK_REPO_DIR=" + repo,
 		"LARK_OTA_DIR=" + root, "LARK_BOX3_OTA_DIR=" + root,
 		"LARK_OPENCODE_URL=" + s.model.url, "LARK_OPENCODE_DIR=" + s.workspace,
@@ -163,7 +163,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 
 func e2eInstallation(t *testing.T, home string, required bool) map[string]string {
 	t.Helper()
-	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark/bridge.env")
+	path := filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark/lark.env")
 	raw, err := os.ReadFile(path)
 	if required && err != nil {
 		t.Fatal("cannot read private dedicated OpenCode configuration")
