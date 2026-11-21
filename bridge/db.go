@@ -97,8 +97,7 @@ func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error 
 		}
 		defer os.RemoveAll(staging)
 		tmp := filepath.Join(staging, "lark.db")
-		// Turso 0.8.4 requires a literal and does not unescape doubled quotes
-		// in the VACUUM path, but accepts either quote delimiter.
+		// SQLite VACUUM INTO requires a string literal path; pick a quote delimiter not in tmp.
 		quote := "'"
 		if strings.Contains(tmp, quote) {
 			quote = `"`

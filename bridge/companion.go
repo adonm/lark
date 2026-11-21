@@ -313,7 +313,7 @@ func (b *bridge) changeCompanionPrepared(ctx context.Context, who peer, theme, o
 			next.FaceBG = portrait.bg
 			next.FaceSVG = portrait.svg()
 		}
-		// An omitted flag retains legacy auto-save; an explicit false is a
+		// An omitted flag retains default auto-save; an explicit false is a
 		// temporary shift that must not overwrite a named favorite.
 		if _, explicit := args["save_profile"]; save || !explicit && next.Configured {
 			if err := archive(next, true); err != nil {

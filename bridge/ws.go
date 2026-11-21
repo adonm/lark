@@ -40,7 +40,7 @@ type wsEvent struct {
 	Call      uint32  `json:"call"`
 	Cancelled bool    `json:"cancelled"`
 	Enabled   *bool   `json:"enabled"`
-	IfFree    bool    `json:"if_free"` // A reconnect must not replace a live virtual cat.
+	IfFree    bool    `json:"if_free"` // A reconnect must not replace a live virtual companion.
 	wsStatus
 }
 

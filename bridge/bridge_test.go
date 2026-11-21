@@ -257,20 +257,17 @@ func TestStateAndDirectMessage(t *testing.T) {
 func TestBridgeAuthAndBody(t *testing.T) {
 	b := &bridge{token: "correct", peers: peers{deviceStore(testDB(t, ":memory:"))}}
 	for _, tc := range []struct {
-		lark, legacy []string
-		want         int
+		lark []string
+		want int
 	}{
-		{[]string{"correct"}, nil, 200},
-		{nil, []string{"correct"}, 401},
-		{[]string{"wrong"}, nil, 401},
-		{[]string{"correct", "correct"}, nil, 401},
+		{[]string{"correct"}, 200},
+		{nil, 401},
+		{[]string{"wrong"}, 401},
+		{[]string{"correct", "correct"}, 401},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/api/scope", nil)
 		for _, token := range tc.lark {
 			req.Header.Add("X-Lark-Token", token)
-		}
-		for _, token := range tc.legacy {
-			req.Header.Add("X-EchoEar-Token", token)
 		}
 		res := httptest.NewRecorder()
 		b.ServeHTTP(res, req)

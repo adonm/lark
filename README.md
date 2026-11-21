@@ -506,12 +506,12 @@ synthesizing sentences while OpenCode streams its reply over SSE. Firmware
 | `GET /api/companions`, `DELETE /api/companions/{slug}` | List or delete LAN-only saved forms |
 | `POST /api/companions/reassign` | LAN-only `from_device_id`, `to_device_id`, and `mode` (`swap` or `move`) → transfer companions, voices, and sessions |
 | `POST /api/devices/{id}/companion` | Update active form fields or send `{"slug":"cake"}` to load a form (LAN-only) |
-| `GET /api/devices/{id}/messages`, `GET /api/history?device_id={id}` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
+| `GET /api/devices/{id}/messages` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
 | `POST /api/devices/{id}/voice` | `{"voice":"af_heart"}` → saved `device_id` and `voice`; scoped links can change only their own companion |
 | `POST /api/chat` | `{"text":"Explain a circle","device_id":"my-lark"}` → accepted on a connected device; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
 | `GET /api/audio/<id>` | Reply PCM from `audio_url`; streams by sentence while synthesis runs |
 | `POST /api/tts` | `{"text":"Hello!"}`, optional `device_id` → complete PCM clip using that device's voice |
-| `POST /api/reset` | `{"device_id":"my-lark"}` → archive the active form if not already saved, restore the starter, and start a fresh session |
+| `POST /api/devices/{id}/reset` | Archive the active form if not already saved, restore the starter, and start a fresh session (pass `{"archive_history":false}` to keep chat history) |
 | `POST /api/opencode/compact` | LAN-only; optional `device_id` selects one session (default: all), optional `reconnect_mcp: true` refreshes MCP first → `ok`, `compacted`, and `skipped` device IDs |
 | `GET /api/memory?scope=…`, `GET /api/memory/scopes`, `DELETE /api/memory?scope=…&key=…` | LAN-only saved JSON and populated scopes |
 | `GET /api/apps`, `DELETE /api/apps/{name}`, `POST /api/apps/run` | List, delete, or run saved apps and drawings (LAN only) |

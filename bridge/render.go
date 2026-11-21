@@ -1071,8 +1071,8 @@ func directRect(n *svgNode, m rasterx.Matrix2D, crisp bool) (image.Rectangle, bo
 			}
 		}
 	}
-	// Opt-in pixel sprites snap both sides to the same shared grid at
-	// fractional display scales. Legacy SVG retains its antialiasing.
+	// Pixel sprites snap both sides to a shared grid at
+	// fractional display scales; standard SVG retains antialiasing.
 	return image.Rect(int(math.Round(x1)), int(math.Round(y1)), int(math.Round(x2)), int(math.Round(y2))), true
 }
 
