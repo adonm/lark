@@ -335,19 +335,16 @@ esp_err_t ota_server_start(void)
 void ota_check_boot(int64_t boot_us)
 {
     if (!pending_verification()) return;
-    if (media_audio_ready()) {
-        while (esp_timer_get_time() - boot_us < 45 * 1000000LL) {
-            if (net_client_connected()) {
-                esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
-                if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Confirmed OTA image after bridge hello and audio initialization");
-                    return;
-                }
-                ESP_LOGE(TAG, "Confirm OTA image: %s", esp_err_to_name(err));
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(100));
+    // Roll back if the bridge never completes HELLO_OK within 45 s of boot.
+    int64_t remaining_us = 45 * 1000000LL - (esp_timer_get_time() - boot_us);
+    if (media_audio_ready() &&
+        (net_client_connected() || (remaining_us > 0 && net_client_wait_connected((uint32_t)(remaining_us / 1000))))) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Confirmed OTA image after bridge hello and audio initialization");
+            return;
         }
+        ESP_LOGE(TAG, "Confirm OTA image: %s", esp_err_to_name(err));
     }
     ESP_LOGE(TAG, "OTA boot health check failed (audio=%d, bridge=%d)", media_audio_ready(), net_client_connected());
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();

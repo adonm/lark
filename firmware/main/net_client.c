@@ -16,6 +16,7 @@
 #include "esp_timer.h"
 #include "frame.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/netdb.h"
@@ -63,13 +64,27 @@ typedef struct {
     int x, y;
 } input_t;
 
+typedef enum {
+    CTRL_REC_START,
+    CTRL_REC_END,
+} ctrl_kind_t;
+
+typedef struct {
+    ctrl_kind_t kind;
+    uint32_t session;
+    uint16_t rec_session;
+    uint8_t target;
+    bool cancelled;
+} ctrl_msg_t;
+
 static const char *TAG = "net";
 
 static char bridge_host[128];
 static uint16_t bridge_port = LARK_DEFAULT_DEVICE_PORT;
 
 static TaskHandle_t service;
-static SemaphoreHandle_t tcp_tx_lock;
+static QueueHandle_t ctrl_queue;
+static SemaphoreHandle_t hello_sem;
 static portMUX_TYPE input_lock = portMUX_INITIALIZER_UNLOCKED;
 static input_t inputs[INPUT_CAP], pending_drag;
 static unsigned input_head, input_count, drag_after;
@@ -110,6 +125,21 @@ bool net_client_connected(void)
     return ready_socket_session() != 0;
 }
 
+bool net_client_wait_connected(uint32_t timeout_ms)
+{
+    if (net_client_connected()) return true;
+    if (!hello_sem) return false;
+    int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000LL;
+    while (!net_client_connected()) {
+        int64_t rem_us = deadline - esp_timer_get_time();
+        if (rem_us <= 0) break;
+        TickType_t ticks = pdMS_TO_TICKS((uint32_t)((rem_us + 999) / 1000));
+        if (ticks == 0) ticks = 1;
+        xSemaphoreTake(hello_sem, ticks);
+    }
+    return net_client_connected();
+}
+
 static bool send_all_tcp(int fd, const void *data, size_t len)
 {
     const uint8_t *p = data;
@@ -126,17 +156,11 @@ static bool send_tcp_frame(uint32_t session, uint8_t type, const void *payload, 
 {
     if (!atomic_load(&wifi_online) || !session || session != net_client_session()) return false;
     if (require_ready && session != atomic_load(&ready_session)) return false;
-    if (!tcp_tx_lock || len > LARK_PROTO_MAX_PAYLOAD) return false;
+    if (tcp_fd < 0 || len > LARK_PROTO_MAX_PAYLOAD) return false;
 
     uint8_t hdr[LARK_PROTO_HDR_SIZE];
-    xSemaphoreTake(tcp_tx_lock, portMAX_DELAY);
-    bool ok = false;
-    if (tcp_fd >= 0 && session == net_client_session() && (!require_ready || session == atomic_load(&ready_session))) {
-        lark_pack_hdr(hdr, type, tx_seq++, len);
-        ok = send_all_tcp(tcp_fd, hdr, sizeof(hdr)) && (!len || send_all_tcp(tcp_fd, payload, len));
-    }
-    xSemaphoreGive(tcp_tx_lock);
-    return ok;
+    lark_pack_hdr(hdr, type, tx_seq++, len);
+    return send_all_tcp(tcp_fd, hdr, sizeof(hdr)) && (!len || send_all_tcp(tcp_fd, payload, len));
 }
 
 static bool enqueue_session(input_t input)
@@ -192,14 +216,26 @@ bool net_client_wake_word(void)
 
 bool net_client_rec_start(uint32_t session, uint16_t rec_session, uint8_t target)
 {
-    lark_rec_start_t msg = { .session = rec_session, .target = target, .pad = 0 };
-    return send_tcp_frame(session, LARK_MSG_REC_START, &msg, sizeof(msg), true);
+    if (!ctrl_queue || !session || ready_socket_session() != session) return false;
+    ctrl_msg_t msg = { .kind = CTRL_REC_START, .session = session, .rec_session = rec_session, .target = target };
+    if (xQueueSend(ctrl_queue, &msg, 0) != pdPASS) return false;
+    if (service) xTaskNotifyGive(service);
+    return true;
 }
 
 void net_client_rec_end(uint32_t session, uint16_t rec_session, uint8_t target, bool cancelled)
 {
-    lark_rec_end_t msg = { .session = rec_session, .target = target, .cancelled = cancelled ? 1 : 0 };
-    send_tcp_frame(session, LARK_MSG_REC_END, &msg, sizeof(msg), true);
+    if (!ctrl_queue || !session) return;
+    ctrl_msg_t msg = {
+        .kind = CTRL_REC_END,
+        .session = session,
+        .rec_session = rec_session,
+        .target = target,
+        .cancelled = cancelled,
+    };
+    if (xQueueSend(ctrl_queue, &msg, 0) == pdPASS && service) {
+        xTaskNotifyGive(service);
+    }
 }
 
 void net_client_tts_ack(uint32_t session, uint32_t audio_id, bool aborted)
@@ -217,7 +253,7 @@ static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, siz
     if (!samples || samples > LARK_RTP_SAMPLES || !ready_socket_session() || session != net_client_session()) {
         return false;
     }
-    static uint8_t pkt[LARK_RTP_PACKET_BYTES];
+    uint8_t pkt[LARK_RTP_PACKET_BYTES];
     int fd = -1;
     struct sockaddr_in dst;
     uint32_t ssrc = 0, ts = 0;
@@ -414,6 +450,7 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         rtp_call_ts = 0;
         portEXIT_CRITICAL(&udp_lock);
         atomic_store(&ready_session, session);
+        if (hello_sem) xSemaphoreGive(hello_sem);
         display_set_link(true);
         ESP_LOGI(TAG, "Bridge accepted hello (udp=%u, ssrc=0x%08" PRIx32 ")", ok.udp_port, ok.ssrc);
         break;
@@ -546,11 +583,19 @@ static bool recv_exact(int fd, uint8_t *dst, size_t len)
         if (n == 0) return false;
         if (errno == EINTR) continue;
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            fd_set rfds;
-            FD_ZERO(&rfds);
-            FD_SET(fd, &rfds);
-            struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
-            if (lwip_select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) return false;
+            int waited = 0;
+            while (waited < 5000) {
+                if (!atomic_load(&wifi_online)) return false;
+                fd_set rfds;
+                FD_ZERO(&rfds);
+                FD_SET(fd, &rfds);
+                struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
+                int rc = lwip_select(fd + 1, &rfds, NULL, NULL, &tv);
+                if (rc > 0) break;
+                if (rc < 0) return false;
+                waited += 200;
+            }
+            if (waited >= 5000) return false;
             continue;
         }
         return false;
@@ -560,10 +605,8 @@ static bool recv_exact(int fd, uint8_t *dst, size_t len)
 
 static void close_sockets(void)
 {
-    if (tcp_tx_lock) xSemaphoreTake(tcp_tx_lock, portMAX_DELAY);
     int tfd = tcp_fd;
     tcp_fd = -1;
-    if (tcp_tx_lock) xSemaphoreGive(tcp_tx_lock);
     if (tfd >= 0) lwip_close(tfd);
 
     portENTER_CRITICAL(&udp_lock);
@@ -662,10 +705,8 @@ static bool open_connection(uint32_t *out_session)
     if (++next_session == 0) ++next_session;
     uint32_t session = next_session;
 
-    xSemaphoreTake(tcp_tx_lock, portMAX_DELAY);
     tcp_fd = tfd;
     tx_seq = 0;
-    xSemaphoreGive(tcp_tx_lock);
 
     portENTER_CRITICAL(&udp_lock);
     udp_fd = ufd;
@@ -714,7 +755,25 @@ static bool has_pending_inputs(void)
     portENTER_CRITICAL(&input_lock);
     bool any = input_count > 0 || pending_drag.session != 0;
     portEXIT_CRITICAL(&input_lock);
-    return any;
+    return any || (ctrl_queue && uxQueueMessagesWaiting(ctrl_queue) > 0);
+}
+
+static void drain_ctrl(void)
+{
+    ctrl_msg_t msg;
+    while (ctrl_queue && xQueueReceive(ctrl_queue, &msg, 0) == pdPASS) {
+        if (msg.kind == CTRL_REC_START) {
+            lark_rec_start_t wire = { .session = msg.rec_session, .target = msg.target, .pad = 0 };
+            send_tcp_frame(msg.session, LARK_MSG_REC_START, &wire, sizeof(wire), true);
+        } else if (msg.kind == CTRL_REC_END) {
+            lark_rec_end_t wire = {
+                .session = msg.rec_session,
+                .target = msg.target,
+                .cancelled = msg.cancelled ? 1 : 0,
+            };
+            send_tcp_frame(msg.session, LARK_MSG_REC_END, &wire, sizeof(wire), true);
+        }
+    }
 }
 
 static void service_task(void *arg)
@@ -724,13 +783,15 @@ static void service_task(void *arg)
         if (!atomic_load(&wifi_online)) {
             close_sockets();
             reconnect_ms = 1000;
-            vTaskDelay(pdMS_TO_TICKS(200));
+            while (!atomic_load(&wifi_online)) {
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            }
             continue;
         }
         uint32_t session = 0;
         if (!open_connection(&session)) {
             close_sockets();
-            vTaskDelay(pdMS_TO_TICKS(reconnect_ms));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(reconnect_ms));
             if (reconnect_ms < 30000) reconnect_ms = reconnect_ms > 15000 ? 30000 : reconnect_ms * 2;
             continue;
         }
@@ -738,6 +799,7 @@ static void service_task(void *arg)
         int64_t after_status = esp_timer_get_time() / 1000 + STATUS_MS;
 
         while (atomic_load(&wifi_online) && tcp_fd >= 0) {
+            drain_ctrl();
             input_t input;
             while (next_input(&input)) send_input(&input);
 
@@ -792,14 +854,16 @@ static void service_task(void *arg)
             }
         }
         close_sockets();
-        vTaskDelay(pdMS_TO_TICKS(500));
+        if (atomic_load(&wifi_online)) {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+        }
     }
 }
 
 void net_client_network_changed(bool online)
 {
     atomic_store(&wifi_online, online);
-    if (!online) close_sockets();
+    if (service) xTaskNotifyGive(service);
 }
 
 esp_err_t net_client_init(void)
@@ -808,10 +872,15 @@ esp_err_t net_client_init(void)
         return ESP_ERR_INVALID_ARG;
     }
     rx_buffer = heap_caps_malloc(FRAME_PACKET_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    tcp_tx_lock = xSemaphoreCreateMutex();
-    if (!rx_buffer || !tcp_tx_lock) {
+    ctrl_queue = xQueueCreate(16, sizeof(ctrl_msg_t));
+    hello_sem = xSemaphoreCreateBinary();
+    if (!rx_buffer || !ctrl_queue || !hello_sem) {
         free(rx_buffer);
         rx_buffer = NULL;
+        if (ctrl_queue) vQueueDelete(ctrl_queue);
+        ctrl_queue = NULL;
+        if (hello_sem) vSemaphoreDelete(hello_sem);
+        hello_sem = NULL;
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(service_task, "net_service", 6144, NULL, 4, &service) != pdPASS) {

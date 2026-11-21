@@ -14,6 +14,8 @@ static const char *TAG = "lark";
 
 static void on_wifi(bool online, const char *ip)
 {
+    (void)ip;
+    if (online) display_sync_power_save();
     net_client_network_changed(online);
 }
 

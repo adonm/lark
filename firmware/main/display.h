@@ -12,3 +12,4 @@ bool display_apply_frame(const uint8_t *data, size_t len);
 void display_wake(void);
 void display_set_brightness(int level);
 bool display_is_sleeping(void);
+void display_sync_power_save(void);

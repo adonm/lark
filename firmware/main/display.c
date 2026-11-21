@@ -37,6 +37,7 @@ static frame_bounds_t dirty_bounds;
 static atomic_int brightness = BRIGHT;
 static atomic_uint last_touch;
 static atomic_uint shown_rev;
+static atomic_bool ps_dirty = true;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -100,6 +101,7 @@ static void paint_task(void *arg)
 {
     int applied = BRIGHT;
     bool panel_on = true;
+    bool low_latency = false;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
         xSemaphoreTake(fb_lock, portMAX_DELAY);
@@ -112,7 +114,13 @@ static void paint_task(void *arg)
             if (applied != 0 && bsp_display_backlight_off() == ESP_OK) applied = 0;
             if (panel_on && esp_lcd_panel_disp_on_off(panel, false) == ESP_OK) {
                 panel_on = false;
-                wifi_set_low_latency(false);
+            }
+            if (atomic_exchange(&ps_dirty, false) || low_latency) {
+                if (wifi_set_low_latency(false)) {
+                    low_latency = false;
+                } else {
+                    atomic_store(&ps_dirty, true);
+                }
             }
             continue;
         }
@@ -127,7 +135,13 @@ static void paint_task(void *arg)
         }
         if (!panel_on && esp_lcd_panel_disp_on_off(panel, true) == ESP_OK) {
             panel_on = true;
-            wifi_set_low_latency(true);
+        }
+        if (atomic_exchange(&ps_dirty, false) || !low_latency) {
+            if (wifi_set_low_latency(true)) {
+                low_latency = true;
+            } else {
+                atomic_store(&ps_dirty, true);
+            }
         }
         if (panel_on && level != applied && bsp_display_brightness_set(level) == ESP_OK) applied = level;
     }
@@ -167,10 +181,13 @@ bool display_apply_frame(const uint8_t *data, size_t len)
 void display_set_brightness(int level)
 {
     if (level < DIM || level > BRIGHT) return;
-    int prev = atomic_exchange(&brightness, level);
-    if ((prev == DIM) != (level == DIM)) {
-        wifi_set_low_latency(level != DIM);
-    }
+    atomic_store(&brightness, level);
+    if (painter) xTaskNotifyGive(painter);
+}
+
+void display_sync_power_save(void)
+{
+    atomic_store(&ps_dirty, true);
     if (painter) xTaskNotifyGive(painter);
 }
 
