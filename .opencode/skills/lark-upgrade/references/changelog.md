@@ -62,10 +62,12 @@ systemctl --user stop lark-bridge.service lark-opencode.service lark-opencode-la
 
 # Back up whichever directory exists
 mkdir -p ~/.local/share/lark/backups
-if [ -f ~/.local/share/echoear/bridge.db ]; then
+if [ -f ~/.local/share/echoear/echoear.db ]; then
+  sqlite3 ~/.local/share/echoear/echoear.db ".backup '$HOME/.local/share/lark/backups/pre-upgrade.db'"
+elif [ -f ~/.local/share/echoear/bridge.db ]; then
   sqlite3 ~/.local/share/echoear/bridge.db ".backup '$HOME/.local/share/lark/backups/pre-upgrade.db'"
-elif [ -f ~/.local/share/lark/bridge.db ]; then
-  sqlite3 ~/.local/share/lark/bridge.db ".backup '$HOME/.local/share/lark/backups/pre-upgrade.db'"
+elif [ -f ~/.local/share/lark/lark.db ]; then
+  sqlite3 ~/.local/share/lark/lark.db ".backup '$HOME/.local/share/lark/backups/pre-upgrade.db'"
 fi
 ```
 
@@ -74,18 +76,25 @@ fi
 mkdir -p ~/.config/lark ~/.local/share/lark
 [ -d ~/.config/echoear ] && cp -a ~/.config/echoear/. ~/.config/lark/
 [ -d ~/.local/share/echoear ] && cp -a ~/.local/share/echoear/. ~/.local/share/lark/
+[ -f ~/.local/share/lark/echoear.db ] && [ ! -f ~/.local/share/lark/lark.db ] && mv ~/.local/share/lark/echoear.db ~/.local/share/lark/lark.db
 
-# Rename ECHOEAR_* keys to LARK_* in ~/.config/lark/bridge.env
+# Remove stale echoear OpenCode config so setup-host.sh generates fresh lark opencode.jsonc
+rm -rf ~/.local/share/lark/opencode/config/opencode/opencode.jsonc \
+       ~/.local/share/lark/opencode/config/opencode/agents/echoear* \
+       ~/.local/share/lark/opencode/config/opencode/echoear-model-router
+
+# Rename ECHOEAR_* keys to LARK_* in ~/.config/lark/bridge.env (and ensure LARK_DEVICE_PORT=8766)
 if [ -f ~/.config/lark/bridge.env ]; then
-  sed -i 's/^ECHOEAR_/LARK_/' ~/.config/lark/bridge.env
+  sed -i 's/^ECHOEAR_/LARK_/; s|/echoear|/lark|g' ~/.config/lark/bridge.env
+  grep -q '^LARK_DEVICE_PORT=' ~/.config/lark/bridge.env || echo 'LARK_DEVICE_PORT=8766' >> ~/.config/lark/bridge.env
 fi
 
 # Disable legacy echoear user units if present
 systemctl --user disable --now echoear-bridge.service echoear-opencode.service echoear-opencode-lan.socket echoear-opencode-lan.service 2>/dev/null || true
 ```
 
-#### 3. Migrate SQLite schema (`bridge.db`) to match `bridge/db.go`
-Run on `~/.local/share/lark/bridge.db` while `lark-bridge.service` is stopped. Copy-and-verify into clean tables, then drop legacy tables/columns:
+#### 3. Migrate SQLite schema (`lark.db`) to match `bridge/db.go`
+Run on `~/.local/share/lark/lark.db` while `lark-bridge.service` is stopped. Copy-and-verify into clean tables, then drop legacy tables/columns:
 
 ```sql
 PRAGMA foreign_keys = OFF;
@@ -129,14 +138,37 @@ FROM saved_cats;
 -- Update message roles
 UPDATE messages SET role = 'companion' WHERE role = 'cat';
 
--- Clear stale OpenCode session bindings and legacy meta keys
-DELETE FROM sessions;
-DELETE FROM meta WHERE key IN ('schema_version', 'history_backfill');
+-- Rebuild virtual_clients without `theme` and sessions with `contract_hash`/`context_after_ms`
+CREATE TABLE virtual_clients_new (
+  id TEXT PRIMARY KEY,
+  character TEXT NOT NULL,
+  voice TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+INSERT INTO virtual_clients_new (id, character, voice, created_at)
+SELECT id, character, COALESCE(voice, ''), created_at FROM virtual_clients;
+DROP TABLE virtual_clients;
+ALTER TABLE virtual_clients_new RENAME TO virtual_clients;
+
+DROP TABLE IF EXISTS sessions;
+CREATE TABLE sessions (
+  device_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  contract_hash TEXT NOT NULL DEFAULT '',
+  context_after_ms INTEGER NOT NULL DEFAULT 0
+);
+
+-- Clear legacy meta keys
+DELETE FROM meta WHERE key LIKE 'migrated_%' OR key IN ('schema_version', 'history_backfill', 'mcp_schema_hash', 'mcp_contract_refresh_progress');
 
 -- Drop legacy tables
 DROP TABLE IF EXISTS cats;
 DROP TABLE IF EXISTS saved_cats;
 DROP TABLE IF EXISTS chat_events;
+DROP TABLE IF EXISTS assets;
+DROP TABLE IF EXISTS schema_version;
+DROP TABLE IF EXISTS history_backfill;
 
 COMMIT;
 PRAGMA integrity_check;

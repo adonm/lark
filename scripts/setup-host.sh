@@ -256,7 +256,7 @@ client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def get(path):
     request = urllib.request.Request(f"{url}{path}", headers={"Authorization": f"Basic {auth}"})
-    with client.open(request, timeout=1) as response:
+    with client.open(request, timeout=5) as response:
         return json.load(response)
 
 deadline = time.monotonic() + 10
@@ -271,8 +271,9 @@ while True:
 
 try:
     primary = get("/api/agent/lark")["data"]["model"]["providerID"]
+    target_config = Path(root, "config/opencode/opencode.jsonc").resolve()
     router = next(p for entry in get("/api/config")
-                  if entry.get("path") == str(Path(root, "config/opencode/opencode.jsonc"))
+                  if entry.get("path") and Path(entry["path"]).resolve() == target_config
                   for p in entry["info"]["plugins"]
                   if isinstance(p, dict) and p.get("package") == "./lark-model-router")
     fallback = router["options"]["fallback"].split("/", 1)[0]
