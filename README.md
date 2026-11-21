@@ -349,12 +349,33 @@ OpenCode runs the installed `echoear-bridge mcp` stdio proxy, which forwards
 requests to the bridge's authenticated `POST /mcp` on loopback. The proxy
 reads the token from its environment or the private `bridge.env`; the
 OpenCode config contains only the executable and its argument, no secrets.
-After a change to MCP schemas, instructions, the agent prompt, or the runtime
-contract version, the bridge reconnects the `echoear` MCP and compacts active
-OpenCode sessions on startup without changing canonical chat history.
-Set `ECHOEAR_DEFER_MCP_COMPACTION=1` to refresh the catalog without sending
-compaction work to existing sessions. Diagnostics report `deferred`; remove
-the setting and restart the bridge to resume pending compactions.
+On bridge startup after a change to MCP schemas, instructions, the agent
+prompt, or the runtime contract version, Lark reconnects `echoear` MCP and
+verifies that OpenCode loaded its catalog. While that refresh is pending,
+model turns fail without dispatch; local history and device settings remain
+available. Diagnostics distinguish a verified catalog (`current`) from a
+failed attempt awaiting retry (`waiting`). Startup never compacts sessions or
+sends model prompts. `ECHOEAR_DEFER_MCP_COMPACTION` no longer has an effect.
+The authenticated LAN `/api/opencode/compact` still supports explicit
+compaction and MCP reconnects.
+
+Each companion's next user turn that needs the model replaces a stale or
+unversioned binding lazily. A current binding also gets replaced if OpenCode's
+preflight read definitively reports that exact session missing. History, saved
+forms, companion IDs, and scoped links stay in Lark; Lark does not delete the old
+OpenCode session. A replacement can see a short, quoted excerpt of recent
+ordinary dialogue for that device, not tool calls or results. The excerpt
+never reaches behind a chat reset or reassignment. For legacy bindings it
+starts after the last recorded binding write; older chat remains visible but
+may not be in the model's context.
+
+Lark never replays an accepted prompt or one with unclear admission or
+effects. It checks for a missing session again on a
+later user turn. A generic error does not invalidate a binding, and an
+unconfirmed prompt may not appear in history. This does not undo work already
+dispatched or guarantee exactly-once behavior inside OpenCode. Timer wakes
+do not repair stale or missing bindings.
+
 Code Mode exposes exactly four MCP tools under `tools.echoear`:
 
 | Tool | Purpose |

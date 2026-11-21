@@ -367,7 +367,7 @@ func scanString(r rowScanner) (string, string, error) {
 
 func sessionStore(d *bridgeDB) *store[string] {
 	return &store[string]{db: d.DB, table: "sessions", key: "device_id", columns: "device_id,session_id,updated_at",
-		upsert: "session_id=excluded.session_id,updated_at=excluded.updated_at",
+		upsert: "session_id=excluded.session_id,updated_at=excluded.updated_at,contract_hash='',context_after_ms=excluded.updated_at",
 		scan: func(r rowScanner) (string, string, error) {
 			var id, sid string
 			var at int64

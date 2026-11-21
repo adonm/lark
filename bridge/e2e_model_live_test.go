@@ -218,6 +218,27 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	query := r.URL.Query()
 	switch {
 	case path == "/api/info" && method == "GET":
+	case path == "/api/experimental/mcp/echoear/connect" && method == "POST":
+		// The bridge may reconnect only this fixture's MCP in its own workspace.
+		path = "/api/experimental/mcp/" + m.alias + "/connect"
+		query.Set("location[directory]", s.workspace)
+	case path == "/api/mcp" && method == "GET":
+		rows, err := ocData[[]struct {
+			Name   string
+			Status struct{ Status string }
+		}](r.Context(), m.api, "GET", "/api/mcp"+e2eLocation(s.workspace), nil)
+		if err != nil {
+			w.WriteHeader(502)
+			return
+		}
+		for _, row := range rows {
+			if row.Name == m.alias {
+				writeStubJSON(w, mcpServerStatus("echoear", row.Status.Status))
+				return
+			}
+		}
+		writeStubJSON(w, []object{})
+		return
 	case (path == "/api/agent/echoear" || path == "/api/agent/"+builderAgent || path == "/api/event") && method == "GET":
 		query.Set("location[directory]", s.workspace)
 	case create:
@@ -434,6 +455,12 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	switch r.Method + " " + r.URL.Path {
 	case "GET /api/info":
 		writeStubJSON(w, object{})
+		return
+	case "POST /api/experimental/mcp/echoear/connect":
+		w.WriteHeader(204)
+		return
+	case "GET /api/mcp":
+		writeStubJSON(w, mcpServerStatus("echoear", "connected"))
 		return
 	case "GET /api/event":
 		w.Header().Set("Content-Type", "text/event-stream")

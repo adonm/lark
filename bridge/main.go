@@ -101,6 +101,11 @@ func run() error {
 	if os.Getenv("ECHOEAR_REPO_DIR") == "" && filepath.Base(project) == "bridge" {
 		project = filepath.Dir(project)
 	}
+	// Hash the prompt behind the installed echoear agent symlink.
+	contract, err := readMCPContract(filepath.Join(project, "agents/echoear.md"))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(local, 0o700); err != nil {
 		return err
 	}
@@ -142,17 +147,15 @@ func run() error {
 		defer func() { finish(); <-done }()
 	}
 	oc := newOpenCode(root, ocAPI, db, ocDir, settings)
+	oc.contract = contract
 	modelDir := ttsModelDir(local)
 	worker := newSynthWorker(root, func() (speechEngine, error) {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
 	})
 	b := &bridge{root: root, token: token, parentToken: parentToken, db: db, peers: peers{deviceStore(db)},
-		deferMCPCompaction: os.Getenv("ECHOEAR_DEFER_MCP_COMPACTION") == "1",
-		stt:                parakeet.transcribe, endpoint: endpointConfig, oc: oc, pairPort: pairPort, worker: worker,
-		// Keep hashing the prompt behind the installed echoear agent symlink.
-		agentPath: filepath.Join(project, "agents/echoear.md"),
-		voices:    deviceVoiceStore(db, fallbackVoice),
-		virtual:   virtualStore(db), history: &chatHistory{db},
+		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, pairPort: pairPort, worker: worker,
+		voices:  deviceVoiceStore(db, fallbackVoice),
+		virtual: virtualStore(db), history: &chatHistory{db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
 			generate: configuredPortraitGenerator(ocAPI, ocURL != "", os.Getenv("OPENCODE_API_KEY"))},
 		ota:     otaFile{path: filepath.Join(env("ECHOEAR_OTA_DIR", filepath.Join(project, "firmware/build")), "echoear.bin")},

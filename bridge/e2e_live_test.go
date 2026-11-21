@@ -86,7 +86,6 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		"ECHOEAR_DB_PATH=" + filepath.Join(root, "echoear.db"), "ECHOEAR_REPO_DIR=" + repo,
 		"ECHOEAR_OTA_DIR=" + root, "ECHOEAR_BOX3_OTA_DIR=" + root,
 		"ECHOEAR_OPENCODE_URL=" + s.model.url, "ECHOEAR_OPENCODE_DIR=" + s.workspace,
-		"ECHOEAR_DEFER_MCP_COMPACTION=1",
 	}
 	prefs := e2eInstallation(t, home, false)
 	for _, key := range []string{"TTS_MODEL_DIR", "GGML_VK_VISIBLE_DEVICES"} {
@@ -148,6 +147,17 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	liveHealthy(t, s.liveClient)
 	if s.real {
 		s.model.connectMCP(t, s)
+	}
+	deadline = time.Now().Add(20 * time.Second)
+	for {
+		report := liveJSON[diagReport](t, s.liveClient, "/api/diagnostics", nil, nil, "", nil)
+		if report.Refresh.State == "current" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("isolated MCP catalog did not refresh")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	return s
 }

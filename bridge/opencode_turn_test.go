@@ -77,7 +77,7 @@ func TestReconcileSessionUsesCurrentAgentModel(t *testing.T) {
 	for _, model := range models {
 		<-current
 		current <- model
-		got, err := o.ensureSession(t.Context(), device, "Cat")
+		got, err := o.ensureSession(t.Context(), device, "Cat", true)
 		if err != nil || got != sid {
 			t.Fatalf("did not preserve session %q: %q, %v", sid, got, err)
 		}
@@ -549,7 +549,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 		})
 	})
 	for _, item := range []peer{{DeviceID: "echoear-empty"}, {DeviceID: "echoear-equal", Character: "echoear-equal"}} {
-		if _, err := b.oc.ensureSession(t.Context(), item.DeviceID, item.Character); err != nil {
+		if _, err := b.oc.ensureSession(t.Context(), item.DeviceID, item.Character, true); err != nil {
 			t.Fatal(err)
 		}
 		expectValue(t, titles, "EchoEar: "+item.DeviceID)

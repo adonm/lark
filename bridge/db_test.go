@@ -194,7 +194,7 @@ func TestTursoMigration(t *testing.T) {
 	assertRows("sessions", 2)
 	assertRows("chat_events", 2)
 	var version int
-	if err := db.QueryRow("SELECT MAX(version) FROM schema_version").Scan(&version); err != nil || version != 8 {
+	if err := db.QueryRow("SELECT MAX(version) FROM schema_version").Scan(&version); err != nil || version != 9 {
 		t.Fatal("current schema version missing", version, err)
 	}
 }
@@ -237,6 +237,8 @@ func TestUpgradeDeployedSchemaFixture(t *testing.T) {
 		db := testDB(t, path, legacy)
 		for q, want := range map[string]string{
 			`SELECT session_id FROM sessions`:                                    "ses_fixture",
+			`SELECT contract_hash FROM sessions`:                                 "",
+			`SELECT context_after_ms FROM sessions`:                              "42",
 			`SELECT data_json FROM apps`:                                         `{"round":1}`,
 			`SELECT text FROM messages`:                                          "Keep me",
 			`SELECT count(*) FROM sqlite_schema WHERE name='messages_device_ts'`: "0",
@@ -289,7 +291,7 @@ func TestSchemaResumesFailedStep(t *testing.T) {
 	}
 	db := testDB(t, path, dir)
 	if err := db.QueryRow(`SELECT MAX(version), (SELECT count(*) FROM cats) FROM schema_version`).Scan(&version, &count); err != nil ||
-		version != 8 || count != 1 {
+		version != 9 || count != 1 {
 		t.Fatalf("import did not resume: version %d, cats %d: %v", version, count, err)
 	}
 }

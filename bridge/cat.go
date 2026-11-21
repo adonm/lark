@@ -645,8 +645,8 @@ func (b *bridge) transferCats(ctx context.Context, from, to peer, mode string) (
 	}
 	defer tx.Rollback()
 	type assignment struct {
-		cat catState
-		sid string
+		cat           catState
+		sid, contract string
 	}
 	read := func(who peer, theme string) (assignment, error) {
 		var a assignment
@@ -664,7 +664,10 @@ func (b *bridge) transferCats(ctx context.Context, from, to peer, mode string) (
 		if !b.voices.allowed(a.cat.Voice) {
 			a.cat.Voice = b.voices.defaultFor(theme)
 		}
-		err = tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT session_id FROM sessions WHERE device_id=?),'')", who.DeviceID).Scan(&a.sid)
+		err = tx.QueryRowContext(ctx, "SELECT session_id,contract_hash FROM sessions WHERE device_id=?", who.DeviceID).Scan(&a.sid, &a.contract)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
 		return a, err
 	}
 	var nextFrom, nextTo assignment
@@ -689,6 +692,7 @@ func (b *bridge) transferCats(ctx context.Context, from, to peer, mode string) (
 			nextFrom = assignment{cat: blankCat()}
 			nextFrom.cat.Voice = b.voices.defaultFor("")
 		}
+		now := time.Now().UnixMilli()
 		for id, a := range map[string]assignment{from.DeviceID: nextFrom, to.DeviceID: nextTo} {
 			key := strings.ToLower(id)
 			if err := writeCat(ctx, tx, key, a.cat); err != nil {
@@ -701,8 +705,10 @@ func (b *bridge) transferCats(ctx context.Context, from, to peer, mode string) (
 				if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE device_id=?", id); err != nil {
 					return err
 				}
-			} else if _, err := tx.ExecContext(ctx, `INSERT INTO sessions VALUES (?,?,?) ON CONFLICT(device_id)
-				DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`, id, a.sid, time.Now().UnixMilli()); err != nil {
+			} else if _, err := tx.ExecContext(ctx, `INSERT INTO sessions (device_id,session_id,updated_at,contract_hash,context_after_ms)
+				VALUES (?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET session_id=excluded.session_id,
+				updated_at=excluded.updated_at,contract_hash=excluded.contract_hash,context_after_ms=excluded.context_after_ms`,
+				id, a.sid, now, a.contract, now); err != nil {
 				return err
 			}
 		}

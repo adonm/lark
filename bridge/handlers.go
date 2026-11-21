@@ -22,7 +22,6 @@ type bridge struct {
 	db        *bridgeDB
 	root      context.Context
 	token     string
-	agentPath string
 	peers     peers
 	stt       func(context.Context, []byte) (string, error)
 	endpoint  *endpointSettings
@@ -46,8 +45,7 @@ type bridge struct {
 	catMu     sync.Mutex // Serializes cat and voice writes through hub publication.
 	catTitles sync.Mutex
 
-	parentToken        string
-	deferMCPCompaction bool
+	parentToken string
 }
 
 func sendBytes(w http.ResponseWriter, status int, kind string, data []byte) {

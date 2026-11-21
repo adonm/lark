@@ -40,8 +40,14 @@ func TestCatMigration(t *testing.T) {
 	if err := voiceStore(db).save(cats[2].id, fableVoice, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DELETE FROM schema_version WHERE version >= 6`); err != nil {
-		t.Fatal(err)
+	for _, q := range []string{
+		`ALTER TABLE sessions DROP COLUMN contract_hash`,
+		`ALTER TABLE sessions DROP COLUMN context_after_ms`,
+		`DELETE FROM schema_version WHERE version >= 6`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)

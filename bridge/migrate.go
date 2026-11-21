@@ -40,6 +40,18 @@ func (d *bridgeDB) upgradeSchema(ctx context.Context, legacy, fallbackVoice stri
 			_, err := tx.ExecContext(ctx, createHistoryBackfill)
 			return err
 		}},
+		{"version companion session bindings", func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN contract_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN context_after_ms INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+			// The last binding write is the earliest safe boundary for legacy
+			// bindings; older visible messages may predate a reset or reassignment.
+			_, err := tx.ExecContext(ctx, `UPDATE sessions SET context_after_ms=updated_at`)
+			return err
+		}},
 	}
 	version, err := d.initSchema(ctx)
 	if err != nil {

@@ -65,7 +65,8 @@ type upstream struct {
 
 type upstreamStatus struct {
 	*apiError
-	code int
+	code           int
+	tag, sessionID string
 }
 
 func (u upstream) unavailable(err error) *apiError {
@@ -109,10 +110,21 @@ func (u upstream) request(ctx context.Context, method, path, kind, accept string
 		if res.StatusCode >= 200 && res.StatusCode < 300 {
 			return res, nil
 		}
+		status := &upstreamStatus{apiError: problem(502, fmt.Sprintf("%s returned HTTP %d", u.name, res.StatusCode)), code: res.StatusCode}
+		if res.StatusCode == http.StatusNotFound {
+			var body struct {
+				Tag       string `json:"_tag"`
+				SessionID string `json:"sessionID"`
+			}
+			raw, err := io.ReadAll(io.LimitReader(res.Body, 4097))
+			if err == nil && len(raw) <= 4096 && json.Unmarshal(raw, &body) == nil {
+				status.tag, status.sessionID = body.Tag, body.SessionID
+			}
+		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 16<<10))
 		res.Body.Close()
 		if res.StatusCode != 401 || attempt == 1 {
-			return nil, &upstreamStatus{problem(502, fmt.Sprintf("%s returned HTTP %d", u.name, res.StatusCode)), res.StatusCode}
+			return nil, status
 		}
 	}
 	panic("unreachable")

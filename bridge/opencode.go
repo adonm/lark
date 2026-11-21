@@ -90,6 +90,8 @@ type openCode struct {
 	feed     eventFeed
 	settings ocSettings
 	project  string
+	db       *bridgeDB
+	contract string
 	store    *store[string]
 	turns    [64]chan struct{}
 
@@ -105,7 +107,7 @@ type ocReset struct {
 }
 
 func newOpenCode(ctx context.Context, u upstream, db *bridgeDB, project string, settings ocSettings) *openCode {
-	o := &openCode{upstream: u, project: project, settings: settings,
+	o := &openCode{upstream: u, project: project, settings: settings, db: db,
 		store:  sessionStore(db),
 		active: make(map[string]context.CancelFunc), interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
 		feed: eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
@@ -285,19 +287,31 @@ func ocData[T any](ctx context.Context, api upstream, method, path string, in an
 }
 
 func (o *openCode) ReconnectMCP(ctx context.Context, name string) error {
-	path := "/api/experimental/mcp/" + url.PathEscape(name) + "/connect"
+	query := ""
 	if o.project != "" {
-		path += "?" + url.Values{"location[directory]": {o.project}}.Encode()
+		query = "?" + url.Values{"location[directory]": {o.project}}.Encode()
 	}
-	return o.jsonCall(ctx, http.MethodPost, path, nil, nil)
+	if err := o.jsonCall(ctx, http.MethodPost, "/api/experimental/mcp/"+url.PathEscape(name)+"/connect"+query, nil, nil); err != nil {
+		return err
+	}
+	// V2 returns 204 for a completed connect attempt even if MCP initialization failed.
+	servers, err := ocData[[]struct {
+		Name   string
+		Status struct{ Status string }
+	}](ctx, o.upstream, http.MethodGet, "/api/mcp"+query, nil)
+	if err != nil {
+		return err
+	}
+	for _, s := range servers {
+		if s.Name == name && s.Status.Status == "connected" {
+			return nil
+		}
+	}
+	return problem(502, "OpenCode MCP catalog not connected")
 }
 
 // CompactSession returns false without an error for an ineligible or stale session.
 func (o *openCode) CompactSession(ctx context.Context, device, sid string) (bool, error) {
-	return o.compactSession(ctx, device, sid, "", nil)
-}
-
-func (o *openCode) compactSession(ctx context.Context, device, sid, itemID string, checkpoint func(string) error) (bool, error) {
 	if sid == "" {
 		return false, nil
 	}
@@ -330,23 +344,15 @@ func (o *openCode) compactSession(ctx context.Context, device, sid, itemID strin
 	if session.ID != sid {
 		return false, o.invalid()
 	}
-	if itemID == "" {
-		item, err := ocData[struct{ ID, SessionID, Type string }](ctx, o.upstream, http.MethodPost, path+"/compact", object{"delivery": "queue"})
-		if isMissing(err) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		if item.ID == "" || item.SessionID != sid || item.Type != "compaction" {
-			return false, o.invalid()
-		}
-		itemID = item.ID
-		if checkpoint != nil {
-			if err := checkpoint(itemID); err != nil {
-				return false, err
-			}
-		}
+	item, err := ocData[struct{ ID, SessionID, Type string }](ctx, o.upstream, http.MethodPost, path+"/compact", object{"delivery": "queue"})
+	if isMissing(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if item.ID == "" || item.SessionID != sid || item.Type != "compaction" {
+		return false, o.invalid()
 	}
 	// Admission is not completion. Keep the gate until the result is projected.
 	err = o.jsonCall(ctx, http.MethodPost, "/api/experimental/session/"+sid+"/wait", nil, nil)
@@ -359,24 +365,11 @@ func (o *openCode) compactSession(ctx context.Context, device, sid, itemID strin
 	message, err := ocData[struct {
 		ID, Type, Status string
 		Error            struct{ Type, Message string }
-	}](ctx, o.upstream, http.MethodGet, path+"/message/"+url.PathEscape(itemID), nil)
-	if isMissing(err) && checkpoint != nil {
-		// A server restart may lose an admitted item before projecting a
-		// message. Do not issue another while the first is still queued.
-		var inbox struct {
-			Data   []struct{ ID string }
-			Cursor struct{ Next string }
-		}
-		inboxErr := o.jsonCall(ctx, http.MethodGet, path+"/inbox", nil, &inbox)
-		if inboxErr == nil && inbox.Data != nil && inbox.Cursor.Next == "" &&
-			!slices.ContainsFunc(inbox.Data, func(i struct{ ID string }) bool { return i.ID == itemID }) {
-			return false, errors.Join(err, checkpoint(""))
-		}
-	}
+	}](ctx, o.upstream, http.MethodGet, path+"/message/"+url.PathEscape(item.ID), nil)
 	if err != nil {
 		return false, err
 	}
-	if message.ID != itemID || message.Type != "compaction" {
+	if message.ID != item.ID || message.Type != "compaction" {
 		return false, o.invalid()
 	}
 	// OpenCode reports this when the session has no history beyond its last compaction.
@@ -384,11 +377,7 @@ func (o *openCode) compactSession(ctx context.Context, device, sid, itemID strin
 		return false, nil
 	}
 	if message.Status != "completed" {
-		err := problem(502, "OpenCode did not complete session compaction")
-		if message.Status == "failed" && checkpoint != nil {
-			return false, errors.Join(err, checkpoint(""))
-		}
-		return false, err
+		return false, problem(502, "OpenCode did not complete session compaction")
 	}
 	return true, nil
 }
@@ -423,17 +412,34 @@ func (o *openCode) configuredSettings(ctx context.Context) (ocSettings, error) {
 	return settings, nil
 }
 
-func (o *openCode) ensureSession(ctx context.Context, device, character string) (string, error) {
-	sid, err := o.get(device)
+func (o *openCode) ensureSession(ctx context.Context, device, character string, replace bool) (string, error) {
+	if o.contract != "" {
+		catalog, err := o.db.getMeta(ctx, mcpSchemaMeta)
+		if err != nil {
+			return "", problem(502, "Cannot read OpenCode MCP contract")
+		}
+		if catalog != o.contract {
+			return "", problem(503, "OpenCode MCP catalog refresh pending")
+		}
+	}
+	binding, err := o.readBinding(ctx, device)
 	if err != nil {
 		return "", err
+	}
+	sid := binding.sid
+	stale := sid != "" && binding.contract != o.contract
+	if stale && !replace {
+		return "", problem(503, "OpenCode session refresh pending a user turn")
 	}
 	type session struct {
 		ID string `json:"id"`
 		ocSettings
 	}
 	var settings ocSettings
-	if sid != "" {
+	if sid != "" && !stale {
+		if !sessionIDRE.MatchString(sid) {
+			return "", problem(502, "Invalid stored OpenCode session ID")
+		}
 		path := "/api/session/" + sid
 		// Both reads precede any writes. Keep the live session permission check,
 		// but fetch the user-owned model selection alongside it.
@@ -468,7 +474,8 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string) 
 			return sid, nil
 		}
 		var status *upstreamStatus
-		if !errors.As(err, &status) || status.code != 404 {
+		if !replace || !errors.As(err, &status) || status.code != http.StatusNotFound ||
+			status.tag != "SessionNotFoundError" || status.sessionID != sid {
 			return "", err
 		}
 	} else {
@@ -476,6 +483,17 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string) 
 		if err != nil {
 			return "", err
 		}
+	}
+	var seed string
+	if sid != "" {
+		seed, err = o.recentDialogue(ctx, device, binding.after)
+		if err != nil {
+			return "", err
+		}
+	}
+	after := binding.after
+	if after == 0 || sid == "" {
+		after = time.Now().UnixMilli()
 	}
 	in := struct {
 		Title    string `json:"title"`
@@ -486,10 +504,15 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string) 
 	if err != nil {
 		return "", err
 	}
-	if !sessionIDRE.MatchString(created.ID) {
+	if !sessionIDRE.MatchString(created.ID) || created.ID == sid {
 		return "", o.invalid()
 	}
-	if err := o.save(device, created.ID); err != nil {
+	if seed != "" {
+		if err := o.seedDialogue(ctx, created.ID, seed); err != nil {
+			return "", err
+		}
+	}
+	if err := o.replaceBinding(ctx, device, binding, created.ID, after); err != nil {
 		return "", err
 	}
 	return created.ID, nil
@@ -751,7 +774,7 @@ func (o *openCode) askPrepared(ctx context.Context, device string, prepare func(
 	trace.measure(diagGate, admitted.Sub(waiting))
 	defer unlock()
 	character, prompt := prepare()
-	sid, err = o.ensureSession(ctx, device, character)
+	sid, err = o.ensureSession(ctx, device, character, source != "timer")
 	if err != nil {
 		return "", "", err
 	}
