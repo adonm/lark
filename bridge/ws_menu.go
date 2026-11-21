@@ -49,7 +49,7 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 			}
 			c.watch = strings.ToLower(ev.DeviceID)
 			if d := h.devices[c.watch]; d != nil && h.active(d) {
-				if d.svgWire.data != nil && (d.scene.library == nil || c.canSeeLibrary()) {
+				if d.svgWire.data != nil {
 					c.enqueue(d.svgWire)
 				}
 				c.enqueue(textFrame(d.volumeFrame(false)))
@@ -72,7 +72,7 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		return
 	}
 	if c.scope != nil && ev.Event == "watch" && ev.DeviceID == c.scope.ID {
-		if d.svgWire.data != nil && d.scene.library == nil {
+		if d.svgWire.data != nil {
 			c.enqueue(d.svgWire)
 		}
 		return
@@ -151,9 +151,6 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		text := strings.TrimSpace(ev.Text)
 		if text != "" && len(text) <= 4096 {
 			h.startTurn(d, now, false, "typed", func(ctx context.Context, id uint64) {
-				if !c.canSeeLibrary() {
-					ctx = withoutPhotoAccess(ctx)
-				}
 				h.runTurn(ctx, d, id, text, "typed", nil)
 			})
 		}
@@ -239,26 +236,11 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 		return
 	}
 	switch a.kind {
-	case "photo-prev", "photo-next", "photo-exit":
-		if d.photos == nil || d.view == nil || d.scene.library != d.view.library {
-			return
-		}
-		if a.kind == "photo-exit" {
-			h.leaveScene(d, now, "leave-slideshow")
-			return
-		}
-		n, step := len(d.photos.handles), 1
-		if a.kind == "photo-prev" {
-			step = n - 1
-		}
-		d.photos.index = (d.photos.index + step) % n
-		h.showSlide(d, now)
 	case "menu":
 		h.chime(d, "tap")
 		d.drawer, d.card, d.pending = drawerMenu, nil, nil
 		d.menuPage = 0
 		d.view = nil
-		h.dropPhotoShow(d)
 		h.render(d, now, false)
 	case "menu-open", "menu-back", "menu-page":
 		if d.scene.menu != d.menuData {
@@ -342,7 +324,6 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 func (d *wsDevice) acceptPointerRevision(action string, rev *uint16) bool {
 	switch action {
 	case "stop", "rec-cancel", "rec-send", "rec-continue", "listen", "reply", "call-peer",
-		"photo-prev", "photo-next", "photo-exit",
 		"call-answer", "call-decline", "call-hangup", "call-mute", "build-cancel":
 		if rev == nil {
 			return !d.caps.PointerRev
@@ -394,7 +375,6 @@ func (h *wsHub) leaveScene(d *wsDevice, now time.Time, reason string) {
 func (h *wsHub) clearView(d *wsDevice) {
 	d.appGen++
 	h.dropApp(d)
-	h.dropPhotoShow(d)
 	d.drawer, d.view, d.pending, d.card = "", nil, nil, nil
 }
 

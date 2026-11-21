@@ -8,10 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	imagecolor "image/color"
 	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -49,7 +47,7 @@ func TestVirtualE2E(t *testing.T) {
 			t.Run("Apps", s.apps)
 			t.Run("BuilderAndParents", s.builderParents)
 			t.Run("TimersMemoryHistory", s.data)
-			t.Run("PhotosAndScopedTunnel", s.photosAndScope)
+			t.Run("ScopedTunnel", s.scopedTunnel)
 			t.Run("Diagnostics", s.diagnostics)
 		})
 	default:
@@ -658,134 +656,45 @@ func (s *e2eSuite) idleWake(t *testing.T, c *e2eCompanion, start time.Time) {
 	t.Logf("wake touch → active power %s", time.Since(start).Round(time.Millisecond))
 }
 
-func e2ePhotosFixture(t *testing.T, local string) {
-	t.Helper()
-	// The subprocess opens and reconciles the generated Ente export/index.
-	// It cannot authenticate or fetch originals; the derivative cache is seeded.
-	e2eWrite(t, filepath.Join(local, "bin/ente-photo-job"), []byte("#!/bin/sh\nexit 1\n"), 0o700)
-	p, err := openPhotoLibrary(t.Context(), local, "")
-	if err != nil {
-		t.Fatal("cannot create isolated photo index")
+func (s *e2eSuite) scopedTunnel(t *testing.T) {
+	c := s.browser(t, "Share")
+	c.testWS.conn.Close()
+	other := s.browser(t, "NotShared")
+	scope := s.scope(t, c.id)
+	get := func(path string, code int) []byte { return e2eRequest(t, scope, "GET", path, "", nil, code) }
+	get("/app", 200)
+	worker := get("/app/sw.js", 200)
+	if !bytes.Contains(worker, []byte("lark-shell-scoped-")) ||
+		!bytes.Contains(worker, []byte(`"/app/lark.svg"`)) {
+		t.Fatal("scoped app did not serve the restricted offline shell")
 	}
-	defer p.close()
-	ingestTestPhotos(t, p, fakeEnteSnapshot(), time.Now())
-	files, err := p.search(t.Context(), "beach", "", 8)
-	if err != nil || len(files) != 2 {
-		t.Fatal("synthetic index did not ingest")
+	manifest := testObject(t, get(phonePWAPath+"manifest.webmanifest?token="+url.QueryEscape(scope.token), 200))
+	icons, _ := manifest["icons"].([]any)
+	if manifest["display"] != "standalone" || manifest["orientation"] != "portrait" || len(icons) != 3 {
+		t.Fatal("scoped Phone Lark did not serve an installable portrait manifest")
 	}
-	for i, f := range files {
-		col := []imagecolor.RGBA{{R: 250, A: 255}, {B: 250, A: 255}}[i]
-		if err := p.storeDerivative(t.Context(), f.photoKey, testJPEG(t, col)); err != nil {
-			t.Fatal("cannot seed isolated derivative")
+	for _, icon := range icons {
+		raw := get(str(icon.(object)["src"]), 200)
+		if !bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")) {
+			t.Fatal("scoped manifest icon is not a PNG")
 		}
 	}
-}
-
-func (s *e2eSuite) photosAndScope(t *testing.T) {
-	for _, g := range []struct{ variant, name string }{{"esp-vocat", "PhotosRound"}, {"esp-box-3", "PhotosRect"}} {
-		t.Run(g.name, func(t *testing.T) {
-			c := s.board(t, g.variant, g.name)
-			c.mirrorOn(t, s)
-			c.mirror.timeout = 45 * time.Second
-			path := "/api/library?device_id=" + c.id + "&q=beach"
-			results := testObject(t, s.request(t, "GET", path, nil, 200))
-			items, _ := results["items"].([]any)
-			if results["ready"] != true || len(items) != 2 {
-				t.Fatal("synthetic metadata query did not return two images")
-			}
-			raw := s.request(t, "GET", "/api/library/thumbnail/"+str(items[0].(object)["handle"]), nil, 200)
-			if len(raw) < 100 || raw[0] != 0xff || raw[1] != 0xd8 {
-				t.Fatal("synthetic thumbnail is not JPEG data")
-			}
-			prompt := e2ePhotoPrompt + " in a slideshow."
-			if s.real {
-				handles, _ := json.Marshal([]string{str(items[0].(object)["handle"]), str(items[1].(object)["handle"])})
-				prompt += " In one Code Mode execute, run the following, replacing ACCESS with the 32-character local photos access value from the turn header. Do not print access or call any other tool.\n" +
-					fmt.Sprintf("return await tools.%s.app({devices:%q,template:\"slideshow\",data:{handles:%s,access:ACCESS}});", s.model.alias, c.id, handles)
-				t.Cleanup(func() {
-					if t.Failed() {
-						s.model.mu.Lock()
-						defer s.model.mu.Unlock()
-						t.Logf("isolated MCP results: %v", s.model.mcpAudit)
-					}
-				})
-			}
-			c.json(t, object{"ev": "text", "text": prompt})
-			c.scene(t, "photo:lib-")
-			red565 := func(p uint16) bool { return p>>11 > 25 && p&31 < 4 }
-			blue565 := func(p uint16) bool { return p>>11 < 4 && p&31 > 25 }
-			// Picture area includes the native center on both displays.
-			center := c.high/2*c.width + c.width/2
-			if !red565(c.pixels[center]) {
-				t.Fatal("first synthetic photo is missing from native framebuffer")
-			}
-			c.tap(t, "photo-next")
-			c.scene(t, "2 / 2", "photo:lib-")
-			if !blue565(c.pixels[center]) {
-				t.Fatal("Next did not paint the second photo")
-			}
-			s.request(t, "POST", "/api/library?device_id="+c.id, object{"op": "visibility", "hidden": true}, 200)
-			c.scene(t, "companion-ring")
-			hidden := testObject(t, s.request(t, "GET", path, nil, 200))
-			if hidden["hidden"] != true || len(hidden["items"].([]any)) != 0 {
-				t.Fatal("per-cat hide did not revoke the slideshow and query")
-			}
-		})
+	info := testObject(t, get("/api/scope", 200))
+	if info["device_id"] != c.id || info["scoped"] != true {
+		t.Fatal("scoped listener resolved the wrong virtual cat")
 	}
-	t.Run("Scope", func(t *testing.T) {
-		c := s.browser(t, "Share")
-		c.testWS.conn.Close()
-		other := s.browser(t, "NotShared")
-		scope := s.scope(t, c.id)
-		get := func(path string, code int) []byte { return e2eRequest(t, scope, "GET", path, "", nil, code) }
-		get("/app", 200)
-		worker := get("/app/sw.js", 200)
-		if !bytes.Contains(worker, []byte("lark-shell-scoped-")) ||
-			!bytes.Contains(worker, []byte(`"/app/lark.svg"`)) || bytes.Contains(worker, []byte("photo-library.js")) {
-			t.Fatal("scoped app did not serve the restricted offline shell")
-		}
-		manifest := testObject(t, get(phonePWAPath+"manifest.webmanifest?token="+url.QueryEscape(scope.token), 200))
-		icons, _ := manifest["icons"].([]any)
-		if manifest["display"] != "standalone" || manifest["orientation"] != "portrait" || len(icons) != 3 {
-			t.Fatal("scoped Phone Lark did not serve an installable portrait manifest")
-		}
-		for _, icon := range icons {
-			raw := get(str(icon.(object)["src"]), 200)
-			if !bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")) {
-				t.Fatal("scoped manifest icon is not a PNG")
-			}
-		}
-		info := testObject(t, get("/api/scope", 200))
-		if info["device_id"] != c.id || info["scoped"] != true {
-			t.Fatal("scoped listener resolved the wrong virtual cat")
-		}
-		for _, path := range []string{"/api/devices", "/api/parent", "/api/diagnostics", "/mcp",
-			"/api/library?device_id=" + c.id, "/api/library/thumbnail/photo-12345678", "/app/photo-library.js"} {
-			get(path, 404)
-		}
-		get("/api/devices/"+c.id+"/messages", 200)
-		get("/api/devices/"+other.id+"/messages", 403)
-		ws := testConnectWS(t, scope.base, scope.token, true)
-		ws.json(t, object{"ev": "hello", "role": "web", "device_id": c.id, "caps": object{"call": true, "drag": true, "bridge_endpoint": true}})
-		client := &e2eCompanion{testWS: ws, id: c.id, name: c.name}
-		client.timeout = 20 * time.Second
-		client.scene(t, "companion-ring")
-		ws.json(t, object{"ev": "watch", "device_id": other.id})
-		client.op(t, "error", "status", "403")
-		if !s.real {
-			ws.json(t, object{"ev": "text", "text": e2ePhotoPrompt})
-			client.playback(t, time.Now())
-			s.model.mu.Lock()
-			capability, found := s.model.photo[c.id]
-			defer s.model.mu.Unlock()
-			if capability {
-				t.Fatal("scoped prompt received a photo access grant")
-			}
-			if !found {
-				t.Fatal("scoped prompt did not reach the deterministic upstream")
-			}
-		}
-	})
+	for _, path := range []string{"/api/devices", "/api/parent", "/api/diagnostics", "/mcp"} {
+		get(path, 404)
+	}
+	get("/api/devices/"+c.id+"/messages", 200)
+	get("/api/devices/"+other.id+"/messages", 403)
+	ws := testConnectWS(t, scope.base, scope.token, true)
+	ws.json(t, object{"ev": "hello", "role": "web", "device_id": c.id, "caps": object{"call": true, "drag": true, "bridge_endpoint": true}})
+	client := &e2eCompanion{testWS: ws, id: c.id, name: c.name}
+	client.timeout = 20 * time.Second
+	client.scene(t, "companion-ring")
+	ws.json(t, object{"ev": "watch", "device_id": other.id})
+	client.op(t, "error", "status", "403")
 }
 
 func (s *e2eSuite) diagnostics(t *testing.T) {

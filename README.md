@@ -236,14 +236,6 @@ Ringing, calls, recording, thinking, and playback finish first. Tap
 **Tap to reconnect** to unlock audio and resume; reconnecting won't take over
 a companion already open elsewhere.
 
-### Ente Photos
-
-The optional LAN-only **Photo Library** uses your hosted Ente Photos account. It syncs
-metadata nightly and fetches originals only when needed; the bridge keeps small local
-JPEG previews, not a full originals export. Parents can hide the library per companion, add
-labels, and review face groups if local models are installed. See
-[Ente Photos setup](docs/ente-photos.md) for interactive login, storage and backfill costs.
-
 ### Geeky diagnostics
 
 Open **Menu → Stats** for a compact on-device HUD, or **Diagnostics** in the
@@ -515,7 +507,6 @@ synthesizing sentences while OpenCode streams its reply over SSE. Firmware
 | `POST /api/companions/reassign` | LAN-only `from_device_id`, `to_device_id`, and `mode` (`swap` or `move`) → transfer companions, voices, and sessions |
 | `POST /api/devices/{id}/companion` | Update active form fields or send `{"slug":"cake"}` to load a form (LAN-only) |
 | `GET /api/devices/{id}/messages`, `GET /api/history?device_id={id}` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
-| `POST /api/devices/{id}/photo`, `GET /api/photos/{id}` | Share a PNG, JPEG, or WebP up to 2 MiB, or fetch the stored square PNG |
 | `POST /api/devices/{id}/voice` | `{"voice":"af_heart"}` → saved `device_id` and `voice`; scoped links can change only their own companion |
 | `POST /api/chat` | `{"text":"Explain a circle","device_id":"my-lark"}` → accepted on a connected device; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
 | `GET /api/audio/<id>` | Reply PCM from `audio_url`; streams by sentence while synthesis runs |

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var stateSlices = []string{"devices", "companions", "apps", "timers", "memory", "saved_companions", "messages", "diagnostics", "photos"}
+var stateSlices = []string{"devices", "companions", "apps", "timers", "memory", "saved_companions", "messages", "diagnostics"}
 
 func stringList(raw any, key string) ([]string, error) {
 	items, ok := raw.([]any)
@@ -32,14 +32,6 @@ func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
 	include := stateSlices[:5]
 	var err error
 	out := object{"now": object{"local": now.Format(time.RFC3339), "unix_ms": now.UnixMilli()}}
-	if raw, exists := args["photos"]; exists {
-		value, err := b.photoQuery(ctx, id, raw)
-		if err != nil {
-			return nil, err
-		}
-		out["photos"] = value
-		include = nil
-	}
 	if raw, exists := args["app_name"]; exists {
 		name, ok := raw.(string)
 		if !ok {
@@ -125,8 +117,6 @@ func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
 			}
 			page, readErr := b.readHistoryPage(ctx, id, limit, before)
 			out[key], out["messages_has_more"], out["messages_next_cursor"], err = page.Messages, page.HasMore, page.Next, readErr
-		case "photos":
-			out[key], err = b.photoState(ctx, id)
 		case "diagnostics":
 			out[key] = b.diagnosticReport()
 		}

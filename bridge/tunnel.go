@@ -333,20 +333,18 @@ func (b *bridge) scoped(v virtualClient, token string) http.Handler {
 				http.Redirect(w, r, location, http.StatusFound)
 				return
 			}
-			if b.servePhonePWA(w, r, path, &v, token) || path != "/app/photo-library.js" && serveApp(w, path) {
+			if b.servePhonePWA(w, r, path, &v, token) || serveApp(w, path) {
 				return
 			}
 		}
 		messageID, messages := messagesDevice(path)
 		voiceID, voice := voiceDevice(path)
 		volumeID, volume := deviceSettingID(path, "volume")
-		photoDevice, uploadPhoto := deviceSettingID(path, "photo")
-		photoID, readPhoto := photoPath(path)
 		readPortrait := strings.HasPrefix(path, "/api/portraits/")
 		timers := r.Method == http.MethodGet && path == "/api/timers" ||
 			r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/timers/")
-		get := r.Method == http.MethodGet && (path == "/ws" || path == "/api/scope" || messages || readPhoto || readPortrait)
-		post := r.Method == http.MethodPost && (path == "/api/chat" || voice || volume || uploadPhoto)
+		get := r.Method == http.MethodGet && (path == "/ws" || path == "/api/scope" || messages || readPortrait)
+		post := r.Method == http.MethodPost && (path == "/api/chat" || voice || volume)
 		if !get && !post && !timers {
 			sendError(w, problem(404, "Not found"))
 			return
@@ -356,15 +354,6 @@ func (b *bridge) scoped(v virtualClient, token string) http.Handler {
 			return
 		}
 		switch {
-		case post && uploadPhoto:
-			if photoDevice != v.ID {
-				sendError(w, problem(403, "Device out of scope"))
-				return
-			}
-			value, err := b.postPhoto(w, r, photoDevice)
-			sendResult(w, value, err)
-		case get && readPhoto:
-			sendResult(w, nil, b.getPhoto(w, r, photoID, v.ID))
 		case get && readPortrait:
 			sendResult(w, nil, b.servePortrait(w, r, path, v.ID))
 		case timers:

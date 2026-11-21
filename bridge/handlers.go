@@ -39,7 +39,6 @@ type bridge struct {
 	history   *chatHistory
 	timers    *timerManager
 	builders  *buildManager
-	library   *photoLibrary
 	portraits *portraitStore
 	diag      diagnostics
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
@@ -413,24 +412,12 @@ func (b *bridge) generateReply(ctx, audioBase context.Context, sender peer, text
 		defer mu.Unlock()
 		drop(true)
 	}}
-	releasePhoto := func() {}
-	defer func() { releasePhoto() }()
 	prepare := func() (string, string) {
 		companion := b.companionFor(sender)
-		prompt := turnPrompt(sender, options.web, options.source, text, companion)
-		if !options.scoped && options.source != "timer" {
-			access, release := b.library.newPhotoGrant(ctx, sender.DeviceID)
-			releasePhoto = release
-			if access != "" {
-				header, input, _ := strings.Cut(prompt, "\n")
-				// Keep the capability inside the non-transcript turn header.
-				prompt = strings.TrimSuffix(header, "]") + " · local photos access: " + access + "]\n" + input
-			}
-		}
-		return companion.Name, prompt
+		return companion.Name, turnPrompt(sender, options.web, options.source, text, companion)
 	}
 	raw, sid, err := b.oc.askPrepared(ctx, sender.DeviceID, prepare, pieces, options.source,
-		func() func() { return releasePhoto }, func(entry chatEntry) {
+		nil, func(entry chatEntry) {
 			if entry.Role == "assistant" {
 				entry.Sender = b.companionFor(sender).Name
 			}
@@ -473,18 +460,6 @@ func (b *bridge) route(w http.ResponseWriter, r *http.Request, path string) (any
 		if id, ok := deviceSettingID(path, "parent"); ok {
 			return b.routeParent(w, r, id)
 		}
-	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/library/thumbnail/"):
-		return nil, b.libraryThumbnail(w, r, strings.TrimPrefix(path, "/api/library/thumbnail/"))
-	case path == "/api/library":
-		return b.photoParentAPI(r)
-	case r.Method == http.MethodPost && strings.HasSuffix(path, "/photo"):
-		if id, ok := deviceSettingID(path, "photo"); ok {
-			return b.postPhoto(w, r, id)
-		}
-	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/photos/"):
-		if id, ok := photoPath(path); ok {
-			return nil, b.getPhoto(w, r, id, "")
-		}
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/portraits/"):
 		return nil, b.servePortrait(w, r, path, "")
 	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/") ||
@@ -501,9 +476,6 @@ func (b *bridge) route(w http.ResponseWriter, r *http.Request, path string) (any
 	case path == "/api/tunnel/status" || path == "/api/tunnels" || strings.HasPrefix(path, "/api/tunnels/"):
 		return b.tunnelAPI(w, r, path)
 	case r.Method == http.MethodPost && path == "/api/chat":
-		if !libraryLAN(r) {
-			r = r.WithContext(withoutPhotoAccess(ctx))
-		}
 		return b.chatAPI(r, "")
 	}
 	switch r.Method {

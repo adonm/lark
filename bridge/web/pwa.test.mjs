@@ -59,7 +59,7 @@ test("worker caches only the versioned shell; runtime navigation never writes pr
     return response;
   }
   for (const path of ["/api/scope", "/api/devices/virt-12345678/messages", "/api/audio/fixture",
-    "/api/photos/fixture", "/ws", "/app/client.js?q=other", "/app/parent", "/app/photo-library.js",
+    "/ws", "/app/client.js?q=other", "/app/parent",
     "/app/pwa/manifest.webmanifest", "/app/pwa/icon-192.png", "https://other.invalid/app/client.js",
     "https://unpkg.com/@knadh/oat@1.1.0/oat.min.css", "https://unpkg.com/@knadh/oat@1.1.0/oat.min.js"]) {
     assert.equal(request(path), undefined);

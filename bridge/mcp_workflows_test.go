@@ -36,7 +36,7 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 	}
 }
 
-func TestMCPHistoryCursorAndPhotoMetadata(t *testing.T) {
+func TestMCPHistoryCursor(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "lark-history-page"
 	board := testConnectWS(t, base, "unit", false)
@@ -45,23 +45,10 @@ func TestMCPHistoryCursorAndPhotoMetadata(t *testing.T) {
 	for _, msg := range []string{"same-a", "same-b", "same-c"} {
 		b.history.add(id, chatEntry{ID: msg, Sender: "User", Role: "user", Text: msg, Source: "typed", Timestamp: now})
 	}
-	if _, err := b.db.Exec(`INSERT INTO photos (id,device_id,mime,path,caption,created_at) VALUES
-		('photo-1234abcd',?,'image/png','blobs/photos/photo-1234abcd','A flower',?),
-		('photo-2345abcd','other','image/png','blobs/photos/photo-2345abcd','Another flower',?)`, id, now.UnixMilli(), now.UnixMilli()); err != nil {
-		t.Fatal(err)
-	}
-	first := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages", "photos"}, "messages_limit": 2}, false)
+	first := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages"}, "messages_limit": 2}, false)
 	list := first["messages"].([]any)
 	if len(list) != 2 || list[0].(object)["id"] != "same-b" || list[1].(object)["id"] != "same-c" || first["messages_has_more"] != true {
 		t.Fatal(first)
-	}
-	photos := first["photos"].([]any)
-	if len(photos) != 1 {
-		t.Fatal(photos)
-	}
-	if p := photos[0].(object); p["id"] != "photo-1234abcd" || p["caption"] != "A flower" || p["mime"] != "image/png" ||
-		p["created_at"] == nil || p["device_id"] != id || p["data"] != nil {
-		t.Fatal(p)
 	}
 	next := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages"},
 		"messages_limit": 2, "messages_cursor": first["messages_next_cursor"]}, false)

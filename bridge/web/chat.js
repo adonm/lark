@@ -192,31 +192,4 @@ $("prompt").onsubmit = async e => {
   }
 };
 
-$("share-photo").onclick = () => $("photo-file").click();
-$("photo-file").onchange = async e => {
-  const file = e.target.files[0], cat = state.view, current = state.app;
-  e.target.value = "";
-  if (!file || !cat?.id || $("share-photo").disabled) return;
-  if (file.size > 2 * 1024 * 1024) {
-    say("chat-note", "Choose a photo under 2 MiB.");
-    return;
-  }
-  const body = new FormData();
-  body.append("photo", file);
-  cat.sharingPhoto = true;
-  renderCurrent();
-  say("chat-note", "Sending photo…");
-  try {
-    const {displayed} = await api(current, `/api/devices/${encodeURIComponent(cat.id)}/photo`, {method:"POST", body});
-    if (state.view !== cat) return;
-    say("chat-note", displayed ? "Photo sent." : "Photo saved. This companion is offline.");
-    if (!displayed || !state.rev) loadHistory({replace:false});
-  } catch {
-    if (state.view === cat) say("chat-note", "Could not send the photo. Use a PNG, JPEG or WebP.");
-  } finally {
-    cat.sharingPhoto = false;
-    if (state.view === cat) renderCurrent();
-  }
-};
-
 export {loadHistory, receiveChat, reloadArchivedHistory, resetTranscript};

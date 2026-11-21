@@ -1,8 +1,6 @@
 package main
 
 import (
-	"image"
-	imagecolor "image/color"
 	"math"
 	"slices"
 	"testing"
@@ -79,7 +77,7 @@ func TestAtmospherePhasesAndContrast(t *testing.T) {
 	}
 }
 
-func TestAtmosphereCacheAndPhotos(t *testing.T) {
+func TestAtmosphereCache(t *testing.T) {
 	const raw = svgStart + `<rect width="360" height="360" fill="#FAF6F0"/></svg>`
 	var cache screenCache
 	shape := screenGeometry{320, 240, "rect"}
@@ -112,20 +110,6 @@ func TestAtmosphereCacheAndPhotos(t *testing.T) {
 	redrawn, err := app.screens(nil)
 	if err != nil || redrawn[0].grade != gradeDay || redrawn[0].raw != views[0].raw || slices.Equal(redrawn[0].fb, views[0].fb) {
 		t.Fatal("app reused pixels from the previous grade", err)
-	}
-	const photo = svgStart + `<rect width="360" height="360" fill="#FAF6F0"/><image href="photo:photo-12345678" x="100" y="100" width="160" height="160"/></svg>`
-	lookup := func(string) (image.Image, error) {
-		img := image.NewRGBA(image.Rect(0, 0, 1, 1))
-		img.SetRGBA(0, 0, imagecolor.RGBA{228, 161, 118, 255})
-		return img, nil
-	}
-	pday, err := buildScreenWithPhotos(photo, false, shape, lookup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pnight, err := buildScreenPaint(photo, false, shape, lookup, gradeNight)
-	if err != nil || pnight.grade != gradeDay || !slices.Equal(pday.fb, pnight.fb) {
-		t.Fatal("photo scene was tinted", err)
 	}
 }
 

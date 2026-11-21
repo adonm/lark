@@ -186,7 +186,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	for i, row := range []struct{ device, role, source, text string }{
 		{id, "user", "typed", "BEFORE-RESET"},
 		{id, "companion", "typed", "BEFORE-RESET"},
-		{id, "user", "typed", "[Plum (" + id + ") · web · typed · local photos access: PHOTO-CAPABILITY]\nOur island is called Mango.\n```js\nOLD-TOOL\n```"},
+		{id, "user", "typed", "[Plum (" + id + ") · web · typed]\nOur island is called Mango.\n```js\nOLD-TOOL\n```"},
 		{id, "assistant", "typed", "Mango Island, got it.\n```js\nOLD-TOOL\n```"},
 		{id, "system", "mcp", "TOOLS-ONLY"},
 		{"virt-11112222", "user", "typed", "OTHER-DEVICE"},

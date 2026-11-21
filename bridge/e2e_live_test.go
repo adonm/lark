@@ -59,7 +59,6 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	config := filepath.Join(root, "config")
 	e2eWrite(t, filepath.Join(config, "lark/parent.token"), []byte(s.parent), 0o600)
 	e2eWrite(t, filepath.Join(root, "bin/opentunnel"), []byte(e2eTunnelCLI), 0o700)
-	e2ePhotosFixture(t, local)
 	for _, name := range []string{"stt-models", "tts-models"} {
 		if err := os.Symlink(filepath.Join(data, "lark", name), filepath.Join(local, name)); err != nil {
 			t.Fatal(err)

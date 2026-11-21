@@ -33,8 +33,7 @@ func phoneWorker(scoped bool) []byte {
 	files, _ := webFiles.ReadDir("web")
 	for _, file := range files {
 		name := file.Name()
-		if strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".test.js") && name != "sw.js" && name != "parent.js" &&
-			!(scoped && name == "photo-library.js") {
+		if strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".test.js") && name != "sw.js" && name != "parent.js" {
 			paths = append(paths, "/app/"+name)
 		}
 	}

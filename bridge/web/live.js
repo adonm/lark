@@ -4,7 +4,6 @@ import {applyVolume, refreshDevices, renderCallTarget, renderDevices, renderTarg
 import {$, colors, companionName, isLive, nodes, say, screen, svgNS} from "./dom.js";
 import {busyMode, idleWatch} from "./idle.js";
 import {loadSaved, loadSavedCompanions, loadTimers} from "./library.js";
-import {clearPhotos, stagePhotos} from "./photos.js";
 import {installer} from "./pwa.js";
 import {send, state} from "./state.js";
 
@@ -26,7 +25,7 @@ if (viewport) {
   syncVisualHeight();
 }
 const idle = idleWatch({
-  isBusy: () => busyMode(state.view?.mode) || audioBusy() || state.view?.sending || state.view?.resetting || state.view?.sharingPhoto,
+  isBusy: () => busyMode(state.view?.mode) || audioBusy() || state.view?.sending || state.view?.resetting,
   onIdle: () => pause("idle"),
 });
 
@@ -50,7 +49,6 @@ function clearScene() {
   state.pointer = null;
   screenHits = [];
   nodes.replaceChildren();
-  clearPhotos();
   $("canvas-bg").setAttribute("fill", "#202432");
   $("screen-placeholder").removeAttribute("display");
   delete screen.dataset.dim;
@@ -120,7 +118,6 @@ function renderCurrent() {
   $("text").disabled = !d || resting || state.view.virtual && (!active || busyCall);
   $("text").placeholder = state.view?.parentMessage || (d?.companion?.configured === false ? "Say hi to meet me!" : "Message your companion…");
   $("send").disabled = $("text").disabled || !!state.view?.sending || !!state.view?.resetting;
-  $("share-photo").disabled = !d || !!state.view?.sharingPhoto || state.view?.virtual && !active;
   $("reset").hidden = !!state.app?.scope;
   $("reset").disabled = !d || state.view.virtual && !active || !!state.view?.resetting || !!state.view?.sending;
   $("refresh").disabled = !d || state.view.quick && !active || !!state.view?.loading || !!state.view?.resetting;
@@ -313,7 +310,6 @@ function command(msg) {
           control.setAttribute("aria-label", control.querySelector("[aria-label]")?.getAttribute("aria-label") || control.dataset.id);
         }
       }
-      stagePhotos(imported, state.app.token);
       const mask = $("screen-mask");
       if (state.view.device.shape === "rect") mask.removeAttribute("clip-path");
       else mask.setAttribute("clip-path", "url(#round-screen)");

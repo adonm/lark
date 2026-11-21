@@ -33,9 +33,6 @@ Speech:
   https://huggingface.co/nvidia/parakeet-unified-en-0.6b
 
 Optional components:
-* Ente CLI — AGPLv3; the photo integration invokes the separately installed,
-  unmodified executable.
-  https://github.com/ente-io/ente
 * espressif/esp-sr 2.4.0 — ESPRESSIF MIT License, restricted to Espressif
   products. The round-board firmware uses it for optional WakeNet support.
   https://components.espressif.com/components/espressif/esp-sr/versions/2.4.0/license

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,6 +46,7 @@ type wsEvent struct {
 
 type wsClient struct {
 	wire       *websocket
+	native     *nativeClient
 	ctx        context.Context
 	cancel     context.CancelFunc
 	closeCode  atomic.Uint32
@@ -130,9 +132,6 @@ func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *virtua
 		return err
 	}
 	ctx, cancel := context.WithCancel(r.Context())
-	if scope != nil || !libraryLAN(r) {
-		ctx = withoutPhotoAccess(ctx)
-	}
 	c := &wsClient{wire: wire, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 192), scope: scope}
 	wire.onPong = c.pong
 	h.mu.Lock()
@@ -209,7 +208,25 @@ func (c *wsClient) stop(code uint16) {
 	c.cancel()
 }
 
+func (c *wsClient) remoteAddr() net.Addr {
+	if c.native != nil {
+		return c.native.conn.RemoteAddr()
+	}
+	return c.wire.conn.RemoteAddr()
+}
+
 func (c *wsClient) enqueue(f wsFrame) bool {
+	if c.native != nil {
+		if f.op == wsBinary && len(f.data) > 0 {
+			switch f.data[0] {
+			case frameTag:
+				return c.native.enqueue(msgFrame, f.data)
+			case pcmPrefix:
+				return c.native.enqueue(msgTTSPCM, f.data[1:])
+			}
+		}
+		return true
+	}
 	c.outMu.Lock()
 	defer c.outMu.Unlock()
 	if c.ctx.Err() != nil {
@@ -226,6 +243,12 @@ func (c *wsClient) enqueue(f wsFrame) bool {
 }
 
 func (c *wsClient) enqueueWait(ctx context.Context, f wsFrame) bool {
+	if c.native != nil {
+		if f.op == wsBinary && len(f.data) > 0 && f.data[0] == pcmPrefix {
+			return c.native.enqueueWait(ctx, msgTTSPCM, f.data[1:])
+		}
+		return true
+	}
 	for {
 		c.outMu.Lock()
 		if c.ctx.Err() != nil || ctx.Err() != nil {
@@ -260,14 +283,119 @@ func textFrame(v object) wsFrame {
 }
 
 func (h *wsHub) push(d *wsDevice, v object, mirror bool) {
-	f := textFrame(v)
-	d.client.enqueue(f)
+	if d.client.native != nil {
+		h.pushNative(d, v)
+	} else {
+		f := textFrame(v)
+		d.client.enqueue(f)
+		if mirror {
+			for c := range h.clients {
+				if c.watch == d.key {
+					c.enqueue(f)
+				}
+			}
+		}
+		return
+	}
 	if mirror {
+		var f wsFrame
 		for c := range h.clients {
 			if c.watch == d.key {
+				if f.data == nil {
+					f = textFrame(v)
+				}
 				c.enqueue(f)
 			}
 		}
+	}
+}
+
+func (h *wsHub) pushNative(d *wsDevice, v object) {
+	nc := d.client.native
+	switch str(v["op"]) {
+	case "wake_word":
+		var b [1]byte
+		if enabled, _ := v["enabled"].(bool); enabled {
+			b[0] = 1
+		}
+		nc.enqueue(msgWakeWordCtrl, b[:])
+	case "rec":
+		var op uint8
+		switch str(v["action"]) {
+		case "start":
+			op = recOpStart
+		default:
+			if cancelled, _ := v["cancelled"].(bool); cancelled {
+				op = recOpCancel
+			} else {
+				op = recOpStop
+			}
+		}
+		var target uint8
+		if str(v["target"]) != "" {
+			target |= recTargetInter
+		}
+		if str(v["endpoint"]) == "bridge" {
+			target |= recTargetBridgeE
+		}
+		nc.enqueue(msgRecCtrl, encodeRecCtrl(op, target, d.recSession))
+	case "tts":
+		var op uint8
+		switch str(v["state"]) {
+		case "start":
+			op = ttsOpStart
+		case "end":
+			op = ttsOpEnd
+		default:
+			op = ttsOpStop
+		}
+		var id uint64
+		switch n := v["audio"].(type) {
+		case uint64:
+			id = n
+		case int:
+			id = uint64(n)
+		}
+		nc.enqueue(msgTTSCtrl, encodeIDCtrl(op, id))
+	case "call":
+		var op uint8
+		switch str(v["state"]) {
+		case "start":
+			op = callOpStart
+		case "mute":
+			if muted, _ := v["muted"].(bool); muted {
+				op = callOpMute
+			} else {
+				op = callOpUnmute
+			}
+		default:
+			op = callOpEnd
+		}
+		var id uint64
+		switch n := v["call"].(type) {
+		case uint32:
+			id = uint64(n)
+		case uint64:
+			id = n
+		case int:
+			id = uint64(n)
+		}
+		nc.enqueue(msgCallCtrl, encodeIDCtrl(op, id))
+	case "chime":
+		if code, ok := encodeChimePayload(str(v["kind"])); ok {
+			nc.enqueue(msgChime, []byte{code})
+		}
+	case "power":
+		bright, _ := v["brightness"].(int)
+		nc.enqueue(msgPower, []byte{encodePowerPayload(bright)})
+	case "volume":
+		level, _ := v["level"].(int)
+		persist, _ := v["persist"].(bool)
+		var p byte
+		if persist {
+			p = 1
+		}
+		nc.enqueue(msgVolume, []byte{byte(min(100, max(0, level))), p})
 	}
 }
 

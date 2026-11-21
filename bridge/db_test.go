@@ -1,16 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"image"
-	imagecolor "image/color"
-	"image/draw"
-	"image/png"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -46,7 +39,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if err := os.WriteFile(unrelated, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`INSERT INTO photos (id,device_id,mime,path,caption,created_at) VALUES ('photo-12345678','cake','image/png','blobs/photos/photo-12345678','image',100)`); err != nil {
+	if _, err := d.Exec(`INSERT INTO apps (name,title,kind,svg,updated_at) VALUES ('sun','Sun','svg','<svg/>',100)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.backup(t.Context(), dir, now); err != nil {
@@ -60,7 +53,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if info.Mode().Perm() != 0o600 || d.lastBackup.Load() != info.ModTime().Unix() {
 		t.Fatalf("backup mode or timestamp: %v %d", info.Mode(), d.lastBackup.Load())
 	}
-	if _, err := d.Exec(`UPDATE photos SET caption='new'`); err != nil {
+	if _, err := d.Exec(`UPDATE apps SET title='Moon'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.backup(t.Context(), dir, now); err != nil {
@@ -81,9 +74,9 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backup.Close()
-	var blobPath, caption string
-	if err := backup.QueryRow(`SELECT path,caption FROM photos`).Scan(&blobPath, &caption); err != nil || blobPath != "blobs/photos/photo-12345678" || caption != "image" {
-		t.Fatalf("backup did not preserve WAL data: %q %q %v", blobPath, caption, err)
+	var title string
+	if err := backup.QueryRow(`SELECT title FROM apps WHERE name='sun'`).Scan(&title); err != nil || title != "Sun" {
+		t.Fatalf("backup did not preserve WAL data: %q %v", title, err)
 	}
 }
 
@@ -236,76 +229,5 @@ func TestHotCacheHitAndInvalidation(t *testing.T) {
 	}
 	if p.settings.DailyMinutes != 30 {
 		t.Fatalf("expected cached parent daily_minutes 30, got %d", p.settings.DailyMinutes)
-	}
-}
-
-func TestDiskBackedPhotoBlobsAndCleanup(t *testing.T) {
-	b, base := wsHarness(t, nil)
-	const hardware = "lark-blob-test"
-	board := testConnectWS(t, base, "unit", false)
-	board.hello(t, hardware, "Cake")
-
-	img := image.NewRGBA(image.Rect(0, 0, 120, 120))
-	draw.Draw(img, img.Bounds(), image.NewUniform(imagecolor.RGBA{R: 20, G: 180, B: 90, A: 255}), image.Point{}, draw.Src)
-	var raw bytes.Buffer
-	if err := png.Encode(&raw, img); err != nil {
-		t.Fatal(err)
-	}
-
-	upload := func(caption string) string {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/devices/"+hardware+"/photo?caption="+caption, bytes.NewReader(raw.Bytes()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("X-Lark-Token", "unit")
-		req.Header.Set("Content-Type", "image/png")
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer res.Body.Close()
-		body, _ := io.ReadAll(res.Body)
-		if res.StatusCode != 200 {
-			t.Fatalf("upload status %d: %s", res.StatusCode, body)
-		}
-		return str(testObject(t, body)["id"])
-	}
-
-	firstID := upload("first")
-	firstBlob := filepath.Join(b.db.dataDir, "blobs", "photos", firstID)
-	if _, err := os.Stat(firstBlob); err != nil {
-		t.Fatalf("expected photo blob on disk at %s: %v", firstBlob, err)
-	}
-
-	// ServeContent should return 200 with ETag, and 304 when If-None-Match matches.
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/photos/"+firstID, nil)
-	req.Header.Set("X-Lark-Token", "unit")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != 200 || res.Header.Get("ETag") == "" {
-		t.Fatalf("unexpected GET photo response: %d, etag=%q", res.StatusCode, res.Header.Get("ETag"))
-	}
-	req304, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/photos/"+firstID, nil)
-	req304.Header.Set("X-Lark-Token", "unit")
-	req304.Header.Set("If-None-Match", res.Header.Get("ETag"))
-	res304, err := http.DefaultClient.Do(req304)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res304.Body.Close()
-	if res304.StatusCode != http.StatusNotModified {
-		t.Fatalf("expected 304 Not Modified, got %d", res304.StatusCode)
-	}
-
-	// Upload maxPhotos more photos so firstID is pruned from both DB and disk.
-	for i := range maxPhotos {
-		upload(fmt.Sprintf("p%d", i))
-	}
-	if _, err := os.Stat(firstBlob); !os.IsNotExist(err) {
-		t.Fatalf("expected pruned photo blob %s to be deleted, stat err: %v", firstBlob, err)
 	}
 }

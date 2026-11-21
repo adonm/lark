@@ -29,7 +29,6 @@
       <div id="lan-actions" class="row wrap" role="group" aria-label="LAN tools" hidden>
         <button id="sidebar-toggle" class="ghost" type="button" aria-expanded="false" aria-controls="sidebar" hidden>Devices</button>
         <button id="diagnostics-toggle" class="ghost" type="button" aria-expanded="false" aria-controls="diagnostics" hidden>Diagnostics</button>
-        <button id="library-toggle" class="ghost" type="button" aria-haspopup="dialog" hidden>Photo Library</button>
         <a id="parent-link" class="button ghost" href="/app/parent" hidden>Parent controls</a>
       </div>
       <button id="settings" class="outline" type="button">Bridge token</button>
@@ -188,15 +187,13 @@
           <input id="text" maxlength="640" required placeholder="Message your companion…" autocomplete="off" enterkeyhint="send" autocapitalize="sentences" autocorrect="on" spellcheck="true" disabled>
           <button id="send" type="submit" disabled>Send</button>
         </form>
-        <div class="composer-tools" role="group" aria-label="Photo and voice actions">
+        <div class="composer-tools" role="group" aria-label="Voice actions">
           <div id="phone-controls" class="row wrap" hidden>
             <button id="talk" type="button" class="outline" aria-pressed="false" aria-describedby="mic-help">Mic · Talk</button>
             <button id="mic-send" type="button" hidden>Send now</button>
             <button id="cancel" type="button" class="outline" data-variant="danger" hidden>Cancel</button>
             <button id="sound" type="button" class="outline">Enable speaker</button>
           </div>
-          <input id="photo-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-          <button id="share-photo" class="outline" type="button" disabled>Photo</button>
           <div class="phone-destination" id="phone-destination" hidden>
             <label id="target-label" class="sr-only" for="target">Talk destination</label>
             <select id="target"><option value="">Ask my companion</option></select>

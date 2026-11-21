@@ -10,10 +10,9 @@ units=$config/systemd/user
 oc_root=$data/opencode
 env_file=$config/lark/bridge.env
 pin_gpu=false
-ente_photos=false
 models_only=false
 usage() {
-    printf '%s\n' 'Usage: setup-host.sh [--gpu-index INDEX] [--ente-photos]' \
+    printf '%s\n' 'Usage: setup-host.sh [--gpu-index INDEX]' \
         '       setup-host.sh --models-only  # Kokoro and Silero; no service changes' \
         'Run vulkaninfo --summary to find the intended Vulkan GPU index.'
 }
@@ -22,14 +21,13 @@ while (($#)); do
         --gpu-index:*)
             [[ ${2-} =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
             pin_gpu=$2; shift 2 ;;
-        --ente-photos:*) ente_photos=true; shift ;;
         --models-only:*) models_only=true; shift ;;
         -h:*|--help:*) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
 done
 
-if "$models_only" && { "$ente_photos" || [[ $pin_gpu != false ]]; }; then
+if "$models_only" && [[ $pin_gpu != false ]]; then
     usage >&2
     exit 2
 fi
@@ -44,9 +42,6 @@ if ! "$models_only"; then
         command -v "$cmd" >/dev/null || { echo "Install $cmd before running setup." >&2; exit 1; }
     done
     systemctl --user show-environment >/dev/null
-    if "$ente_photos"; then
-        "$REPO_DIR/scripts/setup-ente-photos.sh"
-    fi
 fi
 
 install_kokoro() (

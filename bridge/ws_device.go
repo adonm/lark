@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"image"
 	"log"
 	"maps"
@@ -121,7 +120,6 @@ type wsDevice struct {
 
 	scene     sceneView
 	view      *sceneView
-	photos    *photoShow
 	pending   *sceneView
 	card      *sceneView
 	drawer    string
@@ -151,6 +149,7 @@ type wsDevice struct {
 	callFramesIn, callFramesOut uint64
 
 	recording     deviceCapture
+	recSession    uint16
 	queuedVoice   *endpointCapture
 	turn          uint64
 	trace         *turnTrace
@@ -487,7 +486,7 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 	if !characterRE.MatchString(character) {
 		return
 	}
-	host, _, _ := net.SplitHostPort(c.wire.conn.RemoteAddr().String())
+	host, _, _ := net.SplitHostPort(c.remoteAddr().String())
 	if addr, err := netip.ParseAddr(host); err == nil {
 		host = addr.Unmap().String()
 	}
@@ -547,6 +546,94 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 	if h.parentRefresh(d.key, now) == "" {
 		h.render(d, now, true)
 	}
+}
+
+func (h *wsHub) helloNative(nc *nativeClient, ev nativeHello, now time.Time) bool {
+	c := nc.client
+	if !deviceIDRE.MatchString(ev.deviceID) || phoneID.MatchString(ev.deviceID) {
+		return false
+	}
+	board := "esp-vocat"
+	if ev.board != "" {
+		board = ev.board
+	}
+	screen := roundScreen
+	if board == "esp-box-3" {
+		screen = screenGeometry{320, 240, "rect"}
+	}
+	if ev.width > 0 {
+		screen.width = int(ev.width)
+	}
+	if ev.height > 0 {
+		screen.height = int(ev.height)
+	}
+	if screen.width < 1 || screen.width > screenSize || screen.height < 1 || screen.height > screenSize ||
+		(board != "esp-vocat" && board != "esp-box-3") {
+		return false
+	}
+	character := "New Cat"
+	if h.b.peers.store != nil {
+		if prior, ok, _ := h.b.peers.get(ev.deviceID); ok {
+			character = prior.Character
+		}
+	}
+	if !characterRE.MatchString(character) {
+		return false
+	}
+	who := peer{DeviceID: ev.deviceID, Character: character, LastSeen: now.Unix(), IP: nc.remoteIP.String(), Port: 80}
+	if h.b.peers.store != nil {
+		if err := h.b.peers.register(who); err != nil {
+			return false
+		}
+	}
+	d := &wsDevice{
+		client:     c,
+		key:        strings.ToLower(ev.deviceID),
+		who:        who,
+		firmware:   shortText(ev.firmware, 24, false),
+		screen:     screen,
+		board:      board,
+		caps:       helloCapsFromMask(ev.capsMask),
+		pct:        -1,
+		last:       now,
+		moodAt:     now,
+		announcing: true,
+	}
+	h.b.companionMu.Lock()
+	defer h.b.companionMu.Unlock()
+	d.companion = h.b.companionFor(d.who)
+	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
+	d.autoVol, d.vol = h.b.volumePrefs(d.key)
+	d.telemetry.HasBattery = new(d.caps.Battery)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || c.ctx.Err() != nil {
+		return false
+	}
+	if old := h.devices[d.key]; old != nil {
+		if old.virtual() {
+			old.client.stop(wsCompanionOccupied)
+		} else {
+			old.client.cancel()
+		}
+		h.endCall(old, "disconnected")
+		h.dropApp(old)
+		old.recording.clear()
+		h.cancelTurn(old, "reconnect")
+		h.stopPlayback(old, true)
+		d.rev = old.rev
+	}
+	h.devices[d.key], c.device, c.role = d, d, "device"
+	var flags uint16
+	if h.bridgeEndpoint(d) {
+		flags |= helloFlagBridgeEP
+	}
+	nc.enqueue(msgHelloOK, encodeHelloOK(nc.server.udpPort, flags, nc.ssrc, nc.ssrc))
+	if h.parentRefresh(d.key, now) == "" {
+		h.render(d, now, true)
+	}
+	return true
 }
 
 func (h *wsHub) announce(d *wsDevice) {
@@ -805,17 +892,9 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 				face = companionArt(*r.companion, r.pose)
 			}
 			raw := r.view.svg(face)
-			photo := strings.Contains(raw, "photo:")
 			grade := r.grade
-			if photo {
-				grade = gradeDay
-			}
-			if r.view.library != nil {
-				screen, err = h.b.library.slideScreen(d.client.ctx, d.key, r.view.library, raw, geometry)
-			} else if !r.full && raw == prev.raw && grade == prev.grade {
+			if !r.full && raw == prev.raw && grade == prev.grade {
 				screen = prev
-			} else if photo {
-				screen, err = h.b.buildScreen(raw, false, geometry)
 			} else if portrait {
 				p := h.b.portraits
 				screen, err = p.frames.buildGradedWithAssets(raw, false, geometry, grade, p.image)
@@ -825,7 +904,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			} else {
 				screen, err = screens.buildGraded(raw, false, geometry, grade)
 			}
-		} else if r.grade != screen.grade && screen.fb != nil && !strings.Contains(screen.raw, "photo:") {
+		} else if r.grade != screen.grade && screen.fb != nil {
 			if !r.full && screen.raw == prev.raw && r.grade == prev.grade {
 				screen = prev
 			} else {
@@ -857,14 +936,6 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 		if !h.active(d) || d.renderGen != gen {
 			continue
 		}
-		if r.view.library != nil {
-			_, valid := h.b.library.getPhotoHandle(d.client.ctx, d.key, r.view.library.handle)
-			if !valid || !d.client.canSeeLibrary() || errors.Is(err, errPhotoRevoked) {
-				h.clearView(d)
-				h.render(d, time.Now(), true)
-				continue
-			}
-		}
 		if err != nil {
 			log.Printf("Lark screen: %v", err)
 			continue
@@ -879,7 +950,11 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			r.trace.measure(diagRender, screen.render)
 			h.trackFrame(d, screen.render, len(svgWire.data), len(screen.source), "svg")
 		} else if native.data != nil {
-			d.client.enqueue(native)
+			if d.client.native != nil {
+				d.client.native.enqueue(msgFrame, native.data)
+			} else {
+				d.client.enqueue(native)
+			}
 			d.nativeRev = uint16(rev)
 			r.trace.measure(diagRender, screen.render)
 			codec := "RGB565"
@@ -894,7 +969,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			h.trackFrame(d, screen.render, len(native.data), rawBytes, codec)
 		}
 		for c := range h.clients {
-			if c.watch == d.key && (r.view.library == nil || c.canSeeLibrary()) {
+			if c.watch == d.key {
 				c.enqueue(svgWire)
 			}
 		}
@@ -967,7 +1042,7 @@ func (h *wsHub) animate(ctx context.Context) {
 					continue
 				}
 				if checkGrade && d.client.role == "device" && !(d.asleep && d.caps.PanelSleep) &&
-					d.svg.grade != h.frameGrade(d, now) && !strings.Contains(d.svg.raw, "photo:") {
+					d.svg.grade != h.frameGrade(d, now) {
 					h.render(d, now, false)
 				}
 				if h.parentRefresh(d.key, now) != "" {

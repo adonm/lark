@@ -21,7 +21,6 @@ import (
 )
 
 const e2eDedicated = "http://127.0.0.1:49375"
-const e2ePhotoPrompt = "Show the synthetic beach photos"
 const e2eModelReply = "The sky looks blue because air scatters sunlight."
 
 type e2eModel struct {
@@ -37,7 +36,6 @@ type e2eModel struct {
 	mcpCalls    atomic.Int32
 	templates   []string
 	mcpAudit    []string
-	photo       map[string]bool
 	build       chan struct{}
 	followUp    chan struct{}
 	events      chan ocEvent
@@ -56,7 +54,7 @@ type e2eSession struct {
 func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 	t.Helper()
 	m := &e2eModel{client: s.client, settings: openCodeSettings("lark"), sessions: map[string]*e2eSession{},
-		photo: map[string]bool{}, build: make(chan struct{}), followUp: make(chan struct{}),
+		build: make(chan struct{}), followUp: make(chan struct{}),
 		events: make(chan ocEvent, 64), usage: map[ocModel]int{}, tools: map[string]int{}}
 	m.settings.Model = ocModel{Provider: "test", ID: "deterministic"}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.stub(w, r, s) })
@@ -278,7 +276,6 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 				w.WriteHeader(429)
 				return
 			}
-			m.rememberPhoto(text)
 			writeInput(in)
 		case "PATCH ":
 			// The bridge reasserts its normal wider permissions on reused sessions.
@@ -368,23 +365,6 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 }
 
 var e2eSessionRoute = regexp.MustCompile(`^/api/(?:experimental/)?session/(ses[-_][A-Za-z0-9_-]{1,120})(/message|/wait|/prompt|/interrupt)?$`)
-var e2ePhotoAccess = regexp.MustCompile(` · local photos access: ([a-zA-Z0-9_-]+)\]`)
-
-func (m *e2eModel) rememberPhoto(text string) string {
-	if !strings.Contains(text, e2ePhotoPrompt) {
-		return ""
-	}
-	match := e2ePhotoAccess.FindStringSubmatch(text)
-	if cat := e2ePhotoDevice.FindStringSubmatch(text); len(cat) != 0 {
-		m.mu.Lock()
-		m.photo[cat[1]] = len(match) > 0
-		m.mu.Unlock()
-	}
-	if len(match) != 0 {
-		return match[1]
-	}
-	return ""
-}
 
 func (m *e2eModel) relayMCP(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	if !tokenMatches(r.Header.Values("X-Lark-Token"), s.token) || r.Method != "POST" {
@@ -590,13 +570,6 @@ func (m *e2eModel) finishStub(s *e2eSuite, session *e2eSession, id, key, text st
 		return
 	case strings.Contains(text, "Virtual test queued follow-up"):
 		<-m.followUp
-	case strings.Contains(text, e2ePhotoPrompt):
-		if token := m.rememberPhoto(text); token != "" {
-			match := e2ePhotoDevice.FindStringSubmatch(text)
-			if len(match) == 0 || !m.stubPhotos(s, match[1], token) {
-				reply = "I could not open the synthetic photos."
-			}
-		}
 	}
 	m.mu.Lock()
 	session.rows = append(session.rows, object{"id": "assistant-" + key, "type": "assistant", "agent": session.state["agent"], "model": m.settings.Model,
@@ -609,34 +582,4 @@ func (m *e2eModel) finishStub(s *e2eSuite, session *e2eSession, id, key, text st
 		}}
 	}
 	m.events <- ocEvent{Type: "session.execution.succeeded", Data: ocEventData{SessionID: id}}
-}
-
-var e2ePhotoDevice = regexp.MustCompile(`\(([a-z0-9-]+)\) ·`)
-
-func (m *e2eModel) stubPhotos(s *e2eSuite, id, token string) bool {
-	call := func(name string, args object) object {
-		raw, _ := json.Marshal(object{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": object{"name": name, "arguments": args}})
-		req, _ := http.NewRequest("POST", s.base+"/mcp", bytes.NewReader(raw))
-		req.Header.Set("X-Lark-Token", s.token)
-		req.Header.Set("Content-Type", jsonType)
-		res, err := m.client.Do(req)
-		if err != nil {
-			return nil
-		}
-		defer res.Body.Close()
-		var v object
-		_ = json.NewDecoder(res.Body).Decode(&v)
-		r, _ := v["result"].(map[string]any)
-		out, _ := r["structuredContent"].(map[string]any)
-		return out
-	}
-	found := call("state", object{"device_id": id, "photos": object{"query": "beach", "access": token}})
-	photos, _ := found["photos"].(map[string]any)
-	items, _ := photos["items"].([]any)
-	var handles []string
-	for _, item := range items {
-		value, _ := item.(map[string]any)
-		handles = append(handles, str(value["handle"]))
-	}
-	return len(handles) == 2 && call("app", object{"devices": id, "template": "slideshow", "data": object{"handles": handles, "access": token}})["ok"] == true
 }

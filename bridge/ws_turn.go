@@ -44,6 +44,9 @@ func (h *wsHub) startRecording(d *wsDevice, target string, now time.Time, reques
 		h.stopPlayback(d, true)
 	}
 	d.recording.start(now, target, request)
+	if request {
+		d.recSession++
+	}
 	if w := h.b.worker; target != "" && w != nil && w.ready.Load() {
 		// A voice note can use the cached introduction without waiting on
 		// synthesis. Warm it while its sender is recording, not on every hello.
@@ -221,7 +224,6 @@ func (h *wsHub) beginTurn(d *wsDevice, now time.Time, keepView bool, source stri
 	d.drawer, d.card, d.pending = "", nil, nil
 	if !keepView {
 		d.view = nil
-		h.dropPhotoShow(d)
 	}
 	ctx, cancel := context.WithTimeout(d.client.ctx, turnTimeout)
 	ctx = h.b.traceTurn(ctx, d.who.DeviceID, d.companion.Name, source, now)

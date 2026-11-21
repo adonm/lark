@@ -827,7 +827,7 @@ func (a *appInstance) screens(connected []bool) ([]svgScreen, error) {
 			raw = s.String()
 		}
 		grade := gradeDay
-		if src := a.gradeSources[i]; src != nil && !strings.Contains(raw, "photo:") {
+		if src := a.gradeSources[i]; src != nil {
 			grade = gradeKey(src.Load())
 		}
 		if last := a.lastScreens[i]; last.source != "" && last.raw == raw && last.grade == grade {
@@ -973,13 +973,8 @@ func (b *bridge) launchApp(ctx context.Context, args object, menu *menuContent) 
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		for _, d := range devices {
-			if h.active(d) {
-				if d.app != nil {
-					h.closeApp(d.app, time.Now())
-				} else if d.photos != nil {
-					h.clearView(d)
-					h.render(d, time.Now(), true)
-				}
+			if h.active(d) && d.app != nil {
+				h.closeApp(d.app, time.Now())
 			}
 		}
 		return object{"ok": true, "devices": ids, "title": "", "hit_ids": []string{}}, nil
@@ -1071,7 +1066,7 @@ func (b *bridge) launchApp(ctx context.Context, args object, menu *menuContent) 
 			if slices.ContainsFunc(devices, func(d *wsDevice) bool { return d.client.role == "device" }) {
 				geometry = roundScreen
 			}
-			if _, err := b.buildScreen(a.SVG, false, geometry); err != nil {
+			if _, err := buildScreen(a.SVG, false, geometry); err != nil {
 				return nil, problem(400, err.Error())
 			}
 		}
@@ -1096,7 +1091,7 @@ func (b *bridge) launchApp(ctx context.Context, args object, menu *menuContent) 
 			memory[str(value["key"])] = value["value"].(json.RawMessage)
 		}
 	}
-	inst, screens, err := initApp(a, players, memory, devices, initial, b.buildScreen)
+	inst, screens, err := initApp(a, players, memory, devices, initial, buildScreen)
 	if err != nil {
 		h.mu.Lock()
 		for i, d := range devices {

@@ -158,11 +158,7 @@ func svgHash(raw string) [sha256.Size]byte {
 }
 
 func buildScreenUncached(raw string, exit bool, geometry screenGeometry) (svgScreen, error) {
-	return buildScreenWithPhotos(raw, exit, geometry, nil)
-}
-
-func buildScreenWithPhotos(raw string, exit bool, geometry screenGeometry, lookup photoLookup) (svgScreen, error) {
-	return buildScreenPaint(raw, exit, geometry, lookup, gradeDay)
+	return buildScreenPaint(raw, exit, geometry, nil, gradeDay)
 }
 
 func buildScreenPaint(raw string, exit bool, geometry screenGeometry, lookup photoLookup, grade gradeKey) (svgScreen, error) {
@@ -170,7 +166,7 @@ func buildScreenPaint(raw string, exit bool, geometry screenGeometry, lookup pho
 	if err != nil {
 		return svgScreen{}, err
 	}
-	if geometry.width == 0 || strings.Contains(scene.svg, `href="photo:`) {
+	if geometry.width == 0 {
 		grade = gradeDay
 	}
 	screen := svgScreen{raw: raw, source: scene.toBrowserSVG(), hits: scene.hits, hitWarnings: scene.hitWarnings, grade: grade}
@@ -473,9 +469,7 @@ func parseSVG(raw string) (*svgNode, error) {
 					n.pixelRuns = nil
 				}
 				if tag == "image" && k == "href" {
-					id, isPhoto := strings.CutPrefix(v, "photo:")
-					_, _, isPortrait := parsePortraitRef(v)
-					if isPhoto && photoID.MatchString(id) || isPortrait {
+					if _, _, isPortrait := parsePortraitRef(v); isPortrait {
 						n.attr[k] = v
 					}
 				}
@@ -1159,7 +1153,7 @@ func rasterLayers(s preparedScene, dst *image.RGBA, target rasterx.Matrix2D, pho
 			if width <= 0 || height <= 0 {
 				return nil
 			}
-			id := strings.TrimPrefix(n.attr["href"], "photo:")
+			id := n.attr["href"]
 			src, ok := images[id]
 			if !ok {
 				var err error

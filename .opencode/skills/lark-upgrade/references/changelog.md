@@ -166,83 +166,69 @@ Using `TOKEN=$(grep '^LARK_BRIDGE_TOKEN=' ~/.config/lark/bridge.env | cut -d= -f
 
 ---
 
-## 2026-11-22 — Native SQLite WAL, Split Reader/Writer Pools, and Disk-Backed Photo Blobs
+## 2026-11-22 — Native SQLite WAL and Split Reader/Writer Pools
 
 ### Affects
 - `bridge.env` (`LARK_TURSO_*` removed)
-- SQLite schema (`photos` table in `lark.db`)
-- Photo blob storage (`~/.local/share/lark/blobs/photos/<id>`)
+- SQLite database (`bridge.db` / `lark.db`)
 
 ### Breaking Changes
 - **Removed `tursogo` and Turso Cloud sync**: Replaced `turso.tech/database/tursogo` with tuned native SQLite (`github.com/mattn/go-sqlite3`) in WAL mode (`_synchronous=NORMAL`, `mmap_size=256MB`, `cache_size=-32MB`, `temp_store=MEMORY`) and split reader/writer pools. `LARK_TURSO_URL` and `LARK_TURSO_AUTH_TOKEN` are no longer read.
-- **Disk-backed photo blobs**: The `photos` table replaced `data BLOB` with `path TEXT NOT NULL` pointing to `~/.local/share/lark/blobs/photos/<id>` (relative path `blobs/photos/<id>`).
 
 ### How to Detect
-- `photos` table still has a `data` column instead of `path`:
-  ```sh
-  sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(photos);"
-  ```
 - `LARK_TURSO_URL` or `LARK_TURSO_AUTH_TOKEN` still present in `~/.config/lark/bridge.env`.
 
 ### Upgrade Steps
 
-#### 1. Stop `lark-bridge.service` and back up
-```sh
-systemctl --user stop lark-bridge.service
-mkdir -p ~/.local/share/lark/backups ~/.local/share/lark/blobs/photos
-sqlite3 ~/.local/share/lark/lark.db ".backup '$HOME/.local/share/lark/backups/pre-sqlite-upgrade.db'"
-```
-
-#### 2. Extract legacy `photos.data` BLOBs to disk and migrate `photos` table
-```sh
-python3 - <<'PY'
-import os, sqlite3
-
-data_dir = os.path.expanduser("~/.local/share/lark")
-db_path = os.path.join(data_dir, "lark.db")
-blob_dir = os.path.join(data_dir, "blobs", "photos")
-os.makedirs(blob_dir, mode=0o700, exist_ok=True)
-
-conn = sqlite3.connect(db_path)
-cols = [row[1] for row in conn.execute("PRAGMA table_info(photos)")]
-if "data" in cols:
-    conn.execute("BEGIN IMMEDIATE")
-    conn.execute("""
-        CREATE TABLE photos_new (
-            id TEXT PRIMARY KEY,
-            device_id TEXT NOT NULL,
-            mime TEXT NOT NULL,
-            path TEXT NOT NULL,
-            caption TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL
-        )
-    """)
-    for pid, device_id, mime, data, caption, created_at in conn.execute(
-        "SELECT id, device_id, mime, data, caption, created_at FROM photos"
-    ):
-        rel_path = os.path.join("blobs", "photos", pid)
-        abs_path = os.path.join(data_dir, rel_path)
-        with open(abs_path, "wb") as f:
-            f.write(bytes(data))
-        os.chmod(abs_path, 0o600)
-        conn.execute(
-            "INSERT INTO photos_new (id, device_id, mime, path, caption, created_at) VALUES (?,?,?,?,?,?)",
-            (pid, device_id, mime, rel_path, caption, created_at),
-        )
-    conn.execute("DROP TABLE photos")
-    conn.execute("ALTER TABLE photos_new RENAME TO photos")
-    conn.commit()
-conn.close()
-PY
-```
-
-#### 3. Clean up `bridge.env` and restart
-Remove any `LARK_TURSO_URL` / `LARK_TURSO_AUTH_TOKEN` lines from `~/.config/lark/bridge.env`, rebuild/install the bridge, and start `lark-bridge.service`:
+#### 1. Clean up `bridge.env` and restart
+Remove any `LARK_TURSO_URL` / `LARK_TURSO_AUTH_TOKEN` lines from `~/.config/lark/bridge.env`, rebuild/install the bridge, and restart `lark-bridge.service`:
 ```sh
 sed -i '/^LARK_TURSO_/d' ~/.config/lark/bridge.env
+systemctl --user restart lark-bridge.service
+```
+
+### Verification
+- `sqlite3 ~/.local/share/lark/bridge.db "PRAGMA journal_mode;"` reports `wal`.
+
+---
+
+## 2026-11-22 — Remove Photo Uploads, Ente Photo Library, and ML Photo Indexing
+
+### Affects
+- SQLite schema (`photos` table dropped)
+- Host data & systemd user units (`photo_index.db`, `blobs/photos`, `photo-models`, `ente-photo-job`, `lark-ente-photos.{service,timer}`, `echoear-ente-photos.{service,timer}`)
+- Bridge HTTP API & MCP tools (`/api/photos/*`, `/api/devices/{id}/photo`, `/api/library*`, `photos` state slice, `slideshow` template removed)
+
+### Breaking Changes
+- Removed photo upload (`POST /api/devices/{id}/photo`, `GET /api/photos/{id}`), Ente Photos library sync/search/thumbnails (`/api/library*`), photo ML indexing (`photo_index.db`, `photo-models`), and the `slideshow` MCP template.
+
+### How to Detect
+- `photos` table still exists in `bridge.db` (or `lark.db`):
+  ```sh
+  sqlite3 ~/.local/share/lark/bridge.db ".tables"
+  ```
+- Legacy `photo_index.db`, `blobs/photos`, `bin/ente*`, `photo-models`, or `*-ente-photos.{service,timer}` units exist on disk.
+
+### Upgrade Steps
+
+#### 1. Stop services and remove Ente systemd units
+```sh
+systemctl --user disable --now lark-ente-photos.timer lark-ente-photos.service echoear-ente-photos.timer echoear-ente-photos.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/lark-ente-photos.service ~/.config/systemd/user/lark-ente-photos.timer \
+      ~/.config/systemd/user/echoear-ente-photos.service ~/.config/systemd/user/echoear-ente-photos.timer
+systemctl --user daemon-reload
+```
+
+#### 2. Drop legacy `photos` table and remove photo data
+```sh
+systemctl --user stop lark-bridge.service
+sqlite3 ~/.local/share/lark/bridge.db "DROP TABLE IF EXISTS photos;"
+rm -rf ~/.local/share/lark/photo_index.db* ~/.local/share/lark/blobs/photos ~/.local/share/lark/photo-models \
+       ~/.local/share/lark/bin/ente ~/.local/share/lark/bin/ente-* ~/.local/share/lark/bin/ente-photo-job \
+       ~/.local/share/lark/ente-cli ~/.local/share/lark/ente-export ~/.local/share/lark/ente-photos.*
 systemctl --user start lark-bridge.service
 ```
 
 ### Verification
-- `sqlite3 ~/.local/share/lark/lark.db "PRAGMA journal_mode; PRAGMA table_info(photos);"` reports `wal` and a `path` column (no `data` column).
-- `GET /api/photos/{id}` serves existing migrated photos with HTTP 200 and `ETag`.
+- `sqlite3 ~/.local/share/lark/bridge.db ".tables"` does not list `photos`.
+- `systemctl --user list-unit-files '*-ente-photos*'` returns no units.

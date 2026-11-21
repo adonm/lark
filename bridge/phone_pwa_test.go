@@ -55,8 +55,6 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 	if assertAsset.Header().Get("Content-Type") != "image/svg+xml" {
 		t.Fatal("wrong favicon MIME type")
 	}
-	request(t, scoped, "/app/photo-library.js", nil, 404)
-	request(t, scoped, "/api/library?token="+grant, nil, 404)
 	for _, tc := range []struct {
 		name    string
 		handler http.Handler
@@ -119,8 +117,6 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 	lanWorker := request(t, b, "/app/sw.js", nil, 200)
 	privateWorker := request(t, scoped, "/app/sw.js", nil, 200)
 	if lanWorker.Header().Get("Service-Worker-Allowed") != "/app" || privateWorker.Header().Get("Service-Worker-Allowed") != "/app" ||
-		!strings.Contains(lanWorker.Body.String(), `"/app/photo-library.js"`) ||
-		strings.Contains(privateWorker.Body.String(), `"/app/photo-library.js"`) ||
 		strings.Contains(privateWorker.Body.String(), grant) || bytes.Equal(lanWorker.Body.Bytes(), privateWorker.Body.Bytes()) ||
 		!strings.Contains(privateWorker.Body.String(), `"/app/lark.svg"`) ||
 		!strings.Contains(privateWorker.Body.String(), `"lark-shell-scoped-`) {
