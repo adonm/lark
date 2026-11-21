@@ -15,7 +15,7 @@
 enum { FRAME_WIDTH = 320, FRAME_HEIGHT = 240 };
 #else
 #define BOARD_NAME "esp-vocat"
-#define BOARD_ID_PREFIX "lark-"
+#define BOARD_ID_PREFIX "vocat-"
 #define BOARD_SHAPE "round"
 #define BOARD_LCD "ST77916"
 #define BOARD_TOUCH "CST816S"
