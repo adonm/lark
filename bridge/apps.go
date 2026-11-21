@@ -62,7 +62,7 @@ func (b *bridge) savedAppState(ctx context.Context, name string) (object, error)
 		return nil, problem(503, "Apps unavailable")
 	}
 	var state string
-	a, err := scanApp(b.db.QueryRowContext(ctx, `SELECT `+appColumns+`,
+	a, err := scanApp(b.db.readDB().QueryRowContext(ctx, `SELECT `+appColumns+`,
 		(SELECT json_group_object(key,json(value_json)) FROM memory WHERE scope=?) FROM apps WHERE name=?`, "app:"+name, name), &state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, problem(404, "saved app not found")
@@ -86,7 +86,7 @@ func (b *bridge) loadApp(ctx context.Context, name string) (savedApp, error) {
 	if !slugRE.MatchString(name) {
 		return a, problem(400, "Invalid app name")
 	}
-	a, err := scanApp(b.db.QueryRowContext(ctx, "SELECT "+appColumns+" FROM apps WHERE name=?", name))
+	a, err := scanApp(b.db.readDB().QueryRowContext(ctx, "SELECT "+appColumns+" FROM apps WHERE name=?", name))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = problem(404, "App not found")
 	}
@@ -131,7 +131,7 @@ func (b *bridge) listApps(ctx context.Context, includeCode bool) ([]object, erro
 	if includeCode {
 		columns += ",svg,code,data_json"
 	}
-	rows, err := b.db.QueryContext(ctx, "SELECT "+columns+" FROM apps ORDER BY name")
+	rows, err := b.db.readDB().QueryContext(ctx, "SELECT "+columns+" FROM apps ORDER BY name")
 	if err != nil {
 		return nil, err
 	}

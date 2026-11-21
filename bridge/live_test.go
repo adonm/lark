@@ -236,7 +236,7 @@ func liveIsolated(t *testing.T, data string, conf map[string]string, token strin
 	cmd := exec.Command(binary)
 	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+root, "LARK_BRIDGE_TOKEN="+token, "LARK_BRIDGE_HOST=127.0.0.1",
 		"LARK_BRIDGE_PORT=0", "LARK_DB_PATH="+filepath.Join(state, "lark.db"),
-		"LARK_TURSO_URL=", "LARK_TURSO_AUTH_TOKEN=", "LARK_OTA_DIR="+root, "LARK_REPO_DIR=..",
+		"LARK_OTA_DIR="+root, "LARK_REPO_DIR=..",
 		"LARK_OPENCODE_AGENT="+conf["LARK_OPENCODE_AGENT"],
 		"LARK_OPENCODE_URL="+conf["LARK_OPENCODE_URL"], "LARK_OPENCODE_PASSWORD="+conf["LARK_OPENCODE_PASSWORD"],
 		"LARK_OPENCODE_DIR="+filepath.Join(root, "workspace"), "LARK_OPENCODE_PAIR_PORT=0",

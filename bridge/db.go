@@ -12,8 +12,28 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	turso "turso.tech/database/tursogo"
+
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
+
+func init() {
+	sql.Register("lark-sqlite3", &sqlite3.SQLiteDriver{
+		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			_, err := conn.Exec("PRAGMA temp_store=MEMORY; PRAGMA mmap_size=268435456;", nil)
+			return err
+		},
+	})
+}
+
+func sqliteDSN(path string, writer bool) string {
+	if path == ":memory:" {
+		return "file::memory:?_busy_timeout=5000&_cache_size=-32000&_foreign_keys=ON"
+	}
+	if writer {
+		return path + "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_cache_size=-32000&_foreign_keys=ON&_txlock=immediate"
+	}
+	return path + "?mode=ro&_query_only=1&_busy_timeout=5000&_cache_size=-32000"
+}
 
 var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
@@ -27,7 +47,7 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS tunnels (device_id TEXT PRIMARY KEY, route_name TEXT NOT NULL, url TEXT NOT NULL, local_port INTEGER NOT NULL, scoped_token TEXT NOT NULL, profile TEXT NOT NULL, created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS messages_device_ts_id ON messages (device_id, ts_ms, id)`,
-	`CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL, caption TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS photos (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, mime TEXT NOT NULL, path TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS memory (scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key))`,
 	`CREATE TABLE IF NOT EXISTS apps (name TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL, svg TEXT NOT NULL DEFAULT '', code TEXT NOT NULL DEFAULT '', tick_ms INTEGER NOT NULL DEFAULT 0, max_ticks INTEGER NOT NULL DEFAULT 0, author TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, template TEXT NOT NULL DEFAULT '', data_json TEXT NOT NULL DEFAULT '{}')`,
 	`CREATE TABLE IF NOT EXISTS timers (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, label TEXT NOT NULL, say TEXT NOT NULL, chime TEXT NOT NULL, wake_agent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, fire_at TEXT NOT NULL, notes_json TEXT NOT NULL DEFAULT '[]', app_name TEXT NOT NULL DEFAULT '')`,
@@ -40,12 +60,42 @@ var schemaBaseline = []string{
 
 type bridgeDB struct {
 	*sql.DB
-	cloud      *turso.TursoSyncDb
+	readers    *sql.DB
+	dataDir    string
+	hot        *hotCache
 	lastBackup atomic.Int64
 }
 
+func (d *bridgeDB) readDB() *sql.DB {
+	if d.readers != nil {
+		return d.readers
+	}
+	return d.DB
+}
+
+func (d *bridgeDB) Close() error {
+	var err error
+	if d.readers != nil && d.readers != d.DB {
+		err = d.readers.Close()
+	}
+	if d.DB != nil {
+		err = errors.Join(err, d.DB.Close())
+	}
+	return err
+}
+
+func (d *bridgeDB) photoBlobPath(rel string) string {
+	if rel == "" || d.dataDir == "" {
+		return ""
+	}
+	if filepath.IsAbs(rel) {
+		return rel
+	}
+	return filepath.Join(d.dataDir, rel)
+}
+
 // VACUUM INTO produces a standalone consistent SQLite file, including WAL data,
-// without copying live database files or pausing the sync worker.
+// without copying live database files or pausing readers.
 func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -74,7 +124,7 @@ func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error 
 		if err := os.Chmod(tmp, 0o600); err != nil {
 			return err
 		}
-		copyDB, err := sql.Open("turso", tmp)
+		copyDB, err := sql.Open("lark-sqlite3", tmp)
 		if err != nil {
 			return err
 		}
@@ -149,7 +199,7 @@ func (d *bridgeDB) backupPeriodically(ctx context.Context, dir string) {
 
 func (d *bridgeDB) getMeta(ctx context.Context, key string) (string, error) {
 	var value string
-	err := d.QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&value)
+	err := d.readDB().QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -161,7 +211,8 @@ func (d *bridgeDB) setMeta(ctx context.Context, key, value string) error {
 	return err
 }
 
-func openBridgeDB(ctx context.Context, path, remote, token string) (_ *bridgeDB, err error) {
+func openBridgeDB(ctx context.Context, path string) (_ *bridgeDB, err error) {
+	var dataDir string
 	if path != ":memory:" {
 		path, err = filepath.Abs(path)
 		if err != nil {
@@ -170,7 +221,8 @@ func openBridgeDB(ctx context.Context, path, remote, token string) (_ *bridgeDB,
 		if strings.Contains(path, "?") {
 			return nil, errors.New("database path cannot contain '?'")
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		dataDir = filepath.Dir(path)
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
 			return nil, err
 		}
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
@@ -182,20 +234,8 @@ func openBridgeDB(ctx context.Context, path, remote, token string) (_ *bridgeDB,
 			return nil, err
 		}
 	}
-	d := &bridgeDB{}
-	if path != ":memory:" && remote != "" && token != "" {
-		// Local-first: an unavailable cloud endpoint must not hold up boot.
-		bootstrap := false
-		d.cloud, err = turso.NewTursoSyncDb(ctx, turso.TursoSyncDbConfig{
-			Path: path, RemoteUrl: remote, AuthToken: token, BootstrapIfEmpty: &bootstrap,
-		})
-		if err != nil {
-			return nil, errors.New("cannot initialize optional Turso Cloud sync")
-		}
-		d.DB, err = d.cloud.Connect(ctx)
-	} else {
-		d.DB, err = sql.Open("turso", path)
-	}
+	d := &bridgeDB{dataDir: dataDir, hot: newHotCache()}
+	d.DB, err = sql.Open("lark-sqlite3", sqliteDSN(path, true))
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +248,18 @@ func openBridgeDB(ctx context.Context, path, remote, token string) (_ *bridgeDB,
 	d.SetMaxOpenConns(1)
 	if err := d.initSchema(ctx); err != nil {
 		return nil, err
+	}
+	if path == ":memory:" {
+		d.readers = d.DB
+	} else {
+		d.readers, err = sql.Open("lark-sqlite3", sqliteDSN(path, false))
+		if err != nil {
+			return nil, err
+		}
+		d.readers.SetMaxOpenConns(8)
+		if err := d.readers.PingContext(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return d, nil
 }
@@ -230,12 +282,18 @@ const initialAutoVolume = 55
 
 func (b *bridge) volumePrefs(id string) (auto bool, level int) {
 	auto, level = true, initialAutoVolume
-	if b.db != nil {
-		err := b.db.QueryRow(`SELECT auto_volume,manual_volume FROM device_prefs WHERE device_id=?`, strings.ToLower(id)).Scan(&auto, &level)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			log.Print("Lark could not read volume preferences")
-		}
+	if b.db == nil {
+		return auto, level
 	}
+	if cached, ok := b.db.hot.getVolume(id); ok {
+		return cached.auto, cached.level
+	}
+	err := b.db.readDB().QueryRow(`SELECT auto_volume,manual_volume FROM device_prefs WHERE device_id=?`, strings.ToLower(id)).Scan(&auto, &level)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		log.Print("Lark could not read volume preferences")
+		return auto, level
+	}
+	b.db.hot.setVolume(id, auto, level)
 	return auto, level
 }
 
@@ -249,38 +307,8 @@ func (b *bridge) saveVolumePrefs(ctx context.Context, id string, auto bool, leve
 	if err != nil {
 		return problem(502, "Cannot save volume")
 	}
+	b.db.hot.setVolume(id, auto, level)
 	return nil
-}
-
-func (d *bridgeDB) syncCloud(ctx context.Context) error {
-	if d.cloud == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := d.cloud.Push(ctx); err != nil {
-		return err
-	}
-	_, err := d.cloud.Pull(ctx)
-	return err
-}
-
-func (d *bridgeDB) syncPeriodically(ctx context.Context) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		if err := d.syncCloud(ctx); err != nil && ctx.Err() == nil {
-			log.Print("Lark Turso Cloud sync failed")
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 type rowScanner interface{ Scan(...any) error }
@@ -288,11 +316,12 @@ type rowScanner interface{ Scan(...any) error }
 // Table definitions share the same SQL codecs between migration and runtime.
 type store[T any] struct {
 	mu                  sync.Mutex
-	db                  *sql.DB
+	db, readDB          *sql.DB
 	table, key, columns string
 	upsert              string
 	scan                func(rowScanner) (string, T, error)
 	values              func(string, T) []any
+	onWrite             func(string)
 }
 
 func (s *store[T]) all() (map[string]T, error) {
@@ -300,7 +329,11 @@ func (s *store[T]) all() (map[string]T, error) {
 }
 
 func (s *store[T]) allContext(ctx context.Context) (map[string]T, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+s.columns+" FROM "+s.table)
+	rdb := s.readDB
+	if rdb == nil {
+		rdb = s.db
+	}
+	rows, err := rdb.QueryContext(ctx, "SELECT "+s.columns+" FROM "+s.table)
 	if err != nil {
 		return nil, problem(502, "Cannot read "+s.table)
 	}
@@ -324,7 +357,11 @@ func (s *store[T]) get(id string) (T, bool, error) {
 }
 
 func (s *store[T]) getContext(ctx context.Context, id string) (T, bool, error) {
-	_, value, err := s.scan(s.db.QueryRowContext(ctx, "SELECT "+s.columns+" FROM "+s.table+" WHERE "+s.key+"=?", id))
+	rdb := s.readDB
+	if rdb == nil {
+		rdb = s.db
+	}
+	_, value, err := s.scan(rdb.QueryRowContext(ctx, "SELECT "+s.columns+" FROM "+s.table+" WHERE "+s.key+"=?", id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return value, false, nil
 	}
@@ -344,13 +381,16 @@ func (s *store[T]) save(id string, value T, remove bool) error {
 	if err != nil {
 		return problem(502, "Cannot save "+s.table)
 	}
+	if s.onWrite != nil {
+		s.onWrite(id)
+	}
 	return nil
 }
 
 func placeholders(n int) string { return strings.Repeat("?,", n-1) + "?" }
 
 func deviceStore(d *bridgeDB) *store[peer] {
-	return &store[peer]{db: d.DB, table: "devices", key: "device_id", columns: "device_id,character,ip,port,last_seen",
+	return &store[peer]{db: d.DB, readDB: d.readDB(), table: "devices", key: "device_id", columns: "device_id,character,ip,port,last_seen",
 		upsert: "character=excluded.character,ip=excluded.ip,port=excluded.port,last_seen=excluded.last_seen",
 		scan: func(r rowScanner) (string, peer, error) {
 			var p peer
@@ -360,8 +400,9 @@ func deviceStore(d *bridgeDB) *store[peer] {
 }
 
 func voiceStore(d *bridgeDB) *store[string] {
-	return &store[string]{db: d.DB, table: "voices", key: "device_id", columns: "device_id,voice", upsert: "voice=excluded.voice",
-		scan: scanString, values: func(id, voice string) []any { return []any{id, voice} }}
+	return &store[string]{db: d.DB, readDB: d.readDB(), table: "voices", key: "device_id", columns: "device_id,voice", upsert: "voice=excluded.voice",
+		scan: scanString, values: func(id, voice string) []any { return []any{id, voice} },
+		onWrite: func(id string) { d.hot.invalidateVoice(id) }}
 }
 
 func scanString(r rowScanner) (string, string, error) {
@@ -371,7 +412,7 @@ func scanString(r rowScanner) (string, string, error) {
 }
 
 func sessionStore(d *bridgeDB) *store[string] {
-	return &store[string]{db: d.DB, table: "sessions", key: "device_id", columns: "device_id,session_id,updated_at",
+	return &store[string]{db: d.DB, readDB: d.readDB(), table: "sessions", key: "device_id", columns: "device_id,session_id,updated_at",
 		upsert: "session_id=excluded.session_id,updated_at=excluded.updated_at,contract_hash='',context_after_ms=excluded.updated_at",
 		scan: func(r rowScanner) (string, string, error) {
 			var id, sid string
@@ -382,7 +423,7 @@ func sessionStore(d *bridgeDB) *store[string] {
 }
 
 func virtualStore(d *bridgeDB) *store[virtualClient] {
-	return &store[virtualClient]{db: d.DB, table: "virtual_clients", key: "id", columns: "id,character,voice,created_at",
+	return &store[virtualClient]{db: d.DB, readDB: d.readDB(), table: "virtual_clients", key: "id", columns: "id,character,voice,created_at",
 		upsert: "character=excluded.character,voice=excluded.voice,created_at=excluded.created_at",
 		scan: func(r rowScanner) (string, virtualClient, error) {
 			var v virtualClient
@@ -394,11 +435,11 @@ func virtualStore(d *bridgeDB) *store[virtualClient] {
 			return v.ID, v, err
 		}, values: func(id string, v virtualClient) []any {
 			return []any{id, v.Character, v.Voice, v.CreatedAt.Format(time.RFC3339Nano)}
-		}}
+		}, onWrite: func(id string) { d.hot.invalidateCompanion(id) }}
 }
 
 func tunnelStore(d *bridgeDB) *store[tunnelRecord] {
-	return &store[tunnelRecord]{db: d.DB, table: "tunnels", key: "device_id", columns: "device_id,route_name,url,local_port,scoped_token,profile,created_at",
+	return &store[tunnelRecord]{db: d.DB, readDB: d.readDB(), table: "tunnels", key: "device_id", columns: "device_id,route_name,url,local_port,scoped_token,profile,created_at",
 		upsert: "route_name=excluded.route_name,url=excluded.url,local_port=excluded.local_port,scoped_token=excluded.scoped_token,profile=excluded.profile",
 		scan: func(r rowScanner) (string, tunnelRecord, error) {
 			var v tunnelRecord

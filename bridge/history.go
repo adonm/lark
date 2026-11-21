@@ -117,7 +117,7 @@ func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, befo
 	} else {
 		query += ` ORDER BY ts_ms,id`
 	}
-	rows, err := h.db.QueryContext(ctx, query, args...)
+	rows, err := h.db.readDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, problem(502, "Cannot read chat events")
 	}

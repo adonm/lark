@@ -11,6 +11,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -41,7 +43,7 @@ func (b *bridge) photoState(ctx context.Context, id string) ([]object, error) {
 		return out, nil
 	}
 	id = strings.ToLower(id)
-	rows, err := b.db.QueryContext(ctx, `SELECT id,device_id,mime,caption,created_at FROM photos
+	rows, err := b.db.readDB().QueryContext(ctx, `SELECT id,device_id,mime,caption,created_at FROM photos
 		WHERE (?='' OR device_id=?) ORDER BY created_at DESC,id DESC LIMIT ?`, id, id, maxPhotos)
 	readErr := problem(502, "Cannot list photos")
 	if err != nil {
@@ -147,7 +149,40 @@ func photoReadError(err error) error {
 	return problem(400, "Could not read photo")
 }
 
+func writePhotoBlob(absPath string, data []byte) error {
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".photo-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := errors.Join(tmp.Chmod(0o600), tmp.Close()); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, absPath); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
 func (b *bridge) postPhoto(w http.ResponseWriter, r *http.Request, id string) (any, error) {
+	if b.db == nil || b.db.dataDir == "" {
+		return nil, problem(503, "Photo storage unavailable")
+	}
 	who, err := b.lookupDevice(id)
 	if err != nil {
 		return nil, err
@@ -161,16 +196,46 @@ func (b *bridge) postPhoto(w http.ResponseWriter, r *http.Request, id string) (a
 		entry.Text = "Photo"
 	}
 	entry.ID, entry.SceneTitle = "photo-"+randomHex(4), "Photo"
+	relPath := filepath.Join("blobs", "photos", entry.ID)
+	absPath := b.db.photoBlobPath(relPath)
+	if err := writePhotoBlob(absPath, data); err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(absPath)
+		}
+	}()
 	ctx := r.Context()
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO photos VALUES (?,?,'image/png',?,?,?)`,
-		entry.ID, strings.ToLower(who.DeviceID), data, caption, entry.Timestamp.UnixMilli()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO photos (id,device_id,mime,path,caption,created_at) VALUES (?,?,'image/png',?,?,?)`,
+		entry.ID, strings.ToLower(who.DeviceID), relPath, caption, entry.Timestamp.UnixMilli()); err != nil {
 		return nil, err
 	}
+	rows, err := tx.QueryContext(ctx, `SELECT path FROM photos WHERE id NOT IN
+		(SELECT id FROM photos ORDER BY created_at DESC, rowid DESC LIMIT ?)`, maxPhotos)
+	if err != nil {
+		return nil, err
+	}
+	var pruned []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		pruned = append(pruned, p)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	_ = rows.Close()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM photos WHERE id NOT IN
 		(SELECT id FROM photos ORDER BY created_at DESC, rowid DESC LIMIT ?)`, maxPhotos); err != nil {
 		return nil, err
@@ -181,15 +246,20 @@ func (b *bridge) postPhoto(w http.ResponseWriter, r *http.Request, id string) (a
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	committed = true
+	for _, rel := range pruned {
+		if p := b.db.photoBlobPath(rel); p != "" {
+			_ = os.Remove(p)
+		}
+	}
 	b.chat(who.DeviceID, entry, false)
 	displayed := b.ws != nil && b.ws.showPhoto(who.DeviceID, entry.ID)
 	return object{"id": entry.ID, "caption": caption, "displayed": displayed}, nil
 }
 
 func (b *bridge) getPhoto(w http.ResponseWriter, r *http.Request, id, scope string) error {
-	var device, media string
-	var data []byte
-	err := b.db.QueryRowContext(r.Context(), `SELECT device_id,mime,data FROM photos WHERE id=?`, id).Scan(&device, &media, &data)
+	var device, media, relPath string
+	err := b.db.readDB().QueryRowContext(r.Context(), `SELECT device_id,mime,path FROM photos WHERE id=?`, id).Scan(&device, &media, &relPath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return problem(404, "Photo not found")
 	}
@@ -199,8 +269,30 @@ func (b *bridge) getPhoto(w http.ResponseWriter, r *http.Request, id, scope stri
 	if scope != "" && device != scope {
 		return problem(403, "Photo out of scope")
 	}
+	blobPath := b.db.photoBlobPath(relPath)
+	if blobPath == "" {
+		return problem(404, "Photo not found")
+	}
+	f, err := os.Open(blobPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return problem(404, "Photo not found")
+		}
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return problem(404, "Photo not found")
+	}
+	w.Header().Set("Content-Type", media)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	sendBytes(w, 200, media, data)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("ETag", `"`+id+`"`)
+	http.ServeContent(w, r, id+".png", info.ModTime(), f)
 	return nil
 }
 
@@ -208,15 +300,27 @@ func (b *bridge) photoImage(id string) (image.Image, error) {
 	if b.db == nil {
 		return nil, nil
 	}
-	var data []byte
-	err := b.db.QueryRowContext(b.root, `SELECT data FROM photos WHERE id=?`, id).Scan(&data)
+	var relPath string
+	err := b.db.readDB().QueryRowContext(b.root, `SELECT path FROM photos WHERE id=?`, id).Scan(&relPath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil // Recent-photo retention may expire saved references.
 	}
 	if err != nil {
 		return nil, err
 	}
-	return png.Decode(bytes.NewReader(data))
+	blobPath := b.db.photoBlobPath(relPath)
+	if blobPath == "" {
+		return nil, nil
+	}
+	f, err := os.Open(blobPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	return png.Decode(f)
 }
 
 func (h *wsHub) showPhoto(device, id string) bool {

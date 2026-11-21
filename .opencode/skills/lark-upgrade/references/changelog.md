@@ -163,3 +163,86 @@ Using `TOKEN=$(grep '^LARK_BRIDGE_TOKEN=' ~/.config/lark/bridge.env | cut -d= -f
 - `GET /api/devices`, `GET /api/companions`, and `GET /api/diagnostics` return HTTP 200 with expected devices and companions.
 - `sqlite3 ~/.local/share/lark/bridge.db "SELECT name FROM sqlite_master WHERE type='table'"` contains `companions` and `saved_companions` and no `cats`, `saved_cats`, or `chat_events`.
 - Send a test chat message to a device and confirm the `lark` agent responds and `lark_state` / `lark_patch` work cleanly.
+
+---
+
+## 2026-11-22 — Native SQLite WAL, Split Reader/Writer Pools, and Disk-Backed Photo Blobs
+
+### Affects
+- `bridge.env` (`LARK_TURSO_*` removed)
+- SQLite schema (`photos` table in `lark.db`)
+- Photo blob storage (`~/.local/share/lark/blobs/photos/<id>`)
+
+### Breaking Changes
+- **Removed `tursogo` and Turso Cloud sync**: Replaced `turso.tech/database/tursogo` with tuned native SQLite (`github.com/mattn/go-sqlite3`) in WAL mode (`_synchronous=NORMAL`, `mmap_size=256MB`, `cache_size=-32MB`, `temp_store=MEMORY`) and split reader/writer pools. `LARK_TURSO_URL` and `LARK_TURSO_AUTH_TOKEN` are no longer read.
+- **Disk-backed photo blobs**: The `photos` table replaced `data BLOB` with `path TEXT NOT NULL` pointing to `~/.local/share/lark/blobs/photos/<id>` (relative path `blobs/photos/<id>`).
+
+### How to Detect
+- `photos` table still has a `data` column instead of `path`:
+  ```sh
+  sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(photos);"
+  ```
+- `LARK_TURSO_URL` or `LARK_TURSO_AUTH_TOKEN` still present in `~/.config/lark/bridge.env`.
+
+### Upgrade Steps
+
+#### 1. Stop `lark-bridge.service` and back up
+```sh
+systemctl --user stop lark-bridge.service
+mkdir -p ~/.local/share/lark/backups ~/.local/share/lark/blobs/photos
+sqlite3 ~/.local/share/lark/lark.db ".backup '$HOME/.local/share/lark/backups/pre-sqlite-upgrade.db'"
+```
+
+#### 2. Extract legacy `photos.data` BLOBs to disk and migrate `photos` table
+```sh
+python3 - <<'PY'
+import os, sqlite3
+
+data_dir = os.path.expanduser("~/.local/share/lark")
+db_path = os.path.join(data_dir, "lark.db")
+blob_dir = os.path.join(data_dir, "blobs", "photos")
+os.makedirs(blob_dir, mode=0o700, exist_ok=True)
+
+conn = sqlite3.connect(db_path)
+cols = [row[1] for row in conn.execute("PRAGMA table_info(photos)")]
+if "data" in cols:
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("""
+        CREATE TABLE photos_new (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            path TEXT NOT NULL,
+            caption TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        )
+    """)
+    for pid, device_id, mime, data, caption, created_at in conn.execute(
+        "SELECT id, device_id, mime, data, caption, created_at FROM photos"
+    ):
+        rel_path = os.path.join("blobs", "photos", pid)
+        abs_path = os.path.join(data_dir, rel_path)
+        with open(abs_path, "wb") as f:
+            f.write(bytes(data))
+        os.chmod(abs_path, 0o600)
+        conn.execute(
+            "INSERT INTO photos_new (id, device_id, mime, path, caption, created_at) VALUES (?,?,?,?,?,?)",
+            (pid, device_id, mime, rel_path, caption, created_at),
+        )
+    conn.execute("DROP TABLE photos")
+    conn.execute("ALTER TABLE photos_new RENAME TO photos")
+    conn.commit()
+conn.close()
+PY
+```
+
+#### 3. Clean up `bridge.env` and restart
+Remove any `LARK_TURSO_URL` / `LARK_TURSO_AUTH_TOKEN` lines from `~/.config/lark/bridge.env`, rebuild/install the bridge, and start `lark-bridge.service`:
+```sh
+sed -i '/^LARK_TURSO_/d' ~/.config/lark/bridge.env
+systemctl --user start lark-bridge.service
+```
+
+### Verification
+- `sqlite3 ~/.local/share/lark/lark.db "PRAGMA journal_mode; PRAGMA table_info(photos);"` reports `wal` and a `path` column (no `data` column).
+- `GET /api/photos/{id}` serves existing migrated photos with HTTP 200 and `ETag`.

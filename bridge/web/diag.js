@@ -106,7 +106,7 @@ function renderDiagnostics(data) {
       ["CPU / RSS", `${diagPct(bridge.cpu_pct)} / ${diagMB(bridge.rss_bytes)}`],
       ["Heap alloc / in use", `${diagMB(bridge.heap_alloc_bytes)} / ${diagMB(bridge.heap_inuse_bytes)}`],
       ["Goroutines", diagFormat(bridge.goroutines)], ["Uptime", diagUptime(bridge.uptime_s)],
-      ["Turso DB + WAL", diagBytes(bridge.db_bytes)],
+      ["SQLite DB + WAL", diagBytes(bridge.db_bytes)],
       ["Last backup", bridge.last_backup ? new Date(bridge.last_backup).toLocaleString() : "—"],
     ]),
     diagTile("Kokoro TTS", [

@@ -398,7 +398,7 @@ target one player or share state across multiple devices with a separate SVG
 view for each player. `initial_state` seeds `ctx.initial_state` (or the state
 directly if there is no `init`). `state_patch` shallow-merges live state and
 redraws all players without restarting. App state must fit in 64 KB of JSON.
-`save_as` writes apps and drawings to Turso's `apps` table; `load` reopens
+`save_as` writes apps and drawings to SQLite's `apps` table; `load` reopens
 them. `storeGet(key)` reads persisted state in `init(ctx)`
 and `render(state, player)`; `storeSet(key, value)` is available only in event
 hooks. Use `onDrag` and `onUp` alongside `onTap` for sliders and drawing in
@@ -446,7 +446,7 @@ or personality hints when applicable. The agent uses `state` for live context.
 
 ## Bridge data
 
-The bridge uses the embedded Turso Go driver without CGO. Persistent state lives
+The bridge uses native SQLite (`go-sqlite3`) in WAL mode with split reader/writer pools. Persistent state lives
 in `~/.local/share/lark/lark.db` (or `$XDG_DATA_HOME/lark/lark.db`);
 `LARK_DB_PATH` overrides it. Keep the data directory private (0700, database
 0600). The first boot imports valid rows from the six legacy JSON files in that
@@ -471,18 +471,12 @@ current sheet back as reference.
 The bridge aligns four poses from a 2×2 sheet and uses them for the six face
 states. `style` defaults to `"storybook"`; `"pixel"` snaps each pose to a
 64×64 grid and upscales without smoothing. Only SVG references go into the database; private PNGs under the
-local `portraits/` directory do not sync to Turso. For local, no-cost art, use
+local `portraits/` and `blobs/photos/` directories are stored on disk. For local, no-cost art, use
 the instant vector companion.
 The canonical `messages` table drives browser history. The v2 migration
 backfills it from legacy bridge chat events and OpenCode session history.
 New rows contain user text, final companion replies, intercom, and display cards,
 not tool traces or prompt headers.
-
-Optional Turso Cloud sync runs every minute when both `LARK_TURSO_URL`
-and `LARK_TURSO_AUTH_TOKEN` are set. Use a dedicated private remote and one
-active bridge per database: the data includes chat events and tunnel credentials,
-and the bridge, not the cloud, performs timer side effects. No cloud credentials
-or connectivity are required for normal local operation.
 
 ## API
 

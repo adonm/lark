@@ -19,7 +19,7 @@ type sessionBinding struct {
 
 func (o *openCode) readBinding(ctx context.Context, device string) (sessionBinding, error) {
 	var b sessionBinding
-	err := o.db.QueryRowContext(ctx, `SELECT session_id,contract_hash,updated_at,context_after_ms FROM sessions WHERE device_id=?`,
+	err := o.db.readDB().QueryRowContext(ctx, `SELECT session_id,contract_hash,updated_at,context_after_ms FROM sessions WHERE device_id=?`,
 		device).Scan(&b.sid, &b.contract, &b.updated, &b.after)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return b, problem(502, "Cannot read sessions")
@@ -57,7 +57,7 @@ func (o *openCode) recentDialogue(ctx context.Context, device string, after int6
 	}
 	// Only canonical dialogue from this device. Do not load archives, cards,
 	// intercom, tool data, timer wakes, attachments, or prompt headers.
-	rows, err := o.db.QueryContext(ctx, `SELECT role,text FROM messages WHERE device_id=? AND ts_ms>?
+	rows, err := o.db.readDB().QueryContext(ctx, `SELECT role,text FROM messages WHERE device_id=? AND ts_ms>?
 		AND role IN ('user','companion') AND source IN ('typed','voice','text')
 		ORDER BY ts_ms DESC,id DESC LIMIT 12`, strings.ToLower(device), after)
 	if err != nil {

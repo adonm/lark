@@ -6,12 +6,12 @@ require (
 	github.com/dop251/goja v0.0.0-20261118204651-8dfece3d1e1d
 	github.com/gen2brain/heic v0.7.2
 	github.com/k2-fsa/sherpa-onnx-go v1.13.8
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/yalue/onnxruntime_go v1.32.0
 	golang.org/x/image v0.48.0
 	golang.org/x/text v0.44.0
-	turso.tech/database/tursogo v0.8.4
 )
 
 require (
@@ -23,7 +23,6 @@ require (
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.8 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.8 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
-	github.com/tursodatabase/turso-go-platform-libs v0.8.4 // indirect
 	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 )

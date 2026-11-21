@@ -114,8 +114,7 @@ func run() error {
 	}
 	fallbackVoice := env("LARK_TTS_VOICE", heartVoice)
 	dbPath := env("LARK_DB_PATH", filepath.Join(local, "lark.db"))
-	db, err := openBridgeDB(context.Background(), dbPath,
-		os.Getenv("LARK_TURSO_URL"), os.Getenv("LARK_TURSO_AUTH_TOKEN"))
+	db, err := openBridgeDB(context.Background(), dbPath)
 	if err != nil {
 		return err
 	}
@@ -135,14 +134,6 @@ func run() error {
 		go func() {
 			defer close(done)
 			db.backupPeriodically(root, filepath.Join(local, "backups"))
-		}()
-		defer func() { finish(); <-done }()
-	}
-	if db.cloud != nil {
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			db.syncPeriodically(root)
 		}()
 		defer func() { finish(); <-done }()
 	}

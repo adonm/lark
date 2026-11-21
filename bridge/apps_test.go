@@ -551,19 +551,20 @@ func TestAppSaveDoesNotCommitStaleLaunch(t *testing.T) {
 			const id, name = "lark-stale", "stale-app"
 			board := testConnectWS(t, base, "unit", false)
 			board.helloV2(t, id, "Cake")
-			conn, err := b.db.Conn(t.Context())
+			b.db.readDB().SetMaxOpenConns(1)
+			conn, err := b.db.readDB().Conn(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer conn.Close()
-			before := b.db.Stats().WaitCount
+			before := b.db.readDB().Stats().WaitCount
 			done := make(chan error, 1)
 			go func() {
 				_, err := b.runApp(t.Context(), object{"devices": id, "save_as": name, "code": `function render(){ return "<svg/>"; }`})
 				done <- err
 			}()
 			// Memory loads after the launch captures its device generation.
-			eventually(t, func() bool { return b.db.Stats().WaitCount > before })
+			eventually(t, func() bool { return b.db.readDB().Stats().WaitCount > before })
 			if change == "disconnected" {
 				b.ws.disconnectDevice(id)
 			} else {

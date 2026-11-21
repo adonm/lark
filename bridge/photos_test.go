@@ -33,7 +33,7 @@ func TestPhotoUploadDisplayAndScope(t *testing.T) {
 	web := testConnectWS(t, scope.URL, "scoped", false)
 	web.hello(t, virtual.ID, virtual.Character)
 	for i := range maxPhotos {
-		if _, err := b.db.Exec(`INSERT INTO photos VALUES (?,?,'image/png',x'01','',?)`, fmt.Sprintf("photo-%08x", i), hardware, i); err != nil {
+		if _, err := b.db.Exec(`INSERT INTO photos (id,device_id,mime,path,caption,created_at) VALUES (?,?,'image/png','','',?)`, fmt.Sprintf("photo-%08x", i), hardware, i); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -4,19 +4,23 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"image"
+	imagecolor "image/color"
+	"image/draw"
+	"image/png"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
-
-	_ "turso.tech/database/tursogo"
 )
 
 func testDB(t *testing.T, path string) *bridgeDB {
 	t.Helper()
-	d, err := openBridgeDB(t.Context(), path, "", "")
+	d, err := openBridgeDB(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +46,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if err := os.WriteFile(unrelated, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`INSERT INTO photos VALUES ('photo-12345678','cake','image/png',x'fedc','image',100)`); err != nil {
+	if _, err := d.Exec(`INSERT INTO photos (id,device_id,mime,path,caption,created_at) VALUES ('photo-12345678','cake','image/png','blobs/photos/photo-12345678','image',100)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.backup(t.Context(), dir, now); err != nil {
@@ -72,15 +76,14 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if _, err := os.Stat(unrelated); err != nil {
 		t.Fatal(err)
 	}
-	backup, err := sql.Open("turso", target)
+	backup, err := sql.Open("lark-sqlite3", target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer backup.Close()
-	var caption string
-	var data []byte
-	if err := backup.QueryRow(`SELECT data,caption FROM photos`).Scan(&data, &caption); err != nil || !bytes.Equal(data, []byte{0xfe, 0xdc}) || caption != "image" {
-		t.Fatalf("backup did not preserve WAL data: %x %q %v", data, caption, err)
+	var blobPath, caption string
+	if err := backup.QueryRow(`SELECT path,caption FROM photos`).Scan(&blobPath, &caption); err != nil || blobPath != "blobs/photos/photo-12345678" || caption != "image" {
+		t.Fatalf("backup did not preserve WAL data: %q %q %v", blobPath, caption, err)
 	}
 }
 
@@ -92,52 +95,217 @@ func writeMap(path string, value any) error {
 	return os.WriteFile(path, raw, 0o600)
 }
 
-func TestTursoDriver(t *testing.T) {
-	db, err := sql.Open("turso", filepath.Join(t.TempDir(), "lark.db"))
+func TestSQLiteWALMmapAndConcurrentPool(t *testing.T) {
+	d := testDB(t, filepath.Join(t.TempDir(), "lark.db"))
+
+	var journal, tempStore string
+	var syncMode, cacheSize, fk int
+	var mmapSize int64
+	if err := d.QueryRow(`PRAGMA journal_mode`).Scan(&journal); err != nil || journal != "wal" {
+		t.Fatalf("journal_mode = %q, err = %v", journal, err)
+	}
+	if err := d.QueryRow(`PRAGMA synchronous`).Scan(&syncMode); err != nil || syncMode != 1 {
+		t.Fatalf("synchronous = %d, err = %v", syncMode, err)
+	}
+	if err := d.QueryRow(`PRAGMA cache_size`).Scan(&cacheSize); err != nil || cacheSize != -32000 {
+		t.Fatalf("cache_size = %d, err = %v", cacheSize, err)
+	}
+	if err := d.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Fatalf("foreign_keys = %d, err = %v", fk, err)
+	}
+	if err := d.QueryRow(`PRAGMA mmap_size`).Scan(&mmapSize); err != nil || mmapSize <= 0 {
+		t.Fatalf("mmap_size = %d, err = %v", mmapSize, err)
+	}
+	if err := d.QueryRow(`PRAGMA temp_store`).Scan(&tempStore); err != nil || tempStore != "2" {
+		t.Fatalf("temp_store = %q, err = %v", tempStore, err)
+	}
+
+	var queryOnly int
+	var readerMmap int64
+	if err := d.readDB().QueryRow(`PRAGMA query_only`).Scan(&queryOnly); err != nil || queryOnly != 1 {
+		t.Fatalf("reader query_only = %d, err = %v", queryOnly, err)
+	}
+	if err := d.readDB().QueryRow(`PRAGMA mmap_size`).Scan(&readerMmap); err != nil || readerMmap <= 0 {
+		t.Fatalf("reader mmap_size = %d, err = %v", readerMmap, err)
+	}
+	if _, err := d.readDB().Exec(`INSERT INTO meta VALUES ('ro','fail')`); err == nil {
+		t.Fatal("expected read-only pool to reject writes")
+	}
+
+	if err := d.setMeta(t.Context(), "counter", "0"); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range 25 {
+				if id == 0 {
+					if err := d.setMeta(t.Context(), "counter", fmt.Sprintf("%d", i+1)); err != nil {
+						t.Errorf("writer failed: %v", err)
+						return
+					}
+				} else {
+					if _, err := d.getMeta(t.Context(), "counter"); err != nil {
+						t.Errorf("reader failed: %v", err)
+						return
+					}
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+func TestHotCacheHitAndInvalidation(t *testing.T) {
+	d := testDB(t, filepath.Join(t.TempDir(), "lark.db"))
+	b := &bridge{root: t.Context(), db: d, voices: deviceVoiceStore(d, heartVoice)}
+	h := newWSHub(b, false)
+	t.Cleanup(h.shutdown)
+	b.ws = h
+
+	// 1. Volume prefs: miss -> cache hit -> write updates cache.
+	if err := b.saveVolumePrefs(t.Context(), "lark-cache", false, 42); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE device_prefs SET manual_volume=99 WHERE device_id='lark-cache'`); err != nil {
+		t.Fatal(err)
+	}
+	if auto, level := b.volumePrefs("lark-cache"); auto || level != 42 {
+		t.Fatalf("expected cached volume (false, 42), got (%v, %d)", auto, level)
+	}
+	if err := b.saveVolumePrefs(t.Context(), "lark-cache", true, 75); err != nil {
+		t.Fatal(err)
+	}
+	if auto, level := b.volumePrefs("lark-cache"); !auto || level != 75 {
+		t.Fatalf("expected updated volume (true, 75), got (%v, %d)", auto, level)
+	}
+
+	// 2. Voices: save -> cache hit -> save updates cache.
+	if err := b.voices.save("lark-cache", fableVoice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE voices SET voice=? WHERE device_id='lark-cache'`, heartVoice); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.voices.get("lark-cache", "cake"); got != fableVoice {
+		t.Fatalf("expected cached voice %q, got %q", fableVoice, got)
+	}
+	if err := b.voices.save("lark-cache", heartVoice); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.voices.get("lark-cache", "cake"); got != heartVoice {
+		t.Fatalf("expected updated voice %q, got %q", heartVoice, got)
+	}
+
+	// 3. Companions: write -> cache hit -> update refreshes cache.
+	who := peer{DeviceID: "lark-cache", Character: "Cake"}
+	if _, _, err := b.changeCompanion(t.Context(), who, "cake", "update", object{"name": "Mochi"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE companions SET name='Stale' WHERE device_id='lark-cache'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.companionFor(who); got.Name != "Mochi" {
+		t.Fatalf("expected cached companion Mochi, got %q", got.Name)
+	}
+	if _, _, err := b.changeCompanion(t.Context(), who, "cake", "update", object{"name": "Biscuit"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.companionFor(who); got.Name != "Biscuit" {
+		t.Fatalf("expected updated companion Biscuit, got %q", got.Name)
+	}
+
+	// 4. Parent settings: write -> cache hit -> update refreshes cache.
+	h.mu.Lock()
+	s := parentSettings{Timezone: "UTC", QuietStart: "21:00", QuietEnd: "07:00", DailyMinutes: 30}
+	if err := h.parentSet("lark-cache", s, time.UTC, time.Now()); err != nil {
+		h.mu.Unlock()
+		t.Fatal(err)
+	}
+	delete(h.parents, "lark-cache") // Force parentLoad to consult bridgeDB hot cache.
+	if _, err := d.Exec(`UPDATE parent_settings SET daily_minutes=999 WHERE device_id='lark-cache'`); err != nil {
+		h.mu.Unlock()
+		t.Fatal(err)
+	}
+	p, err := h.parentLoad("lark-cache")
+	h.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if _, err := db.Exec("CREATE TABLE probe (id INTEGER PRIMARY KEY, value TEXT)"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("INSERT INTO probe VALUES (1, 'ok')"); err != nil {
-		t.Fatal(err)
-	}
-	var value string
-	if err := db.QueryRow("SELECT value FROM probe").Scan(&value); err != nil || value != "ok" {
-		t.Fatalf("value = %q, err = %v", value, err)
+	if p.settings.DailyMinutes != 30 {
+		t.Fatalf("expected cached parent daily_minutes 30, got %d", p.settings.DailyMinutes)
 	}
 }
 
-func TestCloudOptionWorksOffline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "lark.db")
-	local := testDB(t, path)
-	if err := voiceStore(local).save("offline", heartVoice, false); err != nil {
+func TestDiskBackedPhotoBlobsAndCleanup(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	const hardware = "lark-blob-test"
+	board := testConnectWS(t, base, "unit", false)
+	board.hello(t, hardware, "Cake")
+
+	img := image.NewRGBA(image.Rect(0, 0, 120, 120))
+	draw.Draw(img, img.Bounds(), image.NewUniform(imagecolor.RGBA{R: 20, G: 180, B: 90, A: 255}), image.Point{}, draw.Src)
+	var raw bytes.Buffer
+	if err := png.Encode(&raw, img); err != nil {
 		t.Fatal(err)
 	}
-	if err := local.Close(); err != nil {
-		t.Fatal(err)
+
+	upload := func(caption string) string {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/devices/"+hardware+"/photo?caption="+caption, bytes.NewReader(raw.Bytes()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Lark-Token", "unit")
+		req.Header.Set("Content-Type", "image/png")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("upload status %d: %s", res.StatusCode, body)
+		}
+		return str(testObject(t, body)["id"])
 	}
-	unavailable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer unavailable.Close()
-	db, err := openBridgeDB(t.Context(), path, unavailable.URL, "test-token")
+
+	firstID := upload("first")
+	firstBlob := filepath.Join(b.db.dataDir, "blobs", "photos", firstID)
+	if _, err := os.Stat(firstBlob); err != nil {
+		t.Fatalf("expected photo blob on disk at %s: %v", firstBlob, err)
+	}
+
+	// ServeContent should return 200 with ETag, and 304 when If-None-Match matches.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/photos/"+firstID, nil)
+	req.Header.Set("X-Lark-Token", "unit")
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if db.cloud == nil {
-		t.Fatal("cloud sync not configured")
+	res.Body.Close()
+	if res.StatusCode != 200 || res.Header.Get("ETag") == "" {
+		t.Fatalf("unexpected GET photo response: %d, etag=%q", res.StatusCode, res.Header.Get("ETag"))
 	}
-	if err := db.syncCloud(t.Context()); err == nil {
-		t.Fatal("false sync success against unavailable server")
+	req304, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/photos/"+firstID, nil)
+	req304.Header.Set("X-Lark-Token", "unit")
+	req304.Header.Set("If-None-Match", res.Header.Get("ETag"))
+	res304, err := http.DefaultClient.Do(req304)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, _, err := voiceStore(db).get("offline"); err != nil || got != heartVoice {
-		t.Fatal("cloud configuration lost local data", err)
+	res304.Body.Close()
+	if res304.StatusCode != http.StatusNotModified {
+		t.Fatalf("expected 304 Not Modified, got %d", res304.StatusCode)
 	}
-	if err := voiceStore(db).save("offline", fableVoice, false); err != nil {
-		t.Fatal("cloud error blocked local write", err)
+
+	// Upload maxPhotos more photos so firstID is pruned from both DB and disk.
+	for i := range maxPhotos {
+		upload(fmt.Sprintf("p%d", i))
+	}
+	if _, err := os.Stat(firstBlob); !os.IsNotExist(err) {
+		t.Fatalf("expected pruned photo blob %s to be deleted, stat err: %v", firstBlob, err)
 	}
 }

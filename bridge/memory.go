@@ -116,7 +116,7 @@ func (b *bridge) memoryEntries(ctx context.Context, scope string) ([]object, err
 	if b.db == nil {
 		return entries, nil
 	}
-	rows, err := b.db.QueryContext(ctx, "SELECT key,value_json,version,updated_at FROM memory WHERE scope=? ORDER BY key", scope)
+	rows, err := b.db.readDB().QueryContext(ctx, "SELECT key,value_json,version,updated_at FROM memory WHERE scope=? ORDER BY key", scope)
 	if err != nil {
 		return nil, errMemoryAccess
 	}
@@ -252,7 +252,7 @@ func (b *bridge) memoryAPI(w http.ResponseWriter, r *http.Request, path string) 
 		return nil, err
 	case r.Method == http.MethodGet && path == "/api/memory/scopes":
 		dbError := problem(502, "Cannot list memory scopes")
-		rows, err := b.db.QueryContext(r.Context(), "SELECT scope,count(*) FROM memory GROUP BY scope ORDER BY scope")
+		rows, err := b.db.readDB().QueryContext(r.Context(), "SELECT scope,count(*) FROM memory GROUP BY scope ORDER BY scope")
 		if err != nil {
 			return nil, dbError
 		}

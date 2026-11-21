@@ -171,7 +171,7 @@ func (b *bridge) parentOverview(ctx context.Context) (object, error) {
 			return nil, reason.err()
 		}
 		var talk, apps, calls, intercom, timers int
-		err = b.db.QueryRowContext(ctx, `SELECT
+		err = b.db.readDB().QueryRowContext(ctx, `SELECT
 			COUNT(CASE WHEN role='user' THEN 1 END),
 			COUNT(CASE WHEN source='app' THEN 1 END),
 			COUNT(CASE WHEN source='call' THEN 1 END),

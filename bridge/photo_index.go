@@ -132,7 +132,7 @@ func openPhotoLibrary(ctx context.Context, data, key string) (_ *photoLibrary, e
 	if err = errors.Join(f.Chmod(0o600), f.Close()); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("turso", path) // Never use bridgeDB or connect this index to a remote.
+	db, err := sql.Open("lark-sqlite3", sqliteDSN(path, true)) // Never use bridgeDB or connect this index to a remote.
 	if err != nil {
 		return nil, err
 	}

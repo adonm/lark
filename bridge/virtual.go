@@ -92,6 +92,7 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 		if err := writeCompanion(ctx, tx, v.ID, companion); err != nil || tx.Commit() != nil {
 			return nil, problem(502, "Cannot create virtual client")
 		}
+		b.db.hot.invalidateCompanion(v.ID)
 		sendJSON(w, 201, b.publicVirtual(v))
 		return nil, nil
 	case strings.HasPrefix(path, "/api/virtual-clients/") && r.Method == http.MethodDelete:
@@ -122,6 +123,7 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 		if err := tx.Commit(); err != nil {
 			return nil, problem(502, "Cannot delete virtual client")
 		}
+		b.db.hot.invalidateCompanion(id)
 		if b.ws != nil {
 			b.ws.disconnectDevice(id)
 		}

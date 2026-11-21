@@ -45,9 +45,9 @@ func TestMCPHistoryCursorAndPhotoMetadata(t *testing.T) {
 	for _, msg := range []string{"same-a", "same-b", "same-c"} {
 		b.history.add(id, chatEntry{ID: msg, Sender: "User", Role: "user", Text: msg, Source: "typed", Timestamp: now})
 	}
-	if _, err := b.db.Exec(`INSERT INTO photos (id,device_id,mime,data,caption,created_at) VALUES
-		('photo-1234abcd',?,'image/png',x'CAFE','A flower',?),
-		('photo-2345abcd','other','image/png',x'CAFE','Another flower',?)`, id, now.UnixMilli(), now.UnixMilli()); err != nil {
+	if _, err := b.db.Exec(`INSERT INTO photos (id,device_id,mime,path,caption,created_at) VALUES
+		('photo-1234abcd',?,'image/png','blobs/photos/photo-1234abcd','A flower',?),
+		('photo-2345abcd','other','image/png','blobs/photos/photo-2345abcd','Another flower',?)`, id, now.UnixMilli(), now.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	first := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages", "photos"}, "messages_limit": 2}, false)

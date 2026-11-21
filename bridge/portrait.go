@@ -522,7 +522,7 @@ func (b *bridge) servePortrait(w http.ResponseWriter, r *http.Request, path, sco
 	}
 	if scope != "" {
 		var face string
-		if b.db == nil || b.db.QueryRowContext(r.Context(), `SELECT face_svg FROM companions WHERE device_id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
+		if b.db == nil || b.db.readDB().QueryRowContext(r.Context(), `SELECT face_svg FROM companions WHERE device_id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
 			activePortrait(face) != id {
 			return problem(404, "Portrait not found")
 		}

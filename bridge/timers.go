@@ -76,7 +76,7 @@ func scanTimer(r rowScanner) (savedTimer, error) {
 }
 
 func (m *timerManager) list(ctx context.Context, id string) ([]savedTimer, error) {
-	rows, err := m.b.db.QueryContext(ctx, "SELECT "+timerColumns+" FROM timers WHERE (?='' OR device_id=?)", id, id)
+	rows, err := m.b.db.readDB().QueryContext(ctx, "SELECT "+timerColumns+" FROM timers WHERE (?='' OR device_id=?)", id, id)
 	if err != nil {
 		return nil, problem(502, "Cannot read timers")
 	}
@@ -124,7 +124,7 @@ func (b *bridge) timerState(ctx context.Context, id string, now time.Time) ([]ob
 
 func (m *timerManager) activeCount(ctx context.Context, id string) int {
 	var count int
-	_ = m.b.db.QueryRowContext(ctx, "SELECT count(*) FROM timers WHERE device_id=?", id).Scan(&count)
+	_ = m.b.db.readDB().QueryRowContext(ctx, "SELECT count(*) FROM timers WHERE device_id=?", id).Scan(&count)
 	return count
 }
 
@@ -402,7 +402,7 @@ func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]s
 	ids := []string{}
 	if id != "" {
 		var owner string
-		err := m.b.db.QueryRowContext(ctx, "SELECT device_id FROM timers WHERE id=?", id).Scan(&owner)
+		err := m.b.db.readDB().QueryRowContext(ctx, "SELECT device_id FROM timers WHERE id=?", id).Scan(&owner)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, problem(404, "Timer not found")
 		}

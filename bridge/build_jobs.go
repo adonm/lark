@@ -181,7 +181,7 @@ func (m *buildManager) run(ctx context.Context) {
 }
 
 func (m *buildManager) pump(ctx context.Context, now time.Time) {
-	rows, err := m.b.db.QueryContext(ctx, `SELECT id,device_id,state,spec,result,announced,cleanup,created_at FROM build_jobs
+	rows, err := m.b.db.readDB().QueryContext(ctx, `SELECT id,device_id,state,spec,result,announced,cleanup,created_at FROM build_jobs
 		WHERE state='queued' OR (state<>'running' AND (announced=0 OR cleanup=1)) ORDER BY created_at,id`)
 	if err != nil {
 		return

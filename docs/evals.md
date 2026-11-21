@@ -63,7 +63,7 @@ or real model speed.
 For a real replay, prepare a disposable loopback OpenCode instance with its
 own config/data/cache/state/workspace, the `lark` agent revision to test, and
 **only** the `lark` MCP connected to a separate local bridge with a temporary
-database and no Turso sync or production devices. Use a mock companion/device if the
+database and no production devices. Use a mock companion/device if the
 prompt needs on-screen state. Follow the [dedicated installation notes](../README.md#dedicated-opencode)
 for config layout; make sure the MCP proxy inherits the test bridge's
 `LARK_BRIDGE_PORT` and `LARK_BRIDGE_TOKEN`, not the installed ones.

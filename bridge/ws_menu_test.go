@@ -203,14 +203,15 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	}
 
 	for _, control := range []string{"menu-games", "game-0"} {
-		conn, err := b.db.Conn(t.Context())
+		b.db.readDB().SetMaxOpenConns(1)
+		conn, err := b.db.readDB().Conn(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		wait := b.db.Stats().WaitCount
+		wait := b.db.readDB().Stats().WaitCount
 		web.json(t, object{"ev": "tap", "id": control})
-		eventually(t, func() bool { return b.db.Stats().WaitCount > wait })
+		eventually(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
 		if control == "game-0" {
 			board.json(t, object{"ev": "tap", "x": 180, "y": 316}) // Leave Games while the app is still loading.
 		} else {
@@ -220,6 +221,7 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 		if err := conn.Close(); err != nil {
 			t.Fatal(err)
 		}
+		b.db.readDB().SetMaxOpenConns(8)
 		if control == "menu-games" {
 			menuFrame(t, web, "Slow Game")
 		} else {
