@@ -642,13 +642,13 @@ func (h *wsHub) announce(d *wsDevice) {
 	if c.role == "web" {
 		c.enqueue(companionFrame(d.who.DeviceID, d.companion, d.voice))
 		if h.bridgeEndpoint(d) {
-			h.push(d, object{"op": "capabilities", "bridge_endpoint": true}, false)
+			h.pushWS(d, object{"op": "capabilities", "bridge_endpoint": true}, false)
 		}
 	}
-	h.push(d, d.volumeFrame(false), true)
-	h.push(d, object{"op": "power", "brightness": d.brightness()}, true)
+	h.pushVolume(d, false, true)
+	h.pushPower(d, d.brightness(), true)
 	if d.parentReason != "" {
-		h.push(d, parentFrame(d), true)
+		h.pushWS(d, parentFrame(d), true)
 	}
 	h.broadcastPeers()
 	if c.role == "web" {
@@ -782,7 +782,7 @@ func (h *wsHub) render(d *wsDevice, now time.Time, full bool) {
 		d.moodAt = now
 	}
 	if changed && d.virtual() {
-		h.push(d, object{"op": "mode", "mode": mood}, false)
+		h.pushWS(d, object{"op": "mode", "mode": mood}, false)
 	}
 	pose := h.companionPose(d, now, mood)
 	d.pose = pose
@@ -950,11 +950,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			r.trace.measure(diagRender, screen.render)
 			h.trackFrame(d, screen.render, len(svgWire.data), len(screen.source), "svg")
 		} else if native.data != nil {
-			if d.client.native != nil {
-				d.client.native.enqueue(msgFrame, native.data)
-			} else {
-				d.client.enqueue(native)
-			}
+			d.client.enqueue(native)
 			d.nativeRev = uint16(rev)
 			r.trace.measure(diagRender, screen.render)
 			codec := "RGB565"
@@ -997,7 +993,7 @@ func (h *wsHub) setSleeping(d *wsDevice, asleep bool) {
 	}
 	if d.asleep != asleep {
 		d.asleep = asleep
-		h.push(d, object{"op": "power", "brightness": d.brightness()}, true)
+		h.pushPower(d, d.brightness(), true)
 	}
 }
 
@@ -1151,7 +1147,7 @@ func (h *wsHub) setVolume(ctx context.Context, d *wsDevice, auto bool, level int
 	}
 	changedMode := d.autoVol != auto
 	d.autoVol, d.vol = auto, level
-	h.push(d, d.volumeFrame(!auto), true)
+	h.pushVolume(d, !auto, true)
 	now := time.Now()
 	d.meter = now.Add(1800 * time.Millisecond)
 	h.render(d, now, false)

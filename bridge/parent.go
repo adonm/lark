@@ -267,10 +267,10 @@ func (h *wsHub) applyParent(d *wsDevice, r parentReason, now time.Time) {
 		h.stopPlayback(d, true)
 		d.last, d.asleep = now, false
 	}
-	h.push(d, object{"op": "power", "brightness": d.brightness()}, true)
-	h.push(d, parentFrame(d), true)
+	h.pushPower(d, d.brightness(), true)
+	h.pushWS(d, parentFrame(d), true)
 	if d.caps.WakeWord {
-		h.push(d, object{"op": "wake_word", "enabled": r == "" && d.wakeWord, "device_id": d.who.DeviceID}, false)
+		h.pushWakeWord(d, r == "" && d.wakeWord)
 	}
 	h.render(d, now, true)
 	if r == parentLimit && old == "" && !d.announcing {

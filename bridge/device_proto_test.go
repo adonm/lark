@@ -212,7 +212,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 		t.Fatal("MSG_STATUS telemetry was not applied")
 	}
 	b.ws.setSleeping(dev, true)
-	b.ws.push(dev, dev.volumeFrame(true), false)
+	b.ws.pushVolume(dev, true, false)
 	stream := newAudioStream()
 	pcm := bytes.Repeat([]byte{0x12, 0x34}, 320)
 	stream.append(pcm)

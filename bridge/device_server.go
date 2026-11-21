@@ -159,13 +159,6 @@ func (s *deviceServer) serveConn(conn net.Conn) {
 	}
 	remoteIP = remoteIP.Unmap()
 
-	s.hub.mu.Lock()
-	full := s.hub.closed || len(s.hub.clients) >= wsConnections
-	s.hub.mu.Unlock()
-	if full {
-		return
-	}
-
 	ctx, cancel := context.WithCancel(s.hub.b.root)
 	ssrc := s.nextSSRC()
 	var initialUDP *net.UDPAddr
@@ -385,30 +378,7 @@ func (nc *nativeClient) enqueue(msgType uint8, payload []byte) bool {
 }
 
 func (nc *nativeClient) enqueueWait(ctx context.Context, msgType uint8, payload []byte) bool {
-	for {
-		nc.outMu.Lock()
-		if nc.client.ctx.Err() != nil || ctx.Err() != nil {
-			nc.outMu.Unlock()
-			return false
-		}
-		if len(nc.out) < min(8, cap(nc.out)) {
-			nc.out <- nativeOutMsg{msgType: msgType, payload: payload}
-			nc.outMu.Unlock()
-			return true
-		}
-		if nc.drained == nil {
-			nc.drained = make(chan struct{})
-		}
-		drained := nc.drained
-		nc.outMu.Unlock()
-		select {
-		case <-drained:
-		case <-nc.client.ctx.Done():
-			return false
-		case <-ctx.Done():
-			return false
-		}
-	}
+	return enqueueWaitChan(ctx, nc.client.ctx, &nc.outMu, nc.out, &nc.drained, nativeOutMsg{msgType: msgType, payload: payload})
 }
 
 func (nc *nativeClient) sendCallDownUDP(pcm []byte) bool {

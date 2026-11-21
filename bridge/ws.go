@@ -49,6 +49,7 @@ type wsClient struct {
 	native     *nativeClient
 	ctx        context.Context
 	cancel     context.CancelFunc
+	closeOnce  sync.Once
 	closeCode  atomic.Uint32
 	out        chan wsFrame
 	outMu      sync.Mutex
@@ -71,6 +72,7 @@ type wsHub struct {
 	settingsMu    sync.Mutex
 	conns         sync.WaitGroup
 	clients       map[*wsClient]struct{}
+	pending       int
 	devices       map[string]*wsDevice
 	parents       map[string]*parentRuntime
 	closed        bool
@@ -122,28 +124,31 @@ func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *virtua
 		}
 	}
 	h.mu.Lock()
-	full := h.closed || len(h.clients) >= wsConnections
+	full := h.closed || len(h.clients)+h.pending >= wsConnections
+	if !full {
+		h.pending++
+	}
 	h.mu.Unlock()
 	if full {
 		return problem(503, "WebSocket hub unavailable")
 	}
 	wire, err := upgradeWebSocket(w, r)
 	if err != nil || wire == nil {
+		h.mu.Lock()
+		h.pending--
+		h.mu.Unlock()
 		return err
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	c := &wsClient{wire: wire, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 192), scope: scope}
 	wire.onPong = c.pong
 	h.mu.Lock()
-	if closed := h.closed; closed || len(h.clients) >= wsConnections {
+	h.pending--
+	if h.closed {
 		h.mu.Unlock()
 		cancel()
-		code := uint16(1013)
-		if closed {
-			code = 1001
-		}
-		_ = wire.write(wsCloseFrame(code))
-		wire.conn.Close()
+		_ = wire.write(wsCloseFrame(1001))
+		c.close()
 		return nil
 	}
 	h.clients[c] = struct{}{}
@@ -152,7 +157,7 @@ func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *virtua
 	go c.write()
 	defer h.conns.Done()
 	defer func() {
-		c.wire.conn.Close()
+		c.close()
 		cancel()
 		h.detach(c)
 	}()
@@ -173,8 +178,16 @@ func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *virtua
 	}
 }
 
+func (c *wsClient) close() {
+	if c.wire != nil {
+		c.closeOnce.Do(func() {
+			c.wire.conn.Close()
+		})
+	}
+}
+
 func (c *wsClient) write() {
-	defer c.wire.conn.Close()
+	defer c.close()
 	ping := time.NewTicker(12 * time.Second)
 	defer ping.Stop()
 	for c.ctx.Err() == nil {
@@ -237,8 +250,37 @@ func (c *wsClient) enqueue(f wsFrame) bool {
 		return true
 	default:
 		c.cancel()
-		c.wire.conn.Close()
+		c.close()
 		return false
+	}
+}
+
+func enqueueWaitChan[T any](ctx, clientCtx context.Context, mu *sync.Mutex, out chan T, drained *chan struct{}, val T) bool {
+	for {
+		mu.Lock()
+		if clientCtx.Err() != nil || ctx.Err() != nil {
+			mu.Unlock()
+			return false
+		}
+		// Keep one FIFO, but leave room for display and interrupt controls
+		// rather than letting a burst of PCM fill it.
+		if len(out) < min(8, cap(out)) {
+			out <- val
+			mu.Unlock()
+			return true
+		}
+		if *drained == nil {
+			*drained = make(chan struct{})
+		}
+		wait := *drained
+		mu.Unlock()
+		select {
+		case <-wait:
+		case <-clientCtx.Done():
+			return false
+		case <-ctx.Done():
+			return false
+		}
 	}
 }
 
@@ -249,32 +291,7 @@ func (c *wsClient) enqueueWait(ctx context.Context, f wsFrame) bool {
 		}
 		return true
 	}
-	for {
-		c.outMu.Lock()
-		if c.ctx.Err() != nil || ctx.Err() != nil {
-			c.outMu.Unlock()
-			return false
-		}
-		// Keep one FIFO, but leave room for display and interrupt controls
-		// rather than letting a burst of PCM fill it.
-		if len(c.out) < min(8, cap(c.out)) {
-			c.out <- f
-			c.outMu.Unlock()
-			return true
-		}
-		if c.drained == nil {
-			c.drained = make(chan struct{})
-		}
-		drained := c.drained
-		c.outMu.Unlock()
-		select {
-		case <-drained:
-		case <-c.ctx.Done():
-			return false
-		case <-ctx.Done():
-			return false
-		}
-	}
+	return enqueueWaitChan(ctx, c.ctx, &c.outMu, c.out, &c.drained, f)
 }
 
 func textFrame(v object) wsFrame {
@@ -282,10 +299,20 @@ func textFrame(v object) wsFrame {
 	return wsFrame{wsText, raw}
 }
 
-func (h *wsHub) push(d *wsDevice, v object, mirror bool) {
-	if d.client.native != nil {
-		h.pushNative(d, v)
-	} else {
+func (h *wsHub) mirrorWatchers(d *wsDevice, v object) {
+	var f wsFrame
+	for c := range h.clients {
+		if c.watch == d.key {
+			if f.data == nil {
+				f = textFrame(v)
+			}
+			c.enqueue(f)
+		}
+	}
+}
+
+func (h *wsHub) pushWS(d *wsDevice, v object, mirror bool) {
+	if d.client.native == nil {
 		f := textFrame(v)
 		d.client.enqueue(f)
 		if mirror {
@@ -298,109 +325,150 @@ func (h *wsHub) push(d *wsDevice, v object, mirror bool) {
 		return
 	}
 	if mirror {
-		var f wsFrame
-		for c := range h.clients {
-			if c.watch == d.key {
-				if f.data == nil {
-					f = textFrame(v)
-				}
-				c.enqueue(f)
-			}
-		}
+		h.mirrorWatchers(d, v)
 	}
 }
 
-func (h *wsHub) pushNative(d *wsDevice, v object) {
-	nc := d.client.native
-	switch str(v["op"]) {
-	case "wake_word":
+func (h *wsHub) pushWakeWord(d *wsDevice, enabled bool) {
+	if d.client.native != nil {
 		var b [1]byte
-		if enabled, _ := v["enabled"].(bool); enabled {
+		if enabled {
 			b[0] = 1
 		}
-		nc.enqueue(msgWakeWordCtrl, b[:])
-	case "rec":
-		var op uint8
-		switch str(v["action"]) {
-		case "start":
-			op = recOpStart
-		default:
-			if cancelled, _ := v["cancelled"].(bool); cancelled {
-				op = recOpCancel
-			} else {
-				op = recOpStop
-			}
+		d.client.native.enqueue(msgWakeWordCtrl, b[:])
+		return
+	}
+	d.client.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "device_id": d.who.DeviceID}))
+}
+
+func (h *wsHub) pushRecStart(d *wsDevice, target string, bridgeEndpoint bool) {
+	if d.client.native != nil {
+		var t uint8
+		if target != "" {
+			t |= recTargetInter
 		}
-		var target uint8
-		if str(v["target"]) != "" {
-			target |= recTargetInter
+		if bridgeEndpoint {
+			t |= recTargetBridgeE
 		}
-		if str(v["endpoint"]) == "bridge" {
-			target |= recTargetBridgeE
+		d.client.native.enqueue(msgRecCtrl, encodeRecCtrl(recOpStart, t, d.recSession))
+		return
+	}
+	start := object{"op": "rec", "action": "start", "target": target}
+	if bridgeEndpoint {
+		start["endpoint"] = "bridge"
+	}
+	d.client.enqueue(textFrame(start))
+}
+
+func (h *wsHub) pushRecStop(d *wsDevice, target string, cancelled bool) {
+	if d.client.native != nil {
+		op := recOpStop
+		if cancelled {
+			op = recOpCancel
 		}
-		nc.enqueue(msgRecCtrl, encodeRecCtrl(op, target, d.recSession))
-	case "tts":
-		var op uint8
-		switch str(v["state"]) {
-		case "start":
-			op = ttsOpStart
-		case "end":
-			op = ttsOpEnd
-		default:
-			op = ttsOpStop
+		var t uint8
+		if target != "" {
+			t |= recTargetInter
 		}
-		var id uint64
-		switch n := v["audio"].(type) {
-		case uint64:
-			id = n
-		case int:
-			id = uint64(n)
+		d.client.native.enqueue(msgRecCtrl, encodeRecCtrl(op, t, d.recSession))
+		return
+	}
+	v := object{"op": "rec", "action": "stop", "target": target}
+	if cancelled {
+		v["cancelled"] = true
+	}
+	d.client.enqueue(textFrame(v))
+}
+
+func (h *wsHub) pushTTSAbort(d *wsDevice, audioID uint64) {
+	if d.client.native != nil {
+		d.client.native.enqueue(msgTTSCtrl, encodeIDCtrl(ttsOpStop, audioID))
+		return
+	}
+	d.client.enqueue(textFrame(object{"op": "tts", "state": "abort", "audio": audioID}))
+}
+
+func (h *wsHub) pushCallStart(d *wsDevice) {
+	if d.client.native != nil {
+		d.client.native.enqueue(msgCallCtrl, encodeIDCtrl(callOpStart, uint64(d.callID)))
+		return
+	}
+	msg := object{"op": "call", "state": "start", "call": d.callID, "muted": false}
+	if d.caps.CallPCM {
+		msg["mic_prefix"] = callMicPrefix
+	}
+	d.client.enqueue(textFrame(msg))
+}
+
+func (h *wsHub) pushCallMute(d *wsDevice) {
+	if d.client.native != nil {
+		op := callOpUnmute
+		if d.callMuted {
+			op = callOpMute
 		}
-		nc.enqueue(msgTTSCtrl, encodeIDCtrl(op, id))
-	case "call":
-		var op uint8
-		switch str(v["state"]) {
-		case "start":
-			op = callOpStart
-		case "mute":
-			if muted, _ := v["muted"].(bool); muted {
-				op = callOpMute
-			} else {
-				op = callOpUnmute
-			}
-		default:
-			op = callOpEnd
+		d.client.native.enqueue(msgCallCtrl, encodeIDCtrl(op, uint64(d.callID)))
+		return
+	}
+	d.client.enqueue(textFrame(object{"op": "call", "state": "mute", "call": d.callID, "muted": d.callMuted}))
+}
+
+func (h *wsHub) pushCallEnd(d *wsDevice, callID uint32, reason string) {
+	if d.client.native != nil {
+		d.client.native.enqueue(msgCallCtrl, encodeIDCtrl(callOpEnd, uint64(callID)))
+		return
+	}
+	d.client.enqueue(textFrame(object{"op": "call", "state": "end", "call": callID, "reason": reason}))
+}
+
+func (h *wsHub) pushChime(d *wsDevice, kind string) {
+	if d.client.native != nil {
+		if code, ok := encodeChimePayload(kind); ok {
+			d.client.native.enqueue(msgChime, []byte{code})
 		}
-		var id uint64
-		switch n := v["call"].(type) {
-		case uint32:
-			id = uint64(n)
-		case uint64:
-			id = n
-		case int:
-			id = uint64(n)
-		}
-		nc.enqueue(msgCallCtrl, encodeIDCtrl(op, id))
-	case "chime":
-		if code, ok := encodeChimePayload(str(v["kind"])); ok {
-			nc.enqueue(msgChime, []byte{code})
-		}
-	case "power":
-		bright, _ := v["brightness"].(int)
-		nc.enqueue(msgPower, []byte{encodePowerPayload(bright)})
-	case "volume":
-		level, _ := v["level"].(int)
-		persist, _ := v["persist"].(bool)
+		return
+	}
+	d.client.enqueue(textFrame(object{"op": "chime", "kind": kind}))
+}
+
+func (h *wsHub) pushPower(d *wsDevice, brightness int, mirror bool) {
+	if d.client.native != nil {
+		d.client.native.enqueue(msgPower, []byte{encodePowerPayload(brightness)})
+	} else {
+		d.client.enqueue(textFrame(object{"op": "power", "brightness": brightness}))
+	}
+	if mirror {
+		h.mirrorWatchers(d, object{"op": "power", "brightness": brightness})
+	}
+}
+
+func (h *wsHub) pushVolume(d *wsDevice, persist, mirror bool) {
+	if d.client.native != nil {
 		var p byte
 		if persist {
 			p = 1
 		}
-		nc.enqueue(msgVolume, []byte{byte(min(100, max(0, level))), p})
+		d.client.native.enqueue(msgVolume, []byte{byte(min(100, max(0, d.vol))), p})
+		if mirror {
+			h.mirrorWatchers(d, d.volumeFrame(persist))
+		}
+		return
 	}
+	h.pushWS(d, d.volumeFrame(persist), mirror)
 }
 
 func (h *wsHub) active(d *wsDevice) bool {
 	return !h.closed && h.devices[d.key] == d && d.client.ctx.Err() == nil
+}
+
+func (h *wsHub) teardownDevice(d *wsDevice) {
+	h.endCall(d, "disconnected")
+	h.dropApp(d)
+	delete(h.devices, d.key)
+	d.recording.clear()
+	h.cancelTurn(d, "disconnect")
+	h.stopPlayback(d, false)
+	h.parentFinishActivity(d.key, time.Now())
+	h.broadcastPeers()
 }
 
 func (h *wsHub) detach(c *wsClient) {
@@ -408,14 +476,7 @@ func (h *wsHub) detach(c *wsClient) {
 	defer h.mu.Unlock()
 	delete(h.clients, c)
 	if d := c.device; d != nil && h.devices[d.key] == d {
-		h.endCall(d, "disconnected")
-		h.dropApp(d)
-		delete(h.devices, d.key)
-		d.recording.clear()
-		h.cancelTurn(d, "disconnect")
-		h.stopPlayback(d, false)
-		h.parentFinishActivity(d.key, time.Now())
-		h.broadcastPeers()
+		h.teardownDevice(d)
 	}
 }
 
@@ -424,13 +485,6 @@ func (h *wsHub) disconnectDevice(id string) {
 	defer h.mu.Unlock()
 	if d := h.devices[id]; d != nil {
 		d.client.cancel()
-		h.endCall(d, "disconnected")
-		h.dropApp(d)
-		delete(h.devices, id)
-		d.recording.clear()
-		h.cancelTurn(d, "disconnect")
-		h.stopPlayback(d, false)
-		h.parentFinishActivity(d.key, time.Now())
-		h.broadcastPeers()
+		h.teardownDevice(d)
 	}
 }

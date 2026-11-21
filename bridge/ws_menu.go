@@ -36,9 +36,8 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 				target.client.role == "device" {
 				target.wakeWord = *ev.Enabled
 				enabled := h.parentRefresh(target.key, now) == "" && target.wakeWord
-				f := object{"op": "wake_word", "enabled": enabled, "device_id": target.who.DeviceID}
-				h.push(target, f, false)
-				c.enqueue(textFrame(f))
+				h.pushWakeWord(target, enabled)
+				c.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "device_id": target.who.DeviceID}))
 			}
 			return
 		}
@@ -82,11 +81,11 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		switch ev.Event {
 		case "status", "tts_ack", "rec_end":
 		case "rec_start", "rec_request":
-			h.push(d, object{"op": "rec", "action": "stop", "cancelled": true}, false)
+			h.pushRecStop(d, "", true)
 			return
 		default:
 			if native && ev.Event == "tap" {
-				h.push(d, object{"op": "power", "brightness": d.brightness()}, false)
+				h.pushPower(d, d.brightness(), false)
 			}
 			return
 		}
@@ -305,7 +304,7 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 		}
 	case "vol-auto", "vol-minus", "vol-plus":
 		if err := h.setVolume(d.client.ctx, d, false, 0, a.kind); err != nil && h.active(d) {
-			h.push(d, object{"op": "error", "status": 502, "error": err.Error()}, true)
+			h.pushWS(d, object{"op": "error", "status": 502, "error": err.Error()}, true)
 		}
 	case "listen", "reply":
 		if key == "companion-ring" && (d.busy || d.ttsStarted || d.awaitAck) {

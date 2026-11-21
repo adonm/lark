@@ -1491,7 +1491,7 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 		for _, d := range a.devices {
 			if d != nil && h.active(d) {
 				d.lastAppError = appFailure(a.spec, ev.kind, err, now)
-				h.push(d, object{"op": "error", "status": 400, "error": err.Error()}, true)
+				h.pushWS(d, object{"op": "error", "status": 400, "error": err.Error()}, true)
 			}
 		}
 		h.closeApp(a, now)

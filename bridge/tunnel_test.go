@@ -140,7 +140,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	defer oc.Close()
 	b, base := wsHarness(t, func(b *bridge, dir string) {
 		b.virtual = virtualStore(b.db)
-		b.tunnels = newTunnelManager(b, "mock-opentunnel", r)
+		b.tunnels = newTunnelManager(b, "mock-opentunnel", r.run)
 		b.history = &chatHistory{b.db}
 		b.stt = func(context.Context, []byte) (string, error) { return "Voice to Cake.", nil }
 		path := filepath.Join(dir, "service.json")
@@ -169,7 +169,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	if details := apiObjects(t, base+"/api/devices", "devices")[0].(object)["tunnel"].(object); details["active"] != true {
 		t.Fatal("unified list missing tunnel")
 	}
-	restored := newTunnelManager(b, "mock-opentunnel", r)
+	restored := newTunnelManager(b, "mock-opentunnel", r.run)
 	defer restored.shutdown()
 	b.tunnels.mu.Lock()
 	before, _, err := b.tunnels.store.get(id)

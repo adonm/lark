@@ -59,12 +59,10 @@ func (h *wsHub) startRecording(d *wsDevice, target string, now time.Time, reques
 		}()
 	}
 	if request {
-		start := object{"op": "rec", "action": "start", "target": target}
 		if bridgeEndpoint {
 			h.startEndpoint(d)
-			start["endpoint"] = "bridge"
 		}
-		h.push(d, start, false)
+		h.pushRecStart(d, target, bridgeEndpoint)
 	}
 	h.render(d, now, false)
 }
@@ -75,7 +73,7 @@ func (h *wsHub) recordingControl(d *wsDevice, now time.Time, cancelled bool) {
 		return
 	}
 	if cancelled {
-		h.push(d, object{"op": "rec", "action": "stop", "target": c.target, "cancelled": true}, false)
+		h.pushRecStop(d, c.target, true)
 		c.suppressLateStart()
 		h.endRecording(d, wsEvent{Cancelled: true}, now)
 		return
@@ -86,7 +84,7 @@ func (h *wsHub) recordingControl(d *wsDevice, now time.Time, cancelled bool) {
 	if c.endpoint != nil {
 		c.endpoint.commitAt = now
 	}
-	h.push(d, object{"op": "rec", "action": "stop", "target": ""}, false)
+	h.pushRecStop(d, "", false)
 	if d.client.role == "web" && c.endpoint == nil {
 		return
 	}
@@ -154,7 +152,7 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 }
 
 func (h *wsHub) stopRecordingAtLimit(d *wsDevice, now time.Time) {
-	h.push(d, object{"op": "rec", "action": "stop", "target": ""}, false)
+	h.pushRecStop(d, "", false)
 	h.endRecording(d, wsEvent{}, now)
 }
 
@@ -173,7 +171,7 @@ func (h *wsHub) endRecording(d *wsDevice, ev wsEvent, now time.Time) {
 	d.recording.clear()
 	if ev.Cancelled || len(pcm) == 0 {
 		if ev.Cancelled {
-			h.push(d, object{"op": "chime", "kind": "cancel"}, false)
+			h.pushChime(d, "cancel")
 		}
 		h.wake(d, now)
 		h.render(d, now, false)
@@ -226,7 +224,7 @@ func (h *wsHub) beginTurn(d *wsDevice, now time.Time, keepView bool, source stri
 	h.wake(d, now)
 	h.stopPlayback(d, true)
 	if d.recording.active() {
-		h.push(d, object{"op": "rec", "action": "stop", "target": d.recording.target}, false)
+		h.pushRecStop(d, d.recording.target, false)
 		d.recording.clear()
 	}
 	d.drawer, d.card, d.pending = "", nil, nil
@@ -239,7 +237,7 @@ func (h *wsHub) beginTurn(d *wsDevice, now time.Time, keepView bool, source stri
 	id := d.turn
 	d.cancel, d.busy = cancel, true
 	if !keepView {
-		h.push(d, object{"op": "chime", "kind": "think"}, false)
+		h.pushChime(d, "think")
 	}
 	h.render(d, now, false)
 	go run(ctx, id)
@@ -303,7 +301,7 @@ func (h *wsHub) stopCompanionTurn(d *wsDevice) {
 	h.cancelLocalTurn(d)
 	h.stopPlayback(d, true)
 	if d.recording.active() {
-		h.push(d, object{"op": "rec", "action": "stop", "target": d.recording.target}, false)
+		h.pushRecStop(d, d.recording.target, false)
 		d.recording.clear()
 	}
 }
@@ -661,7 +659,7 @@ func (h *wsHub) applyAmbientVolume(d *wsDevice) {
 	level := ambientVolume(d.ambientEMA)
 	if delta := level - d.vol; delta >= 3 || delta <= -3 {
 		d.vol = level
-		h.push(d, d.volumeFrame(false), true)
+		h.pushVolume(d, false, true)
 	}
 }
 
@@ -671,7 +669,7 @@ func (h *wsHub) stopPlayback(d *wsDevice, notify bool) {
 		d.stopAudio = nil
 	}
 	if notify && (d.ttsStarted || d.awaitAck) {
-		h.push(d, object{"op": "tts", "state": "abort", "audio": d.audio}, false)
+		h.pushTTSAbort(d, d.audio)
 	}
 	d.ttsStarted, d.awaitAck = false, false
 	d.replyAudio = nil
@@ -751,7 +749,7 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender peer, recipients []pee
 		h.cancelTurn(d, "intercom")
 		h.stopPlayback(d, true)
 		if d.recording.active() {
-			h.push(d, object{"op": "rec", "action": "stop", "target": d.recording.target}, false)
+			h.pushRecStop(d, d.recording.target, false)
 			d.recording.clear()
 		}
 		d.drawer, d.pending = "", nil
@@ -762,7 +760,7 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender peer, recipients []pee
 		}
 		h.wake(d, now)
 		h.render(d, now, false)
-		h.push(d, object{"op": "chime", "kind": "intercom"}, false)
+		h.pushChime(d, "intercom")
 		if d.client.ctx.Err() == nil {
 			receipts = append(receipts, wsReceipt{d, &view})
 			if pcm != nil {

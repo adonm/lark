@@ -30,16 +30,14 @@ func tokenMatches(values []string, want string) bool {
 	return want != "" && len(values) == 1 && subtle.ConstantTimeCompare([]byte(values[0]), []byte(want)) == 1
 }
 
-type tunnelRunner interface {
-	run(context.Context, ...string) ([]byte, error)
-}
+type tunnelRunner func(context.Context, ...string) ([]byte, error)
 
-type tunnelCLI string
-
-func (bin tunnelCLI) run(ctx context.Context, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, string(bin), args...).CombinedOutput()
+func tunnelCLI(bin string) tunnelRunner {
+	return func(ctx context.Context, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	}
 }
 
 func findTunnelCLI(home string) string {
@@ -141,7 +139,7 @@ func (m *tunnelManager) status(ctx context.Context) object {
 		out["error"] = "OpenTunnel CLI not found"
 		return out
 	}
-	raw, err := m.runner.run(ctx, "status")
+	raw, err := m.runner(ctx, "status")
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		key, value, _ := strings.Cut(strings.TrimSpace(line), ":")
 		value = strings.TrimSpace(value)
@@ -236,7 +234,7 @@ func (m *tunnelManager) addLocked(ctx context.Context, id string) (object, error
 	}
 	record.LocalPort = port
 	// A fresh profile prevents route add from reusing a user's route for this target.
-	raw, err := m.runner.run(ctx, "route", "add", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), "--profile", record.Profile)
+	raw, err := m.runner(ctx, "route", "add", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), "--profile", record.Profile)
 	record.RouteName, record.URL = routeAddress(string(raw))
 	if err != nil || record.RouteName == "" {
 		server.close()
@@ -264,7 +262,7 @@ func (m *tunnelManager) removeLocked(ctx context.Context, id string, required bo
 	if m.runner == nil {
 		return problem(503, "OpenTunnel CLI not found")
 	}
-	if _, err := m.runner.run(ctx, "route", "remove", v.RouteName, "--profile", v.Profile); err != nil {
+	if _, err := m.runner(ctx, "route", "remove", v.RouteName, "--profile", v.Profile); err != nil {
 		return problem(502, "OpenTunnel route remove failed")
 	}
 	if s := m.live[id]; s != nil {

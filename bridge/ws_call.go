@@ -49,7 +49,7 @@ func (h *wsHub) interruptForCall(d *wsDevice, now time.Time) {
 func (h *wsHub) abortCallRecording(d *wsDevice) {
 	rec := &d.recording
 	if rec.active() {
-		h.push(d, object{"op": "rec", "action": "stop", "target": rec.target, "cancelled": true}, false)
+		h.pushRecStop(d, rec.target, true)
 		rec.clear()
 	}
 	rec.ignoreStart = false
@@ -273,11 +273,7 @@ func (h *wsHub) answerCall(callee *wsDevice) {
 	for _, d := range []*wsDevice{caller, callee} {
 		h.interruptForCall(d, now)
 		d.callState, d.callStarted = callActive, now
-		msg := object{"op": "call", "state": "start", "call": d.callID, "muted": false}
-		if d.caps.CallPCM {
-			msg["mic_prefix"] = callMicPrefix
-		}
-		h.push(d, msg, false)
+		h.pushCallStart(d)
 		h.render(d, now, false)
 	}
 }
@@ -319,7 +315,7 @@ func (h *wsHub) endCall(d *wsDevice, reason string) {
 		side.callMuted, side.callStarted, side.callSecond, side.callCancel = false, time.Time{}, 0, nil
 		side.callOrigin, side.callFramesIn, side.callFramesOut = false, 0, 0
 		if h.active(side) {
-			h.push(side, object{"op": "call", "state": "end", "call": id, "reason": reason}, false)
+			h.pushCallEnd(side, id, reason)
 			if answered && side.parentReason == "" {
 				h.chime(side, "cancel")
 			}
@@ -357,7 +353,7 @@ func logCall(event string, d, p *wsDevice, reason string, duration time.Duration
 func (h *wsHub) toggleCallMute(d *wsDevice) {
 	if d.callState == callActive {
 		d.callMuted = !d.callMuted
-		h.push(d, object{"op": "call", "state": "mute", "call": d.callID, "muted": d.callMuted}, false)
+		h.pushCallMute(d)
 		h.render(d, time.Now(), false)
 	}
 }

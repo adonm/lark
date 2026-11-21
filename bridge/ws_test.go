@@ -623,7 +623,7 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		if !h.mu.TryLock() {
 			t.Fatal("playback blocked the hub while waiting for the client")
 		}
-		h.push(d, object{"op": "volume", "level": 42}, false)
+		h.pushWS(d, object{"op": "volume", "level": 42}, false)
 		h.mu.Unlock()
 
 		var got []byte
