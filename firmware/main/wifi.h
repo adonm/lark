@@ -16,3 +16,4 @@ esp_err_t wifi_init_identity(void);
 const char *wifi_character(void);
 esp_err_t wifi_start(wifi_state_cb_t on_state);
 void wifi_get_ip(char ip[WIFI_IP_LEN]);
+void wifi_set_low_latency(bool enable);

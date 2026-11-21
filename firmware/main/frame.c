@@ -1,6 +1,15 @@
 #include "frame.h"
 
+#include <limits.h>
 #include <string.h>
+
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#include "esp_jpeg_dec.h"
+#include "lz4.h"
+#endif
+
+enum { FRAME_SCRATCH_CAP = (FRAME_WIDTH + 16) * (FRAME_HEIGHT + 16) * 2 };
 
 void frame_union(frame_bounds_t *dirty, frame_rect_t r)
 {
@@ -20,6 +29,29 @@ void frame_union(frame_bounds_t *dirty, frame_rect_t r)
 static uint16_t le16(const uint8_t *p)
 {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint16_t be16(const uint8_t *p)
+{
+    return ((uint16_t)p[0] << 8) | (uint16_t)p[1];
+}
+
+static uint8_t *frame_scratch(size_t needed)
+{
+    if (needed > FRAME_SCRATCH_CAP) return NULL;
+#ifdef ESP_PLATFORM
+    static uint8_t *scratch;
+    if (!scratch) {
+        scratch = heap_caps_aligned_alloc(16, FRAME_SCRATCH_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!scratch) {
+            scratch = heap_caps_aligned_alloc(16, FRAME_SCRATCH_CAP, MALLOC_CAP_8BIT);
+        }
+    }
+    return scratch;
+#else
+    static _Alignas(16) uint8_t scratch[FRAME_SCRATCH_CAP];
+    return scratch;
+#endif
 }
 
 static bool rle_valid(const uint8_t *p, size_t len, size_t pixels)
@@ -70,6 +102,192 @@ static void decode_rle(uint16_t *fb, const uint8_t *p, frame_rect_t r)
     }
 }
 
+static bool lz4_block_valid(const uint8_t *src, size_t src_len, size_t expected_dst)
+{
+    const uint8_t *ip = src, *iend = src + src_len;
+    size_t dst_pos = 0;
+    while (ip < iend) {
+        uint8_t token = *ip++;
+        size_t lit_len = token >> 4;
+        if (lit_len == 15) {
+            uint8_t s;
+            do {
+                if (ip >= iend) return false;
+                s = *ip++;
+                if (lit_len > SIZE_MAX - s) return false;
+                lit_len += s;
+            } while (s == 255);
+        }
+        if (lit_len > (size_t)(iend - ip) || lit_len > expected_dst - dst_pos) return false;
+        ip += lit_len;
+        dst_pos += lit_len;
+        if (ip == iend) break;
+        if ((size_t)(iend - ip) < 2) return false;
+        uint16_t offset = le16(ip);
+        ip += 2;
+        if (offset == 0 || offset > dst_pos) return false;
+        size_t match_len = (token & 0x0f) + 4;
+        if ((token & 0x0f) == 15) {
+            uint8_t s;
+            do {
+                if (ip >= iend) return false;
+                s = *ip++;
+                if (match_len > SIZE_MAX - s) return false;
+                match_len += s;
+            } while (s == 255);
+        }
+        if (match_len > expected_dst - dst_pos) return false;
+        dst_pos += match_len;
+    }
+    return dst_pos == expected_dst && ip == iend;
+}
+
+#ifndef ESP_PLATFORM
+static int lz4_block_decode(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap)
+{
+    const uint8_t *ip = src, *iend = src + src_len;
+    uint8_t *op = dst, *oend = dst + dst_cap;
+    while (ip < iend) {
+        uint8_t token = *ip++;
+        size_t lit_len = token >> 4;
+        if (lit_len == 15) {
+            uint8_t s;
+            do {
+                if (ip >= iend) return -1;
+                s = *ip++;
+                if (lit_len > SIZE_MAX - s) return -1;
+                lit_len += s;
+            } while (s == 255);
+        }
+        if (lit_len > (size_t)(iend - ip) || lit_len > (size_t)(oend - op)) return -1;
+        memcpy(op, ip, lit_len);
+        ip += lit_len;
+        op += lit_len;
+        if (ip == iend) break;
+        if ((size_t)(iend - ip) < 2) return -1;
+        uint16_t offset = le16(ip);
+        ip += 2;
+        if (offset == 0 || offset > (size_t)(op - dst)) return -1;
+        size_t match_len = (token & 0x0f) + 4;
+        if ((token & 0x0f) == 15) {
+            uint8_t s;
+            do {
+                if (ip >= iend) return -1;
+                s = *ip++;
+                if (match_len > SIZE_MAX - s) return -1;
+                match_len += s;
+            } while (s == 255);
+        }
+        if (match_len > (size_t)(oend - op)) return -1;
+        const uint8_t *match = op - offset;
+        for (size_t i = 0; i < match_len; ++i) *op++ = match[i];
+    }
+    return (int)(op - dst);
+}
+
+static bool jpeg_valid(const uint8_t *src, size_t len, uint16_t w, uint16_t h)
+{
+    if (len < 4 || src[0] != 0xff || src[1] != 0xd8 || src[len - 2] != 0xff || src[len - 1] != 0xd9) {
+        return false;
+    }
+    bool has_sof0 = false, has_sos = false;
+    size_t pos = 2;
+    while (pos < len) {
+        if (src[pos] != 0xff) return false;
+        while (pos < len && src[pos] == 0xff) ++pos;
+        if (pos >= len) return false;
+        uint8_t marker = src[pos++];
+        if (marker == 0xd9) {
+            return has_sof0 && has_sos && pos == len;
+        }
+        if (marker == 0x00 || marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+            continue;
+        }
+        if (pos + 2 > len) return false;
+        uint16_t seg_len = be16(src + pos);
+        if (seg_len < 2 || pos + seg_len > len) return false;
+        if (marker == 0xc0) { // SOF0 Baseline DCT
+            if (seg_len < 7 || src[pos + 2] == 0) return false;
+            uint16_t jh = be16(src + pos + 3);
+            uint16_t jw = be16(src + pos + 5);
+            if (jw != w || jh != h) return false;
+            has_sof0 = true;
+        } else if (marker == 0xc2) { // SOF2 Progressive DCT not supported by esp_new_jpeg
+            return false;
+        } else if (marker == 0xda) { // SOS: scan entropy data until EOI
+            has_sos = true;
+            return has_sof0;
+        }
+        pos += seg_len;
+    }
+    return false;
+}
+#endif
+
+static bool decode_lz4(uint16_t *fb, const uint8_t *payload, size_t len, frame_rect_t r)
+{
+    size_t expected = (size_t)r.w * r.h * 2;
+    if (len > (size_t)INT_MAX || expected > (size_t)INT_MAX) return false;
+    if (!lz4_block_valid(payload, len, expected)) return false;
+
+    bool direct = (r.x == 0 && r.w == FRAME_WIDTH);
+    uint8_t *dst = direct ? (uint8_t *)(fb + (size_t)r.y * FRAME_WIDTH) : frame_scratch(expected);
+    if (!dst) return false;
+
+#ifdef ESP_PLATFORM
+    int dec = LZ4_decompress_safe((const char *)payload, (char *)dst, (int)len, (int)expected);
+#else
+    int dec = lz4_block_decode(payload, len, dst, expected);
+#endif
+    if (dec != (int)expected) return false;
+
+    if (!direct) {
+        size_t row_bytes = (size_t)r.w * 2;
+        for (size_t row = 0; row < r.h; ++row) {
+            memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, dst + row * row_bytes, row_bytes);
+        }
+    }
+    return true;
+}
+
+static bool decode_jpeg(uint16_t *fb, const uint8_t *payload, size_t len, frame_rect_t r)
+{
+#ifdef ESP_PLATFORM
+    if (len < 4 || len > (size_t)INT_MAX || payload[0] != 0xff || payload[1] != 0xd8) return false;
+    static jpeg_dec_handle_t jpeg_dec;
+    if (!jpeg_dec) {
+        jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
+        config.output_type = JPEG_PIXEL_FORMAT_RGB565_BE;
+        if (jpeg_dec_open(&config, &jpeg_dec) != JPEG_ERR_OK) {
+            jpeg_dec = NULL;
+            return false;
+        }
+    }
+    jpeg_dec_io_t io = {
+        .inbuf = (uint8_t *)payload,
+        .inbuf_len = (int)len,
+    };
+    jpeg_dec_header_info_t info = { 0 };
+    if (jpeg_dec_parse_header(jpeg_dec, &io, &info) != JPEG_ERR_OK) return false;
+    if (info.width != r.w || info.height != r.h) return false;
+    int outbuf_len = 0;
+    if (jpeg_dec_get_outbuf_len(jpeg_dec, &outbuf_len) != JPEG_ERR_OK || outbuf_len <= 0) return false;
+    uint8_t *out = frame_scratch((size_t)outbuf_len);
+    if (!out) return false;
+    io.outbuf = out;
+    io.out_size = outbuf_len;
+    if (jpeg_dec_process(jpeg_dec, &io) != JPEG_ERR_OK) return false;
+    size_t row_bytes = (size_t)r.w * 2;
+    for (size_t row = 0; row < r.h; ++row) {
+        memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, out + row * row_bytes, row_bytes);
+    }
+    return true;
+#else
+    (void)fb;
+    return jpeg_valid(payload, len, r.w, r.h);
+#endif
+}
+
 bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *dirty)
 {
     if (!fb || !data || !dirty || len < FRAME_HEADER_SIZE || data[0] != FRAME_TAG) return false;
@@ -81,16 +299,25 @@ bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *di
     const uint8_t *payload = data + FRAME_HEADER_SIZE;
     len -= FRAME_HEADER_SIZE;
     size_t pixels = (size_t)r.w * r.h;
-    if (data[9] == 0) {
+    switch (data[9]) {
+    case FRAME_CODEC_RAW:
         if (len != pixels * 2) return false;
         for (size_t row = 0; row < r.h; ++row) {
             memcpy(fb + (r.y + row) * FRAME_WIDTH + r.x, payload + row * r.w * 2, r.w * 2);
         }
-    } else if (data[9] == 1) {
+        break;
+    case FRAME_CODEC_RLE565:
         // Validate the whole stream before exposing any pixels to a later flush.
         if (!rle_valid(payload, len, pixels)) return false;
         decode_rle(fb, payload, r);
-    } else {
+        break;
+    case FRAME_CODEC_JPEG:
+        if (!decode_jpeg(fb, payload, len, r)) return false;
+        break;
+    case FRAME_CODEC_LZ4:
+        if (!decode_lz4(fb, payload, len, r)) return false;
+        break;
+    default:
         return false;
     }
     *dirty = r;

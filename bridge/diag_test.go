@@ -122,7 +122,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	d := report.Devices[0]
 	if !d.WS || d.Board != "esp-box-3" || d.Firmware != "0.8.4" || d.RTT == nil || *d.RTT < 12 ||
 		d.CPU == nil || *d.CPU != 27 || *d.WiFi != -60 || *d.FreeHeap != 65536 || *d.MinHeap != 32768 || *d.FreePSRAM != 6291456 ||
-		*d.HasBattery || d.DeviceVol == nil || *d.DeviceVol != 70 || d.Frame.Bytes >= d.Frame.RawBytes || d.Frame.Codec != "RLE565" {
+		*d.HasBattery || d.DeviceVol == nil || *d.DeviceVol != 70 || d.Frame.Bytes >= d.Frame.RawBytes || (d.Frame.Codec != "RLE565" && d.Frame.Codec != "LZ4") {
 		t.Fatalf("invalid device telemetry: %+v", d)
 	}
 	if d.LastFrameRev != nil || d.AudioDrops != nil {

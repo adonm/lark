@@ -109,6 +109,7 @@ type wsDevice struct {
 	grade      atomic.Uint32 // App workers read the board's grade without the hub lock.
 	svgWire    wsFrame
 	displayApp *appInstance
+	encoder    frameEncoder
 	renderGen  uint64
 	rendering  bool
 	renderNext *renderRequest
@@ -844,7 +845,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 					rect = image.Rect(0, 0, 1, 1)
 				}
 				if !rect.Empty() {
-					native = displayFrame(screen.fb, rect, rev, geometry.width)
+					native = d.encoder.encode(screen.fb, nil, rect, rev, geometry.width)
 					rawBytes = 12 + rect.Dx()*rect.Dy()*2
 				}
 			}
@@ -882,8 +883,13 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 			d.nativeRev = uint16(rev)
 			r.trace.measure(diagRender, screen.render)
 			codec := "RGB565"
-			if native.data[9] == 1 {
+			switch native.data[9] {
+			case frameCodecRLE565:
 				codec = "RLE565"
+			case frameCodecJPEG:
+				codec = "JPEG"
+			case frameCodecLZ4:
+				codec = "LZ4"
 			}
 			h.trackFrame(d, screen.render, len(native.data), rawBytes, codec)
 		}

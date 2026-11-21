@@ -29,7 +29,7 @@ static esp_lcd_panel_handle_t panel;
 static esp_lcd_touch_handle_t touch;
 static SemaphoreHandle_t drawn, fb_lock;
 static TaskHandle_t painter;
-static uint16_t *fb, *strip;
+static uint16_t *fb, *strip[2];
 static bool linked;
 static bool first_frame;
 static frame_bounds_t dirty_bounds;
@@ -46,27 +46,48 @@ static bool color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data
     return awaken == pdTRUE;
 }
 
+static void copy_strip(uint16_t *dst, frame_bounds_t area, int y, int rows)
+{
+    int width = area.x1 - area.x0;
+    xSemaphoreTake(fb_lock, portMAX_DELAY);
+    if (width == FRAME_WIDTH) {
+        memcpy(dst, fb + y * FRAME_WIDTH, (size_t)rows * FRAME_WIDTH * sizeof(*dst));
+    } else {
+        for (int row = 0; row < rows; ++row) {
+            memcpy(dst + row * width, fb + (y + row) * FRAME_WIDTH + area.x0, (size_t)width * sizeof(*dst));
+        }
+    }
+    xSemaphoreGive(fb_lock);
+}
+
 static esp_err_t blit(frame_bounds_t area)
 {
+    if (area.x0 >= area.x1 || area.y0 >= area.y1) return ESP_OK;
     int64_t started = esp_timer_get_time();
-    int width = area.x1 - area.x0;
+    int cur = 0;
+    bool in_flight = false;
+    esp_err_t err = ESP_OK;
     for (int y = area.y0; y < area.y1; y += STRIP_ROWS) {
         int rows = area.y1 - y < STRIP_ROWS ? area.y1 - y : STRIP_ROWS;
-        xSemaphoreTake(fb_lock, portMAX_DELAY);
-        if (width == FRAME_WIDTH) {
-            memcpy(strip, fb + y * FRAME_WIDTH, rows * FRAME_WIDTH * sizeof(*strip));
-        } else {
-            for (int row = 0; row < rows; ++row) {
-                memcpy(strip + row * width, fb + (y + row) * FRAME_WIDTH + area.x0, width * sizeof(*strip));
-            }
+        // Copy the next strip into strip[cur] while strip[cur ^ 1] transfers over SPI DMA.
+        copy_strip(strip[cur], area, y, rows);
+        if (in_flight) {
+            xSemaphoreTake(drawn, portMAX_DELAY);
+            in_flight = false;
         }
-        xSemaphoreGive(fb_lock);
-        ESP_RETURN_ON_ERROR(esp_lcd_panel_draw_bitmap(panel, area.x0, y, area.x1, y + rows, strip), TAG, "Queue LCD strip");
-        // tx_color borrows the strip until the SPI completion callback.
+        err = esp_lcd_panel_draw_bitmap(panel, area.x0, y, area.x1, y + rows, strip[cur]);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Queue LCD strip: %s", esp_err_to_name(err));
+            break;
+        }
+        in_flight = true;
+        cur ^= 1;
+    }
+    if (in_flight) {
         xSemaphoreTake(drawn, portMAX_DELAY);
     }
     atomic_store_explicit(&telemetry_io.display_flush_ms, (esp_timer_get_time() - started) / 1000, memory_order_relaxed);
-    return ESP_OK;
+    return err;
 }
 
 static void display_show_offline(void)
@@ -88,7 +109,10 @@ static void paint_task(void *arg)
         if (BOARD_HAS_BATTERY && level == DIM) {
             xSemaphoreGive(fb_lock);
             if (applied != 0 && bsp_display_backlight_off() == ESP_OK) applied = 0;
-            if (panel_on && esp_lcd_panel_disp_on_off(panel, false) == ESP_OK) panel_on = false;
+            if (panel_on && esp_lcd_panel_disp_on_off(panel, false) == ESP_OK) {
+                panel_on = false;
+                wifi_set_low_latency(false);
+            }
             continue;
         }
         frame_bounds_t area = dirty_bounds;
@@ -100,7 +124,10 @@ static void paint_task(void *arg)
             if (linked && dirty_bounds.x0 == dirty_bounds.x1) atomic_store(&shown_rev, rev);
             xSemaphoreGive(fb_lock);
         }
-        if (!panel_on && esp_lcd_panel_disp_on_off(panel, true) == ESP_OK) panel_on = true;
+        if (!panel_on && esp_lcd_panel_disp_on_off(panel, true) == ESP_OK) {
+            panel_on = true;
+            wifi_set_low_latency(true);
+        }
         if (panel_on && level != applied && bsp_display_brightness_set(level) == ESP_OK) applied = level;
     }
 }
@@ -139,7 +166,10 @@ bool display_apply_frame(const uint8_t *data, size_t len)
 void display_set_brightness(int level)
 {
     if (level < DIM || level > BRIGHT) return;
-    atomic_store(&brightness, level);
+    int prev = atomic_exchange(&brightness, level);
+    if ((prev == DIM) != (level == DIM)) {
+        wifi_set_low_latency(level != DIM);
+    }
     if (painter) xTaskNotifyGive(painter);
 }
 
@@ -192,10 +222,11 @@ static void touch_task(void *arg)
 esp_err_t display_init(void)
 {
     fb = heap_caps_malloc(FRAME_PIXELS * sizeof(*fb), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    strip = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    strip[0] = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    strip[1] = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     drawn = xSemaphoreCreateBinary();
     fb_lock = xSemaphoreCreateMutex();
-    ESP_RETURN_ON_FALSE(fb && strip && drawn && fb_lock, ESP_ERR_NO_MEM, TAG, "Display buffers");
+    ESP_RETURN_ON_FALSE(fb && strip[0] && strip[1] && drawn && fb_lock, ESP_ERR_NO_MEM, TAG, "Display buffers");
     bsp_display_config_t config = { .max_transfer_sz = STRIP_BYTES };
     esp_lcd_panel_io_handle_t io;
     ESP_RETURN_ON_ERROR(bsp_display_new(&config, &panel, &io), TAG, "Init LCD");

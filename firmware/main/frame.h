@@ -8,6 +8,12 @@
 
 enum { FRAME_PIXELS = FRAME_WIDTH * FRAME_HEIGHT };
 enum { FRAME_TAG = 0x03, FRAME_HEADER_SIZE = 12, FRAME_PACKET_CAP = FRAME_HEADER_SIZE + FRAME_PIXELS * 2 };
+enum {
+    FRAME_CODEC_RAW = 0,
+    FRAME_CODEC_RLE565 = 1,
+    FRAME_CODEC_JPEG = 2,
+    FRAME_CODEC_LZ4 = 3,
+};
 
 typedef struct {
     uint16_t x, y, w, h, rev_lo;

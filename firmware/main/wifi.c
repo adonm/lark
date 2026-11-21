@@ -42,6 +42,14 @@ esp_err_t wifi_init_identity(void)
     return ESP_OK;
 }
 
+void wifi_set_low_latency(bool enable)
+{
+    esp_err_t err = esp_wifi_set_ps(enable ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED) {
+        ESP_LOGW(TAG, "Set Wi-Fi PS(%d): %s", enable ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM, esp_err_to_name(err));
+    }
+}
+
 void wifi_get_ip(char ip[WIFI_IP_LEN])
 {
     esp_netif_ip_info_t info;
@@ -105,6 +113,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         char ip[WIFI_IP_LEN];
         snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "STA IP %s", ip);
+        wifi_set_low_latency(true);
         if (!sntp_started) {
             esp_err_t err = esp_netif_sntp_start();
             sntp_started = (err == ESP_OK);

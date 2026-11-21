@@ -117,7 +117,7 @@ static void test_malformed(void)
         { 0, 0, 0, 1, 0 }, { 0, 0, 1, 0, 0 },
         { FRAME_WIDTH - 1, 0, 2, 1, 1 }, { 0, FRAME_HEIGHT - 1, 1, 2, 1 },
         { 0, 0, FRAME_WIDTH + 1, 1, 0 }, { 0, 0, 1, FRAME_HEIGHT + 1, 0 },
-        { 65535, 65535, 65535, 65535, 0 }, { 0, 0, 1, 1, 2 },
+        { 65535, 65535, 65535, 65535, 0 }, { 0, 0, 1, 1, FRAME_CODEC_JPEG }, { 0, 0, 1, 1, 4 },
     };
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
         header(packet, invalid[i].x, invalid[i].y, invalid[i].w, invalid[i].h, invalid[i].codec);
@@ -151,6 +151,104 @@ static void test_malformed(void)
     assert(!frame_apply(fb, packet, sizeof(packet), NULL));
 }
 
+static void test_lz4(void)
+{
+    // Full-width fast path (x == 0, w == FRAME_WIDTH) with overlapping match copy.
+    enum { FULL_H = 4, FULL_BYTES = FRAME_WIDTH * FULL_H * 2 };
+    size_t match_len = FULL_BYTES - 4;
+    size_t match_extra = (match_len - 4 - 15) / 255 + 1;
+    uint8_t *full_pkt = malloc(FRAME_HEADER_SIZE + 1 + 4 + 2 + match_extra);
+    assert(full_pkt);
+    header(full_pkt, 0, 10, FRAME_WIDTH, FULL_H, FRAME_CODEC_LZ4);
+    size_t p = FRAME_HEADER_SIZE;
+    full_pkt[p++] = 0x4f; // 4 literals, match_len >= 19
+    full_pkt[p++] = 0x12;
+    full_pkt[p++] = 0x34;
+    full_pkt[p++] = 0x56;
+    full_pkt[p++] = 0x78;
+    full_pkt[p++] = 0x04; // offset = 4
+    full_pkt[p++] = 0x00;
+    size_t rem = match_len - 4 - 15;
+    while (rem >= 255) {
+        full_pkt[p++] = 255;
+        rem -= 255;
+    }
+    full_pkt[p++] = (uint8_t)rem;
+
+    uint8_t full_expected[FULL_BYTES];
+    for (size_t i = 0; i < FULL_BYTES; i += 4) {
+        full_expected[i] = 0x12;
+        full_expected[i + 1] = 0x34;
+        full_expected[i + 2] = 0x56;
+        full_expected[i + 3] = 0x78;
+    }
+    memset(fb, SENTINEL, sizeof(fb));
+    apply(full_pkt, p, 0, 10, FRAME_WIDTH, FULL_H);
+    expect_rect(0, 10, FRAME_WIDTH, FULL_H, full_expected);
+    free(full_pkt);
+
+    // Sub-rect path (w < FRAME_WIDTH) with literals + match + trailing literals.
+    // 12x5 = 60 pixels = 120 bytes: 6 literals + 100 match (offset 6) + 14 trailing literals.
+    uint8_t sub_pkt[FRAME_HEADER_SIZE + 1 + 6 + 2 + 1 + 1 + 14];
+    header(sub_pkt, 17, 13, 12, 5, FRAME_CODEC_LZ4);
+    size_t sp = FRAME_HEADER_SIZE;
+    sub_pkt[sp++] = 0x6f; // 6 literals, match_len = 15 + 4 + 81 = 100
+    for (int i = 0; i < 6; ++i) sub_pkt[sp++] = (uint8_t)(0x10 + i);
+    sub_pkt[sp++] = 0x06; // offset = 6
+    sub_pkt[sp++] = 0x00;
+    sub_pkt[sp++] = 81;   // 19 + 81 = 100
+    sub_pkt[sp++] = 0xe0; // 14 trailing literals
+    for (int i = 0; i < 14; ++i) sub_pkt[sp++] = (uint8_t)(0xa0 + i);
+
+    uint8_t sub_expected[120];
+    for (int i = 0; i < 106; ++i) sub_expected[i] = (uint8_t)(0x10 + (i % 6));
+    for (int i = 0; i < 14; ++i) sub_expected[106 + i] = (uint8_t)(0xa0 + i);
+    memset(fb, SENTINEL, sizeof(fb));
+    apply(sub_pkt, sp, 17, 13, 12, 5);
+    expect_rect(17, 13, 12, 5, sub_expected);
+
+    // Malformed LZ4 (full-width and sub-rect) must leave fb untouched.
+    memset(fb, SENTINEL, sizeof(fb));
+    reject(sub_pkt, sp - 1); // truncated trailing literal
+    uint8_t bad_offset[FRAME_HEADER_SIZE + 7] = { 0 };
+    header(bad_offset, 0, 0, FRAME_WIDTH, 1, FRAME_CODEC_LZ4);
+    bad_offset[FRAME_HEADER_SIZE] = 0x40; // 4 literals, match 4
+    bad_offset[FRAME_HEADER_SIZE + 5] = 0x05; // offset 5 > dst_pos(4)
+    bad_offset[FRAME_HEADER_SIZE + 6] = 0x00;
+    reject(bad_offset, sizeof(bad_offset));
+    bad_offset[FRAME_HEADER_SIZE + 5] = 0x00; // offset 0
+    reject(bad_offset, sizeof(bad_offset));
+}
+
+static void test_jpeg(void)
+{
+    // Minimal Baseline JPEG (SOI + SOF0 64x64 + SOS + EOI).
+    const uint8_t jpeg[] = {
+        0xff, 0xd8,
+        0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x40, 0x00, 0x40, 0x01, 0x01, 0x11, 0x00,
+        0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00,
+        0xaa, 0xbb,
+        0xff, 0xd9,
+    };
+    uint8_t pkt[FRAME_HEADER_SIZE + sizeof(jpeg)];
+    header(pkt, 0, 0, 64, 64, FRAME_CODEC_JPEG);
+    memcpy(pkt + FRAME_HEADER_SIZE, jpeg, sizeof(jpeg));
+    memset(fb, SENTINEL, sizeof(fb));
+    apply(pkt, sizeof(pkt), 0, 0, 64, 64);
+
+    // Reject wrong dimensions, progressive SOF2, missing EOI, missing SOI.
+    memset(fb, SENTINEL, sizeof(fb));
+    header(pkt, 0, 0, 63, 64, FRAME_CODEC_JPEG);
+    reject(pkt, sizeof(pkt));
+    header(pkt, 0, 0, 64, 64, FRAME_CODEC_JPEG);
+    pkt[FRAME_HEADER_SIZE + 3] = 0xc2; // SOF2 progressive
+    reject(pkt, sizeof(pkt));
+    pkt[FRAME_HEADER_SIZE + 3] = 0xc0;
+    reject(pkt, sizeof(pkt) - 2); // missing EOI
+    pkt[FRAME_HEADER_SIZE] = 0x00; // bad SOI
+    reject(pkt, sizeof(pkt));
+}
+
 static void test_dirty_union(void)
 {
     frame_bounds_t dirty = { 0 };
@@ -172,6 +270,10 @@ int main(void)
     puts("PASS raw RGB565 full frame and sub-rect, exact wire bytes");
     test_rle();
     puts("PASS RLE565 literal, repeat, mixed and 128-pixel runs, sub-rect isolation");
+    test_lz4();
+    puts("PASS LZ4 full-width fast path, sub-rect, and malformed rejection");
+    test_jpeg();
+    puts("PASS JPEG baseline validation and malformed rejection");
     test_malformed();
     puts("PASS malformed frames rejected without framebuffer or dirty-rect changes");
     test_dirty_union();

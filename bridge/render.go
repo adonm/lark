@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/xml"
@@ -8,6 +9,7 @@ import (
 	"image"
 	imagecolor "image/color"
 	"image/draw"
+	"image/jpeg"
 	"io"
 	"math"
 	"regexp"
@@ -18,6 +20,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pierrec/lz4/v4"
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
 	xdraw "golang.org/x/image/draw"
@@ -898,23 +901,64 @@ func (s preparedScene) toRGB565(screen screenGeometry, lookup photoLookup, grade
 	if err != nil {
 		return nil, err
 	}
-	clip := image.Rect(int(x), int(y), int(math.Ceil(x+float64(side))), int(math.Ceil(y+float64(side))))
 	fb := make([]uint16, w*h)
 	br, bgc, bb, _ := s.background.RGBA()
 	lut := &atmosphereLUTs[grade]
 	bar := pack565(lut[0][br>>8], lut[1][bgc>>8], lut[2][bb>>8])
-	for y := range h {
-		for x := range w {
-			dx, dy := 2*x-w, 2*y-h
-			if screen.shape == "rect" && !image.Pt(x, y).In(clip) {
-				fb[y*w+x] = bar
-			} else if screen.shape == "rect" || dx*dx+dy*dy <= side*side {
-				i := y*img.Stride + x*4
-				p := img.Pix[i : i+4]
-				if grade == gradeDay {
-					fb[y*w+x] = pack565(p[0], p[1], p[2])
-				} else {
-					fb[y*w+x] = pack565(lut[0][p[0]], lut[1][p[1]], lut[2][p[2]])
+	pix := img.Pix
+	stride := img.Stride
+	if screen.shape == "rect" {
+		clipX0, clipY0 := int(x), int(y)
+		clipX1, clipY1 := int(math.Ceil(x+float64(side))), int(math.Ceil(y+float64(side)))
+		for py := range h {
+			rowFB := fb[py*w : (py+1)*w]
+			if py < clipY0 || py >= clipY1 {
+				for px := range w {
+					rowFB[px] = bar
+				}
+				continue
+			}
+			rowPix := pix[py*stride:]
+			for px := range clipX0 {
+				rowFB[px] = bar
+			}
+			if grade == gradeDay {
+				for px := clipX0; px < clipX1; px++ {
+					i := px * 4
+					rowFB[px] = pack565(rowPix[i], rowPix[i+1], rowPix[i+2])
+				}
+			} else {
+				for px := clipX0; px < clipX1; px++ {
+					i := px * 4
+					rowFB[px] = pack565(lut[0][rowPix[i]], lut[1][rowPix[i+1]], lut[2][rowPix[i+2]])
+				}
+			}
+			for px := clipX1; px < w; px++ {
+				rowFB[px] = bar
+			}
+		}
+		return fb, nil
+	}
+	sideSq := side * side
+	for py := range h {
+		dy := 2*py - h
+		dySq := dy * dy
+		rowFB := fb[py*w : (py+1)*w]
+		rowPix := pix[py*stride:]
+		if grade == gradeDay {
+			for px := range w {
+				dx := 2*px - w
+				if dx*dx+dySq <= sideSq {
+					i := px * 4
+					rowFB[px] = pack565(rowPix[i], rowPix[i+1], rowPix[i+2])
+				}
+			}
+		} else {
+			for px := range w {
+				dx := 2*px - w
+				if dx*dx+dySq <= sideSq {
+					i := px * 4
+					rowFB[px] = pack565(lut[0][rowPix[i]], lut[1][rowPix[i+1]], lut[2][rowPix[i+2]])
 				}
 			}
 		}
@@ -1200,16 +1244,30 @@ func rasterLayers(s preparedScene, dst *image.RGBA, target rasterx.Matrix2D, pho
 	return flush()
 }
 
+const (
+	frameCodecRaw    byte = 0
+	frameCodecRLE565 byte = 1
+	frameCodecJPEG   byte = 2
+	frameCodecLZ4    byte = 3
+)
+
 func dirtyRect(prev, next []uint16, screen screenGeometry) image.Rectangle {
 	w, h := screen.width, screen.height
 	if prev == nil {
 		return image.Rect(0, 0, w, h)
 	}
 	minX, minY, maxX, maxY := w, h, 0, 0
-	for i, pixel := range next {
-		if pixel != prev[i] {
-			x, y := i%w, i/w
-			minX, minY, maxX, maxY = min(minX, x), min(minY, y), max(maxX, x+1), max(maxY, y+1)
+	for y := range h {
+		off := y * w
+		prevRow := prev[off : off+w]
+		nextRow := next[off : off+w]
+		for x := range w {
+			if nextRow[x] != prevRow[x] {
+				minX = min(minX, x)
+				minY = min(minY, y)
+				maxX = max(maxX, x+1)
+				maxY = max(maxY, y+1)
+			}
 		}
 	}
 	if minX >= maxX {
@@ -1218,47 +1276,128 @@ func dirtyRect(prev, next []uint16, screen screenGeometry) image.Rectangle {
 	return image.Rect(minX, minY, maxX, maxY)
 }
 
-func encodeRLE565(p []uint16) []byte {
-	out := make([]byte, 0, len(p)*2)
-	for i := 0; i < len(p); {
+func encodeRLE565FromBE(out []byte, rawBE []byte, pixels int) []byte {
+	for i := 0; i < pixels; {
 		start := i
 		i++
-		if i < len(p) && p[i] == p[start] {
-			for i < len(p) && i-start < 128 && p[i] == p[start] {
+		sOff := start * 2
+		hi, lo := rawBE[sOff], rawBE[sOff+1]
+		if i < pixels && rawBE[i*2] == hi && rawBE[i*2+1] == lo {
+			for i < pixels && i-start < 128 && rawBE[i*2] == hi && rawBE[i*2+1] == lo {
 				i++
 			}
-			out = append(out, 0x80|byte(i-start-1), byte(p[start]>>8), byte(p[start]))
+			out = append(out, 0x80|byte(i-start-1), hi, lo)
 		} else {
-			for i < len(p) && i-start < 128 && (i+1 == len(p) || p[i] != p[i+1]) {
+			for i < pixels && i-start < 128 && (i+1 == pixels || rawBE[i*2] != rawBE[(i+1)*2] || rawBE[i*2+1] != rawBE[(i+1)*2+1]) {
 				i++
 			}
 			out = append(out, byte(i-start-1))
-			for _, v := range p[start:i] {
-				out = binary.BigEndian.AppendUint16(out, v)
-			}
+			out = append(out, rawBE[sOff:i*2]...)
 		}
 	}
 	return out
 }
 
-func displayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) wsFrame {
-	p := make([]uint16, 0, r.Dx()*r.Dy())
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		p = append(p, fb[y*width+r.Min.X:y*width+r.Max.X]...)
-	}
-	out := make([]byte, 12, 12+len(p)*2)
-	out[0] = 0x03
-	for i, v := range []int{r.Min.X, r.Min.Y, r.Dx(), r.Dy()} {
-		binary.LittleEndian.PutUint16(out[1+i*2:], uint16(v))
-	}
-	binary.LittleEndian.PutUint16(out[10:], uint16(rev))
-	if encoded := encodeRLE565(p); len(encoded) <= len(p)*2 {
-		out[9] = 1
-		out = append(out, encoded...)
+type frameEncoder struct {
+	rawBE   []byte
+	rleBuf  []byte
+	lz4Buf  []byte
+	lz4Comp lz4.Compressor
+	jpegBuf bytes.Buffer
+	jpegImg *image.RGBA
+}
+
+func (e *frameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *image.RGBA {
+	rw, rh := r.Dx(), r.Dy()
+	need := rw * rh * 4
+	if e.jpegImg == nil || cap(e.jpegImg.Pix) < need {
+		e.jpegImg = image.NewRGBA(image.Rect(0, 0, rw, rh))
 	} else {
-		for _, v := range p {
-			out = binary.BigEndian.AppendUint16(out, v)
+		e.jpegImg.Rect = image.Rect(0, 0, rw, rh)
+		e.jpegImg.Stride = rw * 4
+		e.jpegImg.Pix = e.jpegImg.Pix[:need]
+	}
+	pix := e.jpegImg.Pix
+	off := 0
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for _, v := range fb[y*width+r.Min.X : y*width+r.Max.X] {
+			r5 := uint8(v >> 11)
+			g6 := uint8((v >> 5) & 0x3f)
+			b5 := uint8(v & 0x1f)
+			pix[off] = (r5 << 3) | (r5 >> 2)
+			pix[off+1] = (g6 << 2) | (g6 >> 4)
+			pix[off+2] = (b5 << 3) | (b5 >> 2)
+			pix[off+3] = 255
+			off += 4
 		}
 	}
+	return e.jpegImg
+}
+
+func (e *frameEncoder) encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) wsFrame {
+	rw, rh := r.Dx(), r.Dy()
+	pixels := rw * rh
+	rawLen := pixels * 2
+	if cap(e.rawBE) < rawLen {
+		e.rawBE = make([]byte, rawLen)
+	}
+	rawBE := e.rawBE[:rawLen]
+	off := 0
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for _, v := range fb[y*width+r.Min.X : y*width+r.Max.X] {
+			rawBE[off] = byte(v >> 8)
+			rawBE[off+1] = byte(v)
+			off += 2
+		}
+	}
+
+	e.rleBuf = encodeRLE565FromBE(e.rleBuf[:0], rawBE, pixels)
+	bestCodec := frameCodecRaw
+	bestPayload := rawBE
+	if len(e.rleBuf) <= len(bestPayload) {
+		bestCodec = frameCodecRLE565
+		bestPayload = e.rleBuf
+	}
+
+	bound := lz4.CompressBlockBound(rawLen)
+	if cap(e.lz4Buf) < bound {
+		e.lz4Buf = make([]byte, bound)
+	}
+	lz4Dst := e.lz4Buf[:bound]
+	if n, err := e.lz4Comp.CompressBlock(rawBE, lz4Dst); err == nil && n > 0 && n < len(bestPayload) {
+		bestCodec = frameCodecLZ4
+		bestPayload = lz4Dst[:n]
+	}
+
+	if rw >= 64 && rh >= 64 && len(bestPayload) > rawLen/3 {
+		var src image.Image
+		if rgba != nil && r.In(rgba.Bounds()) {
+			src = rgba.SubImage(r)
+		} else {
+			src = e.rgbaFromFB(fb, r, width)
+		}
+		e.jpegBuf.Reset()
+		if err := jpeg.Encode(&e.jpegBuf, src, &jpeg.Options{Quality: 82}); err == nil {
+			if e.jpegBuf.Len() < len(bestPayload)*7/10 {
+				bestCodec = frameCodecJPEG
+				bestPayload = e.jpegBuf.Bytes()
+			}
+		}
+	}
+
+	out := make([]byte, 12+len(bestPayload))
+	out[0] = 0x03
+	binary.LittleEndian.PutUint16(out[1:], uint16(r.Min.X))
+	binary.LittleEndian.PutUint16(out[3:], uint16(r.Min.Y))
+	binary.LittleEndian.PutUint16(out[5:], uint16(rw))
+	binary.LittleEndian.PutUint16(out[7:], uint16(rh))
+	out[9] = bestCodec
+	binary.LittleEndian.PutUint16(out[10:], uint16(rev))
+	copy(out[12:], bestPayload)
 	return wsFrame{wsBinary, out}
+}
+
+func displayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) wsFrame {
+	var enc frameEncoder
+	return enc.encode(fb, nil, r, rev, width)
 }
