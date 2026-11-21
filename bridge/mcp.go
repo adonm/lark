@@ -21,7 +21,7 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact Lark device IDs. Read keyed snapshots with state, change devices/cats/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
+	mcpInstructions = "Use exact Lark device IDs. Read keyed snapshots with state, change devices/companions/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
 )
 
 type rpcRequest struct {
@@ -188,24 +188,24 @@ var mcpTools = func() []object {
 	fields := appData["properties"].(object)
 	fields["handles"], fields["access"] = array(text), text
 	return []object{
-		tool("state", "Read live state by slice. device_id adds me.device, me.cat and me.active_app; app_name adds full saved app source, settings and state.",
+		tool("state", "Read live state by slice. device_id adds me.device, me.companion and me.active_app; app_name adds full saved app source, settings and state.",
 			schema(object{"device_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
 				"app_name": text, "include_code": flag, "messages_limit": object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id"),
 				"photos":          schema(object{"access": text, "query": text, "person": text, "limit": object{"type": "integer", "minimum": 1, "maximum": 8}}, "access")})),
-		tool("patch", "Change devices, cats, timers, memory or saved apps. For a shift, use cat.companion for instant Storybook presets or cat.portrait for bespoke Nano Banana 2.1 art (style pixel for 64×64 retro art). Memory and app batches are atomic. Stop running apps before changing slugs. Deletes run before renames and ignore missing slugs; renames update timers. Cancel timers before deleting their app. Cat defaults to update; create timers with in_seconds or at.",
+		tool("patch", "Change devices, companions, timers, memory or saved apps. For a shift, use companion.preset for instant Storybook presets or companion.portrait for bespoke Nano Banana 2.1 art (style pixel for 64×64 retro art). Memory and app batches are atomic. Stop running apps before changing slugs. Deletes run before renames and ignore missing slugs; renames update timers. Cancel timers before deleting their app. Companion defaults to update; create timers with in_seconds or at.",
 			schema(object{"device_id": text,
 				"device": schema(object{"volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag, "voice": voice}),
-				"cat": schema(object{"op": enum("update", "load", "reset_blank", "delete_saved"), "name": text, "face_bg": text, "mark_color": text, "accent_color": text,
-					"personality": text, "voice": voice, "companion": companionSchema, "portrait": portraitSchema, "face_svg": object{"type": "string", "maxLength": maxSVG, "description": "Complete SVG face with idle, blink, talk, listen, think and sleep pose layers"},
+				"companion": schema(object{"op": enum("update", "load", "reset_blank", "delete_saved"), "name": text, "face_bg": text, "mark_color": text, "accent_color": text,
+					"personality": text, "voice": voice, "preset": companionSchema, "portrait": portraitSchema, "face_svg": object{"type": "string", "maxLength": maxSVG, "description": "Complete SVG face with idle, blink, talk, listen, think and sleep pose layers"},
 					"face_edits": array(schema(object{"part": enum(faceParts...), "pose": enum(faceEditPoses...),
 						"svg": object{"type": "string", "maxLength": 16384, "description": "Replacement SVG fragment. Omit pose for all matching parts."}}, "part", "svg")),
-					"slug": object{"type": "string", "description": "Saved cat slug for load/delete_saved"}, "configured": flag,
+					"slug": object{"type": "string", "description": "Saved companion slug for load/delete_saved"}, "configured": flag,
 					"save_profile": object{"type": "boolean", "description": "True saves the current form by name; false shifts without replacing a favorite"}}),
 				"memory": object{"anyOf": []object{memory, array(memory)}},
 				"apps":   schema(object{"delete": array(text), "rename": array(rename), "update": object{"anyOf": []object{update, array(update)}}}),
 				"timer":  schema(object{"op": enum("set", "update", "cancel"), "device_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag, "app": text})})),
-		tool("app", "Show a declarative screen, launch a data-only template, display SVG, run/load/save/delete an app, exit to the cat, or shallow-patch running JS state. Players share state and render separately.",
+		tool("app", "Show a declarative screen, launch a data-only template, display SVG, run/load/save/delete an app, exit to the companion, or shallow-patch running JS state. Players share state and render separately.",
 			schema(object{"devices": object{"anyOf": []object{text, array(text)}}, "title": text, "screen": declarativeScreenSchema, "svg": text, "code": object{"type": "string", "maxLength": 16384},
 				"template": enum(append(templateNames(), "slideshow")...), "data": appData,
 				"save_current": schema(object{"name": text, "title": text}, "name"),
@@ -264,7 +264,7 @@ func checkMCPFields(value any, schema object, path string) error {
 func (b *bridge) lookupDevice(id string) (peer, error) {
 	p, _, err := b.findDevice(id)
 	if err == nil {
-		p.Character = b.catFor(p).Name
+		p.Character = b.companionFor(p).Name
 	}
 	return p, err
 }
@@ -278,7 +278,7 @@ func (h *wsHub) deviceStatus(entry object, id string, full bool) {
 	h.mu.Lock()
 	if d := h.devices[key]; d != nil && h.active(d) {
 		entry["ws_connected"], entry["ws"], entry["online"], entry["mode"] = true, true, true, d.pose.mood
-		entry["character"], entry["cat"], entry["voice"] = d.cat.Name, d.cat.catLook, d.voice
+		entry["character"], entry["companion"], entry["voice"] = d.companion.Name, d.companion.companionLook, d.voice
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
 		entry["can_call"], entry["call"] = d.caps.Call, h.callSnapshot(d)
@@ -291,12 +291,12 @@ func (h *wsHub) deviceStatus(entry object, id string, full bool) {
 		}
 		if full {
 			entry["last_app_error"] = d.lastAppError
-			cat := d.cat
-			cat.Voice = d.voice
-			entry["cat"], entry["voice"] = cat, d.voice
+			companion := d.companion
+			companion.Voice = d.voice
+			entry["companion"], entry["voice"] = companion, d.voice
 			title := d.scene.title
 			if title == "" {
-				title = "Cat"
+				title = "Companion"
 			}
 			entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev, "hit_ids": appHitIDs(d.svg)}
 			entry["width"], entry["height"] = d.screen.width, d.screen.height
@@ -453,7 +453,7 @@ func volumeCommand(args object, key string) (auto bool, level int, set bool, err
 		return false, 0, false, problem(400, "Volume must be an integer from 0 to 100")
 	}
 	if _, ok := args[key]; ok {
-		auto, err = catBool(args, key, false)
+		auto, err = companionBool(args, key, false)
 		if err != nil {
 			return false, 0, false, err
 		}

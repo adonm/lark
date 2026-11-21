@@ -17,7 +17,7 @@ func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &bridge{root: t.Context()}
 		c := &wsClient{role: "web", ctx: t.Context(), out: make(chan wsFrame, 8)}
-		d := &wsDevice{client: c, key: "phone-a100", screen: roundScreen, cat: blankCat()}
+		d := &wsDevice{client: c, key: "phone-a100", screen: roundScreen, companion: blankCompanion()}
 		h := &wsHub{b: b, devices: map[string]*wsDevice{d.key: d}}
 		const code = `function init() { return {color: "red"}; }
 			function render(s) { return '<svg><rect width="360" height="360" fill="' + s.color + '"/></svg>'; }
@@ -57,7 +57,7 @@ func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 		h.mu.Unlock()
 		release()
 		synctest.Wait()
-		if d.app != nil || d.displayApp != nil || !strings.Contains(d.svg.source, "cat-ring") {
+		if d.app != nil || d.displayApp != nil || !strings.Contains(d.svg.source, "companion-ring") {
 			t.Fatal("exited app published its superseded render")
 		}
 		for len(c.out) > 0 {
@@ -127,7 +127,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 	web := testConnectWS(t, base, "unit", true)
 	web.json(t, object{"ev": "hello", "role": "web"})
 	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	const code = `app={
 	init(ctx){ return {n:storeGet("score") ?? 0,x:100}; },
 	render(s,p){ return '<svg viewBox="0 0 360 360"><rect width="360" height="360" fill="black"/><circle data-id="monster" cx="'+s.x+'" cy="180" r="30" fill="lime"/><text x="180" y="100" fill="white">Score '+s.n+' / saved '+(storeGet("score") ?? 0)+'</text></svg>'; },
@@ -155,7 +155,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 		t.Fatal(mem)
 	}
 	device.json(t, object{"ev": "tap", "x": 180, "y": 318})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	if a := stateMe(t, base, id)["active_app"]; a != nil {
 		t.Fatal(a)
 	}
@@ -181,7 +181,7 @@ func TestBrowserAppDragAndUp(t *testing.T) {
 	board.helloV2(t, id, "Cake")
 	web.json(t, object{"ev": "hello", "role": "web"})
 	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	const code = `
 	function init(){ return {text:"Ready"}; }
 	function render(s){ return '<svg><circle data-id="thumb" cx="180" cy="180" r="20"/><text x="50" y="90">'+s.text+'</text></svg>'; }
@@ -296,7 +296,7 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			if !asleep || last != released {
 				t.Fatal("trailing gestures woke a sleeping device")
 			}
-			web.until(t, hasWS("svg", "cat-ring"))
+			web.until(t, hasWS("svg", "companion-ring"))
 			send("tap", tc.up)
 			board.until(t, hasWS("power", `"brightness":85`))
 			web.until(t, hasWS("svg", "Drag track 150,168 Up track 210,192"))
@@ -369,7 +369,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 		t.Fatal(got)
 	}
 	toolTest(t, base, "app", object{"devices": webID, "exit": true}, false)
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	toolTest(t, base, "app", object{"delete_saved": "players"}, false)
 	saved := toolTest(t, base, "state", object{"include": []string{"apps"}}, false)
 	if len(saved["apps"].(object)) != 0 {
@@ -680,7 +680,7 @@ func TestSVGDirtyFrameMatchesBrowserAndExit(t *testing.T) {
 	}
 	web.json(t, object{"ev": "hello", "role": "web"})
 	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	const svg = `<svg viewBox="0 0 360 360"><rect width="360" height="360" fill="#122234"/><rect data-id="tile" x="179" y="179" width="2" height="2" fill="#123456"/></svg>`
 	run := func(raw string) {
 		t.Helper()

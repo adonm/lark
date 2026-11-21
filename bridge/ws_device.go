@@ -96,7 +96,7 @@ type wsDevice struct {
 	caps       deviceCaps
 	voice      string
 	announcing bool
-	cat        catState
+	companion  companionState
 	vol        int
 	autoVol    bool
 	ambientEMA float64
@@ -130,7 +130,7 @@ type wsDevice struct {
 	statsAt   time.Time
 	rev       uint64
 	nativeRev uint16
-	pose      catPose
+	pose      companionPose
 	moodAt    time.Time
 	last      time.Time
 	meter     time.Time
@@ -204,7 +204,7 @@ func (h *wsHub) peerSnapshot(sender string) ([]peer, error) {
 	list := make([]peer, 0, len(stored)+len(online))
 	for _, p := range stored {
 		if _, connected := online[strings.ToLower(p.DeviceID)]; !connected {
-			p.Character = h.b.catFor(p).Name
+			p.Character = h.b.companionFor(p).Name
 			list = append(list, p)
 		}
 	}
@@ -219,7 +219,7 @@ func (b *bridge) peerSnapshot(sender string) ([]peer, error) {
 	if b.ws == nil {
 		list, err := b.peers.snapshot(sender)
 		for i := range list {
-			list[i].Character = b.catFor(list[i]).Name
+			list[i].Character = b.companionFor(list[i]).Name
 		}
 		return list, err
 	}
@@ -228,11 +228,11 @@ func (b *bridge) peerSnapshot(sender string) ([]peer, error) {
 
 type peerDisplay struct {
 	peer
-	cat      catLook
-	auto     bool
-	online   bool
-	firmware string
-	caps     deviceCaps
+	companion companionLook
+	auto      bool
+	online    bool
+	firmware  string
+	caps      deviceCaps
 }
 
 func (h *wsHub) onlinePeers(sender string) map[string]peerDisplay {
@@ -242,11 +242,11 @@ func (h *wsHub) onlinePeers(sender string) map[string]peerDisplay {
 			continue
 		}
 		p := d.who
-		p.Character = d.cat.Name
+		p.Character = d.companion.Name
 		if d.virtual() {
 			p.IP = ""
 		}
-		out[d.key] = peerDisplay{p, d.cat.catLook, d.autoVol, true, d.firmware, d.caps}
+		out[d.key] = peerDisplay{p, d.companion.companionLook, d.autoVol, true, d.firmware, d.caps}
 	}
 	return out
 }
@@ -273,7 +273,7 @@ func (h *wsHub) peerFrame(scoped bool) wsFrame {
 		}
 		entry := object{"device_id": p.DeviceID, "character": p.Character, "ip": p.IP,
 			"port": p.Port, "last_seen": p.LastSeen, "online": p.online,
-			"ws": p.online, "cat": p.cat, "auto_volume": p.auto}
+			"ws": p.online, "companion": p.companion, "auto_volume": p.auto}
 		if p.online {
 			entry["firmware"] = p.firmware
 			entry["caps"] = p.caps
@@ -313,10 +313,10 @@ func (h *wsHub) refreshStoredPeers() {
 		list, err := h.b.peers.snapshot("")
 		stored := make([]peerDisplay, 0, len(list))
 		for _, p := range list {
-			cat := h.b.catFor(p)
-			p.Character = cat.Name
+			companion := h.b.companionFor(p)
+			p.Character = companion.Name
 			auto, _ := h.b.volumePrefs(p.DeviceID)
-			stored = append(stored, peerDisplay{peer: p, cat: cat.catLook, auto: auto})
+			stored = append(stored, peerDisplay{peer: p, companion: companion.companionLook, auto: auto})
 		}
 		h.mu.Lock()
 		if err == nil && !h.closed && !h.refreshNeeded {
@@ -356,16 +356,16 @@ func (h *wsHub) broadcastPeerFrames() {
 	}
 }
 
-// Called under the hub lock, after committing the cat and profile changes.
-func (h *wsHub) catChanged(id string, cat catState, profilesChanged bool) {
-	h.publishCat(id, cat, profilesChanged, true)
+// Called under the hub lock, after committing the companion and profile changes.
+func (h *wsHub) companionChanged(id string, companion companionState, profilesChanged bool) {
+	h.publishCompanion(id, companion, profilesChanged, true)
 }
 
-func (h *wsHub) publishCat(id string, cat catState, profilesChanged, clearView bool) {
+func (h *wsHub) publishCompanion(id string, companion companionState, profilesChanged, clearView bool) {
 	key := strings.ToLower(id)
 	if d := h.devices[key]; d != nil && h.active(d) {
-		d.cat = cat
-		d.voice = cat.Voice
+		d.companion = companion
+		d.voice = companion.Voice
 		if !h.b.voices.allowed(d.voice) {
 			d.voice = h.b.voices.defaultFor(d.voiceTheme())
 		}
@@ -376,7 +376,7 @@ func (h *wsHub) publishCat(id string, cat catState, profilesChanged, clearView b
 		now := time.Now()
 		h.render(d, now, true)
 	}
-	f := catFrame(id, cat, cat.Voice)
+	f := companionFrame(id, companion, companion.Voice)
 	for c := range h.clients {
 		if c.role == "web" && (c.scope == nil || c.scope.ID == key) {
 			c.enqueue(f)
@@ -384,16 +384,16 @@ func (h *wsHub) publishCat(id string, cat catState, profilesChanged, clearView b
 	}
 	h.broadcastPeers()
 	if profilesChanged {
-		h.savedCatsChanged()
+		h.savedCompanionsChanged()
 	}
 }
 
-func catFrame(id string, cat catState, voice string) wsFrame {
-	return textFrame(object{"op": "cat", "device_id": id, "character": cat.Name, "cat": cat.catLook, "voice": voice})
+func companionFrame(id string, companion companionState, voice string) wsFrame {
+	return textFrame(object{"op": "companion", "device_id": id, "character": companion.Name, "companion": companion.companionLook, "voice": voice})
 }
 
-func (h *wsHub) savedCatsChanged() {
-	f := textFrame(object{"op": "saved_cats"})
+func (h *wsHub) savedCompanionsChanged() {
+	f := textFrame(object{"op": "saved_companions"})
 	for c := range h.clients {
 		if c.role == "web" && c.scope == nil {
 			c.enqueue(f)
@@ -401,9 +401,9 @@ func (h *wsHub) savedCatsChanged() {
 	}
 }
 
-func (h *wsHub) catsReassigned(from, to string) {
+func (h *wsHub) companionsReassigned(from, to string) {
 	for _, id := range []string{from, to} {
-		f := textFrame(object{"op": "cat_reassigned", "device_id": id})
+		f := textFrame(object{"op": "companion_reassigned", "device_id": id})
 		for c := range h.clients {
 			if c.role == "web" && (c.scope == nil || c.scope.ID == id) {
 				c.enqueue(f)
@@ -510,10 +510,10 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 	d := &wsDevice{client: c, key: strings.ToLower(ev.DeviceID), who: who,
 		firmware: shortText(ev.Firmware, 24, false), screen: screen, board: board,
 		caps: helloCaps(ev), pct: -1, last: now, moodAt: now, announcing: true}
-	h.b.catMu.Lock()
-	defer h.b.catMu.Unlock()
-	d.cat = h.b.catFor(d.who)
-	d.voice = h.b.voices.resolve(d.cat.Voice, d.voiceTheme())
+	h.b.companionMu.Lock()
+	defer h.b.companionMu.Unlock()
+	d.companion = h.b.companionFor(d.who)
+	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
 	d.autoVol, d.vol = h.b.volumePrefs(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
 	d.status(ev.wsStatus)
@@ -524,11 +524,11 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 	}
 	if old := h.devices[d.key]; old != nil {
 		if ev.Role == "web" && ev.IfFree && h.active(old) {
-			c.stop(wsCatOccupied)
+			c.stop(wsCompanionOccupied)
 			return
 		}
 		if old.virtual() {
-			old.client.stop(wsCatOccupied)
+			old.client.stop(wsCompanionOccupied)
 		} else {
 			old.client.cancel()
 		}
@@ -552,7 +552,7 @@ func (h *wsHub) announce(d *wsDevice) {
 	d.announcing = false
 	c := d.client
 	if c.role == "web" {
-		c.enqueue(catFrame(d.who.DeviceID, d.cat, d.voice))
+		c.enqueue(companionFrame(d.who.DeviceID, d.companion, d.voice))
 		if h.bridgeEndpoint(d) {
 			h.push(d, object{"op": "capabilities", "bridge_endpoint": true}, false)
 		}
@@ -636,17 +636,17 @@ func (d *wsDevice) voiceTheme() string {
 }
 
 type renderRequest struct {
-	view   sceneView
-	cat    *catState
-	pose   catPose
-	app    *appInstance
-	screen svgScreen
-	grade  gradeKey
-	full   bool
-	trace  *turnTrace
+	view      sceneView
+	companion *companionState
+	pose      companionPose
+	app       *appInstance
+	screen    svgScreen
+	grade     gradeKey
+	full      bool
+	trace     *turnTrace
 }
 
-func (h *wsHub) catPose(d *wsDevice, now time.Time, mood string) catPose {
+func (h *wsHub) companionPose(d *wsDevice, now time.Time, mood string) companionPose {
 	p := poseFrame(now, d.moodAt, d.last, mood, d.pct, d.vol, d.charging, now.Before(d.meter))
 	p.stopTaps = d.stopTaps
 	p.canContinue = mood == "thinking" && h.bridgeEndpoint(d) && d.queuedVoice == nil
@@ -696,7 +696,7 @@ func (h *wsHub) render(d *wsDevice, now time.Time, full bool) {
 	if changed && d.virtual() {
 		h.push(d, object{"op": "mode", "mode": mood}, false)
 	}
-	pose := h.catPose(d, now, mood)
+	pose := h.companionPose(d, now, mood)
 	d.pose = pose
 	r := renderRequest{full: full || d.renderNext != nil && d.renderNext.full, trace: d.trace, grade: h.frameGrade(d, now)}
 	d.grade.Store(uint32(r.grade))
@@ -710,7 +710,7 @@ func (h *wsHub) render(d *wsDevice, now time.Time, full bool) {
 				elapsed = now.Sub(d.callStarted)
 				d.callSecond = elapsed.Truncate(time.Second)
 			}
-			r.view = callScene(d.callState, d.callID, p.cat, d.callMuted, elapsed)
+			r.view = callScene(d.callState, d.callID, p.companion, d.callMuted, elapsed)
 		}
 	case d.drawer != "" && mood == "idle":
 		switch d.drawer {
@@ -726,7 +726,7 @@ func (h *wsHub) render(d *wsDevice, now time.Time, full bool) {
 			var choices []menuPeer
 			for _, other := range h.devices {
 				if other != d && h.active(other) && (!calling || other.caps.Call) {
-					choices = append(choices, menuPeer{other.who.DeviceID, other.cat.Name, other.cat.FaceBG, other.cat.AccentColor})
+					choices = append(choices, menuPeer{other.who.DeviceID, other.companion.Name, other.companion.FaceBG, other.companion.AccentColor})
 				}
 			}
 			slices.SortFunc(choices, func(a, b menuPeer) int { return strings.Compare(a.id, b.id) })
@@ -746,7 +746,7 @@ func (h *wsHub) render(d *wsDevice, now time.Time, full bool) {
 			r.view = menuHome(d.voice, d.autoVol, d.vol, d.client.scope != nil, d.caps.Call, d.menuPage)
 		}
 	case mood == "listening":
-		r.cat, r.pose = new(d.cat), pose
+		r.companion, r.pose = new(d.companion), pose
 	case d.card != nil && (mood == "idle" || mood == "speaking" || mood != "sleepy" && d.card.duringTurn):
 		r.view = *d.card
 	case d.app != nil && mood != "sleepy":
@@ -755,12 +755,12 @@ func (h *wsHub) render(d *wsDevice, now time.Time, full bool) {
 	case d.view != nil && mood != "sleepy":
 		r.view = *d.view
 	default:
-		r.cat, r.pose = new(d.cat), pose
+		r.companion, r.pose = new(d.companion), pose
 	}
 	if card := r.view.intercom; card != nil {
 		r.view = card.scene(h.canCall(d, card.sender.DeviceID))
 	}
-	if r.cat == nil && r.app == nil && (mood == "thinking" || mood == "speaking") {
+	if r.companion == nil && r.app == nil && (mood == "thinking" || mood == "speaking") {
 		r.view.actions = maps.Clone(r.view.actions)
 		r.view.stopControl(pose.stopTaps)
 	}
@@ -793,15 +793,15 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 		if r.app == nil {
 			var face string
 			portrait := false
-			if r.cat != nil {
-				if id := activePortrait(r.cat.FaceSVG); id != "" {
+			if r.companion != nil {
+				if id := activePortrait(r.companion.FaceSVG); id != "" {
 					portrait = h.b.portraits.has(id)
 					if !portrait {
-						r.cat.FaceSVG = r.cat.defaultFace()
+						r.companion.FaceSVG = r.companion.defaultFace()
 					}
 				}
-				r.view = catChrome(*r.cat, r.pose)
-				face = catArt(*r.cat, r.pose)
+				r.view = companionChrome(*r.companion, r.pose)
+				face = companionArt(*r.companion, r.pose)
 			}
 			raw := r.view.svg(face)
 			photo := strings.Contains(raw, "photo:")
@@ -819,7 +819,7 @@ func (h *wsHub) renderFrames(d *wsDevice) {
 				p := h.b.portraits
 				screen, err = p.frames.buildGradedWithAssets(raw, false, geometry, grade, p.image)
 				if err != nil {
-					screen, err = screens.buildGraded(r.view.svg(catArt(catState{FaceSVG: r.cat.defaultFace()}, r.pose)), false, geometry, grade)
+					screen, err = screens.buildGraded(r.view.svg(companionArt(companionState{FaceSVG: r.companion.defaultFace()}, r.pose)), false, geometry, grade)
 				}
 			} else {
 				screen, err = screens.buildGraded(raw, false, geometry, grade)
@@ -991,7 +991,7 @@ func (h *wsHub) animate(ctx context.Context) {
 				case d.stopTapsExpired(now):
 					h.render(d, now, false)
 				case (d.drawer == "" || d.asleep) && (d.app == nil && d.view == nil || d.asleep || d.recording.active()):
-					if h.catPose(d, now, d.pose.mood) != d.pose {
+					if h.companionPose(d, now, d.pose.mood) != d.pose {
 						h.render(d, now, false)
 					}
 				}
@@ -1011,8 +1011,8 @@ func (d *wsDevice) volumeFrame(persist bool) object {
 }
 
 func (h *wsHub) saveVoice(id, voice string) error {
-	h.b.catMu.Lock()
-	defer h.b.catMu.Unlock()
+	h.b.companionMu.Lock()
+	defer h.b.companionMu.Unlock()
 	if err := h.b.voices.save(id, voice); err != nil {
 		return err
 	}

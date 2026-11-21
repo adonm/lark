@@ -207,7 +207,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	h := b.ws
 	h.mu.Lock()
 	d := h.devices[device]
-	h.stopCatTurn(d) // Same foreground cancellation primitive; not the job gate.
+	h.stopCompanionTurn(d) // Same foreground cancellation primitive; not the job gate.
 	h.mu.Unlock()
 	_, err := b.runApp(t.Context(), object{"devices": device, "title": "Not the build",
 		"svg": `<svg viewBox="0 0 360 360"><circle cx="180" cy="180" r="30"/></svg>`})
@@ -392,7 +392,7 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 }
 
 func TestBuildProposesStorybookCompanion(t *testing.T) {
-	stub := &buildStub{allow: make(chan struct{}), reply: `{"companion":{"species":"owl","palette":"mint","accessory":"scarf"}}`}
+	stub := &buildStub{allow: make(chan struct{}), reply: `{"preset":{"species":"owl","palette":"mint","accessory":"scarf"}}`}
 	b, _ := stubBuildBridge(t, stub, true, nil)
 	who := peer{DeviceID: "lark-storybook-build", Character: "Bean"}
 	job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "face"}, "Make me a mint owl wearing a scarf")
@@ -403,8 +403,8 @@ func TestBuildProposesStorybookCompanion(t *testing.T) {
 	close(stub.allow)
 	expectValue(t, stub.deleted, job)
 	waitBuildState(t, b, job, "ready")
-	cat := b.catFor(who)
-	if !cat.Configured || cat.FaceBG != "#E8F7EE" || !strings.Contains(cat.FaceSVG, `data-part="eyes"`) {
+	companion := b.companionFor(who)
+	if !companion.Configured || companion.FaceBG != "#E8F7EE" || !strings.Contains(companion.FaceSVG, `data-part="eyes"`) {
 		t.Fatal("did not apply the proposed Storybook form")
 	}
 }
@@ -428,8 +428,8 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 	close(stub.allow)
 	expectValue(t, stub.deleted, job)
 	waitBuildState(t, b, job, "ready")
-	cat := b.catFor(who)
-	if !cat.Configured || cat.Name != "Bean" || !b.portraits.has(activePortrait(cat.FaceSVG)) {
+	companion := b.companionFor(who)
+	if !companion.Configured || companion.Name != "Bean" || !b.portraits.has(activePortrait(companion.FaceSVG)) {
 		t.Fatal("did not apply the proposed portrait")
 	}
 }
@@ -468,7 +468,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			}
 			expectValue(t, stub.prompted, job)
 			if kind == "face" {
-				_, _, err := b.changeCat(t.Context(), who, "", "update", object{"face_bg": "#000000"})
+				_, _, err := b.changeCompanion(t.Context(), who, "", "update", object{"face_bg": "#000000"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -481,7 +481,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 				t.Fatal(message)
 			}
 			if kind == "face" {
-				if got := b.catFor(who); got.FaceBG != "#000000" || strings.Contains(got.FaceSVG, `cx="90"`) {
+				if got := b.companionFor(who); got.FaceBG != "#000000" || strings.Contains(got.FaceSVG, `cx="90"`) {
 					t.Fatal("late job overwrote the newer face")
 				}
 			} else if got, err := b.loadApp(t.Context(), "dinosaur-quiz"); err != nil || got.Title != "Newer title" {

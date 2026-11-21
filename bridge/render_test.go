@@ -17,33 +17,33 @@ import (
 	"github.com/srwiley/rasterx"
 )
 
-func catSVG(cat catState, pose catPose) string {
-	return catChrome(cat, pose).svg(catArt(cat, pose))
+func companionSVG(companion companionState, pose companionPose) string {
+	return companionChrome(companion, pose).svg(companionArt(companion, pose))
 }
 
 func facePoseSVGs() []string {
-	cat := blankCat()
+	companion := blankCompanion()
 	return []string{
-		catSVG(cat, catPose{mood: "idle", battery: 80}),
-		catSVG(cat, catPose{mood: "idle", battery: 80, blink: true}),
-		catSVG(cat, catPose{mood: "speaking", battery: 80}),
-		catSVG(cat, catPose{mood: "sleepy", battery: 80}),
+		companionSVG(companion, companionPose{mood: "idle", battery: 80}),
+		companionSVG(companion, companionPose{mood: "idle", battery: 80, blink: true}),
+		companionSVG(companion, companionPose{mood: "speaking", battery: 80}),
+		companionSVG(companion, companionPose{mood: "sleepy", battery: 80}),
 	}
 }
 
 func TestCallScreenTouchTargets(t *testing.T) {
-	cat := blankCat()
-	cat.Name = "Mint & Friends"
-	card := intercomCard{sender: peer{DeviceID: "lark-mint", Character: cat.Name}, text: "A message for you!", cat: cat}
+	companion := blankCompanion()
+	companion.Name = "Mint & Friends"
+	card := intercomCard{sender: peer{DeviceID: "lark-mint", Character: companion.Name}, text: "A message for you!", companion: companion}
 	for _, tc := range []struct {
 		name string
 		view sceneView
 		ids  []string
 	}{
-		{"incoming", callScene(callRingingIn, 1, cat, false, 0), []string{"call-answer", "call-decline"}},
-		{"outgoing", callScene(callRingingOut, 1, cat, false, 0), []string{"call-hangup"}},
-		{"active", callScene(callActive, 1, cat, false, 62*time.Second), []string{"call-mute", "call-hangup"}},
-		{"muted", callScene(callActive, 1, cat, true, 62*time.Second), []string{"call-mute", "call-hangup"}},
+		{"incoming", callScene(callRingingIn, 1, companion, false, 0), []string{"call-answer", "call-decline"}},
+		{"outgoing", callScene(callRingingOut, 1, companion, false, 0), []string{"call-hangup"}},
+		{"active", callScene(callActive, 1, companion, false, 62*time.Second), []string{"call-mute", "call-hangup"}},
+		{"muted", callScene(callActive, 1, companion, true, 62*time.Second), []string{"call-mute", "call-hangup"}},
 		{"voice note", card.scene(true), []string{"call", "reply", "done"}},
 	} {
 		for _, geom := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
@@ -171,15 +171,15 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 		return region{name, image.Rect(x, y, x+w, y+h), bg, wide, tall}
 	}
 	var scenes []scene
-	cat := blankCat()
-	for i, pose := range []catPose{{mood: "idle"}, {mood: "idle", blink: true}, {mood: "speaking"}, {mood: "sleepy"}} {
+	companion := blankCompanion()
+	for i, pose := range []companionPose{{mood: "idle"}, {mood: "idle", blink: true}, {mood: "speaking"}, {mood: "sleepy"}} {
 		pose.battery = 80
 		eyes := []int{20, 4, 9, 10}
 		r := []region{
-			reg("left eye", cat.FaceBG, 89, 118, 46, 47, 22, eyes[i]),
-			reg("right eye", cat.FaceBG, 225, 118, 46, 47, 22, eyes[i]),
-			reg("mouth", cat.FaceBG, 139, 188, 82, 44, 34, 8),
-			reg("battery", cat.FaceBG, 226, 39, 40, 21, 23, 10),
+			reg("left eye", companion.FaceBG, 89, 118, 46, 47, 22, eyes[i]),
+			reg("right eye", companion.FaceBG, 225, 118, 46, 47, 22, eyes[i]),
+			reg("mouth", companion.FaceBG, 139, 188, 82, 44, 34, 8),
+			reg("battery", companion.FaceBG, 226, 39, 40, 21, 23, 10),
 		}
 		if i < 3 {
 			bg, icon := navPalette.bg, "menu"
@@ -189,9 +189,9 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 			r = append(r, reg(icon+" icon", bg, 148, 307, 22, 17, 8, 7),
 				reg(icon+" label", bg, 172, 306, 45, 22, 22, 8))
 		} else {
-			r = append(r, reg("sleep z", cat.FaceBG, 212, 79, 39, 36, 20, 17))
+			r = append(r, reg("sleep z", companion.FaceBG, 212, 79, 39, 36, 20, 17))
 		}
-		scenes = append(scenes, scene{[]string{"idle", "blink", "talk", "sleep"}[i], catSVG(cat, pose), r})
+		scenes = append(scenes, scene{[]string{"idle", "blink", "talk", "sleep"}[i], companionSVG(companion, pose), r})
 	}
 
 	menu := func(name string, s sceneView, regions ...region) {
@@ -272,7 +272,7 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 		rows = append(rows, reg("stats row "+strconv.Itoa(i+1), menuCard, 55, 106+27*i, 250, 18, 90, 6))
 	}
 	hub := &wsHub{b: &bridge{}}
-	menu("stats", hub.statsScene(&wsDevice{client: &wsClient{role: "device"}, cat: cat, board: "esp-vocat", firmware: "0.9.1", vol: 55}), rows...)
+	menu("stats", hub.statsScene(&wsDevice{client: &wsClient{role: "device"}, companion: companion, board: "esp-vocat", firmware: "0.9.1", vol: 55}), rows...)
 
 	for _, geometry := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
 		for _, s := range scenes {
@@ -347,7 +347,7 @@ func TestThinkingFramesAndStopLabels(t *testing.T) {
 			for taps, label := range []string{"Stop", "Tap 2×", "Tap 1×"} {
 				var prevDot []uint16
 				for dot := range 3 {
-					raw := catSVG(blankCat(), catPose{mood: "thinking", dot: dot, stopTaps: taps, battery: 80})
+					raw := companionSVG(blankCompanion(), companionPose{mood: "thinking", dot: dot, stopTaps: taps, battery: 80})
 					screen, err := buildScreen(raw, false, geom)
 					if err != nil {
 						t.Fatal(err)
@@ -569,12 +569,12 @@ func TestFaceLayersCacheByArtAndPose(t *testing.T) {
 }
 
 func BenchmarkRenderSVG(b *testing.B) {
-	cat := blankCat()
-	poses := [...]catPose{{mood: "idle", battery: 80}, {mood: "idle", battery: 80, blink: true},
+	companion := blankCompanion()
+	poses := [...]companionPose{{mood: "idle", battery: 80}, {mood: "idle", battery: 80, blink: true},
 		{mood: "speaking", battery: 80}, {mood: "sleepy", battery: 80}}
 	b.Run("uncached", func(b *testing.B) {
 		for i := range b.N {
-			if _, err := buildScreenUncached(catSVG(cat, poses[i%len(poses)]), false, roundScreen); err != nil {
+			if _, err := buildScreenUncached(companionSVG(companion, poses[i%len(poses)]), false, roundScreen); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -582,13 +582,13 @@ func BenchmarkRenderSVG(b *testing.B) {
 	b.Run("cached", func(b *testing.B) {
 		var cache screenCache
 		for _, pose := range poses {
-			if _, err := cache.build(catSVG(cat, pose), false, roundScreen); err != nil {
+			if _, err := cache.build(companionSVG(companion, pose), false, roundScreen); err != nil {
 				b.Fatal(err)
 			}
 		}
 		b.ResetTimer()
 		for i := range b.N {
-			if _, err := cache.build(catSVG(cat, poses[i%len(poses)]), false, roundScreen); err != nil {
+			if _, err := cache.build(companionSVG(companion, poses[i%len(poses)]), false, roundScreen); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -872,14 +872,14 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	devices := testObject(t, testRequest(t, "GET", base+"/api/devices", "unit", nil, 200))["devices"].([]any)
 	boxStatus := devices[0].(object)
 	if boxStatus["device_id"] != boxID || boxStatus["board"] != "esp-box-3" ||
-		boxStatus["character"] != "New Cat" || boxStatus["cat"].(object)["configured"] != false ||
+		boxStatus["character"] != "New Cat" || boxStatus["companion"].(object)["configured"] != false ||
 		boxStatus["ws_connected"] != true {
 		t.Fatal(boxStatus)
 	}
 
 	web.json(t, object{"ev": "hello", "role": "web"})
 	web.json(t, object{"ev": "watch", "device_id": boxID})
-	boxFrame := web.until(t, hasWS("svg", "cat-ring"))
+	boxFrame := web.until(t, hasWS("svg", "companion-ring"))
 	if got := testObject(t, boxFrame.data)["device_id"]; got != boxID {
 		t.Fatalf("BOX-3 mirror tag = %v", got)
 	}

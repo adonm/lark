@@ -47,8 +47,8 @@
         <p class="eyebrow">In your browser</p>
         <h2 id="virtual-heading">Virtual Companions</h2>
         <nav id="virtual" class="device-list" aria-label="Virtual Companions"></nav>
-        <button id="create-cat" class="cat-action" type="button">+ New Companion</button>
-        <button id="join" class="outline cat-action" type="button">Join on Phone</button>
+        <button id="create-companion" class="companion-action" type="button">+ New Companion</button>
+        <button id="join" class="outline companion-action" type="button">Join on Phone</button>
         <p id="device-note" class="note" role="status"></p>
       </section>
       <details class="device-group tunnel">
@@ -58,7 +58,7 @@
         <p id="install-note" class="small" hidden>Install the CLI from <a href="https://opentunnel.xyz" target="_blank" rel="noopener noreferrer">opentunnel.xyz</a> to share a companion over HTTPS.</p>
         <p id="tunnel-hint" class="small">Select a virtual companion to manage its link.</p>
         <div id="tunnel-controls" hidden>
-          <h3 id="tunnel-cat"></h3>
+          <h3 id="tunnel-companion"></h3>
           <button id="tunnel-create" class="outline" type="button">Create Tunnel</button>
           <div id="share" hidden>
             <label for="share-url">Private share link</label>
@@ -70,7 +70,7 @@
           </div>
           <button id="tunnel-close" class="outline" type="button" hidden>Close Tunnel</button>
           <div class="row wrap delete-row">
-            <button id="delete-cat" class="outline" data-variant="danger" type="button">Delete</button>
+            <button id="delete-companion" class="outline" data-variant="danger" type="button">Delete</button>
             <button id="delete-cancel" class="outline" type="button" hidden>Keep companion</button>
           </div>
         </div>
@@ -86,21 +86,21 @@
         <p id="pair-note" class="note" role="status"></p>
       </section>
       <section class="device-group">
-        <details id="reassign-cat">
+        <details id="reassign-companion">
           <summary>Reassign / Load Form</summary>
           <div class="reassign-controls">
             <label for="reassign-target">Move or swap with another device</label>
             <select id="reassign-target"></select>
             <div class="row wrap">
-              <button id="swap-cat" class="outline compact-action" type="button" disabled>Swap</button>
-              <button id="move-cat" class="outline compact-action" type="button" disabled>Move</button>
+              <button id="swap-companion" class="outline compact-action" type="button" disabled>Swap</button>
+              <button id="move-companion" class="outline compact-action" type="button" disabled>Move</button>
             </div>
             <p id="reassign-note" class="note" role="status"></p>
           </div>
           <h3>Saved Forms</h3>
           <p class="small">Load a saved form to change the companion’s look and voice without changing this device’s chat history. Use <strong>+ New Companion</strong> for a separate history.</p>
-          <p id="saved-cat-note" class="note" role="status"></p>
-          <ul id="saved-cat-items" class="compact-list" role="list"></ul>
+          <p id="saved-companion-note" class="note" role="status"></p>
+          <ul id="saved-companion-items" class="compact-list" role="list"></ul>
         </details>
         <details id="saved-state">
           <summary>Saved Memory &amp; Assets</summary>
@@ -135,7 +135,7 @@
         </div>
         <div id="reconnect-overlay" class="reconnect-overlay" role="group" aria-label="Live connection paused" hidden>
           <p id="reconnect-note" role="status"></p>
-          <button id="reconnect-cat" type="button">Tap to reconnect</button>
+          <button id="reconnect-companion" type="button">Tap to reconnect</button>
         </div>
       </div>
       <p id="screen-status" class="screen-status" role="status">No companion selected.</p>
@@ -164,7 +164,7 @@
         <div class="row chat-top wrap">
           <div class="chat-identity">
             <h2 id="chat-heading" tabindex="-1">Chat</h2>
-            <div class="row chat-cat"><span class="cat-dot" aria-hidden="true"></span><strong id="chat-name">Choose a companion</strong><span id="chat-mode" class="badge" data-variant="secondary" hidden></span></div>
+            <div class="row chat-companion"><span class="companion-dot" aria-hidden="true"></span><strong id="chat-name">Choose a companion</strong><span id="chat-mode" class="badge" data-variant="secondary" hidden></span></div>
           </div>
           <div class="row chat-actions">
             <button id="refresh" class="ghost" type="button" disabled>Refresh</button>

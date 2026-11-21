@@ -87,7 +87,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 		t.Fatal("timer didn't synthesize and remove exactly once")
 	}
 	dev.json(t, object{"ev": "tap", "x": 180, "y": 315})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	entries := apiObjects(t, base+"/api/devices/"+id+"/messages", "messages")
 	if len(entries) != 2 || entries[0].(object)["text"] != "Timer: Cake break" || entries[1].(object)["source"] != "timer" {
 		t.Fatal(entries)
@@ -116,7 +116,7 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 	dev.hello(t, id, "Cake")
 	web.json(t, object{"ev": "hello", "role": "web"})
 	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	set := object{"op": "set", "device_id": id, "in_seconds": 1, "app": name}
 	if out := patchTimerTest(t, base, set, true); !strings.Contains(str(out["error"]), "App not found") {
 		t.Fatal(out)

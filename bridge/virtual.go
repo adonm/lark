@@ -73,13 +73,13 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 		if _, supplied := obj["voice"]; supplied && !b.voices.allowed(voice) {
 			return nil, problem(400, "Unsupported voice")
 		}
-		cat := blankCat()
+		companion := blankCompanion()
 		if name != "" {
-			cat.Name = name
-			cat.Configured = true
-			cat.FaceSVG = cat.defaultFace()
+			companion.Name = name
+			companion.Configured = true
+			companion.FaceSVG = companion.defaultFace()
 		}
-		v := virtualClient{ID: "virt-" + randomHex(4), Character: cat.Name, Voice: voice, CreatedAt: time.Now().UTC()}
+		v := virtualClient{ID: "virt-" + randomHex(4), Character: companion.Name, Voice: voice, CreatedAt: time.Now().UTC()}
 		ctx := r.Context()
 		tx, err := b.db.BeginTx(ctx, nil)
 		if err != nil {
@@ -89,7 +89,7 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO virtual_clients (id,character,voice,created_at) VALUES (?,?,?,?)`, b.virtual.values(v.ID, v)...); err != nil {
 			return nil, problem(502, "Cannot create virtual client")
 		}
-		if err := writeCat(ctx, tx, v.ID, cat); err != nil || tx.Commit() != nil {
+		if err := writeCompanion(ctx, tx, v.ID, companion); err != nil || tx.Commit() != nil {
 			return nil, problem(502, "Cannot create virtual client")
 		}
 		sendJSON(w, 201, b.publicVirtual(v))
@@ -114,7 +114,7 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 			return nil, problem(502, "Cannot delete virtual client")
 		}
 		defer tx.Rollback()
-		for _, query := range []string{"DELETE FROM virtual_clients WHERE id=?", "DELETE FROM cats WHERE device_id=?", "DELETE FROM voices WHERE device_id=?"} {
+		for _, query := range []string{"DELETE FROM virtual_clients WHERE id=?", "DELETE FROM companions WHERE device_id=?", "DELETE FROM voices WHERE device_id=?"} {
 			if _, err := tx.ExecContext(ctx, query, id); err != nil {
 				return nil, problem(502, "Cannot delete virtual client")
 			}
@@ -139,9 +139,9 @@ func (b *bridge) publicVirtual(v virtualClient) object {
 		connected = d != nil && b.ws.active(d)
 		b.ws.mu.Unlock()
 	}
-	cat := b.catFor(peer{DeviceID: v.ID, Character: v.Character})
-	out := object{"id": v.ID, "character": cat.Name, "cat": cat.catLook, "created_at": v.CreatedAt,
-		"online": connected, "ws_connected": connected, "voice": b.voices.resolve(cat.Voice, deviceTheme(cat.Name))}
+	companion := b.companionFor(peer{DeviceID: v.ID, Character: v.Character})
+	out := object{"id": v.ID, "character": companion.Name, "companion": companion.companionLook, "created_at": v.CreatedAt,
+		"online": connected, "ws_connected": connected, "voice": b.voices.resolve(companion.Voice, deviceTheme(companion.Name))}
 	if details := b.tunnels.info(v.ID); details != nil {
 		out["tunnel"] = details
 	}
@@ -231,11 +231,11 @@ func (b *bridge) deviceEntry(who peer, v virtualClient, full bool) object {
 		delete(entry, "port")
 		delete(entry, "last_seen")
 	}
-	cat := b.catFor(who)
-	cat.Voice = b.voices.resolve(cat.Voice, str(entry["theme"]))
-	entry["character"], entry["cat"], entry["voice"] = cat.Name, cat.catLook, cat.Voice
+	companion := b.companionFor(who)
+	companion.Voice = b.voices.resolve(companion.Voice, str(entry["theme"]))
+	entry["character"], entry["companion"], entry["voice"] = companion.Name, companion.companionLook, companion.Voice
 	if full {
-		entry["cat"] = cat
+		entry["companion"] = companion
 	} else if details := b.tunnels.info(id); details != nil {
 		entry["tunnel"] = details
 	}

@@ -69,18 +69,18 @@ func e2eFields(f wsFrame, op string, pairs ...string) bool {
 	return true
 }
 
-func (c *e2eCat) op(t *testing.T, op string, pairs ...string) wsFrame {
+func (c *e2eCompanion) op(t *testing.T, op string, pairs ...string) wsFrame {
 	t.Helper()
 	return c.expect(t, op+" "+strings.Join(pairs, " "), func(f wsFrame) bool { return e2eFields(f, op, pairs...) })
 }
 
-func (c *e2eCat) tapScene(t *testing.T, id, want string) string {
+func (c *e2eCompanion) tapScene(t *testing.T, id, want string) string {
 	t.Helper()
 	c.tap(t, id)
 	return c.scene(t, want)
 }
 
-func (c *e2eCat) note(t *testing.T, pcm []byte, target string) time.Time {
+func (c *e2eCompanion) note(t *testing.T, pcm []byte, target string) time.Time {
 	t.Helper()
 	event := object{"ev": "rec_start"}
 	if target != "" {
@@ -93,13 +93,13 @@ func (c *e2eCat) note(t *testing.T, pcm []byte, target string) time.Time {
 	return start
 }
 
-func (c *e2eCat) playback(t *testing.T, start time.Time) []byte {
+func (c *e2eCompanion) playback(t *testing.T, start time.Time) []byte {
 	t.Helper()
 	pcm, _ := c.measuredPlayback(t, start)
 	return pcm
 }
 
-func (c *e2eCat) measuredPlayback(t *testing.T, start time.Time) ([]byte, time.Time) {
+func (c *e2eCompanion) measuredPlayback(t *testing.T, start time.Time) ([]byte, time.Time) {
 	t.Helper()
 	var first time.Time
 	var pcm []byte
@@ -130,7 +130,7 @@ func (c *e2eCat) measuredPlayback(t *testing.T, start time.Time) ([]byte, time.T
 	return pcm, first
 }
 
-func (c *e2eCat) capture(t *testing.T, pcm []byte) time.Time {
+func (c *e2eCompanion) capture(t *testing.T, pcm []byte) time.Time {
 	t.Helper()
 	c.json(t, object{"ev": "rec_start"})
 	ctx, cancel := context.WithCancel(t.Context())
@@ -186,7 +186,7 @@ func e2eEndpointWait(t *testing.T, turn diagTurn, want time.Duration) {
 	}
 }
 
-func (s *e2eSuite) turnStages(t *testing.T, c *e2eCat, first time.Time) diagTurn {
+func (s *e2eSuite) turnStages(t *testing.T, c *e2eCompanion, first time.Time) diagTurn {
 	t.Helper()
 	var report struct {
 		Turns []diagTurn `json:"recent_turns"`
@@ -224,13 +224,13 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 		c.timeout = 40 * time.Second
 		c.mirrorOn(t, s)
 		pcm := s.synth(t, e2eVoiceQuestion)
-		c.tap(t, "cat-ring")
+		c.tap(t, "companion-ring")
 		c.op(t, "rec", "action", `"start"`, "endpoint", `"bridge"`)
 		_, first := c.measuredPlayback(t, c.capture(t, pcm))
 		e2eEndpointWait(t, s.turnStages(t, c, first), tunedEndpoint.complete)
 		rows := s.history(t, c.id, "")
 		if len(rows) != 2 || rows[0].Source != "voice" || !strings.Contains(strings.ToLower(rows[0].Text), "sky blue") ||
-			rows[1].Role != "cat" || strings.TrimSpace(rows[1].Text) == "" {
+			rows[1].Role != "companion" || strings.TrimSpace(rows[1].Text) == "" {
 			t.Fatal("voice did not persist a real transcript and assistant reply")
 		}
 		if !s.real && rows[1].Text != e2eModelReply {
@@ -254,7 +254,7 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 			}
 		}
 		rows := s.history(t, c.id, "")
-		if len(rows) != 2 || rows[0].Source != "typed" || !strings.HasPrefix(rows[0].Text, "Say hello") || rows[1].Role != "cat" {
+		if len(rows) != 2 || rows[0].Source != "typed" || !strings.HasPrefix(rows[0].Text, "Say hello") || rows[1].Role != "companion" {
 			t.Fatal("typed /app turn did not write both canonical messages")
 		}
 		t.Run("PhoneIdleReconnect", func(t *testing.T) { s.phoneIdleReconnect(t, c, rows) })
@@ -310,7 +310,7 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 	})
 }
 
-func (s *e2eSuite) phoneIdleReconnect(t *testing.T, c *e2eCat, rows []chatEntry) {
+func (s *e2eSuite) phoneIdleReconnect(t *testing.T, c *e2eCompanion, rows []chatEntry) {
 	watcher := testConnectWS(t, s.base, s.token, true)
 	watcher.json(t, object{"ev": "hello", "role": "web"})
 	watcher.until(t, hasWS("peers", c.id))
@@ -321,7 +321,7 @@ func (s *e2eSuite) phoneIdleReconnect(t *testing.T, c *e2eCat, rows []chatEntry)
 		return ws
 	}
 	closeOp := func(f wsFrame) bool { return f.op == wsClose }
-	if f := join().until(t, closeOp); !bytes.Equal(f.data, wsCloseFrame(wsCatOccupied).data) {
+	if f := join().until(t, closeOp); !bytes.Equal(f.data, wsCloseFrame(wsCompanionOccupied).data) {
 		t.Fatal("tap-to-reconnect displaced a connected cat")
 	}
 	// idle.js unit tests exercise the hidden/inactive clocks. Emulate the
@@ -333,7 +333,7 @@ func (s *e2eSuite) phoneIdleReconnect(t *testing.T, c *e2eCat, rows []chatEntry)
 	}
 	watcher.until(t, func(f wsFrame) bool { return hasWS("peers", "")(f) && !bytes.Contains(f.data, []byte(c.id)) })
 	ws := join()
-	ws.until(t, hasWS("svg", "cat-ring"))
+	ws.until(t, hasWS("svg", "companion-ring"))
 	ws.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
 	watcher.until(t, hasWS("peers", c.id))
 	if after := s.history(t, c.id, ""); !slices.EqualFunc(rows, after, func(a, b chatEntry) bool { return a.ID == b.ID && a.Text == b.Text }) {
@@ -349,7 +349,7 @@ func (s *e2eSuite) gradedEndpointAndQueuedVoice(t *testing.T) {
 		c := s.board(t, "esp-box-3", "Quick")
 		c.mirrorOn(t, s)
 		pcm := s.synth(t, "Why does Jupiter have stripes?")
-		c.tap(t, "cat-ring")
+		c.tap(t, "companion-ring")
 		c.op(t, "rec", "action", `"start"`, "endpoint", `"bridge"`)
 		_, first := c.measuredPlayback(t, c.capture(t, pcm))
 		e2eEndpointWait(t, s.turnStages(t, c, first), tunedEndpoint.quick)
@@ -376,14 +376,14 @@ func (s *e2eSuite) gradedEndpointAndQueuedVoice(t *testing.T) {
 		c.op(t, "tts", "state", `"start"`)
 		c.expect(t, "original reply PCM", isPlayback)
 		firstEnd := c.op(t, "tts", "state", `"end"`)
-		if rows := s.history(t, c.id, ""); len(rows) != 2 || rows[1].Role != "cat" {
+		if rows := s.history(t, c.id, ""); len(rows) != 2 || rows[1].Role != "companion" {
 			t.Fatal("follow-up did not wait for the original reply's playback acknowledgement")
 		}
 		c.ack(t, firstEnd)
 		_, first := c.measuredPlayback(t, end)
 		e2eEndpointWait(t, s.turnStages(t, c, first), tunedEndpoint.patient)
 		if rows := s.history(t, c.id, ""); len(rows) != 4 || rows[2].Source != "voice" ||
-			!strings.Contains(strings.ToLower(rows[2].Text), "purple mushroom") || rows[3].Role != "cat" {
+			!strings.Contains(strings.ToLower(rows[2].Text), "purple mushroom") || rows[3].Role != "companion" {
 			t.Fatal("queued voice did not preserve both clauses and complete after the first turn")
 		}
 	})
@@ -428,7 +428,7 @@ func (s *e2eSuite) menus(t *testing.T, variant, label string) {
 	c.tap(t, "vol-plus")
 	c.op(t, "volume", "persist", "true")
 	c.tapScene(t, "menu-back", "menu-volume")
-	c.tapScene(t, "menu-back", "cat-ring")
+	c.tapScene(t, "menu-back", "companion-ring")
 	hasColor := func(r image.Rectangle) bool {
 		seen := map[uint16]bool{}
 		for y := r.Min.Y; y < r.Max.Y; y++ {
@@ -527,7 +527,7 @@ func (s *e2eSuite) intercom(t *testing.T) {
 	}
 }
 
-func e2eRing(t *testing.T, a, b *e2eCat) time.Time {
+func e2eRing(t *testing.T, a, b *e2eCompanion) time.Time {
 	t.Helper()
 	start := time.Now()
 	a.json(t, object{"ev": "call", "target": b.id})
@@ -537,7 +537,7 @@ func e2eRing(t *testing.T, a, b *e2eCat) time.Time {
 	return start
 }
 
-func e2eStartCall(t *testing.T, a, b *e2eCat) int {
+func e2eStartCall(t *testing.T, a, b *e2eCompanion) int {
 	t.Helper()
 	first, second := a.op(t, "call", "state", `"start"`), b.op(t, "call", "state", `"start"`)
 	id := e2eNumber(testObject(t, first.data)["call"])
@@ -552,9 +552,9 @@ func e2eStartCall(t *testing.T, a, b *e2eCat) int {
 	return id
 }
 
-func e2eEndCall(t *testing.T, a, b *e2eCat, reason string) {
+func e2eEndCall(t *testing.T, a, b *e2eCompanion, reason string) {
 	t.Helper()
-	for _, c := range []*e2eCat{a, b} {
+	for _, c := range []*e2eCompanion{a, b} {
 		c.op(t, "call", "state", `"end"`, "reason", fmt.Sprintf("%q", reason))
 	}
 }
@@ -563,7 +563,7 @@ func (s *e2eSuite) calls(t *testing.T) {
 	for _, variant := range []string{"WebWeb", "WebBoard"} {
 		t.Run(variant, func(t *testing.T) {
 			a := s.browser(t, "CallFrom")
-			var b *e2eCat
+			var b *e2eCompanion
 			if variant == "WebWeb" {
 				b = s.browser(t, "CallTo")
 			} else {
@@ -575,7 +575,7 @@ func (s *e2eSuite) calls(t *testing.T) {
 			e2eStartCall(t, a, b)
 			t.Logf("ring → connected %s", time.Since(ring).Round(time.Millisecond))
 			pcm := bytes.Repeat([]byte{100, 5}, callPCMBytes/2)
-			relay := func(from, to *e2eCat, data []byte) {
+			relay := func(from, to *e2eCompanion, data []byte) {
 				t.Helper()
 				start := time.Now()
 				from.write(t, maskedFrame(wsBinary, true, append([]byte{0x04}, data...)))
@@ -636,7 +636,7 @@ func (s *e2eSuite) callTimeout(t *testing.T) {
 	}
 }
 
-func (s *e2eSuite) idleWake(t *testing.T, c *e2eCat, start time.Time) {
+func (s *e2eSuite) idleWake(t *testing.T, c *e2eCompanion, start time.Time) {
 	c.timeout = 130 * time.Second
 	c.op(t, "power", "brightness", "12")
 	if elapsed := time.Since(start); elapsed < 118*time.Second || elapsed > 125*time.Second {
@@ -725,7 +725,7 @@ func (s *e2eSuite) photosAndScope(t *testing.T) {
 				t.Fatal("Next did not paint the second photo")
 			}
 			s.request(t, "POST", "/api/library?device_id="+c.id, object{"op": "visibility", "hidden": true}, 200)
-			c.scene(t, "cat-ring")
+			c.scene(t, "companion-ring")
 			hidden := testObject(t, s.request(t, "GET", path, nil, 200))
 			if hidden["hidden"] != true || len(hidden["items"].([]any)) != 0 {
 				t.Fatal("per-cat hide did not revoke the slideshow and query")
@@ -767,9 +767,9 @@ func (s *e2eSuite) photosAndScope(t *testing.T) {
 		get("/api/devices/"+other.id+"/messages", 403)
 		ws := testConnectWS(t, scope.base, scope.token, true)
 		ws.json(t, object{"ev": "hello", "role": "web", "device_id": c.id, "caps": object{"call": true, "drag": true, "bridge_endpoint": true}})
-		client := &e2eCat{testWS: ws, id: c.id, name: c.name}
+		client := &e2eCompanion{testWS: ws, id: c.id, name: c.name}
 		client.timeout = 20 * time.Second
-		client.scene(t, "cat-ring")
+		client.scene(t, "companion-ring")
 		ws.json(t, object{"ev": "watch", "device_id": other.id})
 		client.op(t, "error", "status", "403")
 		if !s.real {

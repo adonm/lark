@@ -146,7 +146,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	view.json(t, object{"ev": "hello", "role": "web"})
 	view.until(t, hasWS("peers", id))
 	view.json(t, object{"ev": "watch", "device_id": id})
-	view.until(t, hasWS("svg", "cat-ring"))
+	view.until(t, hasWS("svg", "companion-ring"))
 	tap := func(x, y int) { board.json(t, object{"ev": "tap", "x": x, "y": y}) }
 	tap(160, 210) // Menu after the 360-square view is letterboxed into 320×240.
 	view.until(t, hasWS("svg", "menu-next"))
@@ -162,7 +162,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	tap(160, 210)
 	view.until(t, hasWS("svg", "menu-stats"))
 	tap(160, 197)
-	view.until(t, hasWS("svg", "cat-ring"))
+	view.until(t, hasWS("svg", "companion-ring"))
 }
 
 func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
@@ -338,7 +338,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 
 	dev.json(t, object{"ev": "tap", "x": 180, "y": 180})
 	dev.barrier(t)
-	mirror.json(t, object{"ev": "tap", "id": "cat-ring"})
+	mirror.json(t, object{"ev": "tap", "id": "companion-ring"})
 	mirror.barrier(t)
 	stillThinking(0)
 

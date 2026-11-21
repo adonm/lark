@@ -80,12 +80,12 @@ func (b *bridge) deliverOfflineBuildReply(ctx context.Context, who peer, text, r
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	b.buildChat(who.DeviceID, newChat("user", "You", text, source), newChat("cat", b.catFor(who).Name, reply, source))
+	b.buildChat(who.DeviceID, newChat("user", "You", text, source), newChat("companion", b.companionFor(who).Name, reply, source))
 	return nil
 }
 
 func buildingScene(id string) sceneView {
-	view := messageScene("Building", "Building", "I'll tell you when it's ready.", blankCat())
+	view := messageScene("Building", "Building", "I'll tell you when it's ready.", blankCompanion())
 	view.build = id
 	view.duringTurn = true
 	view.control(bounds{63, 218, 98, 48}, actionTile("listen", "Talk", "", answerPalette))
@@ -101,7 +101,7 @@ func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsDevice, turn uint
 	h.mu.Lock()
 	allowed := h.active(d) && turn == d.turn && h.parentRefresh(d.key, time.Now()) == "" && ctx.Err() == nil
 	if allowed {
-		h.b.buildChat(d.who.DeviceID, newChat("user", "You", text, source), newChat("cat", d.cat.Name, reply, source))
+		h.b.buildChat(d.who.DeviceID, newChat("user", "You", text, source), newChat("companion", d.companion.Name, reply, source))
 		d.card = &view
 		h.render(d, time.Now(), false)
 	}
@@ -135,7 +135,7 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	if job.state == "ready" {
 		title = "Ready"
 	}
-	view := messageScene(title, title, job.result, d.cat)
+	view := messageScene(title, title, job.result, d.companion)
 	view.duringTurn = true
 	view.control(bounds{129, 218, 102, 48}, tile{id: "build-done", label: "Done", action: sceneAction{"dismiss", ""}, colors: answerPalette})
 	d.card = &view
@@ -143,7 +143,7 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	d.last = now
 	h.speakLocal(d, job.result)
 	h.render(d, now, false)
-	entry := newChat("card", d.cat.Name, job.result, "builder")
+	entry := newChat("card", d.companion.Name, job.result, "builder")
 	entry.SceneTitle = title
 	h.b.buildChat(job.device, entry)
 	h.mu.Unlock()
@@ -158,7 +158,7 @@ func (h *wsHub) cancelBuildCard(d *wsDevice, id string) {
 	cancelled, _ := h.b.builders.cancel(d.client.ctx, d.who.DeviceID, id)
 	h.mu.Lock()
 	if cancelled && h.active(d) && d.card == card {
-		view := messageScene("Build cancelled", "Build cancelled", "", d.cat)
+		view := messageScene("Build cancelled", "Build cancelled", "", d.companion)
 		view.duringTurn = true
 		view.control(bounds{129, 218, 102, 48}, tile{id: "build-done", label: "Done", action: sceneAction{"dismiss", ""}, colors: answerPalette})
 		d.card = &view

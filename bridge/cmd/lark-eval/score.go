@@ -271,7 +271,7 @@ func resultMetrics(v any, warnings bool, depth int) (errs, layouts int) {
 			layouts += len(ls)
 		}
 		for key, item := range x {
-			if key == "layout_warnings" || key == "memory" || key == "devices" || key == "cats" ||
+			if key == "layout_warnings" || key == "memory" || key == "devices" || key == "companions" ||
 				key == "me" || key == "state" || key == "active_app_state" || key == "messages" {
 				continue
 			}

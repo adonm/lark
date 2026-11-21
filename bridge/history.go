@@ -62,8 +62,8 @@ func canonicalMessage(e chatEntry) (chatEntry, bool) {
 		if e.Source == "timer" {
 			return e, false
 		}
-	case "assistant", "cat":
-		e.Role = "cat"
+	case "assistant", "companion":
+		e.Role = "companion"
 		e.Text = strings.TrimSpace(fenced.ReplaceAllString(e.Text, ""))
 	case "intercom", "card":
 	case "system":
@@ -258,7 +258,7 @@ func (b *bridge) chatAPI(r *http.Request, scope string) (any, error) {
 			}
 			if d.callState != callNone {
 				b.ws.mu.Unlock()
-				return nil, problem(409, "Cat is in a call")
+				return nil, problem(409, "Companion is in a call")
 			}
 			b.ws.startTurn(d, now, false, "typed", func(ctx context.Context, turn uint64) {
 				if scope != "" || r.Context().Value(photoScopeContext{}) != nil {
@@ -317,7 +317,7 @@ func (b *bridge) resetDevice(r *http.Request, id string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		archiveHistory, err = catBool(args, "archive_history", false)
+		archiveHistory, err = companionBool(args, "archive_history", false)
 		if err != nil {
 			return nil, err
 		}
@@ -331,10 +331,10 @@ func (b *bridge) resetDevice(r *http.Request, id string) (any, error) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
-	return object{"ok": true}, b.startNewCatSession(ctx, who, archiveHistory)
+	return object{"ok": true}, b.startNewCompanionSession(ctx, who, archiveHistory)
 }
 
-func resetCatSession(ctx context.Context, tx *sql.Tx, id string, archiveHistory bool) error {
+func resetCompanionSession(ctx context.Context, tx *sql.Tx, id string, archiveHistory bool) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE device_id=?`, id); err != nil {
 		return problem(502, "Cannot save sessions")
 	}
@@ -358,15 +358,15 @@ func resetCatSession(ctx context.Context, tx *sql.Tx, id string, archiveHistory 
 	}
 }
 
-func (b *bridge) startNewCatSession(ctx context.Context, who peer, archiveHistory bool) error {
+func (b *bridge) startNewCompanionSession(ctx context.Context, who peer, archiveHistory bool) error {
 	run := b.oc.prepareMappingChange(who.DeviceID)
 	if b.ws != nil {
-		b.ws.stopCatTurns(who.DeviceID)
+		b.ws.stopCompanionTurns(who.DeviceID)
 	}
 	return run(ctx, func() error {
-		b.catMu.Lock()
-		defer b.catMu.Unlock()
-		cat, profilesChanged, err := b.changeCat(ctx, who, b.voiceTheme(who), "new_session", object{"archive_history": archiveHistory})
+		b.companionMu.Lock()
+		defer b.companionMu.Unlock()
+		companion, profilesChanged, err := b.changeCompanion(ctx, who, b.voiceTheme(who), "new_session", object{"archive_history": archiveHistory})
 		if err != nil {
 			return err
 		}
@@ -374,9 +374,9 @@ func (b *bridge) startNewCatSession(ctx context.Context, who peer, archiveHistor
 			b.ws.mu.Lock()
 			defer b.ws.mu.Unlock()
 			if d := b.ws.devices[strings.ToLower(who.DeviceID)]; d != nil {
-				b.ws.stopCatTurn(d)
+				b.ws.stopCompanionTurn(d)
 			}
-			b.ws.catChanged(who.DeviceID, cat, profilesChanged)
+			b.ws.companionChanged(who.DeviceID, companion, profilesChanged)
 			if archiveHistory {
 				b.ws.historyArchived(who.DeviceID)
 			}

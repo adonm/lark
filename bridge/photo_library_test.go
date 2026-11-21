@@ -337,7 +337,7 @@ func TestPhotoLibrarySlideshowAndScope(t *testing.T) {
 		"data": object{"handles": []string{recent}, "access": access}}, false)
 	mirror.until(t, hasWS("svg", "photo:"+recent))
 	verifyHTTP("POST", base, "/api/library?device_id="+hardware, "unit", `{"op":"visibility","hidden":true}`, 200)
-	mirror.until(t, hasWS("svg", "cat-ring"))
+	mirror.until(t, hasWS("svg", "companion-ring"))
 	verifyHTTP("GET", base, "/api/library/thumbnail/"+recent, "unit", "", 404)
 	toolTest(t, base, "state", search, true)
 	verifyHTTP("POST", base, "/api/library?device_id="+hardware, "unit", `{"op":"visibility","hidden":false}`, 200)
@@ -354,7 +354,7 @@ func TestPhotoLibrarySlideshowAndScope(t *testing.T) {
 	s.Files = s.Files[1:2]
 	ingestTestPhotos(t, p, s, now.Add(time.Second))
 	b.ws.clearInvalidSlides()
-	mirror.until(t, hasWS("svg", "cat-ring"))
+	mirror.until(t, hasWS("svg", "companion-ring"))
 	verifyHTTP("GET", base, "/api/library/thumbnail/"+removed, "unit", "", 404)
 }
 

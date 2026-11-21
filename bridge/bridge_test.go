@@ -31,7 +31,7 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		{"phone-1234", "tap", "web", false},
 		{"other-id", "tap", "web", true},
 	} {
-		if got := turnPrompt(peer{DeviceID: tc.id}, tc.web, tc.source, "Hi", catState{catLook: catLook{Name: "Cake", Configured: true}}); got !=
+		if got := turnPrompt(peer{DeviceID: tc.id}, tc.web, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}); got !=
 			"[Cake ("+tc.id+") · "+tc.kind+" · "+tc.source+"]\nHi" {
 			t.Fatal(got)
 		}

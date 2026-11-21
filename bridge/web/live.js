@@ -3,13 +3,13 @@ import {loadHistory, receiveChat, reloadArchivedHistory, resetTranscript} from "
 import {applyVolume, refreshDevices, renderCallTarget, renderDevices, renderTargets, renderVoice, renderVolume} from "./devices.js";
 import {$, colors, companionName, isLive, nodes, say, screen, svgNS} from "./dom.js";
 import {busyMode, idleWatch} from "./idle.js";
-import {loadSaved, loadSavedCats, loadTimers} from "./library.js";
+import {loadSaved, loadSavedCompanions, loadTimers} from "./library.js";
 import {clearPhotos, stagePhotos} from "./photos.js";
 import {installer} from "./pwa.js";
 import {send, state} from "./state.js";
 
 let screenHits = [];
-const occupiedCode = 4001; // wsCatOccupied
+const occupiedCode = 4001; // wsCompanionOccupied
 const updateInstall = installer();
 const phoneLayout = matchMedia("(max-width: 620px), (max-width: 920px) and (orientation: portrait)");
 const viewport = window.visualViewport;
@@ -76,8 +76,8 @@ function select(d, quick = false) {
   $("timer-items").replaceChildren();
   $("active-timers").hidden = true;
   loadSaved();
-  $("saved-cat-items").replaceChildren();
-  loadSavedCats();
+  $("saved-companion-items").replaceChildren();
+  loadSavedCompanions();
   renderCurrent();
   renderDevices();
   resetTranscript();
@@ -95,7 +95,7 @@ function renderCurrent() {
   const resting = !!state.view?.parentMessage;
   const mode = d?.mode && d.mode !== "offline" ? d.mode : "";
   $("workspace").dataset.view = state.view?.virtual ? "virtual" : "mirror";
-  colors($("workspace"), d?.cat);
+  colors($("workspace"), d?.companion);
   updateInstall(state.view, state.app);
   say("chat-name", companionName(d) || "Choose a companion");
   $("chat-mode").hidden = !d;
@@ -118,7 +118,7 @@ function renderCurrent() {
   say("mic-help", window.isSecureContext ? "This browser can’t capture microphone audio." :
     "Mic needs localhost or an HTTPS opentunnel.xyz link");
   $("text").disabled = !d || resting || state.view.virtual && (!active || busyCall);
-  $("text").placeholder = state.view?.parentMessage || (d?.cat?.configured === false ? "Say hi to meet me!" : "Message your companion…");
+  $("text").placeholder = state.view?.parentMessage || (d?.companion?.configured === false ? "Say hi to meet me!" : "Message your companion…");
   $("send").disabled = $("text").disabled || !!state.view?.sending || !!state.view?.resetting;
   $("share-photo").disabled = !d || !!state.view?.sharingPhoto || state.view?.virtual && !active;
   $("reset").hidden = !!state.app?.scope;
@@ -168,29 +168,29 @@ function pause(reason) {
 
 function connect(attempt = 0, ifFree = false) {
   if (!state.app || !state.view?.id) return;
-  const cat = state.view;
-  if (cat.virtual && document.hidden) return pause("idle");
-  disconnect({keepFace:cat.virtual});
-  cat.paused = "";
-  cat.mode = "";
-  cat.parentMessage = "";
-  cat.bridgeEndpoint = false;
+  const view = state.view;
+  if (view.virtual && document.hidden) return pause("idle");
+  disconnect({keepFace:view.virtual});
+  view.paused = "";
+  view.mode = "";
+  view.parentMessage = "";
+  view.bridgeEndpoint = false;
   say("link-state", "Connecting…");
-  updateStatus(cat.virtual ? `Joining as ${cat.device.character}…` : `Connecting to ${cat.device.character}…`);
+  updateStatus(view.virtual ? `Joining as ${view.device.character}…` : `Connecting to ${view.device.character}…`);
   renderCurrent();
   const url = new URL("/ws", location.href);
   url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("token", state.app.token);
   const socket = new WebSocket(url);
   state.ws = socket;
-  if (cat.virtual) idle.start(document.hidden);
+  if (view.virtual) idle.start(document.hidden);
   socket.binaryType = "arraybuffer";
   socket.onopen = () => {
     if (state.ws !== socket) return;
     loadTimers();
-    loadSavedCats();
+    loadSavedCompanions();
     const micAvailable = canCaptureMic();
-    send(cat.virtual ? {ev:"hello",role:"web",device_id:cat.id,character:cat.device.character,firmware:"web",
+    send(view.virtual ? {ev:"hello",role:"web",device_id:view.id,character:view.device.character,firmware:"web",
       if_free:ifFree,caps:{call:micAvailable,call_pcm:micAvailable,drag:true,bridge_endpoint:micAvailable}}
       : {ev:"hello",role:"web"});
   };
@@ -198,23 +198,23 @@ function connect(attempt = 0, ifFree = false) {
     if (state.ws !== socket) return;
     if (typeof e.data === "string") {
       try { command(JSON.parse(e.data)); } catch { updateStatus("Invalid screen update."); }
-    } else if (cat.virtual) playPCM(e.data);
+    } else if (view.virtual) playPCM(e.data);
     idle.refresh();
   };
   socket.onclose = e => {
     if (state.ws !== socket) return;
-    if (cat.virtual && e.code === occupiedCode) return pause("occupied");
-    if (cat.virtual && document.hidden) return pause("lost");
+    if (view.virtual && e.code === occupiedCode) return pause("occupied");
+    if (view.virtual && document.hidden) return pause("lost");
     if (state.rev) attempt = 0;
-    disconnect({keepFace:cat.virtual});
+    disconnect({keepFace:view.virtual});
     renderCurrent();
     say("link-state", "Reconnecting…");
     updateStatus("Live screen disconnected.");
-    state.retry = setTimeout(() => connect(attempt + 1, cat.virtual), Math.min(5000, 500 * 2 ** Math.min(attempt, 4)));
+    state.retry = setTimeout(() => connect(attempt + 1, view.virtual), Math.min(5000, 500 * 2 ** Math.min(attempt, 4)));
   };
 }
 
-$("reconnect-cat").onclick = () => {
+$("reconnect-companion").onclick = () => {
   if (!state.view?.paused) return;
   unlockAudio();
   connect(0, true);
@@ -240,8 +240,8 @@ function syncWatch(live) {
 
 const modeLabel = {idle:"Idle", thinking:"Thinking", listening:"Listening", speaking:"Speaking", sleepy:"Sleepy", calling:"Ringing", call:"In call"};
 
-function updateCat({device_id, character, cat, voice}) {
-  const fields = {character, cat, voice};
+function updateCompanion({device_id, character, companion, voice}) {
+  const fields = {character, companion, voice};
   state.app.deviceVersion++;
   const device = state.app.devices.find(d => d.device_id === device_id);
   if (device) Object.assign(device, fields);
@@ -270,13 +270,13 @@ function command(msg) {
     case "capabilities":
       if (state.view.virtual) state.view.bridgeEndpoint = msg.bridge_endpoint === true;
       break;
-    case "cat":
-      updateCat(msg);
+    case "companion":
+      updateCompanion(msg);
       break;
-    case "saved_cats":
-      loadSavedCats();
+    case "saved_companions":
+      loadSavedCompanions();
       break;
-    case "cat_reassigned":
+    case "companion_reassigned":
       if (msg.device_id === state.view.id) loadHistory();
       break;
     case "history_archived":
@@ -429,4 +429,4 @@ screen.addEventListener("keydown", e => {
   send({ev:"tap",id:control.dataset.id,x:Math.round((x1+x2)/2),y:Math.round((y1+y2)/2)});
 });
 
-export {canStartCall, disconnect, renderCurrent, select, startPeerCall, updateCat};
+export {canStartCall, disconnect, renderCurrent, select, startPeerCall, updateCompanion};

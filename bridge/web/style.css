@@ -20,7 +20,7 @@
   --warning: light-dark(#864b19, #ffd08e);
   --radius-medium: .75rem;
   --radius-large: 1.25rem;
-  --cat-accent: #60a5fa;
+  --companion-accent: #60a5fa;
   --target-size: 2.75rem;
   --gutter: clamp(.625rem, 2.2vw, 1.75rem);
 }
@@ -147,10 +147,10 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
   border-color: var(--border);
 }
 .device:hover:not(:disabled), .device[aria-pressed="true"] { background: var(--accent); }
-.device[aria-pressed="true"] { border-color: var(--input); box-shadow: inset 3px 0 0 var(--cat-accent); }
+.device[aria-pressed="true"] { border-color: var(--input); box-shadow: inset 3px 0 0 var(--companion-accent); }
 .device-name { font-weight: 700; overflow-wrap: anywhere; }
 .device :is(.badge, .device-meta) { grid-column: 2; justify-self: start; }
-.cat-dot, .device-state::before {
+.companion-dot, .device-state::before {
   content: "";
   width: .6rem;
   height: .6rem;
@@ -158,8 +158,8 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
   border-radius: 50%;
   background: currentColor;
 }
-.cat-dot { background: var(--cat-accent); }
-.cat-action { margin-block-start: .55rem; width: 100%; }
+.companion-dot { background: var(--companion-accent); }
+.companion-action { margin-block-start: .55rem; width: 100%; }
 .reassign-controls { margin-block-end: .75rem; }
 .sidebar details + details { margin-block-start: .5rem; }
 .sidebar summary { font-size: .87rem; padding: .65rem .7rem; }
@@ -178,7 +178,7 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
   align-items: center;
   gap: .65rem;
   padding: clamp(.9rem, 2vw, 1.5rem);
-  background: radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--cat-accent) 16%, var(--card)), var(--card) 67%);
+  background: radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--companion-accent) 16%, var(--card)), var(--card) 67%);
 }
 .face-header { align-self: stretch; }
 .stage {
@@ -226,7 +226,7 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 .chat-header, .composer, #transcript { padding: .85rem clamp(.7rem, 1.6vw, 1.25rem); }
 .chat-header { grid-row: 1; border-block-end: 1px solid var(--border); }
 .chat-top { justify-content: space-between; }
-.chat-cat { flex-wrap: wrap; font-size: .9rem; overflow-wrap: anywhere; margin-block-start: .3rem; }
+.chat-companion { flex-wrap: wrap; font-size: .9rem; overflow-wrap: anywhere; margin-block-start: .3rem; }
 #transcript { grid-row: 3; position: relative; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; background: var(--faint); }
 #transcript:focus-visible { outline-offset: -3px; }
 #load-older { display: flex; margin: 0 auto .6rem; }
@@ -237,7 +237,7 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 .day, .chat-divider { align-self: center; text-align: center; }
 .day, .bubble time { color: var(--muted-foreground); font-size: .73rem; }
 .bubble { width: fit-content; max-width: min(93%, 38rem); padding: var(--space-3, .75rem); border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--card); overflow-wrap: anywhere; }
-.bubble.cat { border-inline-start: 3px solid var(--cat-accent); }
+.bubble.companion { border-inline-start: 3px solid var(--companion-accent); }
 .bubble.user { align-self: end; background: var(--secondary); color: var(--secondary-foreground); }
 .bubble.intercom { border-style: dashed; border-color: var(--success); }
 .bubble-head { gap: .3rem .5rem; font-size: .83rem; }
@@ -259,8 +259,8 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 .compact-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .compact-action { padding-inline: .55rem; }
 .timer-clock { font-variant-numeric: tabular-nums; }
-.saved-cat { padding: .65rem; border: 1px solid var(--border); border-radius: var(--radius-medium); }
-.saved-cat .row + .row, .saved-group { margin-block: .5rem; }
+.saved-companion { padding: .65rem; border: 1px solid var(--border); border-radius: var(--radius-medium); }
+.saved-companion .row + .row, .saved-group { margin-block: .5rem; }
 .saved-value { max-block-size: 6rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
 #token-form { padding: clamp(1rem, 5vw, 1.7rem); }
 #token-form label { margin-block-start: .55rem; }
@@ -374,7 +374,7 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
   .workspace[data-view="virtual"] .face-settings summary { border: 0; }
   .workspace[data-view="virtual"] .chat-panel { flex: 1; block-size: auto; min-block-size: 0; }
   .workspace[data-view="virtual"] :is(.chat-header, .composer, #transcript) { padding: .55rem .7rem; }
-  .workspace[data-view="virtual"] .chat-cat { margin-block-start: .1rem; }
+  .workspace[data-view="virtual"] .chat-companion { margin-block-start: .1rem; }
   @container phone (max-height: 30rem) {
     .face-panel:not(:has(:focus-within, #reconnect-overlay:not([hidden]))) { display: none; }
     .chat-identity { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .65rem; }

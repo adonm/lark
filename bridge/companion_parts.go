@@ -8,7 +8,7 @@ var faceEditPoses = []string{"base", "idle", "blink", "talk", "listen", "think",
 func editFaceParts(raw string, edits any) (string, error) {
 	list, ok := edits.([]any)
 	if !ok || len(list) == 0 || len(list) > 24 {
-		return "", fieldError("cat.face_edits", "expected 1–24 face part edits")
+		return "", fieldError("companion.face_edits", "expected 1–24 face part edits")
 	}
 	root, err := parseFaceSVG(raw)
 	if err != nil {
@@ -34,33 +34,33 @@ func editFaceParts(raw string, edits any) (string, error) {
 	}
 	find(root, "base")
 	if len(parts) == 0 {
-		return "", fieldError("cat.face_edits", "untagged custom face; send the complete face_svg instead")
+		return "", fieldError("companion.face_edits", "untagged custom face; send the complete face_svg instead")
 	}
 	updated := map[*svgNode]bool{}
 	for _, raw := range list {
 		edit, ok := raw.(object)
 		if !ok {
-			return "", fieldError("cat.face_edits", "expected a part edit object")
+			return "", fieldError("companion.face_edits", "expected a part edit object")
 		}
 		part, pose := str(edit["part"]), str(edit["pose"])
 		_, poseGiven := edit["pose"]
 		if !slices.Contains(faceParts, part) || poseGiven && !slices.Contains(faceEditPoses, pose) {
-			return "", fieldError("cat.face_edits", "unknown part or pose")
+			return "", fieldError("companion.face_edits", "unknown part or pose")
 		}
 		svg, ok := edit["svg"].(string)
 		if !ok {
-			return "", fieldError("cat.face_edits.svg", "expected an SVG fragment")
+			return "", fieldError("companion.face_edits.svg", "expected an SVG fragment")
 		}
 		replacement, err := parseFaceSVG("<svg>" + svg + "</svg>")
 		if err != nil {
-			return "", fieldError("cat.face_edits.svg", "%s", err)
+			return "", fieldError("companion.face_edits.svg", "%s", err)
 		}
 		var rejectMarkers func(*svgNode) bool
 		rejectMarkers = func(n *svgNode) bool {
 			return n.attr["data-pose"] != "" || n.attr["data-part"] != "" || slices.ContainsFunc(n.children, rejectMarkers)
 		}
 		if rejectMarkers(replacement) {
-			return "", fieldError("cat.face_edits.svg", "replacement cannot define pose or part markers")
+			return "", fieldError("companion.face_edits.svg", "replacement cannot define pose or part markers")
 		}
 		found := false
 		for _, target := range parts {
@@ -68,14 +68,14 @@ func editFaceParts(raw string, edits any) (string, error) {
 				continue
 			}
 			if updated[target.node] {
-				return "", fieldError("cat.face_edits", "multiple edits target %s in %s", part, target.pose)
+				return "", fieldError("companion.face_edits", "multiple edits target %s in %s", part, target.pose)
 			}
 			target.node.children = replacement.children
 			updated[target.node] = true
 			found = true
 		}
 		if !found {
-			return "", fieldError("cat.face_edits", "no matching %s in requested pose; use face_svg to add parts", part)
+			return "", fieldError("companion.face_edits", "no matching %s in requested pose; use face_svg to add parts", part)
 		}
 	}
 	return sanitizeFaceSVG(svgString(root))

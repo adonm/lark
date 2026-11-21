@@ -371,9 +371,9 @@ func (b *bridge) scoped(v virtualClient, token string) http.Handler {
 			value, err := b.timerAPI(w, r, path, v.ID)
 			sendResult(w, value, err)
 		case path == "/api/scope":
-			cat := b.catFor(peer{DeviceID: v.ID, Character: v.Character})
-			out := object{"scoped": true, "device_id": v.ID, "character": cat.Name, "cat": cat.catLook, "voices": voiceCatalog,
-				"voice": b.voices.get(v.ID, deviceTheme(cat.Name))}
+			companion := b.companionFor(peer{DeviceID: v.ID, Character: v.Character})
+			out := object{"scoped": true, "device_id": v.ID, "character": companion.Name, "companion": companion.companionLook, "voices": voiceCatalog,
+				"voice": b.voices.get(v.ID, deviceTheme(companion.Name))}
 			if b.ws != nil {
 				b.ws.deviceStatus(out, v.ID, false)
 			} else {

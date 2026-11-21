@@ -120,19 +120,19 @@ func pages[T any](ctx context.Context, oc openCode, path string, params url.Valu
 
 var sessionID = regexp.MustCompile(`^ses[-_][A-Za-z0-9_-]{1,120}$`)
 var publicLabel = regexp.MustCompile(`^(Cake|Mint|greg|Synthetic)(/[1-9][0-9]*)?$`)
-var cats = []string{"Cake", "Mint", "greg"}
+var companions = []string{"Cake", "Mint", "greg"}
 
-func catMatches(label, title string) bool {
-	cat, ok := strings.CutPrefix(title, "Lark: ")
+func companionMatches(label, title string) bool {
+	companion, ok := strings.CutPrefix(title, "Lark: ")
 	if !ok {
 		return false
 	}
-	if stem, ok := strings.CutSuffix(cat, ")"); ok {
+	if stem, ok := strings.CutSuffix(companion, ")"); ok {
 		if split := strings.LastIndex(stem, " ("); split >= 0 {
-			cat = stem[:split]
+			companion = stem[:split]
 		}
 	}
-	return strings.EqualFold(cat, label)
+	return strings.EqualFold(companion, label)
 }
 
 func historyMessages(ctx context.Context, oc openCode, id string) ([]message, error) {
@@ -148,10 +148,10 @@ func collect(ctx context.Context, oc openCode) (fixture, error) {
 		return fixture{}, err
 	}
 	out := fixture{Version: 1}
-	for _, label := range cats {
+	for _, label := range companions {
 		var matches []session
 		for _, s := range list {
-			if catMatches(label, s.Title) {
+			if companionMatches(label, s.Title) {
 				matches = append(matches, s)
 			}
 		}

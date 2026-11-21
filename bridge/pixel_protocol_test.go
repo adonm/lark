@@ -11,14 +11,14 @@ func TestMCPRejectsCompanionSprite(t *testing.T) {
 	const id = "lark-pixel-test"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "")
-	raw := str(stateMe(t, base, id)["cat"].(object)["face_svg"])
-	rejected := toolTest(t, base, "patch", object{"device_id": id, "cat": object{
+	raw := str(stateMe(t, base, id)["companion"].(object)["face_svg"])
+	rejected := toolTest(t, base, "patch", object{"device_id": id, "companion": object{
 		"sprite": object{"rows": []string{"kk", "k."}},
 	}}, true)
-	if got := str(rejected["error"]); got != "cat.sprite: unknown argument" {
+	if got := str(rejected["error"]); got != "companion.sprite: unknown argument" {
 		t.Fatalf("expected strict MCP rejection; got %q", got)
 	}
-	if got := str(stateMe(t, base, id)["cat"].(object)["face_svg"]); got != raw {
+	if got := str(stateMe(t, base, id)["companion"].(object)["face_svg"]); got != raw {
 		t.Fatal("invalid patch changed the persisted face")
 	}
 }

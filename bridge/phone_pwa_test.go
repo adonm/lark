@@ -14,9 +14,9 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.virtual = virtualStore(b.db) })
 	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Violet"}, 201))
 	id := str(v["id"])
-	cat, ok := b.virtualByID(id)
+	companion, ok := b.virtualByID(id)
 	if !ok {
-		t.Fatal("virtual cat not created")
+		t.Fatal("virtual companion not created")
 	}
 	login := httptest.NewRequest("GET", "/api/scope", nil)
 	login.Header.Set("X-Lark-Token", b.token)
@@ -30,7 +30,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 	cookie := cookies[0]
 	const manifest = phonePWAPath + "manifest.webmanifest"
 	const grant = "scoped-pwa-fixture"
-	scoped := b.scoped(cat, grant)
+	scoped := b.scoped(companion, grant)
 	request := func(t *testing.T, handler http.Handler, path string, cookie *http.Cookie, status int) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest("GET", path, nil)
@@ -128,13 +128,13 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 	}
 }
 
-func TestPhoneCatReconnectDoesNotReplaceLiveTab(t *testing.T) {
+func TestPhoneCompanionReconnectDoesNotReplaceLiveTab(t *testing.T) {
 	b, base := wsHarness(t, func(b *bridge, _ string) { b.virtual = virtualStore(b.db) })
 	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))
 	id := str(v["id"])
-	cat, _ := b.virtualByID(id)
+	companion, _ := b.virtualByID(id)
 	const grant = "scoped-hello-fixture"
-	scoped := httptest.NewServer(b.scoped(cat, grant))
+	scoped := httptest.NewServer(b.scoped(companion, grant))
 	defer scoped.Close()
 	first := testConnectWS(t, base, "unit", false)
 	first.hello(t, id, "New Cat")
@@ -143,7 +143,7 @@ func TestPhoneCatReconnectDoesNotReplaceLiveTab(t *testing.T) {
 	closeFrame := func(socket *testWS) {
 		t.Helper()
 		f := socket.until(t, func(f wsFrame) bool { return f.op == wsClose })
-		if !bytes.Equal(f.data, wsCloseFrame(wsCatOccupied).data) {
+		if !bytes.Equal(f.data, wsCloseFrame(wsCompanionOccupied).data) {
 			t.Fatal("replaced or rejected socket did not receive occupied close code")
 		}
 	}

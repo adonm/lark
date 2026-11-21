@@ -42,7 +42,7 @@ func slideshowScene(s *photoShow, status string) sceneView {
 		v.art = svgLabel(180, 164, 20, status, "#FFFAEE")
 	}
 	v.art += svgLabel(180, 260, 15, fmt.Sprintf("%d / %d", s.index+1, len(s.handles)), "#FFFAEE")
-	palette := palette{"#FFFAEE", catInk}
+	palette := palette{"#FFFAEE", companionInk}
 	if len(s.handles) > 1 {
 		v.control(bounds{75, 274, 59, 39}, actionTile("photo-prev", "Prev", "", palette))
 		v.control(bounds{226, 274, 59, 39}, actionTile("photo-next", "Next", "", palette))
@@ -73,7 +73,7 @@ func (b *bridge) launchPhotoShow(ctx context.Context, args object) (object, erro
 	defer h.mu.Unlock()
 	d := h.devices[device]
 	if d == nil || !h.active(d) || !d.client.canSeeLibrary() || d.callState != callNone {
-		return nil, problem(409, "Photo slideshow needs a connected local cat not in a call")
+		return nil, problem(409, "Photo slideshow needs a connected local companion not in a call")
 	}
 	for _, id := range handles {
 		if _, ok := p.getPhotoHandle(ctx, device, id); !ok {

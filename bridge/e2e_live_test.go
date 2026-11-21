@@ -244,7 +244,7 @@ func (s *e2eSuite) tool(t *testing.T, name string, args object, failed bool) obj
 	return out
 }
 
-type e2eCat struct {
+type e2eCompanion struct {
 	*testWS
 	id, name    string
 	mirror      *testWS
@@ -255,7 +255,7 @@ type e2eCat struct {
 	svg         string
 }
 
-func (s *e2eSuite) browser(t *testing.T, name string) *e2eCat {
+func (s *e2eSuite) browser(t *testing.T, name string) *e2eCompanion {
 	t.Helper()
 	name = s.prefix + " " + name
 	v := testObject(t, s.request(t, "POST", "/api/virtual-clients", object{"character": name, "theme": "mint"}, 201))
@@ -266,12 +266,12 @@ func (s *e2eSuite) browser(t *testing.T, name string) *e2eCat {
 	ws := testConnectWS(t, s.base, s.token, true)
 	ws.json(t, object{"ev": "hello", "role": "web", "device_id": id, "firmware": "web",
 		"volume": 65, "caps": object{"call": true, "call_pcm": true, "drag": true, "bridge_endpoint": true}})
-	c := &e2eCat{testWS: ws, id: id, name: name}
-	c.scene(t, "cat-ring")
+	c := &e2eCompanion{testWS: ws, id: id, name: name}
+	c.scene(t, "companion-ring")
 	return c
 }
 
-func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCat {
+func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	t.Helper()
 	name := s.prefix + " " + label
 	id := "lark-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
@@ -291,7 +291,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCat {
 		"free_heap": 124000, "min_free_heap": 104000, "free_psram": 2000000,
 		"wifi_rssi": -43, "rssi": -43, "uptime_s": 412, "cpu_pct": 13,
 		"battery_pct": pct, "battery_mv": mv, "charging": charging, "volume": 65})
-	c := &e2eCat{testWS: ws, id: id, name: name, width: width, high: height, pixels: make([]uint16, width*height)}
+	c := &e2eCompanion{testWS: ws, id: id, name: name, width: width, high: height, pixels: make([]uint16, width*height)}
 	ws.until(t, hasWS("hello_ok", ""))
 	first := c.expect(t, "full initial framebuffer", isDisplay)
 	r, _, _ := decodeDisplay(t, first)
@@ -301,14 +301,14 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCat {
 	return c
 }
 
-func (c *e2eCat) mirrorOn(t *testing.T, s *e2eSuite) {
+func (c *e2eCompanion) mirrorOn(t *testing.T, s *e2eSuite) {
 	t.Helper()
 	c.mirror = testConnectWS(t, s.base, s.token, true)
 	c.updateScene(t, c.mirror.watch(t, c.id))
 	c.syncRevision(t)
 }
 
-func (c *e2eCat) apply(t *testing.T, f wsFrame) {
+func (c *e2eCompanion) apply(t *testing.T, f wsFrame) {
 	t.Helper()
 	if !isDisplay(f) {
 		return
@@ -325,7 +325,7 @@ func (c *e2eCat) apply(t *testing.T, f wsFrame) {
 	}
 }
 
-func (c *e2eCat) expect(t *testing.T, label string, matches func(wsFrame) bool) wsFrame {
+func (c *e2eCompanion) expect(t *testing.T, label string, matches func(wsFrame) bool) wsFrame {
 	t.Helper()
 	deadline := time.Now().Add(max(6*time.Second, c.timeout))
 	for time.Now().Before(deadline) {
@@ -346,14 +346,14 @@ func (c *e2eCat) expect(t *testing.T, label string, matches func(wsFrame) bool) 
 	return wsFrame{}
 }
 
-func (c *e2eCat) updateScene(t *testing.T, f wsFrame) {
+func (c *e2eCompanion) updateScene(t *testing.T, f wsFrame) {
 	t.Helper()
 	if hasWS("svg", "")(f) {
 		c.svg = str(testObject(t, f.data)["svg"])
 	}
 }
 
-func (c *e2eCat) scene(t *testing.T, text ...string) string {
+func (c *e2eCompanion) scene(t *testing.T, text ...string) string {
 	t.Helper()
 	return c.sceneWhere(t, strings.Join(text, ", "), func(f wsFrame) bool {
 		for _, part := range text {
@@ -365,7 +365,7 @@ func (c *e2eCat) scene(t *testing.T, text ...string) string {
 	})
 }
 
-func (c *e2eCat) sceneWhere(t *testing.T, label string, filter func(wsFrame) bool) string {
+func (c *e2eCompanion) sceneWhere(t *testing.T, label string, filter func(wsFrame) bool) string {
 	t.Helper()
 	match := func(f wsFrame) bool { return hasWS("svg", "")(f) && filter(f) }
 	if c.mirror != nil {
@@ -388,7 +388,7 @@ func e2eNumber(v any) int {
 	return n
 }
 
-func (c *e2eCat) syncTo(t *testing.T, rev uint16) {
+func (c *e2eCompanion) syncTo(t *testing.T, rev uint16) {
 	t.Helper()
 	if int16(c.revision-rev) < 0 {
 		c.expect(t, "framebuffer matching mirror revision", func(f wsFrame) bool {
@@ -397,19 +397,19 @@ func (c *e2eCat) syncTo(t *testing.T, rev uint16) {
 	}
 }
 
-func (c *e2eCat) syncRevision(t *testing.T) {
+func (c *e2eCompanion) syncRevision(t *testing.T) {
 	t.Helper()
 	c.json(t, object{"ev": "status", "rssi": -44})
 	c.syncFrames(t)
 }
 
-func (c *e2eCat) syncFrames(t *testing.T) {
+func (c *e2eCompanion) syncFrames(t *testing.T) {
 	t.Helper()
 	c.write(t, maskedFrame(wsPing, true, []byte("sync")))
 	c.expect(t, "frame barrier", func(f wsFrame) bool { return f.op == wsPong && string(f.data) == "sync" })
 }
 
-func (c *e2eCat) input(t *testing.T, ev string, x, y int, revision uint16) {
+func (c *e2eCompanion) input(t *testing.T, ev string, x, y int, revision uint16) {
 	t.Helper()
 	if c.width != 0 {
 		side := min(c.width, c.high)
@@ -418,7 +418,7 @@ func (c *e2eCat) input(t *testing.T, ev string, x, y int, revision uint16) {
 	c.json(t, object{"ev": ev, "x": x, "y": y, "rev_lo": revision})
 }
 
-func (c *e2eCat) tap(t *testing.T, id string) {
+func (c *e2eCompanion) tap(t *testing.T, id string) {
 	t.Helper()
 	if c.width == 0 {
 		c.json(t, object{"ev": "tap", "id": id})
@@ -434,7 +434,7 @@ func (c *e2eCat) tap(t *testing.T, id string) {
 	c.input(t, "tap", e2eNumber(match[1])+e2eNumber(match[3])/2, e2eNumber(match[2])+e2eNumber(match[4])/2, c.revision)
 }
 
-func (c *e2eCat) audio(t *testing.T, prefix byte, pcm []byte) {
+func (c *e2eCompanion) audio(t *testing.T, prefix byte, pcm []byte) {
 	t.Helper()
 	for offset := 0; offset < len(pcm); offset += pcmPacket {
 		part := pcm[offset:min(offset+pcmPacket, len(pcm))]
@@ -442,7 +442,7 @@ func (c *e2eCat) audio(t *testing.T, prefix byte, pcm []byte) {
 	}
 }
 
-func (c *e2eCat) ack(t *testing.T, end wsFrame) {
+func (c *e2eCompanion) ack(t *testing.T, end wsFrame) {
 	t.Helper()
 	audio := testObject(t, end.data)["audio"]
 	if _, ok := audio.(json.Number); !ok {

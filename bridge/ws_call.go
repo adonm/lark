@@ -88,7 +88,7 @@ func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) e
 		return r.err()
 	}
 	if callee != nil && h.active(callee) && h.parentRefresh(key, now) != "" {
-		return problem(423, callee.cat.Name+" is resting right now. Try again later.")
+		return problem(423, callee.companion.Name+" is resting right now. Try again later.")
 	}
 	// The first request already installed both halves. A reciprocal request
 	// from the ringing callee is an answer, not a second call.
@@ -102,7 +102,7 @@ func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) e
 	}
 	name := peerID
 	if callee != nil {
-		name = callee.cat.Name
+		name = callee.companion.Name
 	} else {
 		for _, p := range h.storedPeers {
 			if strings.EqualFold(p.DeviceID, key) {
@@ -113,9 +113,9 @@ func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) e
 	}
 	switch {
 	case !caller.caps.Call:
-		return problem(409, "This cat needs call support (firmware 0.9.2 or newer).")
+		return problem(409, "This companion needs call support (firmware 0.9.2 or newer).")
 	case callee == caller:
-		return problem(400, "Choose another cat to call.")
+		return problem(400, "Choose another companion to call.")
 	case callee == nil || !h.active(callee):
 		return problem(409, name+" is offline.")
 	case !callee.caps.Call:
@@ -301,7 +301,7 @@ func (h *wsHub) endCall(d *wsDevice, reason string) {
 	logCall("end", d, p, reason, elapsed)
 	if p != nil && d.callState == callActive {
 		duration := callDuration(elapsed)
-		dID, pID, dName, pName := d.who.DeviceID, p.who.DeviceID, d.cat.Name, p.cat.Name
+		dID, pID, dName, pName := d.who.DeviceID, p.who.DeviceID, d.companion.Name, p.companion.Name
 		go func() {
 			h.b.chat(dID, newChat("card", pName, "Voice call with "+pName+" ("+duration+")", "call"), true)
 			h.b.chat(pID, newChat("card", dName, "Voice call with "+dName+" ("+duration+")", "call"), true)
@@ -325,15 +325,15 @@ func (h *wsHub) endCall(d *wsDevice, reason string) {
 			}
 			h.wake(side, now)
 			if outgoing && p != nil && reason == "declined" {
-				h.callNotice(side, d.cat.Name+" declined", now)
+				h.callNotice(side, d.companion.Name+" declined", now)
 				continue
 			}
 			if outgoing && p != nil && reason == "no answer" {
-				h.callNotice(side, "No answer from "+p.cat.Name, now)
+				h.callNotice(side, "No answer from "+p.companion.Name, now)
 				continue
 			}
-			if side.parentReason == "" && reason == "Cat is resting" {
-				h.callNotice(side, "The other cat is resting. Try again later.", now)
+			if side.parentReason == "" && reason == "Companion is resting" {
+				h.callNotice(side, "The other companion is resting. Try again later.", now)
 				continue
 			}
 			h.render(side, now, false)

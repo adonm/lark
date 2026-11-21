@@ -58,7 +58,7 @@ func (o *openCode) recentDialogue(ctx context.Context, device string, after int6
 	// Only canonical dialogue from this device. Do not load archives, cards,
 	// intercom, tool data, timer wakes, attachments, or prompt headers.
 	rows, err := o.db.QueryContext(ctx, `SELECT role,text FROM messages WHERE device_id=? AND ts_ms>?
-		AND role IN ('user','cat') AND source IN ('typed','voice','text')
+		AND role IN ('user','companion') AND source IN ('typed','voice','text')
 		ORDER BY ts_ms DESC,id DESC LIMIT 12`, strings.ToLower(device), after)
 	if err != nil {
 		return "", problem(502, "Cannot read recent dialogue")
@@ -86,7 +86,7 @@ func (o *openCode) recentDialogue(ctx context.Context, device string, after int6
 	var dialogue []line
 	for i := 1; i < len(recent); i++ {
 		user, reply := recent[i-1], recent[i]
-		if user.Role == "user" && reply.Role == "cat" && user.Text != "" && reply.Text != "" {
+		if user.Role == "user" && reply.Role == "companion" && user.Text != "" && reply.Text != "" {
 			dialogue = append(dialogue, user, reply)
 		}
 	}

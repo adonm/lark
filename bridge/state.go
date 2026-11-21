@@ -102,7 +102,7 @@ func (v deviceVoices) get(id, theme string) string {
 	id = strings.ToLower(id)
 	var voice string
 	if v.store != nil {
-		_ = v.db.QueryRow("SELECT "+catVoiceSQL, id, id).Scan(&voice)
+		_ = v.db.QueryRow("SELECT "+companionVoiceSQL, id, id).Scan(&voice)
 	}
 	return v.resolve(voice, theme)
 }

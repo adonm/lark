@@ -62,14 +62,14 @@ func TestStorybookThroughMCP(t *testing.T) {
 	const id = "lark-storybook"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Bean")
-	out := toolTest(t, base, "patch", object{"device_id": id, "cat": object{"save_profile": false, "companion": object{
+	out := toolTest(t, base, "patch", object{"device_id": id, "companion": object{"save_profile": false, "preset": object{
 		"species": "fox", "palette": "berry", "eyes": "star", "accessory": "scarf",
 	}}}, false)
-	cat := out["cat"].(object)
-	if cat["face_bg"] != "#FAEAF0" || !strings.Contains(str(cat["face_svg"]), `data-part="eyes"`) {
-		t.Fatal(cat)
+	companion := out["companion"].(object)
+	if companion["face_bg"] != "#FAEAF0" || !strings.Contains(str(companion["face_svg"]), `data-part="eyes"`) {
+		t.Fatal(companion)
 	}
-	toolTest(t, base, "patch", object{"device_id": id, "cat": object{"companion": object{"species": "fox", "extra": true}}}, true)
+	toolTest(t, base, "patch", object{"device_id": id, "companion": object{"preset": object{"species": "fox", "extra": true}}}, true)
 	out = toolTest(t, base, "app", object{"devices": id, "screen": object{"title": "Owl spot", "body": []object{
 		{"type": "sticker", "name": "owl", "palette": object{"base": "mint", "fur": "#96C7AD"}, "id": "bird"},
 	}}}, false)

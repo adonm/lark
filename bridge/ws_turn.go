@@ -47,7 +47,7 @@ func (h *wsHub) startRecording(d *wsDevice, target string, now time.Time, reques
 	if w := h.b.worker; target != "" && w != nil && w.ready.Load() {
 		// A voice note can use the cached introduction without waiting on
 		// synthesis. Warm it while its sender is recording, not on every hello.
-		intro, voice := "From "+d.cat.Name+"!", d.voice
+		intro, voice := "From "+d.companion.Name+"!", d.voice
 		go func() {
 			ctx, cancel := context.WithTimeout(d.client.ctx, ttsWait)
 			defer cancel()
@@ -224,7 +224,7 @@ func (h *wsHub) beginTurn(d *wsDevice, now time.Time, keepView bool, source stri
 		h.dropPhotoShow(d)
 	}
 	ctx, cancel := context.WithTimeout(d.client.ctx, turnTimeout)
-	ctx = h.b.traceTurn(ctx, d.who.DeviceID, d.cat.Name, source, now)
+	ctx = h.b.traceTurn(ctx, d.who.DeviceID, d.companion.Name, source, now)
 	d.trace = traceFrom(ctx)
 	id := d.turn
 	d.cancel, d.busy = cancel, true
@@ -289,7 +289,7 @@ func (h *wsHub) turnError(d *wsDevice, id uint64, message string) {
 	h.finishTurn(d, id, &view, nil)
 }
 
-func (h *wsHub) stopCatTurn(d *wsDevice) {
+func (h *wsHub) stopCompanionTurn(d *wsDevice) {
 	h.cancelLocalTurn(d)
 	h.stopPlayback(d, true)
 	if d.recording.active() {
@@ -298,13 +298,13 @@ func (h *wsHub) stopCatTurn(d *wsDevice) {
 	}
 }
 
-func (h *wsHub) stopCatTurns(ids ...string) {
+func (h *wsHub) stopCompanionTurns(ids ...string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := time.Now()
 	for _, id := range ids {
 		if d := h.devices[strings.ToLower(id)]; d != nil && h.active(d) {
-			h.stopCatTurn(d)
+			h.stopCompanionTurn(d)
 			h.render(d, now, false)
 		}
 	}
@@ -313,10 +313,10 @@ func (h *wsHub) stopCatTurns(ids ...string) {
 func (h *wsHub) runVoice(ctx context.Context, d *wsDevice, id uint64, target string, pcm []byte) {
 	if target != "" {
 		sender := d.who
-		sender.Character = h.b.catFor(sender).Name
+		sender.Character = h.b.companionFor(sender).Name
 		others, err := h.peerSnapshot(d.who.DeviceID)
 		if err != nil {
-			h.turnError(d, id, "Could not find nearby cats.")
+			h.turnError(d, id, "Could not find nearby companions.")
 			return
 		}
 		recipients := h.b.intercomTargets(others, target)
@@ -353,7 +353,7 @@ func (h *wsHub) runVoice(ctx context.Context, d *wsDevice, id uint64, target str
 
 func (h *wsHub) runTurn(ctx context.Context, d *wsDevice, id uint64, text, source string, pcm []byte) {
 	if traceFrom(ctx) == nil {
-		ctx = h.b.traceTurn(ctx, d.who.DeviceID, h.b.catFor(d.who).Name, source, time.Now())
+		ctx = h.b.traceTurn(ctx, d.who.DeviceID, h.b.companionFor(d.who).Name, source, time.Now())
 	}
 	if ctx.Err() != nil {
 		h.finishTurn(d, id, nil, nil)
@@ -384,7 +384,7 @@ func (h *wsHub) runTurn(ctx context.Context, d *wsDevice, id uint64, text, sourc
 	}
 	others, direct, err := h.b.intercomIntent(d.who.DeviceID, text)
 	if err != nil || others != nil && ctx.Err() != nil {
-		h.turnError(d, id, "Could not find nearby cats.")
+		h.turnError(d, id, "Could not find nearby companions.")
 		return
 	}
 	if direct != nil {
@@ -419,7 +419,7 @@ func (h *wsHub) runTurn(ctx context.Context, d *wsDevice, id uint64, text, sourc
 
 func (h *wsHub) sendIntercom(ctx context.Context, d *wsDevice, id uint64, others []peer, target, text string, pcm []byte) {
 	if traceFrom(ctx) == nil {
-		ctx = h.b.traceTurn(ctx, d.who.DeviceID, h.b.catFor(d.who).Name, "intercom", time.Now())
+		ctx = h.b.traceTurn(ctx, d.who.DeviceID, h.b.companionFor(d.who).Name, "intercom", time.Now())
 	}
 	recipients := h.b.intercomTargets(others, target)
 	res := h.b.deliver(ctx, d.who, recipients, text, pcm)
@@ -435,7 +435,7 @@ func (h *wsHub) confirm(ctx context.Context, d *wsDevice, id uint64, target stri
 func (h *wsHub) sayTurn(ctx context.Context, d *wsDevice, id uint64, text string, view *sceneView) {
 	start := time.Now()
 	if traceFrom(ctx) == nil {
-		ctx = h.b.traceTurn(ctx, d.who.DeviceID, h.b.catFor(d.who).Name, "tap", start)
+		ctx = h.b.traceTurn(ctx, d.who.DeviceID, h.b.companionFor(d.who).Name, "tap", start)
 	}
 	w := h.b.worker
 	if w != nil && w.ready.Load() {
@@ -710,7 +710,7 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender peer, recipients []pee
 		stream.finish(nil)
 	}
 	receipts := make([]wsReceipt, 0, len(connected))
-	cat := h.b.catFor(sender)
+	companion := h.b.companionFor(sender)
 	h.mu.Lock()
 	now := time.Now()
 	if ctx.Err() != nil || h.parentRefresh(strings.ToLower(sender.DeviceID), now) != "" {
@@ -721,7 +721,7 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender peer, recipients []pee
 		if !h.active(d) || h.parentRefresh(d.key, now) != "" || d.callState != callNone {
 			continue
 		}
-		view := (intercomCard{sender, text, cat}).scene(false)
+		view := (intercomCard{sender, text, companion}).scene(false)
 		h.cancelTurn(d, "intercom")
 		h.stopPlayback(d, true)
 		if d.recording.active() {
@@ -779,7 +779,7 @@ func (h *wsHub) caption(receipts []wsReceipt, sender peer, text string) {
 	if len(receipts) == 0 || text == "" {
 		return
 	}
-	view := (intercomCard{sender, shortText(text, maxMessage, true), h.b.catFor(sender)}).scene(false)
+	view := (intercomCard{sender, shortText(text, maxMessage, true), h.b.companionFor(sender)}).scene(false)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, r := range receipts {
@@ -798,7 +798,7 @@ func (h *wsHub) caption(receipts []wsReceipt, sender peer, text string) {
 }
 
 func (b *bridge) deliver(ctx context.Context, sender peer, recipients []peer, text string, raw []byte) delivery {
-	sender.Character = b.catFor(sender).Name
+	sender.Character = b.companionFor(sender).Name
 	sent := make(map[string]bool, len(recipients))
 	if b.ws != nil {
 		for _, r := range b.ws.deliverOnline(ctx, sender, recipients, b.voiceFor(sender), text, raw) {

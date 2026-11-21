@@ -69,7 +69,7 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 			viewer := testConnectWS(t, base, "unit", false)
 			viewer.json(t, object{"ev": "hello", "role": "web"})
 			viewer.json(t, object{"ev": "watch", "device_id": id})
-			viewer.until(t, hasWS("svg", "cat-ring"))
+			viewer.until(t, hasWS("svg", "companion-ring"))
 			viewer.json(t, object{"ev": "wake_word", "enabled": true, "device_id": id})
 			dev.until(t, hasWS("wake_word", `"enabled":true`))
 			dev.json(t, object{"ev": "wake_word"})

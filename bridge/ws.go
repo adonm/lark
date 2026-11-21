@@ -13,7 +13,7 @@ import (
 )
 
 const wsConnections = 64
-const wsCatOccupied = 4001
+const wsCompanionOccupied = 4001
 
 type wsEvent struct {
 	Event     string  `json:"ev"`

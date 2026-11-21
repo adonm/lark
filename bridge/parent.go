@@ -254,7 +254,7 @@ func (h *wsHub) applyParent(d *wsDevice, r parentReason, now time.Time) {
 	old := d.parentReason
 	d.parentReason = r
 	if r != "" {
-		h.endCall(d, "Cat is resting")
+		h.endCall(d, "Companion is resting")
 		pendingRec := d.recording.active() && !d.recording.open()
 		h.abortCallRecording(d)
 		d.recording.ignoreStart = pendingRec

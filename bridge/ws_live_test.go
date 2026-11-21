@@ -35,7 +35,7 @@ func TestLiveWebSocket(t *testing.T) {
 	if !bytes.Contains(html, []byte(`<svg id="stage" viewBox="0 0 360 360"`)) ||
 		!bytes.Contains(html, []byte("Join on Phone")) ||
 		!bytes.Contains(html, []byte("+ New Companion")) ||
-		!bytes.Contains(html, []byte("Reassign / Load Cat")) ||
+		!bytes.Contains(html, []byte("Reassign / Load Form")) ||
 		!bytes.Contains(html, []byte("New Chat")) ||
 		res.Header.Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Fatal("missing live app HTML or inline SVG")
@@ -63,7 +63,7 @@ func TestLiveWebSocket(t *testing.T) {
 	viewer.json(t, object{"ev": "hello", "role": "web"})
 	viewer.until(t, hasWS("peers", deviceID))
 	viewer.json(t, object{"ev": "watch", "device_id": deviceID})
-	if mirror := testObject(t, viewer.until(t, hasWS("svg", "cat-ring")).data); str(mirror["rev"]) == "" {
+	if mirror := testObject(t, viewer.until(t, hasWS("svg", "companion-ring")).data); str(mirror["rev"]) == "" {
 		// JSON revisions are numbers, not strings.
 		if mirror["rev"] == nil || rev == 0 {
 			t.Fatal("missing initial display revisions")
@@ -81,7 +81,7 @@ func TestLiveWebSocket(t *testing.T) {
 		t.Fatal("hardware drawer offered reset")
 	}
 	from.json(t, object{"ev": "tap", "x": 180, "y": 295})
-	viewer.until(t, hasWS("svg", "cat-ring"))
+	viewer.until(t, hasWS("svg", "companion-ring"))
 	const code = `let text="Ready";
 function render(){return '<svg viewBox="0 0 360 360"><rect data-id="flip" x="140" y="95" width="80" height="50" fill="gold"/><text x="180" y="195" fill="white" text-anchor="middle">'+text+'</text></svg>';}
 function onTap(s,p,id){if(id==="flip")text="Live tap";}
@@ -96,12 +96,12 @@ function onTick(){if(text==="Live tap")text="Live reset";}`
 	viewer.until(t, hasWS("svg", "Live tap"))
 	viewer.until(t, hasWS("svg", "Live reset"))
 	from.json(t, object{"ev": "tap", "x": 180, "y": 316})
-	viewer.until(t, hasWS("svg", "cat-ring"))
+	viewer.until(t, hasWS("svg", "companion-ring"))
 	t.Log("live cat drawer, raw tap, JS tick, dirty rectangle, SVG mirror, and exit verified")
 
 	phone := testConnectWS(t, base, token, true)
 	phone.json(t, object{"ev": "hello", "role": "web", "device_id": phoneID, "character": "New Cat", "firmware": "web", "volume": 65})
-	face := phone.until(t, hasWS("svg", "cat-ring"))
+	face := phone.until(t, hasWS("svg", "companion-ring"))
 	if !hasWS("svg", "#FFF2E7")(face) || !hasWS("svg", "Say hi to meet me!")(face) {
 		t.Fatal("live Phone Cat did not start blank")
 	}

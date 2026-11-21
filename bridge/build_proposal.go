@@ -278,11 +278,11 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 		if value, ok := raw.(string); !ok || strings.TrimSpace(value) == "" {
 			return errInvalidBuild
 		}
-	} else if edit["face_edits"] == nil && edit["companion"] == nil {
+	} else if edit["face_edits"] == nil && edit["preset"] == nil {
 		return errInvalidBuild
 	}
 	if portrait == nil {
-		next, _, err = updateCat(next, edit, b.voices)
+		next, _, err = updateCompanion(next, edit, b.voices)
 		if err != nil {
 			return err
 		}
@@ -292,8 +292,8 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 			b.portraits.discard(portrait.id)
 		}
 	}()
-	b.catMu.Lock()
-	defer b.catMu.Unlock()
+	b.companionMu.Lock()
+	defer b.companionMu.Unlock()
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -316,13 +316,13 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 		return errStaleBuild
 	}
 	who := peer{DeviceID: job.device, Character: job.spec.Character}
-	current, err := b.readActiveCat(ctx, tx, who)
+	current, err := b.readActiveCompanion(ctx, tx, who)
 	if err != nil {
 		return err
 	}
 	current.Configured, current.FaceSVG = next.Configured, next.FaceSVG
 	current.FaceBG, current.MarkColor, current.AccentColor = next.FaceBG, next.MarkColor, next.AccentColor
-	if err := writeCat(ctx, tx, job.device, current); err != nil {
+	if err := writeCompanion(ctx, tx, job.device, current); err != nil {
 		return err
 	}
 	if err := finishBuild(ctx, tx, job.id, "My new face is ready!"); err != nil {
@@ -331,7 +331,7 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 	portrait = nil // The committed face owns the stored frames.
 	if b.ws != nil {
 		b.ws.mu.Lock()
-		b.ws.publishCat(job.device, current, false, false)
+		b.ws.publishCompanion(job.device, current, false, false)
 		b.ws.mu.Unlock()
 	}
 	return nil

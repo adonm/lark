@@ -31,7 +31,7 @@ func TestDeviceResetHistory(t *testing.T) {
 	watcher.json(t, object{"ev": "hello", "role": "web"})
 	watcher.until(t, hasWS("peers", ""))
 	const other = "lark-other"
-	for _, e := range []chatEntry{newChat("user", "You", "Hi", "typed"), newChat("cat", "Milo", "Hello", "typed")} {
+	for _, e := range []chatEntry{newChat("user", "You", "Hi", "typed"), newChat("companion", "Milo", "Hello", "typed")} {
 		b.history.add(id, e)
 		b.history.add(other, newChat(e.Role, e.Sender, "Other chat", e.Source))
 	}

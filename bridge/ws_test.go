@@ -278,7 +278,7 @@ func (s *testWS) watch(t *testing.T, id string) wsFrame {
 	s.json(t, object{"ev": "hello", "role": "web"})
 	s.until(t, hasWS("peers", id))
 	s.json(t, object{"ev": "watch", "device_id": id})
-	return s.until(t, hasWS("svg", "cat-ring"))
+	return s.until(t, hasWS("svg", "companion-ring"))
 }
 
 func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
@@ -337,7 +337,7 @@ func TestWSMirrorAndControls(t *testing.T) {
 		c.until(t, hasWS("volume", `"level":62`))
 	}
 	web.json(t, object{"ev": "tap", "id": "menu-back"})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	web.json(t, object{"ev": "tap", "x": 180, "y": 180})
 	dev.until(t, hasWS("rec", `"action":"start"`))
 	dev.json(t, object{"ev": "rec_end", "cancelled": true})
@@ -517,7 +517,7 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &bridge{root: t.Context()}
 		c := &wsClient{role: "device", ctx: t.Context(), out: make(chan wsFrame, 8)}
-		d := &wsDevice{client: c, key: "lark-no-ack", screen: roundScreen, cat: blankCat()}
+		d := &wsDevice{client: c, key: "lark-no-ack", screen: roundScreen, companion: blankCompanion()}
 		d.recording.start(time.Now(), "", false)
 		h := &wsHub{b: b, devices: map[string]*wsDevice{d.key: d}}
 		h.mu.Lock()
@@ -608,7 +608,7 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		defer cancel()
 		c := &wsClient{wire: &websocket{conn: server}, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 12)}
 		dev := &testWS{conn: client, in: bufio.NewReader(client)}
-		d := &wsDevice{client: c, key: "lark-slow", screen: roundScreen, cat: blankCat()}
+		d := &wsDevice{client: c, key: "lark-slow", screen: roundScreen, companion: blankCompanion()}
 		h := &wsHub{devices: map[string]*wsDevice{d.key: d}}
 		go c.write()
 		start := time.Now()
@@ -663,7 +663,7 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	const id = "phone-a123"
 	phone := testConnectWS(t, base, "unit", true)
 	phone.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Plum"})
-	phone.until(t, hasWS("svg", "cat-ring"))
+	phone.until(t, hasWS("svg", "companion-ring"))
 	stream := newAudioStream()
 	stream.append(bytes.Repeat([]byte{12, 0}, sampleRate))
 	stream.finish(nil)

@@ -24,10 +24,10 @@ func callClientCaps(t *testing.T, b *bridge, base, id, name string, tagged bool)
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	cat := blankCat()
-	cat.Name, cat.Configured = name, true
-	cat.FaceSVG = cat.defaultFace()
-	if err = writeCat(t.Context(), tx, id, cat); err == nil {
+	companion := blankCompanion()
+	companion.Name, companion.Configured = name, true
+	companion.FaceSVG = companion.defaultFace()
+	if err = writeCompanion(t.Context(), tx, id, companion); err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
@@ -139,7 +139,7 @@ func TestWSCallDuplex(t *testing.T) {
 		peer := []string{"Mint", "Cake"}[i]
 		var idle, noted bool
 		c.until(t, func(f wsFrame) bool {
-			idle = idle || hasWS("svg", "cat-ring")(f)
+			idle = idle || hasWS("svg", "companion-ring")(f)
 			noted = noted || f.op == wsText && bytes.Contains(f.data, []byte("Voice call with "+peer+" (0:"))
 			return idle && noted
 		})

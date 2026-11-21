@@ -966,7 +966,7 @@ func (b *bridge) launchApp(ctx context.Context, args object, menu *menuContent) 
 		}
 		devices = append(devices, d)
 		gens = append(gens, d.appGen)
-		players = append(players, appPlayer{d.who.DeviceID, d.cat.Name, len(players)})
+		players = append(players, appPlayer{d.who.DeviceID, d.companion.Name, len(players)})
 	}
 	h.mu.Unlock()
 	if args["exit"] == true {
@@ -1044,7 +1044,7 @@ func (b *bridge) launchApp(ctx context.Context, args object, menu *menuContent) 
 		a.Title = "Lark App"
 	}
 	if a.Name == "" {
-		a.Name = truncate(catSlug(a.Title), 48)
+		a.Name = truncate(companionSlug(a.Title), 48)
 		if a.Name == "" {
 			a.Name = "untitled"
 		}

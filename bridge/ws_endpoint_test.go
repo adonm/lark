@@ -283,8 +283,8 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, isDisplay)
 	b.ws.mu.Lock()
-	cat := b.ws.devices[id]
-	b.ws.startRecording(cat, "all", time.Now(), true)
+	dev := b.ws.devices[id]
+	b.ws.startRecording(dev, "all", time.Now(), true)
 	b.ws.mu.Unlock()
 	start := d.until(t, hasWS("rec", `"target":"all"`))
 	if bytes.Contains(start.data, []byte(`"endpoint"`)) {
@@ -306,8 +306,8 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	stream.append([]byte{8, 0, 9, 0})
 	stream.finish(nil)
 	b.ws.mu.Lock()
-	cat := b.ws.devices[id]
-	b.ws.play(cat, stream)
+	dev := b.ws.devices[id]
+	b.ws.play(dev, stream)
 	b.ws.mu.Unlock()
 	d.json(t, object{"ev": "rec_end", "cancelled": true})
 	cleared := false
@@ -328,14 +328,14 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 	d := testConnectWS(t, base, "unit", false)
 	d.hello(t, id, "Echo")
 	b.ws.mu.Lock()
-	cat := b.ws.devices[id]
-	ctx, cancel := context.WithCancel(cat.client.ctx)
-	cat.busy = true
-	cat.queuedVoice = &endpointCapture{ctx: ctx, cancel: cancel}
+	dev := b.ws.devices[id]
+	ctx, cancel := context.WithCancel(dev.client.ctx)
+	dev.busy = true
+	dev.queuedVoice = &endpointCapture{ctx: ctx, cancel: cancel}
 	for range 3 {
-		b.ws.tapStop(cat, time.Now())
+		b.ws.tapStop(dev, time.Now())
 	}
-	busy, queued := cat.busy, cat.queuedVoice
+	busy, queued := dev.busy, dev.queuedVoice
 	b.ws.mu.Unlock()
 	if ctx.Err() == nil || busy || queued != nil {
 		t.Fatal("explicit Stop did not discard both the active and queued turns")

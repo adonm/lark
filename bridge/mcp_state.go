@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var stateSlices = []string{"devices", "cats", "apps", "timers", "memory", "saved_cats", "messages", "diagnostics", "photos"}
+var stateSlices = []string{"devices", "companions", "apps", "timers", "memory", "saved_companions", "messages", "diagnostics", "photos"}
 
 func stringList(raw any, key string) ([]string, error) {
 	items, ok := raw.([]any)
@@ -68,7 +68,7 @@ func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
 			return nil, fieldError("include", "unknown slice %q", key)
 		}
 	}
-	if id != "" || slices.Contains(include, "devices") || slices.Contains(include, "cats") {
+	if id != "" || slices.Contains(include, "devices") || slices.Contains(include, "companions") {
 		if err := b.mcpDeviceState(out, id, include); err != nil {
 			return nil, err
 		}
@@ -79,15 +79,15 @@ func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
 		}
 		switch key {
 		case "apps":
-			code, flagErr := catBool(args, "include_code", false)
+			code, flagErr := companionBool(args, "include_code", false)
 			if flagErr != nil {
 				return nil, flagErr
 			}
 			out[key], err = b.appState(ctx, code)
 		case "timers":
 			out[key], err = b.timerState(ctx, id, now)
-		case "saved_cats":
-			out[key], err = b.savedCatState(ctx)
+		case "saved_companions":
+			out[key], err = b.savedCompanionState(ctx)
 		case "memory":
 			scopes := []string{"shared"}
 			if id != "" && id != "shared" {
@@ -138,9 +138,9 @@ func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
 }
 
 func (b *bridge) mcpDeviceState(out object, id string, include []string) error {
-	wantDevices, wantCats := slices.Contains(include, "devices"), slices.Contains(include, "cats")
+	wantDevices, wantCompanions := slices.Contains(include, "devices"), slices.Contains(include, "companions")
 	var list []object
-	if wantDevices || wantCats {
+	if wantDevices || wantCompanions {
 		var err error
 		list, err = b.deviceEntries(true)
 		if err != nil {
@@ -153,7 +153,7 @@ func (b *bridge) mcpDeviceState(out object, id string, include []string) error {
 		}
 		list = []object{b.deviceEntry(p, v, true)}
 	}
-	devices, cats := object{}, object{}
+	devices, companions := object{}, object{}
 	for _, entry := range list {
 		key := str(entry["device_id"])
 		p := object{"device_id": key, "name": entry["character"]}
@@ -167,12 +167,12 @@ func (b *bridge) mcpDeviceState(out object, id string, include []string) error {
 		if wantDevices {
 			devices[key] = p
 		}
-		if wantCats {
-			cats[key] = entry["cat"]
+		if wantCompanions {
+			companions[key] = entry["companion"]
 		}
 		if strings.EqualFold(key, id) {
 			p["parent_policy"] = b.parentState(key, time.Now())
-			out["me"] = object{"device": p, "cat": entry["cat"], "active_app": p["active_app"]}
+			out["me"] = object{"device": p, "companion": entry["companion"], "active_app": p["active_app"]}
 		}
 	}
 	if id != "" && out["me"] == nil {
@@ -181,8 +181,8 @@ func (b *bridge) mcpDeviceState(out object, id string, include []string) error {
 	if wantDevices {
 		out["devices"] = devices
 	}
-	if wantCats {
-		out["cats"] = cats
+	if wantCompanions {
+		out["companions"] = companions
 	}
 	return nil
 }
@@ -191,7 +191,7 @@ func (b *bridge) mcpPatch(ctx context.Context, args object) (object, error) {
 	id := str(args["device_id"])
 	out := object{"ok": true}
 	// Apply appearance before changing sleep, and leave sleep alone on appearance-only edits.
-	for _, key := range []string{"cat", "device", "memory", "timer", "apps"} {
+	for _, key := range []string{"companion", "device", "memory", "timer", "apps"} {
 		raw, ok := args[key]
 		if !ok {
 			continue
@@ -205,8 +205,8 @@ func (b *bridge) mcpPatch(ctx context.Context, args object) (object, error) {
 				return nil, fieldError(key, "expected an object")
 			}
 			switch key {
-			case "cat":
-				out[key], err = b.patchCat(ctx, id, edit)
+			case "companion":
+				out[key], err = b.patchCompanion(ctx, id, edit)
 			case "device":
 				out[key], err = b.patchDevice(ctx, id, edit)
 			case "timer":
@@ -220,7 +220,7 @@ func (b *bridge) mcpPatch(ctx context.Context, args object) (object, error) {
 		}
 	}
 	if len(out) == 1 {
-		return nil, problem(400, "Expected a device, cat, memory, timer, or saved app patch")
+		return nil, problem(400, "Expected a device, companion, memory, timer, or saved app patch")
 	}
 	return out, nil
 }

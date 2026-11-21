@@ -66,7 +66,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	defer testRequest(t, http.MethodDelete, c.base+clients+"/"+id, c.token, nil, http.StatusNoContent)
 	sock := testConnectWS(t, c.base, c.token, true)
 	sock.json(t, object{"ev": "hello", "role": "web", "device_id": id})
-	sock.until(t, hasWS("svg", "cat-ring"))
+	sock.until(t, hasWS("svg", "companion-ring"))
 	api := liveOpenCode(t, client, home, config)
 	type serverInfo struct {
 		Name   string
@@ -119,7 +119,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 			"',include:['devices']}), tools.lark.patch({device_id:'"+id+"',device:{sleep:false}}), tools.lark.emit({to:'"+id+
 			"',chime:'tap'}), and tools.lark.app({devices:'"+id+
 			"',exit:true}). Return all four tool results from execute, then say one short sentence. Do not call any other tool.",
-		blankCat())
+		blankCompanion())
 	turn, endTurn := context.WithTimeout(root, 60*time.Second)
 	defer endTurn()
 	_, sid, err := o.askPrepared(turn, prefix, func() (string, string) { return character, prompt }, turnStream{}, "typed", nil, nil)

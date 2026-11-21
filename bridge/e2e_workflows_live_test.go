@@ -27,7 +27,7 @@ var e2eTemplates = []e2eTemplate{
 	{"fireworks", `{}`, "sky", "", 180, 130},
 }
 
-func (s *e2eSuite) activeApp(t *testing.T, c *e2eCat) object {
+func (s *e2eSuite) activeApp(t *testing.T, c *e2eCompanion) object {
 	t.Helper()
 	out := s.tool(t, "state", object{"device_id": c.id, "include": []string{"devices"}}, false)
 	me, _ := out["me"].(object)
@@ -56,7 +56,7 @@ func (s *e2eSuite) apps(t *testing.T) {
 							e2eAppResult(t, s.tool(t, "app", args, false))
 							c.scene(t, tc.launch)
 							c.input(t, "tap", 180, 320, c.revision)
-							c.scene(t, "cat-ring")
+							c.scene(t, "companion-ring")
 						}
 						e2eAppResult(t, s.tool(t, "app", object{"devices": c.id, "load": "e2e-" + tc.name}, false))
 						c.scene(t, tc.launch)
@@ -89,7 +89,7 @@ func (s *e2eSuite) apps(t *testing.T) {
 							c.input(t, "up", tc.x, tc.y, c.revision)
 						}
 						c.input(t, "tap", 180, 320, c.revision)
-						c.scene(t, "cat-ring")
+						c.scene(t, "companion-ring")
 						if s.activeApp(t, c) != nil {
 							t.Fatal("Home did not exit saved app")
 						}
@@ -122,7 +122,7 @@ func (s *e2eSuite) apps(t *testing.T) {
 		s.tool(t, "app", object{"devices": c.id, "load": "e2e-copy"}, true)
 		e2eAppResult(t, s.tool(t, "app", object{"devices": c.id, "load": "e2e-renamed"}, false))
 		c.scene(t, "Updated page")
-		c.tapScene(t, exitNode, "cat-ring")
+		c.tapScene(t, exitNode, "companion-ring")
 		s.tool(t, "patch", object{"apps": object{"delete": []string{"e2e-renamed"}}}, false)
 		s.tool(t, "app", object{"devices": c.id, "load": "e2e-renamed"}, true)
 	})
@@ -154,7 +154,7 @@ func (s *e2eSuite) apps(t *testing.T) {
 	}
 }
 
-func (s *e2eSuite) policy(t *testing.T, cat *e2eCat, args object, reason string) {
+func (s *e2eSuite) policy(t *testing.T, cat *e2eCompanion, args object, reason string) {
 	t.Helper()
 	row := testObject(t, e2eRequest(t, s.liveClient, "POST", "/api/devices/"+cat.id+"/parent", s.parent, args, 200))
 	if row["reason"] != reason {
@@ -163,7 +163,7 @@ func (s *e2eSuite) policy(t *testing.T, cat *e2eCat, args object, reason string)
 	cat.op(t, "parent_policy", "reason", fmt.Sprintf("%q", reason))
 }
 
-func (s *e2eSuite) restricted(t *testing.T, c, peer *e2eCat, isolatedPrompts bool) {
+func (s *e2eSuite) restricted(t *testing.T, c, peer *e2eCompanion, isolatedPrompts bool) {
 	t.Helper()
 	prompts := s.model.prompts.Load()
 	c.json(t, object{"ev": "rec_start"})
@@ -190,7 +190,7 @@ func (s *e2eSuite) builderParents(t *testing.T) {
 	s.policy(t, c, settings, string(parentQuiet))
 	s.restricted(t, c, peer, true)
 	s.policy(t, c, object{"action": "unlock", "minutes": 2}, "")
-	c.scene(t, "cat-ring")
+	c.scene(t, "companion-ring")
 
 	start := time.Now()
 	c.json(t, object{"ev": "text", "text": "Make me a dinosaur quiz. Use the quiz template with one simple question."})
@@ -250,7 +250,7 @@ func (s *e2eSuite) parentBudget(t *testing.T) {
 	start := time.Now()
 	e2eStartCall(t, a, b)
 	a.op(t, "parent_policy", "reason", `"daily_limit"`)
-	b.op(t, "call", "state", `"end"`, "reason", `"Cat is resting"`)
+	b.op(t, "call", "state", `"end"`, "reason", `"Companion is resting"`)
 	if elapsed := time.Since(start); elapsed < 58*time.Second || elapsed > 65*time.Second {
 		t.Fatalf("daily minute limit fired at %s", elapsed)
 	} else {
@@ -282,7 +282,7 @@ func (s *e2eSuite) data(t *testing.T) {
 	if len(timers["timers"].([]any)) != 0 {
 		t.Fatal("fired timer remained scheduled")
 	}
-	c.tapScene(t, "cat", "cat-ring")
+	c.tapScene(t, "companion", "companion-ring")
 
 	patch := s.tool(t, "patch", object{"memory": object{"scope": c.id, "key": "kite", "value": "My kite is bright blue."}}, false)
 	if patch["memory"] == nil {
@@ -292,7 +292,7 @@ func (s *e2eSuite) data(t *testing.T) {
 	c.tapScene(t, "menu-next", "menu-memories")
 	c.tapScene(t, "menu-memories", "menu-row-0")
 	c.tapScene(t, "menu-row-0", "My kite is bright blue.")
-	c.tapScene(t, "cat", "cat-ring")
+	c.tapScene(t, "companion", "companion-ring")
 
 	// A fired timer stores a card and spoken line. Page by the public compound
 	// cursor rather than mocking older messages into the database.

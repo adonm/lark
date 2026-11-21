@@ -4,13 +4,13 @@ const getLocal = key => { try { return localStorage.getItem(key) || ""; } catch 
 const setLocal = (key, val) => { try { localStorage.setItem(key, val); } catch {} };
 
 const wide = matchMedia("(min-width: 921px)");
-function colors(el, cat) {
-  if (/^#[a-f\d]{6}$/i.test(cat?.accent_color || "")) el.style.setProperty("--cat-accent", cat.accent_color);
-  else el.style.removeProperty("--cat-accent");
+function colors(el, companion) {
+  if (/^#[a-f\d]{6}$/i.test(companion?.accent_color || "")) el.style.setProperty("--companion-accent", companion.accent_color);
+  else el.style.removeProperty("--companion-accent");
 }
 const isLive = d => !!(d?.ws_connected ?? d?.ws);
 const persisted = d => /^virt-[0-9a-f]{8}$/.test(d?.device_id || "");
-const companionName = d => d?.cat?.configured === false && d.character === "New Cat"
+const companionName = d => d?.companion?.configured === false && d.character === "New Cat"
   ? d.device_id.startsWith("phone-") ? "Phone Lark" : "New Companion"
   : d?.character;
 const node = (tag, cls, text) => {

@@ -353,14 +353,14 @@ func writePortraitPNG(dir, name string, img image.Image) error {
 
 func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID string) (string, error) {
 	if p == nil || p.generate == nil {
-		return "", problem(503, "Portrait generation unavailable; configure a dedicated OpenCode service or OPENCODE_API_KEY, or use cat.companion")
+		return "", problem(503, "Portrait generation unavailable; configure a dedicated OpenCode service or OPENCODE_API_KEY, or use companion.preset")
 	}
 	var source []byte
 	if spec.Edit {
 		var err error
 		source, err = p.read(currentID, "sheet")
 		if err != nil {
-			return "", fieldError("cat.portrait.edit", "current companion has no local portrait sheet")
+			return "", fieldError("companion.portrait.edit", "current companion has no local portrait sheet")
 		}
 	}
 	raw, err := p.generate(ctx, portraitPrompt(spec), source)
@@ -448,28 +448,28 @@ func (p *portraitStore) has(id string) bool {
 }
 
 func (b *bridge) preparePortrait(ctx context.Context, who peer, args object, raw any) (*pendingPortrait, error) {
-	for _, field := range []string{"companion", "face_svg", "face_edits", "face_bg", "mark_color", "accent_color"} {
+	for _, field := range []string{"preset", "face_svg", "face_edits", "face_bg", "mark_color", "accent_color"} {
 		if _, exists := args[field]; exists {
-			return nil, fieldError("cat.portrait", "cannot combine with %s", field)
+			return nil, fieldError("companion.portrait", "cannot combine with %s", field)
 		}
 	}
-	current, err := b.readActiveCat(ctx, b.db, who)
+	current, err := b.readActiveCompanion(ctx, b.db, who)
 	if err != nil {
 		return nil, problem(502, "Cannot read current companion")
 	}
-	if _, _, err := updateCat(current, args, b.voices); err != nil {
+	if _, _, err := updateCompanion(current, args, b.voices); err != nil {
 		return nil, err
 	}
 	return b.portraits.prepare(ctx, current, raw)
 }
 
-func (p *portraitStore) prepare(ctx context.Context, current catState, raw any) (*pendingPortrait, error) {
-	spec, err := readUIValue[portraitSpec](raw, portraitSchema, "cat.portrait")
+func (p *portraitStore) prepare(ctx context.Context, current companionState, raw any) (*pendingPortrait, error) {
+	spec, err := readUIValue[portraitSpec](raw, portraitSchema, "companion.portrait")
 	if err != nil {
 		return nil, err
 	}
 	if spec.Prompt = strings.TrimSpace(spec.Prompt); spec.Prompt == "" {
-		return nil, fieldError("cat.portrait.prompt", "describe the character or edit")
+		return nil, fieldError("companion.portrait.prompt", "describe the character or edit")
 	}
 	spec.BG = colorStringOr(spec.BG, storybookPalettes["peach"].bg)
 	if spec.Edit && str(raw.(object)["bg"]) == "" {
@@ -522,7 +522,7 @@ func (b *bridge) servePortrait(w http.ResponseWriter, r *http.Request, path, sco
 	}
 	if scope != "" {
 		var face string
-		if b.db == nil || b.db.QueryRowContext(r.Context(), `SELECT face_svg FROM cats WHERE device_id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
+		if b.db == nil || b.db.QueryRowContext(r.Context(), `SELECT face_svg FROM companions WHERE device_id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
 			activePortrait(face) != id {
 			return problem(404, "Portrait not found")
 		}

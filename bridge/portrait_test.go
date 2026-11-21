@@ -125,7 +125,7 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 		return fixture, nil
 	}}
 	const side, grid = 360, 64
-	pending, err := store.prepare(t.Context(), catState{}, object{"prompt": "a hedgehog", "bg": "#FFF2E7", "style": "pixel"})
+	pending, err := store.prepare(t.Context(), companionState{}, object{"prompt": "a hedgehog", "bg": "#FFF2E7", "style": "pixel"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +295,9 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	id := str(own["id"])
 	patch := func(spec object, failed bool) object {
 		t.Helper()
-		out := toolTest(t, base, "patch", object{"device_id": id, "cat": object{"portrait": spec, "save_profile": false}}, failed)
-		cat, _ := out["cat"].(object)
-		return cat
+		out := toolTest(t, base, "patch", object{"device_id": id, "companion": object{"portrait": spec, "save_profile": false}}, failed)
+		companion, _ := out["companion"].(object)
+		return companion
 	}
 	patch(object{"prompt": "draw an owl"}, true) // No configured generator or paid fallback.
 	b.portraits = &portraitStore{dir: dir, generate: func(_ context.Context, prompt string, input []byte) ([]byte, error) {
@@ -313,10 +313,10 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	}}
 	patch(object{"prompt": " ", "edit": true}, true)
 	patch(object{"prompt": "invalid", "typo": true}, true)
-	badStyle := toolTest(t, base, "patch", object{"device_id": id, "cat": object{
+	badStyle := toolTest(t, base, "patch", object{"device_id": id, "companion": object{
 		"portrait": object{"prompt": "an owl", "style": "vector"},
 	}}, true)
-	if got := str(badStyle["error"]); got != "cat.portrait.style: expected one of [storybook pixel]" {
+	if got := str(badStyle["error"]); got != "companion.portrait.style: expected one of [storybook pixel]" {
 		t.Fatalf("invalid MCP style: %q", got)
 	}
 	c := patch(object{"prompt": "draw an owl", "bg": "#eaf3fc"}, false)
@@ -348,7 +348,7 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 		blink      bool
 	}{{"idle", "idle", false}, {"idle", "blink", true}, {"speaking", "talk", false}, {"thinking", "think", false},
 		{"listening", "idle", false}, {"sleepy", "blink", false}} {
-		scene := catSVG(catState{FaceSVG: raw, catLook: catLook{FaceBG: "#EAF3FC"}}, catPose{mood: pair.mood, blink: pair.blink, battery: -1})
+		scene := companionSVG(companionState{FaceSVG: raw, companionLook: companionLook{FaceBG: "#EAF3FC"}}, companionPose{mood: pair.mood, blink: pair.blink, battery: -1})
 		ref := `href="portrait:` + asset + ":" + pair.pose + `"`
 		if strings.Count(scene, `href="portrait:`) != 1 || !strings.Contains(scene, ref) {
 			t.Fatalf("wrong asset for %q", pair.mood)
@@ -367,5 +367,5 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 		t.Fatal(edited)
 	}
 	testRequest(t, "GET", s1.URL+path, "on-device", nil, 404)
-	toolTest(t, base, "patch", object{"device_id": str(other["id"]), "cat": object{"face_svg": raw}}, true)
+	toolTest(t, base, "patch", object{"device_id": str(other["id"]), "companion": object{"face_svg": raw}}, true)
 }

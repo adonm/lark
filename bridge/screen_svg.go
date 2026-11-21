@@ -260,7 +260,7 @@ func menuDetail(title string, row menuRow) sceneView {
 		s.art += svgText(180, 134+i*17, 15, line, menuInk, `font-family="monospace"`)
 	}
 	s.control(bounds{92, 276, 79, 42}, actionTile("menu-back", "Back", "back", navPalette))
-	s.control(bounds{189, 276, 79, 42}, actionTile("cat", "Home", "", navPalette))
+	s.control(bounds{189, 276, 79, 42}, actionTile("companion", "Home", "", navPalette))
 	return s
 }
 
@@ -318,7 +318,7 @@ func peerScene(peers []menuPeer, page int, calling bool) sceneView {
 	return s
 }
 
-func callScene(state callState, id uint32, peer catState, muted bool, elapsed time.Duration) sceneView {
+func callScene(state callState, id uint32, peer companionState, muted bool, elapsed time.Duration) sceneView {
 	name := truncate(peer.Name, 20)
 	title := "In call · " + name
 	switch state {
@@ -558,11 +558,11 @@ func sanitizeFaceSVG(raw string) (string, error) {
 		return "", problem(400, "face_svg exceeds 64 KB after sanitizing")
 	}
 	if activePortrait(clean) != "" {
-		return "", fieldError("cat.face_svg", "portrait assets must be set using cat.portrait")
+		return "", fieldError("companion.face_svg", "portrait assets must be set using companion.portrait")
 	}
 	// Validate all poses together with chrome, including the compositor's depth
 	// and node overhead, so no accepted face can crowd out the system controls.
-	chrome := catChrome(blankCat(), catPose{mood: "listening", battery: 100, charge: true, meter: true})
+	chrome := companionChrome(blankCompanion(), companionPose{mood: "listening", battery: 100, charge: true, meter: true})
 	if _, _, err := renderSVG(chrome.svg(svgString(root.asGroup()))); err != nil {
 		return "", problem(400, err.Error())
 	}
@@ -592,7 +592,7 @@ func recolorFaceSVG(raw string, old, next [3]string) (string, error) {
 	return sanitizeFaceSVG(svgString(root))
 }
 
-func (p catPose) facePose() string {
+func (p companionPose) facePose() string {
 	switch p.mood {
 	case "sleepy":
 		return "sleep"
@@ -694,11 +694,11 @@ func (c *faceLayerCache) layer(raw, pose string) (string, error) {
 	return art, nil
 }
 
-func catArt(cat catState, pose catPose) string {
+func companionArt(companion companionState, pose companionPose) string {
 	p := pose.facePose()
-	art, err := faceLayers.layer(cat.FaceSVG, p)
+	art, err := faceLayers.layer(companion.FaceSVG, p)
 	if err != nil {
-		art, _ = faceLayers.layer(cat.defaultFace(), p)
+		art, _ = faceLayers.layer(companion.defaultFace(), p)
 	}
 	return art
 }

@@ -16,7 +16,7 @@ dialog.innerHTML = `
   <div class="photo-body">
     <p class="small">Manage which companions can see your library, organize photos, and review people groups.</p>
     <div class="photo-toolbar" role="group" aria-label="Photo access">
-      <label data-field for="photo-library-cat">Companion or device <select id="photo-library-cat"></select></label>
+      <label data-field for="photo-library-companion">Companion or device <select id="photo-library-companion"></select></label>
       <label class="switch" for="photo-library-allow">
         <input id="photo-library-allow" type="checkbox" role="switch" disabled> Allow photo access for this companion
       </label>
@@ -35,7 +35,7 @@ dialog.innerHTML = `
     <ol id="photo-library-results" class="photo-results" role="list"></ol>
   </div>`;
 document.body.append(dialog);
-const cats = $("photo-library-cat");
+const companions = $("photo-library-companion");
 const allow = $("photo-library-allow");
 const find = $("photo-library-find");
 const peopleButton = $("photo-library-people");
@@ -129,8 +129,8 @@ async function showPeople(offset = 0, cluster = "") {
   const focusStatus = results.contains(document.activeElement);
   resetResults();
   const current = state.app, stamp = revision;
-  if (!current || current.scope || !cats.value || !allow.checked) return;
-  const path = `/api/library?device_id=${encodeURIComponent(cats.value)}`;
+  if (!current || current.scope || !companions.value || !allow.checked) return;
+  const path = `/api/library?device_id=${encodeURIComponent(companions.value)}`;
   const post = (body, again) => async e => {
     const button = e.currentTarget;
     button.disabled = true;
@@ -213,8 +213,8 @@ async function refresh(search = false) {
   const current = state.app, stamp = revision;
   allow.disabled = find.disabled = peopleButton.disabled = true;
   if (!search) allow.checked = false;
-  if (!current || current.scope || !cats.value) return;
-  const path = `/api/library?device_id=${encodeURIComponent(cats.value)}`;
+  if (!current || current.scope || !companions.value) return;
+  const path = `/api/library?device_id=${encodeURIComponent(companions.value)}`;
   const q = search ? `&q=${encodeURIComponent($("photo-library-query").value.trim() || "*")}` : "";
   try {
     const data = await api(current, path + q);
@@ -240,27 +240,27 @@ async function refresh(search = false) {
 $("library-toggle").onclick = () => {
   const current = state.app;
   if (!current || current.scope || dialog.open) return;
-  cats.replaceChildren(...current.devices.map(d => {
+  companions.replaceChildren(...current.devices.map(d => {
     const option = node("option", "", companionName(d) || d.device_id);
     option.value = d.device_id;
     return option;
   }));
   dialog.showModal();
-  say("photo-library-status", cats.value ? "" : "No companions found.");
+  say("photo-library-status", companions.value ? "" : "No companions found.");
   refresh();
 };
 dialog.onclose = () => { resetResults(); mergeTarget = null; };
-cats.onchange = () => { mergeTarget = null; refresh(); };
+companions.onchange = () => { mergeTarget = null; refresh(); };
 $("photo-library-people").onclick = () => showPeople();
 $("photo-library-search").onsubmit = e => { e.preventDefault(); refresh(true); };
 allow.onchange = async () => {
   const current = state.app;
-  if (!current || current.scope || !cats.value) return;
+  if (!current || current.scope || !companions.value) return;
   allow.disabled = find.disabled = peopleButton.disabled = true;
   resetResults();
   const stamp = revision;
   try {
-    await api(current, `/api/library?device_id=${encodeURIComponent(cats.value)}`,
+    await api(current, `/api/library?device_id=${encodeURIComponent(companions.value)}`,
       {method:"POST", body:{op:"visibility", hidden:!allow.checked}});
     if (stamp === revision) await refresh();
   } catch {

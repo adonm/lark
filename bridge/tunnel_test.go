@@ -199,15 +199,15 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	testRequest(t, "GET", scoped+"/api/scope", "unit", nil, 401)
 	scope := testObject(t, testRequest(t, "GET", scoped+"/api/scope?token="+token, "", nil, 200))
 	if scope["scoped"] != true || scope["device_id"] != id || scope["character"] != "Plum" ||
-		scope["cat"].(object)["face_bg"] != storybookPalettes["peach"].bg {
+		scope["companion"].(object)["face_bg"] != storybookPalettes["peach"].bg {
 		t.Fatal(scope)
 	}
-	for _, path := range []string{"/api/devices", "/api/tunnels", "/api/virtual-clients", "/api/tunnel/status", "/ota/version.json", "/mcp", "/health", "/api/audio/abcd", "/api/cats"} {
+	for _, path := range []string{"/api/devices", "/api/tunnels", "/api/virtual-clients", "/api/tunnel/status", "/ota/version.json", "/mcp", "/health", "/api/audio/abcd", "/api/companions"} {
 		testRequest(t, "GET", scoped+path, token, nil, 404)
 	}
 	testRequest(t, "POST", scoped+"/mcp", token, object{}, 404)
-	testRequest(t, "POST", scoped+"/api/devices/"+id+"/cat", token, object{"name": "No"}, 404)
-	testRequest(t, "DELETE", scoped+"/api/cats/plum", token, nil, 404)
+	testRequest(t, "POST", scoped+"/api/devices/"+id+"/companion", token, object{"name": "No"}, 404)
+	testRequest(t, "DELETE", scoped+"/api/companions/plum", token, nil, 404)
 	testRequest(t, "GET", scoped+"/api/devices/"+id+"/messages", token, nil, 200)
 	testRequest(t, "GET", scoped+"/api/devices/lark-private/messages", token, nil, 403)
 	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": "lark-private", "text": "Question?"}, 403)
@@ -241,7 +241,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	}
 	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": "lark-private"}, 404)
 	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": id}, 404)
-	testRequest(t, "POST", scoped+"/api/cats/reassign", token, object{"from_device_id": id, "to_device_id": "lark-private"}, 404)
+	testRequest(t, "POST", scoped+"/api/companions/reassign", token, object{"from_device_id": id, "to_device_id": "lark-private"}, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", token, nil, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", "unit", nil, 404)
 	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": "Tell Cake Hi from HTTP."}, 200)
@@ -282,8 +282,8 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	conn.json(t, object{"ev": "intercom", "target": "lark-private", "text": "Hi from WS intercom."})
 	mirror.until(t, hasWS("svg", "Hi from WS intercom."))
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "tap", "id": "cat", "x": 180, "y": 316})
-	conn.until(t, hasWS("svg", "cat-ring"))
+	conn.json(t, object{"ev": "tap", "id": "companion", "x": 180, "y": 316})
+	conn.until(t, hasWS("svg", "companion-ring"))
 	conn.json(t, object{"ev": "tap", "x": 140, "y": 313})
 	menu := conn.until(t, hasWS("svg", "menu-intercom"))
 	for _, id := range []string{"menu-stats", "menu-games", "menu-memories", "menu-next"} {
@@ -305,22 +305,22 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	}
 	mirror.until(t, hasWS("svg", "Voice to Cake."))
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "tap", "id": "cat", "x": 180, "y": 316})
-	conn.until(t, hasWS("svg", "cat-ring"))
+	conn.json(t, object{"ev": "tap", "id": "companion", "x": 180, "y": 316})
+	conn.until(t, hasWS("svg", "companion-ring"))
 	conn.json(t, object{"ev": "reset", "device_id": id})
 	conn.json(t, object{"ev": "tap", "id": "new", "x": 230, "y": 104})
 	conn.json(t, object{"ev": "watch", "device_id": id})
 	conn.until(t, hasWS("svg", storybookPalettes["peach"].bg))
 	testRequest(t, "POST", base+"/api/devices/"+id+"/reset", "unit", object{}, 200)
-	faceSeen, catSeen := false, false
+	faceSeen, companionSeen := false, false
 	conn.until(t, func(f wsFrame) bool {
 		faceSeen = faceSeen || hasWS("svg", "#FFF2E7")(f)
-		catSeen = catSeen || hasWS("cat", `"configured":false`)(f)
-		return faceSeen && catSeen
+		companionSeen = companionSeen || hasWS("companion", `"configured":false`)(f)
+		return faceSeen && companionSeen
 	})
 	scope = testObject(t, testRequest(t, "GET", scoped+"/api/scope", token, nil, 200))
-	if scope["character"] != "New Cat" || scope["cat"].(object)["configured"] != false {
-		t.Fatal("scope retained the old cat after reset", scope)
+	if scope["character"] != "New Cat" || scope["companion"].(object)["configured"] != false {
+		t.Fatal("scope retained the old companion after reset", scope)
 	}
 	if !bytes.Contains(testRequest(t, "GET", base+history, "unit", nil, 200), []byte("Hello!")) {
 		t.Fatal("LAN reset discarded canonical conversation history")

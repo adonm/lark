@@ -16,7 +16,7 @@ export function idleWatch({isBusy, onIdle, timing = idleTiming, now = Date.now,
     if (!running) return;
     const time = now(), active = isBusy();
     if (busy && !active) {
-      // Start a fresh grace period after the cat finishes a turn or call.
+      // Start a fresh grace period after the companion finishes a turn or call.
       if (hiddenAt !== null) hiddenAt = time;
       lastActivity = time;
     }

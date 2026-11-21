@@ -4,7 +4,7 @@ import {runInNewContext} from "node:vm";
 import {test} from "node:test";
 import {installAssets} from "./pwa.js";
 
-test("LAN install assets use a cat ID, scoped assets use only the existing share grant", () => {
+test("LAN install assets use a companion ID, scoped assets use only the existing share grant", () => {
   const app = {token:"fixture", scope:null}, view = {virtual:true, id:"phone-1234"};
   assert.equal(installAssets({...view, virtual:false}, app), null);
   assert.deepEqual(installAssets(view, app), {

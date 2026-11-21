@@ -42,8 +42,8 @@ type bridge struct {
 	library   *photoLibrary
 	portraits *portraitStore
 	diag      diagnostics
-	catMu     sync.Mutex // Serializes cat and voice writes through hub publication.
-	catTitles sync.Mutex
+	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
+	companionTitles sync.Mutex
 
 	parentToken string
 }
@@ -291,7 +291,7 @@ func (b *bridge) relay(ctx context.Context, sender peer, others []peer, target, 
 func (b *bridge) turn(ctx context.Context, sender peer, text string) (answer, error) {
 	const source = "typed"
 	if traceFrom(ctx) == nil {
-		ctx = b.traceTurn(ctx, sender.DeviceID, b.catFor(sender).Name, source, time.Now())
+		ctx = b.traceTurn(ctx, sender.DeviceID, b.companionFor(sender).Name, source, time.Now())
 	}
 	others, direct, err := b.intercomIntent(sender.DeviceID, text)
 	if err != nil {
@@ -343,26 +343,26 @@ type turnOptions struct {
 	publish func(*AudioStream, time.Time)
 }
 
-func turnPrompt(sender peer, web bool, source, text string, cat catState) string {
+func turnPrompt(sender peer, web bool, source, text string, companion companionState) string {
 	kind := "hardware"
 	if web || webDeviceID(strings.ToLower(sender.DeviceID)) {
 		kind = "web"
 	}
 	extra := ""
-	if !cat.Configured {
+	if !companion.Configured {
 		extra += " · setup"
 	}
-	if cat.Personality != "" {
-		extra += " · vibe: " + cat.Personality
+	if companion.Personality != "" {
+		extra += " · vibe: " + companion.Personality
 	}
-	return fmt.Sprintf("[%s (%s) · %s · %s%s]\n%s", cat.Name, sender.DeviceID, kind, source, extra, text)
+	return fmt.Sprintf("[%s (%s) · %s · %s%s]\n%s", companion.Name, sender.DeviceID, kind, source, extra, text)
 }
 
 // Play plain prose as soon as the first PCM is ready; reconcile against the
 // authoritative reply before finishing the stream.
 func (b *bridge) generateReply(ctx, audioBase context.Context, sender peer, text string, options turnOptions) (generatedReply, error) {
 	if traceFrom(ctx) == nil {
-		ctx = b.traceTurn(ctx, sender.DeviceID, b.catFor(sender).Name, options.source, time.Now())
+		ctx = b.traceTurn(ctx, sender.DeviceID, b.companionFor(sender).Name, options.source, time.Now())
 	}
 	makeSpeech := func(onFirst func(*AudioStream)) *speechTurn {
 		deadline, ok := ctx.Deadline()
@@ -416,8 +416,8 @@ func (b *bridge) generateReply(ctx, audioBase context.Context, sender peer, text
 	releasePhoto := func() {}
 	defer func() { releasePhoto() }()
 	prepare := func() (string, string) {
-		cat := b.catFor(sender)
-		prompt := turnPrompt(sender, options.web, options.source, text, cat)
+		companion := b.companionFor(sender)
+		prompt := turnPrompt(sender, options.web, options.source, text, companion)
 		if !options.scoped && options.source != "timer" {
 			access, release := b.library.newPhotoGrant(ctx, sender.DeviceID)
 			releasePhoto = release
@@ -427,12 +427,12 @@ func (b *bridge) generateReply(ctx, audioBase context.Context, sender peer, text
 				prompt = strings.TrimSuffix(header, "]") + " · local photos access: " + access + "]\n" + input
 			}
 		}
-		return cat.Name, prompt
+		return companion.Name, prompt
 	}
 	raw, sid, err := b.oc.askPrepared(ctx, sender.DeviceID, prepare, pieces, options.source,
 		func() func() { return releasePhoto }, func(entry chatEntry) {
 			if entry.Role == "assistant" {
-				entry.Sender = b.catFor(sender).Name
+				entry.Sender = b.companionFor(sender).Name
 			}
 			b.chat(sender.DeviceID, entry, true)
 		})
@@ -487,9 +487,9 @@ func (b *bridge) route(w http.ResponseWriter, r *http.Request, path string) (any
 		}
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/portraits/"):
 		return nil, b.servePortrait(w, r, path, "")
-	case path == "/api/cats" || strings.HasPrefix(path, "/api/cats/") ||
-		strings.HasPrefix(path, "/api/devices/") && strings.HasSuffix(path, "/cat"):
-		return b.catAPI(w, r, path)
+	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/") ||
+		strings.HasPrefix(path, "/api/devices/") && strings.HasSuffix(path, "/companion"):
+		return b.companionAPI(w, r, path)
 	case path == "/api/memory" || path == "/api/memory/scopes":
 		return b.memoryAPI(w, r, path)
 	case path == "/api/apps" || strings.HasPrefix(path, "/api/apps/"):

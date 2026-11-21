@@ -19,7 +19,7 @@ const (
 type buildSpec struct {
 	Kind, Prompt, Character string
 	App                     *savedApp `json:",omitempty"`
-	Face                    *catState `json:",omitempty"`
+	Face                    *companionState `json:",omitempty"`
 	FaceVersion             int64     `json:",omitempty"`
 }
 
@@ -84,7 +84,7 @@ func (m *buildManager) enqueue(ctx context.Context, who peer, intent buildIntent
 			return "", err
 		}
 		defer tx.Rollback()
-		c, err := m.b.readActiveCat(ctx, tx, who)
+		c, err := m.b.readActiveCompanion(ctx, tx, who)
 		if err != nil {
 			return "", err
 		}
@@ -300,7 +300,7 @@ func (m *buildManager) fail(ctx context.Context, id, message string) {
 	}
 }
 
-func faceVersion(ctx context.Context, q catQuery, id string) (version int64, err error) {
-	err = q.QueryRowContext(ctx, `SELECT COALESCE((SELECT updated_at FROM cats WHERE device_id=?),0)`, id).Scan(&version)
+func faceVersion(ctx context.Context, q companionQuery, id string) (version int64, err error) {
+	err = q.QueryRowContext(ctx, `SELECT COALESCE((SELECT updated_at FROM companions WHERE device_id=?),0)`, id).Scan(&version)
 	return
 }

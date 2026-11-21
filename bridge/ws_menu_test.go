@@ -45,7 +45,7 @@ func TestWSMainMenuPages(t *testing.T) {
 		}
 	}
 	tapMenu(t, c, "menu-prev", "menu-call", "menu-next")
-	tapMenu(t, c, "menu-back", "cat-ring")
+	tapMenu(t, c, "menu-back", "companion-ring")
 }
 
 func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
@@ -134,7 +134,7 @@ func TestWSMenuListDetails(t *testing.T) {
 				case 18:
 					e.Role, e.Sender, e.Text = "intercom", "Mint", body
 				case 20:
-					e.Role, e.Sender = "cat", "Cake"
+					e.Role, e.Sender = "companion", "Cake"
 				}
 				b.history.add(id, e)
 			}
@@ -168,7 +168,7 @@ func TestWSMenuListDetails(t *testing.T) {
 			if strings.Contains(list, "blue kite") {
 				t.Fatal("long row preview wasn't clipped")
 			}
-			detail := tapMenu(t, c, "menu-row-3", "blue kite.", tc.label, "menu-back", `data-id="cat"`)
+			detail := tapMenu(t, c, "menu-row-3", "blue kite.", tc.label, "menu-back", `data-id="companion"`)
 			if strings.Contains(detail, "menu-row-") {
 				t.Fatal("detail still has list hitboxes")
 			}
@@ -184,7 +184,7 @@ func TestWSMenuListDetails(t *testing.T) {
 			} else {
 				tapMenu(t, c, "menu-row-3", "blue kite.")
 			}
-			tapMenu(t, c, "cat", "cat-ring")
+			tapMenu(t, c, "companion", "companion-ring")
 		})
 	}
 }

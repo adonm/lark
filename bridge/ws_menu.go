@@ -164,7 +164,7 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 			h.startTurn(d, now, false, "intercom", func(ctx context.Context, id uint64) {
 				others, err := h.peerSnapshot(d.who.DeviceID)
 				if err != nil || ctx.Err() != nil {
-					h.turnError(d, id, "Could not find nearby cats.")
+					h.turnError(d, id, "Could not find nearby companions.")
 					return
 				}
 				h.sendIntercom(ctx, d, id, others, target, text, nil)
@@ -309,7 +309,7 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 		h.tapStop(d, now)
 	case "build-cancel":
 		h.cancelBuildCard(d, a.value)
-	case "cat":
+	case "companion":
 		h.leaveScene(d, now, "leave-scene")
 	case "dismiss":
 		d.card = nil
@@ -326,7 +326,7 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 			h.push(d, object{"op": "error", "status": 502, "error": err.Error()}, true)
 		}
 	case "listen", "reply":
-		if key == "cat-ring" && (d.busy || d.ttsStarted || d.awaitAck) {
+		if key == "companion-ring" && (d.busy || d.ttsStarted || d.awaitAck) {
 			return // The previous idle frame may still have a Talk target.
 		}
 		if d.recording.active() {
@@ -421,7 +421,7 @@ func (m *menuContent) scene(drawer string, page int) sceneView {
 
 // The placeholder identifies this request even if another client moves the menu while SQL runs.
 func (h *wsHub) loadMenu(d *wsDevice) {
-	drawer, id, name := d.drawer, d.who.DeviceID, d.cat.Name
+	drawer, id, name := d.drawer, d.who.DeviceID, d.companion.Name
 	pending := &menuContent{notice: "Loading…"}
 	d.menuData = pending
 	h.mu.Unlock()

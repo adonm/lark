@@ -53,7 +53,7 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 		if err := voiceStore(b.db).save(id, old, false); err != nil {
 			t.Fatal(err)
 		}
-		if b.voices.allowed(old) || b.voices.get(id, "mint") != want || b.catFor(peer{DeviceID: id}).Voice != want {
+		if b.voices.allowed(old) || b.voices.get(id, "mint") != want || b.companionFor(peer{DeviceID: id}).Voice != want {
 			t.Errorf("%q did not resolve to %q", old, want)
 		}
 		if raw, _, err := voiceStore(b.db).get(id); err != nil || raw != old {
@@ -67,13 +67,13 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 	if got := b.voices.get(virtual, "mint"); got != emmaVoice {
 		t.Fatalf("legacy virtual voice resolved to %q", got)
 	}
-	if _, err := b.db.Exec("INSERT INTO saved_cats ("+savedCatColumns+") VALUES (?,?,?,?,?,?,?,?,?)",
+	if _, err := b.db.Exec("INSERT INTO saved_companions ("+savedCompanionColumns+") VALUES (?,?,?,?,?,?,?,?,?)",
 		"story-cat", "Story Cat", "#FFFFFF", "#000000", "#000000", "", "bm_daniel", "", 0); err != nil {
 		t.Fatal(err)
 	}
-	out, err := b.catTool(t.Context(), object{"op": "list_saved"})
-	if err != nil || len(out["cats"].([]savedCat)) != 1 || out["cats"].([]savedCat)[0].Voice != fableVoice {
-		t.Fatalf("saved cat voice did not resolve to Fable: %v (%v)", out, err)
+	out, err := b.companionTool(t.Context(), object{"op": "list_saved"})
+	if err != nil || len(out["companions"].([]savedCompanion)) != 1 || out["companions"].([]savedCompanion)[0].Voice != fableVoice {
+		t.Fatalf("saved companion voice did not resolve to Fable: %v (%v)", out, err)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestMCPVoiceCatalog(t *testing.T) {
 		t.Fatalf("got %d voice choices, want %d", len(voiceCatalog), len(want))
 	}
 	fields := mcpInputSchema("patch")["properties"].(object)
-	for _, key := range []string{"device", "cat"} {
+	for _, key := range []string{"device", "companion"} {
 		schema := fields[key].(object)["properties"].(object)["voice"].(object)
 		if got := schema["enum"]; !reflect.DeepEqual(got, want) {
 			t.Errorf("MCP %s voice choices = %v, want %v", key, got, want)

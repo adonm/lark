@@ -228,11 +228,11 @@ func (h *wsHub) showPhoto(device, id string) bool {
 		return false
 	}
 	h.interruptTurn(d, "photo")
-	h.stopCatTurn(d)
+	h.stopCompanionTurn(d)
 	h.clearView(d)
 	h.wake(d, now)
 	s := sceneView{bg: "#000000", title: "Photo", art: `<image href="photo:` + id + `" width="360" height="360"/>`}
-	s.control(bounds{139, 300, 82, 32}, actionTile("cat", "Home", "", palette{"#FFFAEE", catInk}))
+	s.control(bounds{139, 300, 82, 32}, actionTile("companion", "Home", "", palette{"#FFFAEE", companionInk}))
 	d.view = &s
 	h.render(d, now, true)
 	return true

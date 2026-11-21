@@ -13,12 +13,12 @@ function bubble(entry) {
     item.dataset.entry = entry.id;
     return item;
   }
-  const role = ["user", "intercom"].includes(entry.role) ? entry.role : "cat";
+  const role = ["user", "intercom"].includes(entry.role) ? entry.role : "companion";
   const item = node("li", `bubble ${role}`);
   item.dataset.entry = entry.id;
-  const catName = state.view.device.character;
-  const sender = entry.sender || (role === "user" ? "You" : catName);
-  const recipient = entry.recipient || (sender !== catName ? catName : "");
+  const name = state.view.device.character;
+  const sender = entry.sender || (role === "user" ? "You" : name);
+  const recipient = entry.recipient || (sender !== name ? name : "");
   const label = role === "intercom" ? recipient ? `${sender} → ${recipient}` : `From ${sender}` : sender;
   const header = node("div", "row wrap bubble-head");
   header.append(node("strong", "", label));

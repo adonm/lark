@@ -56,9 +56,9 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	_, idleRev, _ := decodeDisplay(t, d.until(t, isDisplay))
 
 	b.ws.mu.Lock()
-	cat := b.ws.devices[id]
-	cat.busy = true
-	b.ws.render(cat, time.Now(), false)
+	dev := b.ws.devices[id]
+	dev.busy = true
+	b.ws.render(dev, time.Now(), false)
 	b.ws.mu.Unlock()
 	d.until(t, func(f wsFrame) bool {
 		if !isDisplay(f) {
@@ -72,7 +72,7 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	d.json(t, tap)
 	d.barrier(t)
 	b.ws.mu.Lock()
-	started, thinkingRev := cat.recording.endpoint != nil, cat.nativeRev
+	started, thinkingRev := dev.recording.endpoint != nil, dev.nativeRev
 	b.ws.mu.Unlock()
 	if started {
 		t.Fatal("a stale Talk tap started a Say more capture")

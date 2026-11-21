@@ -373,13 +373,13 @@ Code Mode exposes exactly four MCP tools under `tools.lark`:
 
 | Tool | Purpose |
 | --- | --- |
-| `state` | Read keyed devices, companion forms, saved apps, timers, and scoped JSON. Select slices with `include`; add `saved_cats`, `messages`, or `diagnostics` when needed. |
-| `patch` | Update device settings, companion form (`cat`), memory, or a timer. Use `cat.save_profile:true` to save under the current name or `false` to shift without replacing a favorite. Memory batches commit atomically; `expected_version:0` requires an absent key. |
+| `state` | Read keyed devices, companion forms, saved apps, timers, and scoped JSON. Select slices with `include`; add `saved_companions`, `messages`, or `diagnostics` when needed. |
+| `patch` | Update device settings, companion form (`companion`), memory, or a timer. Use `companion.save_profile:true` to save under the current name or `false` to shift without replacing a favorite. Memory batches commit atomically; `expected_version:0` requires an absent key. |
 | `app` | Show a declarative screen or SVG, run a template or JS app, save/load/delete by slug, or exit to the face. |
 | `emit` | Send spoken intercom and a card, play notes, or play a named sound (`sfx` or `chime`). |
 
-With `device_id`, `state` always returns `me.device`, `me.cat`, and
-`me.active_app`. Read source from `me.cat.face_svg` or fetch saved app source
+With `device_id`, `state` always returns `me.device`, `me.companion`, and
+`me.active_app`. Read source from `me.companion.face_svg` or fetch saved app source
 with `include_code:true`. Read persistent values as `memory[scope][key].value`.
 
 The agent can also use OpenCode's `websearch`. There is no `wait_event` tool:
@@ -445,15 +445,15 @@ directory in one transaction and never modifies those backups.
 The bridge also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
-Active and saved forms are stored in `cats` and `saved_cats`.
-Shift instantly with `patch({device_id, cat: {companion: {species: "owl",
+Active and saved forms are stored in `companions` and `saved_companions`.
+Shift instantly with `patch({device_id, companion: {preset: {species: "owl",
 palette: "lavender", accessory: "scarf"}, save_profile: false}})`. Ten species
 share eight colorways: peach, mint, lavender, sage, berry, amber, sky and
 midnight. Set `eyes`, `markings` or a palette object with `base` and hex tints
 to customize. Vector faces still support `face_edits` and `face_svg`. Existing
 saved artwork is unchanged.
 
-For bespoke creatures, costumes or styles use `cat.portrait: {prompt, bg?, edit?, style?}`. The dedicated
+For bespoke creatures, costumes or styles use `companion.portrait: {prompt, bg?, edit?, style?}`. The dedicated
 OpenCode service sends a billed request to `opencode/gemini-nano-banana-2.1`
 using its OpenCode Console connection. OAuth needs no separate key, and this
 request creates no OpenCode session. If `OPENCODE_API_KEY` is set in the bridge
@@ -505,12 +505,12 @@ synthesizing sentences while OpenCode streams its reply over SSE. Firmware
 | `GET /ws`, `GET /app` | WebSocket hub and embedded browser UI |
 | `GET /api/diagnostics` | LAN-only device telemetry, WebSocket RTT, pipeline timings, Kokoro readiness, bridge and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
 | `POST /api/diagnostics/stt` | Loopback only: synthesize and transcribe a fixed test phrase without a session or playback |
-| `GET /api/devices` | Remembered devices with `device_id`, `character`, `cat`, `voice`, and current `ws_connected`; hardware also includes `ip`, `port`, and `last_seen` |
+| `GET /api/devices` | Remembered devices with `device_id`, `character`, `companion`, `voice`, and current `ws_connected`; hardware also includes `ip`, `port`, and `last_seen` |
 | `GET /api/scope` | Current scope and ordered `voices` catalog |
 | `POST /api/virtual-clients` | `{}` creates a starter companion; optional legacy `character` and `theme` seed a form |
-| `GET /api/cats`, `DELETE /api/cats/{slug}` | List or delete LAN-only saved forms |
-| `POST /api/cats/reassign` | LAN-only `from_device_id`, `to_device_id`, and `mode` (`swap` or `move`) → transfer companions, voices, and sessions |
-| `POST /api/devices/{id}/cat` | Update active form fields or send `{"slug":"cake"}` to load a form (LAN-only) |
+| `GET /api/companions`, `DELETE /api/companions/{slug}` | List or delete LAN-only saved forms |
+| `POST /api/companions/reassign` | LAN-only `from_device_id`, `to_device_id`, and `mode` (`swap` or `move`) → transfer companions, voices, and sessions |
+| `POST /api/devices/{id}/companion` | Update active form fields or send `{"slug":"cake"}` to load a form (LAN-only) |
 | `GET /api/devices/{id}/messages`, `GET /api/history?device_id={id}` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
 | `POST /api/devices/{id}/photo`, `GET /api/photos/{id}` | Share a PNG, JPEG, or WebP up to 2 MiB, or fetch the stored square PNG |
 | `POST /api/devices/{id}/voice` | `{"voice":"af_heart"}` → saved `device_id` and `voice`; scoped links can change only their own companion |

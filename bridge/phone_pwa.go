@@ -17,7 +17,7 @@ const phonePWAPath = "/app/pwa/"
 
 func (b *bridge) phoneCookie() string {
 	mac := hmac.New(sha256.New, []byte(b.token))
-	mac.Write([]byte("lark phone cat install artwork"))
+	mac.Write([]byte("lark phone companion install artwork"))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -84,7 +84,7 @@ func (b *bridge) servePhonePWA(w http.ResponseWriter, r *http.Request, path stri
 	id := query.Get("device_id")
 	start := url.URL{Path: "/app"}
 	iconQuery := url.Values{}
-	var cat catState
+	var companion companionState
 	if scope != nil {
 		if !tokenMatches(query["token"], token) {
 			sendError(w, problem(401, "Unauthorized"))
@@ -99,7 +99,7 @@ func (b *bridge) servePhonePWA(w http.ResponseWriter, r *http.Request, path stri
 		// Installed Safari apps can start with separate website storage.
 		// Use the original scoped share capability, never a LAN credential.
 		start.RawQuery = iconQuery.Encode()
-		cat = b.catFor(peer{DeviceID: id, Character: scope.Character})
+		companion = b.companionFor(peer{DeviceID: id, Character: scope.Character})
 	} else {
 		cookie, err := r.Cookie("lark-pwa")
 		if b.token == "" || err != nil || !tokenMatches([]string{cookie.Value}, b.phoneCookie()) {
@@ -107,9 +107,9 @@ func (b *bridge) servePhonePWA(w http.ResponseWriter, r *http.Request, path stri
 			return true
 		}
 		if v, ok := b.virtualByID(id); ok {
-			cat = b.catFor(peer{DeviceID: id, Character: v.Character})
+			companion = b.companionFor(peer{DeviceID: id, Character: v.Character})
 		} else if phoneID.MatchString(id) {
-			cat = b.catFor(peer{DeviceID: id})
+			companion = b.companionFor(peer{DeviceID: id})
 		} else {
 			sendError(w, problem(404, "Virtual companion not found"))
 			return true
@@ -127,19 +127,19 @@ func (b *bridge) servePhonePWA(w http.ResponseWriter, r *http.Request, path stri
 			iconList = append(iconList, object{"src": phonePWAPath + name + "?" + iconQuery.Encode(), "type": "image/png",
 				"sizes": fmt.Sprintf("%dx%d", icons[name], icons[name]), "purpose": purpose})
 		}
-		name := cat.Name
-		if !cat.Configured && name == "New Cat" {
+		name := companion.Name
+		if !companion.Configured && name == "New Cat" {
 			name = "Phone Lark"
 		}
 		data, _ := json.Marshal(object{
 			"id": "/app?device_id=" + id, "start_url": start.String(), "scope": "/app",
 			"name": name, "short_name": name, "display": "standalone", "orientation": "portrait",
-			"theme_color": cat.MarkColor, "background_color": cat.FaceBG, "icons": iconList,
+			"theme_color": companion.MarkColor, "background_color": companion.FaceBG, "icons": iconList,
 		})
 		sendBytes(w, 200, "application/manifest+json", data)
 		return true
 	}
-	svg := sceneView{bg: cat.FaceBG}.svg(catArt(cat, catPose{mood: "idle"}))
+	svg := sceneView{bg: companion.FaceBG}.svg(companionArt(companion, companionPose{mood: "idle"}))
 	scene, err := prepareScene(svg, false)
 	if err == nil {
 		side := size

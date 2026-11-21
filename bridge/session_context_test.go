@@ -168,7 +168,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	}
 	setup := httptest.NewServer(b)
 	defer setup.Close()
-	testRequest(t, http.MethodPost, setup.URL+"/api/devices/"+id+"/cat", "unit",
+	testRequest(t, http.MethodPost, setup.URL+"/api/devices/"+id+"/companion", "unit",
 		object{"name": "Plum", "face_bg": "#654321", "save_profile": true}, 200)
 	cutoff := time.Now().Add(-time.Minute).UnixMilli()
 	if _, err := db.Exec(`INSERT INTO sessions (device_id,session_id,updated_at,context_after_ms) VALUES (?,?,?,?)`,
@@ -185,14 +185,14 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	mark("mcp_contract_refresh_progress", `{"Hash":"`+current+`","Reconnected":true}`) // An old deferral isn't proof.
 	for i, row := range []struct{ device, role, source, text string }{
 		{id, "user", "typed", "BEFORE-RESET"},
-		{id, "cat", "typed", "BEFORE-RESET"},
+		{id, "companion", "typed", "BEFORE-RESET"},
 		{id, "user", "typed", "[Plum (" + id + ") · web · typed · local photos access: PHOTO-CAPABILITY]\nOur island is called Mango.\n```js\nOLD-TOOL\n```"},
 		{id, "assistant", "typed", "Mango Island, got it.\n```js\nOLD-TOOL\n```"},
 		{id, "system", "mcp", "TOOLS-ONLY"},
 		{"virt-11112222", "user", "typed", "OTHER-DEVICE"},
-		{"virt-11112222", "cat", "typed", "OTHER-DEVICE"},
+		{"virt-11112222", "companion", "typed", "OTHER-DEVICE"},
 		{"archive-" + id + "-42", "user", "voice", "ARCHIVED-DIALOGUE"},
-		{"archive-" + id + "-42", "cat", "voice", "ARCHIVED-DIALOGUE"},
+		{"archive-" + id + "-42", "companion", "voice", "ARCHIVED-DIALOGUE"},
 	} {
 		entry := newChat(row.role, "test", row.text, row.source)
 		entry.Timestamp = time.UnixMilli(cutoff + int64(i) - 1)
@@ -246,7 +246,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 		t.Fatal("scoped identity changed")
 	}
 	var saved int
-	if err := db.QueryRow(`SELECT count(*) FROM saved_cats WHERE name='Plum' AND face_bg='#654321'`).Scan(&saved); err != nil || saved != 1 {
+	if err := db.QueryRow(`SELECT count(*) FROM saved_companions WHERE name='Plum' AND face_bg='#654321'`).Scan(&saved); err != nil || saved != 1 {
 		t.Fatalf("saved companion form changed: %d, %v", saved, err)
 	}
 	raw := testRequest(t, "GET", scope.URL+"/api/devices/"+id+"/messages", "scoped-token", nil, 200)
@@ -357,7 +357,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			if err := b.oc.replaceBinding(t.Context(), id, sessionBinding{}, oldSID, now.UnixMilli()); err != nil {
 				t.Fatal(err)
 			}
-			for i, role := range []string{"user", "cat"} {
+			for i, role := range []string{"user", "companion"} {
 				entry := newChat(role, "test", "Mango Island", "typed")
 				entry.Timestamp = now.Add(time.Duration(i+1) * time.Second)
 				b.history.add(id, entry)

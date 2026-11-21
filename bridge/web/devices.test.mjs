@@ -108,7 +108,7 @@ test("renders the selected live device after the dashboard modules load", async 
 
   await t.test("reconnect restores history without duplicating live or replayed messages", async () => {
     const {loadHistory, receiveChat} = await import("./chat.js");
-    const entry = (id, second, text) => ({id, role:"cat", text, timestamp:`2026-11-21T10:30:0${second}Z`});
+    const entry = (id, second, text) => ({id, role:"companion", text, timestamp:`2026-11-21T10:30:0${second}Z`});
     const old = entry("old", 1, "Before pause"), missed = entry("missed", 2, "While paused");
     const live = entry("live", 3, "After reconnect");
     const mockFetch = (entries) => new Response(JSON.stringify({messages:entries, has_more:false}));
@@ -151,7 +151,7 @@ test("renders the selected live device after the dashboard modules load", async 
       requests.push([path, options]);
       if (options.method === "POST") return Response.json({ok:true});
       return Response.json(requests.length === 1 ? {
-        messages:[{id:"last", role:"cat", text:"Before reset", timestamp:"2026-11-21T10:30:00Z"}],
+        messages:[{id:"last", role:"companion", text:"Before reset", timestamp:"2026-11-21T10:30:00Z"}],
         has_more:true, next_cursor:{before_ts:1795257000000, before_id:"last"},
       } : {messages:[], has_more:false});
     };

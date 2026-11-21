@@ -203,7 +203,7 @@ func companionAccessory(name string, s companionSpecies, accessory string) strin
 }
 
 func compileCompanion(raw any) (string, storybookColors, error) {
-	spec, err := readUIValue[object](raw, companionSchema, "cat.companion")
+	spec, err := readUIValue[object](raw, companionSchema, "companion.preset")
 	if err != nil {
 		return "", storybookColors{}, err
 	}
@@ -211,7 +211,7 @@ func compileCompanion(raw any) (string, storybookColors, error) {
 	s := companionSpeciesArt[name]
 	p := storybookPalette(spec["palette"], s.colorway)
 	if p.outline == "#000000" {
-		return "", p, fieldError("cat.companion.palette.outline", "use a tinted outline")
+		return "", p, fieldError("companion.preset.palette.outline", "use a tinted outline")
 	}
 	forehead, cheeks := companionMarkings(str(spec["markings"]))
 	cheeks = storyOval(113, 201, 13, 7, "@blush") + storyOval(247, 201, 13, 7, "@blush") + cheeks

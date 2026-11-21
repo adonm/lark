@@ -38,7 +38,7 @@ export function installer() {
 
   return (view, app) => {
     const assets = window.isSecureContext && installAssets(view, app);
-    const mark = assets && /^#[a-f\d]{6}$/i.test(view.device?.cat?.mark_color) && view.device.cat.mark_color;
+    const mark = assets && /^#[a-f\d]{6}$/i.test(view.device?.companion?.mark_color) && view.device.companion.mark_color;
     for (const [meta, fallback] of themes) meta.content = mark || fallback;
     if (assets?.manifest === (manifest.getAttribute("href") || undefined)) return;
     prompt = null;

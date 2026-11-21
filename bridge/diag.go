@@ -318,7 +318,7 @@ type diagDevice struct {
 func (d *wsDevice) diagDevice() diagDevice {
 	s := d.telemetry
 	s.Volume = new(d.vol)
-	out := diagDevice{ID: d.who.DeviceID, Character: d.cat.Name, Kind: "physical", Board: d.board,
+	out := diagDevice{ID: d.who.DeviceID, Character: d.companion.Name, Kind: "physical", Board: d.board,
 		Firmware: d.firmware, OTA: s.Partition, WS: true, Mode: d.pose.mood, RTT: d.client.pingRTT(),
 		Frame: d.frame, Auto: d.autoVol, DeviceVol: d.telemetry.Volume, wsStatus: s}
 	if d.virtual() {
@@ -340,7 +340,7 @@ func (h *wsHub) diagDevices() []diagDevice {
 		devices[id] = diagDevice{ID: p.DeviceID, Character: p.Character, Kind: "physical", Mode: "offline"}
 	}
 	for id, v := range virtual {
-		devices[id] = diagDevice{ID: id, Character: h.b.catFor(peer{DeviceID: id, Character: v.Character}).Name, Kind: "virtual", Mode: "offline"}
+		devices[id] = diagDevice{ID: id, Character: h.b.companionFor(peer{DeviceID: id, Character: v.Character}).Name, Kind: "virtual", Mode: "offline"}
 	}
 	h.mu.Lock()
 	for id, d := range h.devices {

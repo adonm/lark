@@ -136,7 +136,7 @@ func TestMCPProtocol(t *testing.T) {
 	}
 	snap := toolTest(t, base, "state", object{"device_id": id}, false)
 	me := snap["me"].(object)
-	if len(snap) != 7 || me["device"].(object)["name"] != "Cake" || me["device"].(object)["screen"].(object)["title"] != "Cat" {
+	if len(snap) != 7 || me["device"].(object)["name"] != "Cake" || me["device"].(object)["screen"].(object)["title"] != "Companion" {
 		t.Fatal(snap)
 	}
 	patchControl(t, base, id, object{"volume": 40})
@@ -154,7 +154,7 @@ func TestMCPClosedArguments(t *testing.T) {
 		path string
 	}{
 		{"state", object{"include": []string{}, "device": "typo"}, "device"},
-		{"patch", object{"device_id": "test", "cat": object{"save_profle": true}}, "cat.save_profle"},
+		{"patch", object{"device_id": "test", "companion": object{"save_profle": true}}, "companion.save_profle"},
 		{"patch", object{"timer": object{"seconds": 5}}, "timer.seconds"},
 		{"patch", object{"memory": []object{{"scope": "shared", "key": "k", "value": 1, "typo": 2}}}, "memory.typo"},
 		{"patch", object{"apps": object{"delete": []string{"book"}, "typo": true}}, "apps.typo"},
@@ -203,7 +203,7 @@ func TestMCPStateSlices(t *testing.T) {
 		defer b.ws.mu.Unlock()
 		return b.ws.devices[id].telemetry.WiFi != nil
 	})
-	toolTest(t, base, "patch", object{"device_id": id, "cat": object{"name": "Slices", "save_profile": true}, "timer": object{"in_seconds": 300, "chime": "tap"},
+	toolTest(t, base, "patch", object{"device_id": id, "companion": object{"name": "Slices", "save_profile": true}, "timer": object{"in_seconds": 300, "chime": "tap"},
 		"memory": []object{{"scope": "shared", "key": "score", "value": object{"points": 7}}, {"scope": id, "key": "seen", "value": []any{true, nil}}}}, false)
 	const code = `function render(s){return '<svg><text x="80" y="180">'+s.n+'</text></svg>';}`
 	toolTest(t, base, "app", object{"devices": id, "save_as": "slices", "code": code, "initial_state": object{"n": 8}}, false)
@@ -218,17 +218,17 @@ func TestMCPStateSlices(t *testing.T) {
 	b.diag.metrics[diagE2E].add(12, 32)
 	b.diag.mu.Unlock()
 
-	args := object{"device_id": id, "include": []string{"devices", "cats", "apps", "timers", "memory", "saved_cats", "messages", "diagnostics"},
+	args := object{"device_id": id, "include": []string{"devices", "companions", "apps", "timers", "memory", "saved_companions", "messages", "diagnostics"},
 		"include_code": true, "messages_limit": 1}
 	s := toolTest(t, base, "state", args, false)
 	dev, me := s["devices"].(object)[id].(object), s["me"].(object)
-	active, cat := me["active_app"].(object), s["cats"].(object)[id].(object)
+	active, companion := me["active_app"].(object), s["companions"].(object)[id].(object)
 	if dev["wifi_rssi"] != json.Number("-62") || dev["cpu_pct"] != json.Number("24") || dev["battery_pct"] != json.Number("73") ||
 		dev["active_app_state"].(object)["n"] != json.Number("8") || active["state"].(object)["n"] != json.Number("8") ||
-		cat["name"] != "Slices" || !strings.Contains(str(cat["face_svg"]), "data-pose") {
-		t.Fatal("missing live device, cat or app state", dev)
+		companion["name"] != "Slices" || !strings.Contains(str(companion["face_svg"]), "data-pose") {
+		t.Fatal("missing live device, companion or app state", dev)
 	}
-	if s["saved_cats"].(object)["slices"].(object)["face_svg"] != cat["face_svg"] ||
+	if s["saved_companions"].(object)["slices"].(object)["face_svg"] != companion["face_svg"] ||
 		s["apps"].(object)["slices"].(object)["code"] != code || len(s["timers"].([]any)) != 1 {
 		t.Fatal("missing saved sources or timer")
 	}

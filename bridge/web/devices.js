@@ -2,7 +2,7 @@ import {api} from "./api.js";
 import {setVolume, unlockAudio, volume} from "./audio.js";
 import {loadHistory} from "./chat.js";
 import {$, colors, companionName, getLocal, isLive, node, persisted, say, setLocal, wide} from "./dom.js";
-import {loadSavedCats} from "./library.js";
+import {loadSavedCompanions} from "./library.js";
 import {canStartCall, renderCurrent, select, startPeerCall} from "./live.js";
 import {state} from "./state.js";
 
@@ -32,21 +32,21 @@ function renderReassign() {
     select.dataset.choices = version;
   }
   select.disabled = !!state.app.reassigning || !choices.length;
-  $("swap-cat").disabled = $("move-cat").disabled = select.disabled || !select.value;
+  $("swap-companion").disabled = $("move-companion").disabled = select.disabled || !select.value;
 }
 
-async function reassignCat(mode) {
+async function reassignCompanion(mode) {
   const current = state.app, selected = state.view, to = $("reassign-target").value;
   if (!current || current.scope || current.reassigning || !selected?.id || !to) return;
   current.reassigning = true;
   renderReassign();
   say("reassign-note", mode === "swap" ? "Swapping companions…" : "Moving companion…");
   try {
-    await api(current, "/api/cats/reassign", {method:"POST",
+    await api(current, "/api/companions/reassign", {method:"POST",
       body:{from_device_id:selected.id, to_device_id:to, mode}});
     if (state.app !== current) return;
     refreshDevices();
-    loadSavedCats();
+    loadSavedCompanions();
     if (state.view === selected) {
       say("reassign-note", mode === "swap" ? "Companions swapped." : "Companion moved. This device now has a fresh starter.");
       loadHistory();
@@ -59,8 +59,8 @@ async function reassignCat(mode) {
   }
 }
 $("reassign-target").onchange = renderReassign;
-$("swap-cat").onclick = () => reassignCat("swap");
-$("move-cat").onclick = () => reassignCat("move");
+$("swap-companion").onclick = () => reassignCompanion("swap");
+$("move-companion").onclick = () => reassignCompanion("move");
 
 $("sidebar-toggle").onclick = () => { state.app.sidebar = !state.app.sidebar; renderSidebar(); };
 wide.addEventListener("change", e => {
@@ -78,13 +78,13 @@ function deviceRow(d) {
   call.onclick = () => startPeerCall(row.dataset.id);
   const name = node("span", "device-name"), status = node("span", "badge device-state");
   const meta = node("span", "device-meta"), badge = node("span", "badge outline", "HTTPS Tunnel");
-  const dot = node("span", "cat-dot");
+  const dot = node("span", "companion-dot");
   dot.setAttribute("aria-hidden", "true");
   button.append(dot, name, status, meta, badge);
   row.append(button, call);
   rowParts.set(row, {button, call, name, status, meta, badge});
   button.onclick = () => {
-    const selected = state.app.devices.find(cat => cat.device_id === row.dataset.id);
+    const selected = state.app.devices.find(d => d.device_id === row.dataset.id);
     if (selected) {
       select(selected);
       if (!wide.matches) {
@@ -108,7 +108,7 @@ function renderDevices() {
       const row = rows.get(d.device_id) ?? deviceRow(d);
       rows.delete(d.device_id);
       const {button, call, name, status, meta, badge} = rowParts.get(row);
-      colors(button, d.cat);
+      colors(button, d.companion);
       button.setAttribute("aria-pressed", String(state.view?.id === d.device_id));
       call.hidden = !state.view?.virtual || !isLive(d) || !d.caps?.call || state.view.id === d.device_id;
       call.disabled = !canStartCall();
@@ -157,10 +157,10 @@ function renderTargets(devices) {
   renderCallTarget();
 }
 
-const preferredCat = devices => devices.find(d => d.kind !== "virtual" && isLive(d))
+const preferredCompanion = devices => devices.find(d => d.kind !== "virtual" && isLive(d))
   || devices.find(d => d.kind !== "virtual") || devices.find(persisted);
 function joinPhone(d) {
-  select(d || {device_id:phone, character:"New Cat", cat:{configured:false}, kind:"virtual"}, true);
+  select(d || {device_id:phone, character:"New Cat", companion:{configured:false}, kind:"virtual"}, true);
 }
 
 async function refreshDevices() {
@@ -177,7 +177,7 @@ async function refreshDevices() {
     if (!state.view?.id || !updated && state.view.virtual && !state.view.quick && !current.tunnelBusy) {
       const requested = devices.find(d => d.device_id === current.historyDevice);
       if (current.historyDevice === phone) joinPhone(requested);
-      else select(requested || preferredCat(devices));
+      else select(requested || preferredCompanion(devices));
       current.historyDevice = null;
     } else if (updated) {
       state.view.device = updated;
@@ -228,17 +228,17 @@ function renderTunnel() {
     else $("open-link").removeAttribute("href");
   }
   if (!show) return;
-  say("tunnel-cat", companionName(d));
+  say("tunnel-companion", companionName(d));
   $("share").hidden = !share;
   $("tunnel-create").hidden = !!tunnel?.active;
   $("tunnel-create").disabled = lock || (!status?.installed && !tunnel);
   say("tunnel-create", tunnel ? "Restore Tunnel" : "Create Tunnel");
   $("tunnel-close").hidden = !tunnel;
   $("tunnel-close").disabled = lock;
-  $("delete-cat").disabled = lock;
+  $("delete-companion").disabled = lock;
   $("delete-cancel").hidden = !state.view.confirmDelete;
   $("delete-cancel").disabled = lock;
-  say("delete-cat", state.view.confirmDelete ? "Confirm delete" : "Delete");
+  say("delete-companion", state.view.confirmDelete ? "Confirm delete" : "Delete");
 }
 
 function safeShareURL(link) {
@@ -248,14 +248,14 @@ function safeShareURL(link) {
   } catch { return ""; }
 }
 
-$("create-cat").onclick = async e => {
+$("create-companion").onclick = async e => {
   const current = state.app, button = e.currentTarget;
   button.disabled = true;
   say("device-note", "Creating companion…");
   try {
-    const cat = await api(current, "/api/virtual-clients", {method:"POST", body:{}});
+    const created = await api(current, "/api/virtual-clients", {method:"POST", body:{}});
     if (state.app !== current) return;
-    const d = {...cat, device_id:cat.id, kind:"virtual"};
+    const d = {...created, device_id:created.id, kind:"virtual"};
     current.deviceVersion++;
     current.devices.push(d);
     say("device-note", "Say hi to meet your new companion!");
@@ -274,7 +274,7 @@ $("create-cat").onclick = async e => {
 };
 
 async function changeTunnel(action) {
-  const current = state.app, cat = state.view, id = encodeURIComponent(cat.id);
+  const current = state.app, view = state.view, id = encodeURIComponent(view.id);
   if (current.tunnelBusy) return;
   current.tunnelBusy = true;
   renderTunnel();
@@ -283,23 +283,23 @@ async function changeTunnel(action) {
     const create = action === "create";
     const result = await api(current, create ? "/api/tunnels" :
       action === "delete" ? `/api/virtual-clients/${id}` : `/api/tunnels/${id}`,
-    create ? {method:"POST", body:{device_id:cat.id}} : {method:"DELETE"});
+    create ? {method:"POST", body:{device_id:view.id}} : {method:"DELETE"});
     if (state.app !== current) return;
     current.deviceVersion++;
-    const d = current.devices.find(d => d.device_id === cat.id);
+    const d = current.devices.find(d => d.device_id === view.id);
     if (action === "delete") {
-      current.devices = current.devices.filter(d => d.device_id !== cat.id);
-      if (state.view === cat) select(preferredCat(current.devices));
+      current.devices = current.devices.filter(d => d.device_id !== view.id);
+      if (state.view === view) select(preferredCompanion(current.devices));
       say("device-note", "Virtual companion deleted.");
     } else if (d) {
       d.tunnel = result;
-      if (state.view === cat) state.view.device = d;
+      if (state.view === view) state.view.device = d;
     }
-    if (state.view === cat) say("tunnel-note", create ? "Tunnel created." : "Tunnel closed.");
+    if (state.view === view) say("tunnel-note", create ? "Tunnel created." : "Tunnel closed.");
     refreshDevices();
     refreshTunnel();
   } catch {
-    if (state.app === current && state.view === cat) say("tunnel-note", `Could not ${action} ${action === "delete" ? "the companion" : "the tunnel"}.`);
+    if (state.app === current && state.view === view) say("tunnel-note", `Could not ${action} ${action === "delete" ? "the companion" : "the tunnel"}.`);
   } finally {
     current.tunnelBusy = false;
     if (state.app === current) renderDevices();
@@ -308,7 +308,7 @@ async function changeTunnel(action) {
 
 $("tunnel-create").onclick = () => changeTunnel("create");
 $("tunnel-close").onclick = () => changeTunnel("close");
-$("delete-cat").onclick = () => {
+$("delete-companion").onclick = () => {
   if (state.view.confirmDelete) changeTunnel("delete");
   else {
     state.view.confirmDelete = true;
@@ -320,7 +320,7 @@ $("delete-cancel").onclick = () => {
   state.view.confirmDelete = false;
   say("tunnel-note", "");
   renderTunnel();
-  $("delete-cat").focus();
+  $("delete-companion").focus();
 };
 async function copyField(field) {
   try {
@@ -343,7 +343,7 @@ $("copy").onclick = async () => {
 };
 
 $("join").onclick = () => {
-  if (state.view?.quick) select(preferredCat(state.app.devices));
+  if (state.view?.quick) select(preferredCompanion(state.app.devices));
   else {
     unlockAudio();
     joinPhone();

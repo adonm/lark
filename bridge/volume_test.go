@@ -93,7 +93,7 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	web.json(t, object{"ev": "hello", "role": "web"})
 	web.until(t, hasWS("peers", id))
 	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "cat-ring"))
+	web.until(t, hasWS("svg", "companion-ring"))
 	tap := func(x, y int) { board.json(t, object{"ev": "tap", "x": x, "y": y}) }
 	tap(180, 300)
 	web.until(t, hasWS("svg", "menu-next"))

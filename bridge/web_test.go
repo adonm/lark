@@ -9,7 +9,7 @@ import (
 
 func TestAppCDNPolicy(t *testing.T) {
 	b := &bridge{}
-	cat := b.scoped(virtualClient{ID: "virt-12345678"}, "scoped-fixture")
+	scoped := b.scoped(virtualClient{ID: "virt-12345678"}, "scoped-fixture")
 	for _, view := range []struct {
 		path   string
 		scoped bool
@@ -22,7 +22,7 @@ func TestAppCDNPolicy(t *testing.T) {
 		r.RemoteAddr = "127.0.0.1:12345"
 		w := httptest.NewRecorder()
 		if view.scoped {
-			cat.ServeHTTP(w, r)
+			scoped.ServeHTTP(w, r)
 		} else {
 			b.ServeHTTP(w, r)
 		}

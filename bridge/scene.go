@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const catInk = "#1A1926"
+const companionInk = "#1A1926"
 
 type sceneAction struct{ kind, value string }
 
@@ -54,7 +54,7 @@ func (s *sceneView) button(id, name string, a sceneAction, x, y, w, h int, art s
 	s.art += fmt.Sprintf(`<g data-id="%s" data-hit="%d,%d,%d,%d" aria-label="%s">%s</g>`, id, x, y, w, h, html.EscapeString(name), art)
 }
 
-type catPose struct {
+type companionPose struct {
 	mood        string
 	blink       bool
 	dot         int
@@ -66,9 +66,9 @@ type catPose struct {
 	meter       bool
 }
 
-func catChrome(cat catState, pose catPose) sceneView {
-	s := sceneView{bg: cat.FaceBG}
-	ringColor, ringWidth := catInk, 3
+func companionChrome(companion companionState, pose companionPose) sceneView {
+	s := sceneView{bg: companion.FaceBG}
+	ringColor, ringWidth := companionInk, 3
 	switch pose.mood {
 	case "listening":
 		ringColor, ringWidth = menuDanger, 6+pose.dot
@@ -81,7 +81,7 @@ func catChrome(cat catState, pose catPose) sceneView {
 	if pose.mood == "thinking" || pose.mood == "speaking" {
 		s.art += ring
 	} else {
-		s.button("cat-ring", "Talk", sceneAction{"listen", ""}, 8, 8, 344, 344, ring)
+		s.button("companion-ring", "Talk", sceneAction{"listen", ""}, 8, 8, 344, 344, ring)
 	}
 	if pose.battery >= 0 && pose.mood != "listening" && pose.mood != "thinking" {
 		s.art += svgRect(258, 46, 6, 7, 2, menuCard, "none", 0) + svgRect(229, 41, 31, 17, 5, menuCard, menuInk, 2)
@@ -102,15 +102,15 @@ func catChrome(cat catState, pose catPose) sceneView {
 	if pose.meter {
 		s.art += svgRect(114, 246, 132, 33, uiButtonRadius, menuCard, menuBorder, 2) +
 			svgRect(123, 267, 114, 5, 2, menuSecondary, "none", 0) +
-			svgRect(123, 267, max(1, pose.volume*114/100), 5, 2, cat.AccentColor, "none", 0) +
+			svgRect(123, 267, max(1, pose.volume*114/100), 5, 2, companion.AccentColor, "none", 0) +
 			svgLabel(180, 262, 14, strconv.Itoa(pose.volume)+"%", menuInk)
 	}
-	if !cat.Configured && pose.mood == "idle" && !pose.meter {
+	if !companion.Configured && pose.mood == "idle" && !pose.meter {
 		x := 180
 		if pose.battery >= 0 {
 			x = 153
 		}
-		s.art += svgLabel(x, 50, 14, "Say hi to meet me!", uiContrastInk(cat.FaceBG))
+		s.art += svgLabel(x, 50, 14, "Say hi to meet me!", uiContrastInk(companion.FaceBG))
 	}
 	switch pose.mood {
 	case "", "idle":
@@ -150,10 +150,10 @@ func volumeLabel(auto bool, level int) string {
 	return value
 }
 
-func messageScene(title, heading, text string, cat catState) sceneView {
+func messageScene(title, heading, text string, companion companionState) sceneView {
 	s := sceneView{bg: menuBG, title: title}
 	s.art = svgRect(42, 84, 276, 204, uiCardRadius, menuCard, menuBorder, 2) +
-		svgCircle(180, 83, 17, cat.AccentColor) + svgLabel(180, 129, 28, heading, menuInk)
+		svgCircle(180, 83, 17, companion.AccentColor) + svgLabel(180, 129, 28, heading, menuInk)
 	for i, line := range cardLines(text) {
 		s.art += svgLabel(180, 159+i*23, 14, line, menuMuted)
 	}
@@ -161,21 +161,21 @@ func messageScene(title, heading, text string, cat catState) sceneView {
 }
 
 type intercomCard struct {
-	sender peer
-	text   string
-	cat    catState
+	sender    peer
+	text      string
+	companion companionState
 }
 
 func (card intercomCard) scene(canCall bool) sceneView {
-	sender, text, cat := card.sender, card.text, card.cat
+	sender, text, companion := card.sender, card.text, card.companion
 	if text == "" {
 		text = "Voice message"
 	}
 	title := "From " + sender.Character
-	s := messageScene(title, truncate(title+"!", 25), text, cat)
+	s := messageScene(title, truncate(title+"!", 25), text, companion)
 	s.intercom = &card
 	reply := tile{id: "reply", label: "Reply", action: sceneAction{"reply", sender.DeviceID}, colors: primaryPalette}
-	done := tile{id: "done", label: "Done", action: sceneAction{"cat", ""}, colors: navPalette}
+	done := tile{id: "done", label: "Done", action: sceneAction{"companion", ""}, colors: navPalette}
 	if canCall {
 		s.control(bounds{43, 218, 78, 55}, tile{id: "call", label: "Call", action: sceneAction{"call-peer", sender.DeviceID}, colors: answerPalette})
 		s.control(bounds{141, 218, 78, 55}, reply)
@@ -188,22 +188,22 @@ func (card intercomCard) scene(canCall bool) sceneView {
 }
 
 func noticeScene(title, message string) sceneView {
-	cat := blankCat()
-	s := messageScene(title, title, message, cat)
-	s.control(bounds{139, 300, 82, 32}, actionTile("cat", "Home", "", navPalette))
+	companion := blankCompanion()
+	s := messageScene(title, title, message, companion)
+	s.control(bounds{139, 300, 82, 32}, actionTile("companion", "Home", "", navPalette))
 	return s
 }
 
 func timerScene(message string) sceneView {
-	cat := blankCat()
-	s := messageScene("Time's up!", "Time's up!", message, cat)
+	companion := blankCompanion()
+	s := messageScene("Time's up!", "Time's up!", message, companion)
 	s.duringTurn = true
-	s.control(bounds{139, 300, 82, 32}, tile{id: "cat", label: "OK", action: sceneAction{"dismiss", ""}, colors: primaryPalette})
+	s.control(bounds{139, 300, 82, 32}, tile{id: "companion", label: "OK", action: sceneAction{"dismiss", ""}, colors: primaryPalette})
 	return s
 }
 
-func poseFrame(now, since, idle time.Time, mood string, pct, volume int, charge, meter bool) catPose {
-	p := catPose{mood: mood, battery: pct, charge: charge, volume: volume, meter: meter}
+func poseFrame(now, since, idle time.Time, mood string, pct, volume int, charge, meter bool) companionPose {
+	p := companionPose{mood: mood, battery: pct, charge: charge, volume: volume, meter: meter}
 	if mood == "idle" || mood == "listening" {
 		p.blink = now.Sub(idle)%(3500*time.Millisecond) >= 3350*time.Millisecond
 	}

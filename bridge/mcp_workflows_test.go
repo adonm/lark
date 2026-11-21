@@ -130,7 +130,7 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "lark-face-parts"
-	c := blankCat()
+	c := blankCompanion()
 	c.Name, c.Configured = "Cake", true
 	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
 	tx, err := b.db.BeginTx(t.Context(), nil)
@@ -138,7 +138,7 @@ func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err = writeCat(t.Context(), tx, id, c); err == nil {
+	if err = writeCompanion(t.Context(), tx, id, c); err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
@@ -147,11 +147,11 @@ func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
 	patch := func(edit object, fail bool) object {
-		return toolTest(t, base, "patch", object{"device_id": id, "cat": edit}, fail)
+		return toolTest(t, base, "patch", object{"device_id": id, "companion": edit}, fail)
 	}
 	replaced := []object{{"part": "eyes", "pose": "talk", "svg": `<circle cx="112" cy="141" r="11" fill="#ABCDEF"/>`}}
 	out := patch(object{"face_edits": replaced}, false)
-	raw := str(out["cat"].(object)["face_svg"])
+	raw := str(out["companion"].(object)["face_svg"])
 	layer := func(pose string) string {
 		t.Helper()
 		root, err := parseFaceSVG(raw)
