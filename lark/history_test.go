@@ -14,7 +14,7 @@ import (
 )
 
 func TestDeviceResetHistory(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.virtual = virtualStore(b.db)
 		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_reset/interrupt" {

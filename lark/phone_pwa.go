@@ -15,13 +15,13 @@ import (
 
 const phonePWAPath = "/app/pwa/"
 
-func (b *bridge) phoneCookie() string {
+func (b *larkServer) phoneCookie() string {
 	mac := hmac.New(sha256.New, []byte(b.token))
 	mac.Write([]byte("lark phone companion install artwork"))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (b *bridge) setPhoneCookie(w http.ResponseWriter) {
+func (b *larkServer) setPhoneCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: "lark-pwa", Value: b.phoneCookie(), Path: phonePWAPath,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 }
@@ -56,7 +56,7 @@ func phoneWorker(scoped bool) []byte {
 	return append(fmt.Appendf(nil, "const CACHE = \"lark-shell-%s-%x\", SHELL = %s;\n", mode, hash.Sum(nil), shell), worker...)
 }
 
-func (b *bridge) servePhonePWA(w http.ResponseWriter, r *http.Request, path string, scope *virtualClient, token string) bool {
+func (b *larkServer) servePhonePWA(w http.ResponseWriter, r *http.Request, path string, scope *virtualClient, token string) bool {
 	if path == "/app/sw.js" {
 		worker := phoneWorkers[0]
 		if scope != nil {

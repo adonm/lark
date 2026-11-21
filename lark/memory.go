@@ -55,7 +55,7 @@ type memoryEdit struct {
 
 var errMemoryAccess = problem(502, "Cannot access saved memory")
 
-func (d *bridgeDB) setMemory(ctx context.Context, w memoryWrite, expected *uint64) (int64, error) {
+func (d *larkDB) setMemory(ctx context.Context, w memoryWrite, expected *uint64) (int64, error) {
 	now := time.Now().UnixMilli()
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
@@ -108,7 +108,7 @@ func editMemory(ctx context.Context, tx *sql.Tx, edit memoryEdit, now int64) (ob
 	return object{"value": json.RawMessage(edit.value), "version": current + 1, "updated_at": now}, nil
 }
 
-func (b *bridge) memoryEntries(ctx context.Context, scope string) ([]object, error) {
+func (b *larkServer) memoryEntries(ctx context.Context, scope string) ([]object, error) {
 	entries := []object{}
 	if !validScope(scope) {
 		return nil, problem(400, "Invalid memory scope")
@@ -135,7 +135,7 @@ func (b *bridge) memoryEntries(ctx context.Context, scope string) ([]object, err
 	return entries, nil
 }
 
-func (b *bridge) memoryState(ctx context.Context, scopes []string) (object, error) {
+func (b *larkServer) memoryState(ctx context.Context, scopes []string) (object, error) {
 	out := object{}
 	for _, scope := range scopes {
 		if _, exists := out[scope]; exists {
@@ -156,7 +156,7 @@ func (b *bridge) memoryState(ctx context.Context, scopes []string) (object, erro
 	return out, nil
 }
 
-func (b *bridge) patchMemory(ctx context.Context, raw any) (object, error) {
+func (b *larkServer) patchMemory(ctx context.Context, raw any) (object, error) {
 	if b.db == nil {
 		return nil, problem(503, "Memory unavailable")
 	}
@@ -225,7 +225,7 @@ func (b *bridge) patchMemory(ctx context.Context, raw any) (object, error) {
 	return out, nil
 }
 
-func deleteRow(ctx context.Context, d *bridgeDB, query string, args ...any) (bool, error) {
+func deleteRow(ctx context.Context, d *larkDB, query string, args ...any) (bool, error) {
 	result, err := d.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
@@ -234,7 +234,7 @@ func deleteRow(ctx context.Context, d *bridgeDB, query string, args ...any) (boo
 	return n != 0, err
 }
 
-func (b *bridge) memoryAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
+func (b *larkServer) memoryAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	if b.db == nil {
 		return nil, problem(503, "Memory unavailable")
 	}

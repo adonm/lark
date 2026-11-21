@@ -44,7 +44,7 @@ func mcpServerStatus(name, status string) []object {
 func TestCompactAPIOnlyOnAuthenticatedLAN(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b := &bridge{token: "unit"}
+	b := &larkServer{token: "unit"}
 	connects := new(atomic.Int32)
 	b.oc = testOpenCode(t, ctx, t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -287,7 +287,7 @@ func TestPortraitOpenCodeContract(t *testing.T) {
 func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	sheet := portraitFixture(t)
 	dir := t.TempDir()
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.virtual = virtualStore(b.db)
 	})
 	own := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))

@@ -29,7 +29,7 @@ func patchTimerTest(t *testing.T, base string, args object, failed bool) object 
 
 func TestTimerLocalFireAndCancel(t *testing.T) {
 	tts := make(chan string, 8)
-	_, base := wsHarness(t, func(b *bridge, _ string) {
+	_, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.voices = deviceVoiceStore(b.db, fableVoice)
 		b.worker = &synthWorker{requests: make(chan ttsRequest)}
 		b.worker.ready.Store(true)
@@ -107,7 +107,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 }
 
 func TestTimerLaunchesSavedApp(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
@@ -143,7 +143,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	if err := virtualStore(db).save(device, virtualClient{ID: device, Character: "Greg", CreatedAt: now}, false); err != nil {
 		t.Fatal(err)
 	}
-	b := &bridge{db: db, root: t.Context()}
+	b := &larkServer{db: db, root: t.Context()}
 	first := newTimerManager(b)
 	ids := [3]string{randomHex(12), randomHex(12), randomHex(12)}
 	for i, delay := range []time.Duration{time.Minute, time.Hour, 2 * time.Hour} {
@@ -164,7 +164,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	db = testDB(t, path)
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b = &bridge{db: db, root: root, virtual: virtualStore(db), history: &chatHistory{db}, peers: peers{deviceStore(db)}}
+	b = &larkServer{db: db, root: root, virtual: virtualStore(db), history: &chatHistory{db}, peers: peers{deviceStore(db)}}
 	b.ws = newWSHub(b, false)
 	defer b.ws.shutdown()
 	m := newTimerManager(b)
@@ -201,7 +201,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 
 func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 	const id = "lark-timer-retry"
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
@@ -234,7 +234,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 func TestTimerWakeAgentGuard(t *testing.T) {
 	const device, other, sid = "lark-timer", "lark-other", "ses-reminder"
 	prompt, release := make(chan string, 1), make(chan struct{})
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
@@ -295,7 +295,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 
 func TestScopedTimerIsolationAndCaps(t *testing.T) {
 	const owner, other = "virt-01234567", "virt-abcdef12"
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.virtual = virtualStore(b.db)
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func (b *bridge) buildReply(ctx context.Context, who peer, text string) (reply, job string, err error) {
+func (b *larkServer) buildReply(ctx context.Context, who peer, text string) (reply, job string, err error) {
 	if b.builders == nil {
 		return "", "", nil
 	}
@@ -61,7 +61,7 @@ func (b *bridge) buildReply(ctx context.Context, who peer, text string) (reply, 
 
 // Serialize persistence and the web chat frames with the visual and audio
 // admission checks. Callers hold the hub lock when a hub exists.
-func (b *bridge) buildChat(id string, entries ...chatEntry) {
+func (b *larkServer) buildChat(id string, entries ...chatEntry) {
 	for _, entry := range entries {
 		if entry, ok := b.recordChat(id, entry, true); ok && b.ws != nil {
 			b.ws.broadcastChat(id, entry)
@@ -69,7 +69,7 @@ func (b *bridge) buildChat(id string, entries ...chatEntry) {
 	}
 }
 
-func (b *bridge) deliverOfflineBuildReply(ctx context.Context, who peer, text, reply, source string) error {
+func (b *larkServer) deliverOfflineBuildReply(ctx context.Context, who peer, text, reply, source string) error {
 	if h := b.ws; h != nil {
 		h.mu.Lock()
 		defer h.mu.Unlock()

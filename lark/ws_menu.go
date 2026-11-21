@@ -421,7 +421,7 @@ func (h *wsHub) loadMenu(d *wsDevice) {
 	h.render(d, time.Now(), false)
 }
 
-func (b *bridge) readMenu(ctx context.Context, drawer, id, name string) (menuContent, error) {
+func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (menuContent, error) {
 	var m menuContent
 	switch drawer {
 	case drawerGames:

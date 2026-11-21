@@ -29,7 +29,7 @@ func env(key, fallback string) string {
 
 var tokenRE = regexp.MustCompile(`^[!-~]+$`)
 
-const bridgeListeningPrefix = "Lark bridge listening on "
+const larkListeningPrefix = "Lark listening on "
 
 func openCodeSettings(agent string) ocSettings {
 	s := ocSettings{Agent: agent, Permissions: []ocPermission{{"*", "*", "deny"}}}
@@ -118,7 +118,7 @@ func run() error {
 	}
 	fallbackVoice := env("LARK_TTS_VOICE", heartVoice)
 	dbPath := env("LARK_DB_PATH", filepath.Join(local, "lark.db"))
-	db, err := openBridgeDB(context.Background(), dbPath)
+	db, err := openLarkDB(context.Background(), dbPath)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func run() error {
 	worker := newSynthWorker(root, func() (speechEngine, error) {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
 	})
-	b := &bridge{root: root, token: token, parentToken: parentToken, db: db, peers: peers{deviceStore(db)},
+	b := &larkServer{root: root, token: token, parentToken: parentToken, db: db, peers: peers{deviceStore(db)},
 		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, pairPort: pairPort, worker: worker,
 		voices:  deviceVoiceStore(db, fallbackVoice),
 		virtual: virtualStore(db), history: &chatHistory{db},
@@ -208,7 +208,7 @@ func run() error {
 	}()
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 105 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	log.Print(bridgeListeningPrefix + listener.Addr().String())
+	log.Print(larkListeningPrefix + listener.Addr().String())
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	served := make(chan error, 1)

@@ -100,7 +100,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	go func() {
 		lines := bufio.NewScanner(log)
 		for lines.Scan() {
-			if _, a, ok := strings.Cut(lines.Text(), bridgeListeningPrefix); ok {
+			if _, a, ok := strings.Cut(lines.Text(), larkListeningPrefix); ok {
 				addr <- a
 			}
 		}

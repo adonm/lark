@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-func testDB(t *testing.T, path string) *bridgeDB {
+func testDB(t *testing.T, path string) *larkDB {
 	t.Helper()
-	d, err := openBridgeDB(t.Context(), path)
+	d, err := openLarkDB(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}

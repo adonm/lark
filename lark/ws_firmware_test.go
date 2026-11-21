@@ -47,7 +47,7 @@ func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
 }
 
 func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.endpoint = testEndpointSettings() })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	d := testConnectWS(t, base, "unit", false)
 	const id = "lark-say-more"
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",

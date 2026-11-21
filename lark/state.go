@@ -76,7 +76,7 @@ type deviceVoices struct {
 	fallback string
 }
 
-func deviceVoiceStore(db *bridgeDB, fallback string) deviceVoices {
+func deviceVoiceStore(db *larkDB, fallback string) deviceVoices {
 	fallback = storedVoice(fallback)
 	if fallback == "" {
 		fallback = heartVoice

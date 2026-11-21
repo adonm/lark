@@ -110,9 +110,9 @@ func TestWSMenuListDetails(t *testing.T) {
 	const body = "A long note starts here and finishes with a tiny blue kite."
 	for _, tc := range []struct {
 		drawer, empty, first, label string
-		seed                        func(*testing.T, *bridge)
+		seed                        func(*testing.T, *larkServer)
 	}{
-		{drawerMemories, "No memories yet", "Memory 0", "memory-3", func(t *testing.T, b *bridge) {
+		{drawerMemories, "No memories yet", "Memory 0", "memory-3", func(t *testing.T, b *larkServer) {
 			for i := range 5 {
 				value := fmt.Sprintf("Memory %d", i)
 				if i == 3 {
@@ -126,7 +126,7 @@ func TestWSMenuListDetails(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{drawerHistory, "No messages yet", "Message 21", "From Mint", func(t *testing.T, b *bridge) {
+		{drawerHistory, "No messages yet", "Message 21", "From Mint", func(t *testing.T, b *larkServer) {
 			for i := range 22 {
 				e := newChat("user", "", fmt.Sprintf("Message %02d", i), "typed")
 				e.Timestamp = time.Unix(int64(i), 0)

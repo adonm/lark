@@ -38,7 +38,7 @@ func newChat(role, sender, text, source string) chatEntry {
 		Source: source, Timestamp: time.Now().UTC()}
 }
 
-type chatHistory struct{ db *bridgeDB }
+type chatHistory struct{ db *larkDB }
 
 type historyCursor struct {
 	TS int64  `json:"before_ts"`
@@ -141,7 +141,7 @@ func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, befo
 	return entries, nil
 }
 
-func (b *bridge) chat(id string, entry chatEntry, persist bool) {
+func (b *larkServer) chat(id string, entry chatEntry, persist bool) {
 	entry, ok := b.recordChat(id, entry, persist)
 	if ok && b.ws != nil {
 		b.ws.mu.Lock()
@@ -150,7 +150,7 @@ func (b *bridge) chat(id string, entry chatEntry, persist bool) {
 	}
 }
 
-func (b *bridge) recordChat(id string, entry chatEntry, persist bool) (chatEntry, bool) {
+func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatEntry, bool) {
 	entry, ok := canonicalMessage(entry)
 	if ok && persist && b.history != nil {
 		b.history.add(id, entry)
@@ -177,7 +177,7 @@ func messagesDevice(path string) (string, bool) {
 	return id, ok && deviceIDRE.MatchString(id)
 }
 
-func (b *bridge) messages(r *http.Request, id string) (any, error) {
+func (b *larkServer) messages(r *http.Request, id string) (any, error) {
 	if !deviceIDRE.MatchString(id) {
 		return nil, problem(400, "Invalid device ID")
 	}
@@ -202,7 +202,7 @@ func (b *bridge) messages(r *http.Request, id string) (any, error) {
 	return b.readHistoryPage(r.Context(), id, limit, before)
 }
 
-func (b *bridge) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
+func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
 	out := historyPage{DeviceID: id, Messages: []chatEntry{}}
 	if b.history == nil {
 		return out, nil
@@ -220,7 +220,7 @@ func (b *bridge) readHistoryPage(ctx context.Context, id string, limit int, befo
 	return out, nil
 }
 
-func (b *bridge) chatAPI(r *http.Request, scope string) (any, error) {
+func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 	obj, err := jsonBody(r)
 	if err != nil {
 		return nil, err
@@ -304,7 +304,7 @@ func (b *bridge) chatAPI(r *http.Request, scope string) (any, error) {
 	return result, nil
 }
 
-func (b *bridge) resetDevice(r *http.Request, id string) (any, error) {
+func (b *larkServer) resetDevice(r *http.Request, id string) (any, error) {
 	var archiveHistory bool
 	if r.ContentLength != 0 {
 		args, err := jsonBody(r)
@@ -352,7 +352,7 @@ func resetCompanionSession(ctx context.Context, tx *sql.Tx, id string, archiveHi
 	}
 }
 
-func (b *bridge) startNewCompanionSession(ctx context.Context, who peer, archiveHistory bool) error {
+func (b *larkServer) startNewCompanionSession(ctx context.Context, who peer, archiveHistory bool) error {
 	run := b.oc.prepareMappingChange(who.DeviceID)
 	if b.ws != nil {
 		b.ws.stopCompanionTurns(who.DeviceID)

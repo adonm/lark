@@ -87,7 +87,7 @@ func (v tunnelRecord) public(active bool) object {
 
 type tunnelManager struct {
 	mu     sync.Mutex
-	b      *bridge
+	b      *larkServer
 	bin    string
 	runner tunnelRunner
 	store  *store[tunnelRecord] // manager mutex owns all access
@@ -95,7 +95,7 @@ type tunnelManager struct {
 	closed bool
 }
 
-func newTunnelManager(b *bridge, bin string, runner tunnelRunner) *tunnelManager {
+func newTunnelManager(b *larkServer, bin string, runner tunnelRunner) *tunnelManager {
 	return &tunnelManager{b: b, bin: bin, runner: runner, live: make(map[string]*scopeServer), store: tunnelStore(b.db)}
 }
 
@@ -159,7 +159,7 @@ func (m *tunnelManager) status(ctx context.Context) object {
 	return out
 }
 
-func (b *bridge) tunnelAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
+func (b *larkServer) tunnelAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	m := b.tunnels
 	if m == nil {
 		return nil, problem(503, "Tunnel manager unavailable")
@@ -313,7 +313,7 @@ func (m *tunnelManager) listen(v virtualClient, token string, port int) (*scopeS
 	return s, ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-func (b *bridge) scoped(v virtualClient, token string) http.Handler {
+func (b *larkServer) scoped(v virtualClient, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")

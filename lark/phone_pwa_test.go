@@ -11,7 +11,7 @@ import (
 )
 
 func TestPhonePWAInstallAssets(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.virtual = virtualStore(b.db) })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.virtual = virtualStore(b.db) })
 	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Violet"}, 201))
 	id := str(v["id"])
 	companion, ok := b.virtualByID(id)
@@ -125,7 +125,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 }
 
 func TestPhoneCompanionReconnectDoesNotReplaceLiveTab(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.virtual = virtualStore(b.db) })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.virtual = virtualStore(b.db) })
 	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))
 	id := str(v["id"])
 	companion, _ := b.virtualByID(id)

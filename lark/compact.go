@@ -75,7 +75,7 @@ type diagSchemaRefresh struct {
 	RetryAt  *time.Time `json:"next_retry_at,omitempty"`
 }
 
-func (b *bridge) runSchemaUpgrade(ctx context.Context, delay, maxDelay time.Duration) {
+func (b *larkServer) runSchemaUpgrade(ctx context.Context, delay, maxDelay time.Duration) {
 	for attempt := 1; ctx.Err() == nil; attempt++ {
 		b.diag.mu.Lock()
 		b.diag.refresh.State, b.diag.refresh.Attempts, b.diag.refresh.RetryAt = "running", attempt, nil
@@ -114,7 +114,7 @@ func readMCPContract(agentPath string) (string, error) {
 	return hashMCPSchema(mcpTools, mcpInstructions, mcpRuntimeContract, string(prompt)), nil
 }
 
-func (b *bridge) syncSchemaUpgrade(ctx context.Context) error {
+func (b *larkServer) syncSchemaUpgrade(ctx context.Context) error {
 	current := b.oc.contract
 	previous, err := b.db.getMeta(ctx, mcpSchemaMeta)
 	if err != nil || previous == current {
@@ -146,7 +146,7 @@ func (o *openCode) waitForStartup(ctx context.Context) error {
 	return nil
 }
 
-func (b *bridge) compactAPI(w http.ResponseWriter, r *http.Request) (any, error) {
+func (b *larkServer) compactAPI(w http.ResponseWriter, r *http.Request) (any, error) {
 	var device string
 	var reconnect bool
 	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {

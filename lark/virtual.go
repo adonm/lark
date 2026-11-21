@@ -28,14 +28,14 @@ type virtualClient struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func (b *bridge) virtualSnapshot() (map[string]virtualClient, error) {
+func (b *larkServer) virtualSnapshot() (map[string]virtualClient, error) {
 	if b.virtual == nil {
 		return nil, nil
 	}
 	return b.virtual.all()
 }
 
-func (b *bridge) virtualByID(id string) (virtualClient, bool) {
+func (b *larkServer) virtualByID(id string) (virtualClient, bool) {
 	if b.virtual == nil {
 		return virtualClient{}, false
 	}
@@ -43,7 +43,7 @@ func (b *bridge) virtualByID(id string) (virtualClient, bool) {
 	return v, ok
 }
 
-func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
+func (b *larkServer) virtualAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	if b.virtual == nil {
 		return nil, problem(503, "Virtual clients unavailable")
 	}
@@ -131,7 +131,7 @@ func (b *bridge) virtualAPI(w http.ResponseWriter, r *http.Request, path string)
 	return nil, problem(404, "Not found")
 }
 
-func (b *bridge) publicVirtual(v virtualClient) object {
+func (b *larkServer) publicVirtual(v virtualClient) object {
 	connected := false
 	if b.ws != nil {
 		b.ws.mu.Lock()
@@ -155,11 +155,11 @@ func deviceTheme(character string) string {
 	return "cake"
 }
 
-func (b *bridge) deviceList() ([]object, error) {
+func (b *larkServer) deviceList() ([]object, error) {
 	return b.deviceEntries(false)
 }
 
-func (b *bridge) deviceEntries(full bool) ([]object, error) {
+func (b *larkServer) deviceEntries(full bool) ([]object, error) {
 	others, err := b.peers.snapshot("")
 	if err != nil {
 		return nil, err
@@ -192,7 +192,7 @@ func (b *bridge) deviceEntries(full bool) ([]object, error) {
 	return list, nil
 }
 
-func (b *bridge) findDevice(id string) (peer, virtualClient, error) {
+func (b *larkServer) findDevice(id string) (peer, virtualClient, error) {
 	if v, ok := b.virtualByID(id); ok {
 		return peer{DeviceID: v.ID, Character: v.Character}, v, nil
 	}
@@ -219,7 +219,7 @@ func (b *bridge) findDevice(id string) (peer, virtualClient, error) {
 	return peer{}, virtualClient{}, problem(404, "Device not found")
 }
 
-func (b *bridge) deviceEntry(who peer, v virtualClient, full bool) object {
+func (b *larkServer) deviceEntry(who peer, v virtualClient, full bool) object {
 	id := who.DeviceID
 	entry := publicPeer(who)
 	entry["kind"], entry["theme"] = "physical", deviceTheme(who.Character)

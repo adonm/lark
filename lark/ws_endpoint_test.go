@@ -112,7 +112,7 @@ func TestEndpointAccumulatorPreservesOriginalPCM(t *testing.T) {
 
 func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	clips := make(chan []byte, 8)
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.endpoint = testEndpointSettings()
 		b.stt = func(_ context.Context, pcm []byte) (string, error) {
 			clips <- slices.Clone(pcm)
@@ -192,7 +192,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	firstCanceled := make(chan struct{}, 1)
 	second := make(chan int, 1)
 	var decodes atomic.Int32
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.endpoint = testEndpointSettings()
 		b.stt = func(ctx context.Context, pcm []byte) (string, error) {
 			switch decodes.Add(1) {
@@ -259,7 +259,7 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 		{false, true, false}, {true, false, false}, {true, true, true},
 	} {
 		t.Run(fmt.Sprintf("model=%t cap=%t", tc.model, tc.cap), func(t *testing.T) {
-			_, base := wsHarness(t, func(b *bridge, _ string) {
+			_, base := wsHarness(t, func(b *larkServer, _ string) {
 				if tc.model {
 					b.endpoint = testEndpointSettings()
 				}
@@ -277,7 +277,7 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 }
 
 func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.endpoint = testEndpointSettings() })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "lark-intercom-ep"
 	d := testConnectWS(t, base, "unit", false)
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
@@ -293,7 +293,7 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 }
 
 func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.endpoint = testEndpointSettings() })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "phone-e023"
 	d := testConnectWS(t, base, "unit", false)
 	d.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
@@ -323,7 +323,7 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 }
 
 func TestStopDiscardsQueuedEndpoint(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.endpoint = testEndpointSettings() })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "phone-e024"
 	d := testConnectWS(t, base, "unit", false)
 	d.hello(t, id, "Echo")
@@ -347,7 +347,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	prompts := make(chan string, 2)
 	finishFirst := make(chan struct{})
 	var count atomic.Int32
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.endpoint = testEndpointSettings()
 		b.stt = func(context.Context, []byte) (string, error) { return "and add stars", nil }
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {

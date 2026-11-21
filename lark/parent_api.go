@@ -48,7 +48,7 @@ func parentLAN(r *http.Request) bool {
 	return err == nil
 }
 
-func (b *bridge) parentAPI(r *http.Request, id string) (any, error) {
+func (b *larkServer) parentAPI(r *http.Request, id string) (any, error) {
 	if !parentLAN(r) {
 		return nil, problem(403, "Open parent controls directly on your LAN")
 	}
@@ -150,7 +150,7 @@ func parentRow(id, name string, p *parentRuntime) object {
 		"reason": p.reason, "used_seconds": int(p.used / time.Second), "day": p.day}
 }
 
-func (b *bridge) parentOverview(ctx context.Context) (object, error) {
+func (b *larkServer) parentOverview(ctx context.Context) (object, error) {
 	devices, err := b.deviceList()
 	if err != nil {
 		return nil, err

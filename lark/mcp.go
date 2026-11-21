@@ -46,7 +46,7 @@ func validRPCID(id json.RawMessage) bool {
 	return false
 }
 
-func (b *bridge) serveMCP(w http.ResponseWriter, r *http.Request) {
+func (b *larkServer) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if b.token == "" || !tokenHeaderMatches(r.Header, "Token", b.token) &&
 		!tokenMatches(r.Header.Values("Authorization"), "Bearer "+b.token) {
 		sendError(w, problem(401, "Unauthorized"))
@@ -257,7 +257,7 @@ func checkMCPFields(value any, schema object, path string) error {
 	return nil
 }
 
-func (b *bridge) lookupDevice(id string) (peer, error) {
+func (b *larkServer) lookupDevice(id string) (peer, error) {
 	p, _, err := b.findDevice(id)
 	if err == nil {
 		p.Character = b.companionFor(p).Name
@@ -328,7 +328,7 @@ func mcpUint(args object, key string) (*uint64, error) {
 	return nil, nil
 }
 
-func (b *bridge) callMCP(ctx context.Context, name string, args object) (object, error) {
+func (b *larkServer) callMCP(ctx context.Context, name string, args object) (object, error) {
 	if err := checkMCPFields(args, mcpInputSchema(name), ""); err != nil {
 		return nil, err
 	}
@@ -346,7 +346,7 @@ func (b *bridge) callMCP(ctx context.Context, name string, args object) (object,
 	}
 }
 
-func (b *bridge) mcpEmit(ctx context.Context, args object) (object, error) {
+func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 	to := str(args["to"])
 	if !deviceIDRE.MatchString(to) {
 		return nil, problem(400, "Expected exact device ID or all")
@@ -567,7 +567,7 @@ func (h *wsHub) signalTarget(id string) (*wsDevice, string) {
 	return d, ""
 }
 
-func (b *bridge) emitSignal(id, action, kind string, pcm []byte) ([]object, error) {
+func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, error) {
 	if b.ws == nil {
 		return nil, problem(503, "Device hub unavailable")
 	}
@@ -603,7 +603,7 @@ func (h *wsHub) playSignal(d *wsDevice, kind string, pcm []byte) bool {
 	return h.chime(d, kind)
 }
 
-func (b *bridge) mcpIntercom(ctx context.Context, args object) (object, []object, error) {
+func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []object, error) {
 	sender, err := b.lookupDevice(str(args["from_device_id"]))
 	if err != nil {
 		return nil, nil, err

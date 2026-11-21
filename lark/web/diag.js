@@ -102,7 +102,7 @@ function renderDiagnostics(data) {
   const {bridge, tts, host, services, latency, recent_turns:turns, devices} = data;
   const usage = Number.isFinite(host.mem_used_bytes) && host.mem_total_bytes > 0 ? host.mem_used_bytes / host.mem_total_bytes * 100 : null;
   const system = [
-    diagTile("Go bridge", [
+    diagTile("Lark server", [
       ["CPU / RSS", `${diagPct(bridge.cpu_pct)} / ${diagMB(bridge.rss_bytes)}`],
       ["Heap alloc / in use", `${diagMB(bridge.heap_alloc_bytes)} / ${diagMB(bridge.heap_inuse_bytes)}`],
       ["Goroutines", diagFormat(bridge.goroutines)], ["Uptime", diagUptime(bridge.uptime_s)],
@@ -111,7 +111,7 @@ function renderDiagnostics(data) {
     ]),
     diagTile("Kokoro TTS", [
       ["Engine", tts.engine || "—"],
-      ["CPU / RSS", "Included in Go bridge"],
+      ["CPU / RSS", "Included in Lark server"],
       ["State", tts.ready ? "Ready" : "Not ready"],
     ]),
     diagTile("Linux host", [
@@ -159,7 +159,7 @@ function renderDiagnostics(data) {
       `${diagFormat(d.battery_pct, "%")} · ${diagFormat(d.battery_mv, " mV")}${d.charging ? " · charging" : ""}` : "—";
     const card = diagTile(d.character, [
       ["Device", d.device_id], ["Board / FW", `${d.board || d.kind} / ${d.firmware || "—"}`],
-      ["OTA", d.kind === "virtual" ? "—" : `${d.ota || "—"} · ${d.ota_bundle ? "image on bridge" : "no image"}`],
+      ["OTA", d.kind === "virtual" ? "—" : `${d.ota || "—"} · ${d.ota_bundle ? "image on server" : "no image"}`],
       ["WS / RTT", `${d.ws_connected ? `Connected · ${d.mode}` : "Disconnected"} / ${diagMS(d.rtt_ms)}`],
       ["Wi-Fi", diagFormat(d.wifi_rssi, " dBm")], ["ESP32 CPU", diagPct(d.cpu_pct)],
       ["SRAM free / min", `${diagBytes(d.free_heap)} / ${diagBytes(d.min_free_heap)}`],

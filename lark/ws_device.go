@@ -215,7 +215,7 @@ func (h *wsHub) peerSnapshot(sender string) ([]peer, error) {
 	return list, nil
 }
 
-func (b *bridge) peerSnapshot(sender string) ([]peer, error) {
+func (b *larkServer) peerSnapshot(sender string) ([]peer, error) {
 	if b.ws == nil {
 		list, err := b.peers.snapshot(sender)
 		for i := range list {

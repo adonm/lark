@@ -15,7 +15,7 @@ import (
 
 func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		b := &bridge{root: t.Context()}
+		b := &larkServer{root: t.Context()}
 		c := &wsClient{role: "web", ctx: t.Context(), out: make(chan wsFrame, 8)}
 		d := &wsDevice{client: c, key: "phone-a100", screen: roundScreen, companion: blankCompanion()}
 		h := &wsHub{b: b, devices: map[string]*wsDevice{d.key: d}}
@@ -201,7 +201,7 @@ func TestBrowserAppDragAndUp(t *testing.T) {
 
 func TestAppDragBurstPreservesCriticalEvents(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		h := &wsHub{b: &bridge{}}
+		h := &wsHub{b: &larkServer{}}
 		app, _, err := initApp(savedApp{Code: `
 			function init() { return {}; }
 			function render() { return '<svg/>'; }

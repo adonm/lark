@@ -35,7 +35,7 @@ type savedTimer struct {
 }
 
 type timerManager struct {
-	b       *bridge
+	b       *larkServer
 	ctx     context.Context
 	cancel  context.CancelFunc
 	mu      sync.Mutex
@@ -52,7 +52,7 @@ type timerHandle struct{ timer *time.Timer }
 
 const timerColumns = "id,device_id,label,say,chime,wake_agent,created_at,fire_at,notes_json,app_name"
 
-func newTimerManager(b *bridge) *timerManager {
+func newTimerManager(b *larkServer) *timerManager {
 	ctx, cancel := context.WithCancel(b.root)
 	return &timerManager{b: b, ctx: ctx, cancel: cancel, handles: make(map[string]*timerHandle), fromTimerTurn: make(map[string]int)}
 }
@@ -108,7 +108,7 @@ func (t savedTimer) state(now time.Time) object {
 		"fire_at": t.FireAt, "remaining_s": (remaining + time.Second - 1) / time.Second}
 }
 
-func (b *bridge) timerState(ctx context.Context, id string, now time.Time) ([]object, error) {
+func (b *larkServer) timerState(ctx context.Context, id string, now time.Time) ([]object, error) {
 	out := []object{}
 	if b.timers == nil {
 		return out, nil
@@ -446,7 +446,7 @@ func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]s
 	return ids, nil
 }
 
-func (b *bridge) timerUpdate(id string) {
+func (b *larkServer) timerUpdate(id string) {
 	if h := b.ws; h != nil {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -460,7 +460,7 @@ func (b *bridge) timerUpdate(id string) {
 	}
 }
 
-func (b *bridge) deliverTimer(ctx context.Context, t savedTimer) {
+func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	who, err := b.lookupDevice(t.DeviceID)
 	if err != nil || ctx.Err() != nil {
 		return
@@ -546,7 +546,7 @@ func (b *bridge) deliverTimer(ctx context.Context, t savedTimer) {
 	h.mu.Unlock()
 }
 
-func (b *bridge) patchTimer(ctx context.Context, id string, args object) (object, error) {
+func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (object, error) {
 	m := b.timers
 	if m == nil {
 		return nil, problem(503, "Timers unavailable")
@@ -619,7 +619,7 @@ func (b *bridge) patchTimer(ctx context.Context, id string, args object) (object
 	return nil, problem(400, "Unknown timer operation")
 }
 
-func (b *bridge) timerAPI(w http.ResponseWriter, r *http.Request, path, scope string) (any, error) {
+func (b *larkServer) timerAPI(w http.ResponseWriter, r *http.Request, path, scope string) (any, error) {
 	m := b.timers
 	if m == nil {
 		return nil, problem(503, "Timers unavailable")

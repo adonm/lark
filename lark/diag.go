@@ -138,7 +138,7 @@ type turnTrace struct {
 
 type traceKey struct{}
 
-func (b *bridge) traceTurn(ctx context.Context, device, character, source string, at time.Time) context.Context {
+func (b *larkServer) traceTurn(ctx context.Context, device, character, source string, at time.Time) context.Context {
 	t := &turnTrace{d: &b.diag, start: at, record: &diagTurn{TS: at.UnixMilli(), Device: device, Character: character, Source: source}}
 	b.diag.mu.Lock()
 	b.diag.turns.add(t.record, 20)
@@ -193,7 +193,7 @@ func (t *turnTrace) firstPCM(at time.Time) {
 	}
 }
 
-func (b *bridge) transcribe(ctx context.Context, pcm []byte) (string, error) {
+func (b *larkServer) transcribe(ctx context.Context, pcm []byte) (string, error) {
 	start := time.Now()
 	text, err := b.decodeClip(ctx, pcm)
 	traceFrom(ctx).measure(diagSTT, time.Since(start))
@@ -270,7 +270,7 @@ type diagCache struct {
 	Misses uint64 `json:"misses"`
 }
 
-func (b *bridge) diagnosticReport() diagReport {
+func (b *larkServer) diagnosticReport() diagReport {
 	out := diagReport{Generated: time.Now().UTC(), Latency: make(map[string]diagSummary), Turns: []diagTurn{}, Devices: []diagDevice{}}
 	out.SVGCache.Hits, out.SVGCache.Misses = screens.stats()
 	b.diag.mu.Lock()
@@ -485,7 +485,7 @@ func sampleHost(prev *cpuReading) (out diagHost) {
 	return out
 }
 
-func (b *bridge) sampleDiagnostics(start time.Time, path string) func() {
+func (b *larkServer) sampleDiagnostics(start time.Time, path string) func() {
 	ctx, cancel := context.WithCancel(b.root)
 	done := make(chan struct{})
 	go func() {

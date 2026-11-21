@@ -447,7 +447,7 @@ func (p *portraitStore) has(id string) bool {
 	return err == nil
 }
 
-func (b *bridge) preparePortrait(ctx context.Context, who peer, args object, raw any) (*pendingPortrait, error) {
+func (b *larkServer) preparePortrait(ctx context.Context, who peer, args object, raw any) (*pendingPortrait, error) {
 	for _, field := range []string{"preset", "face_svg", "face_edits", "face_bg", "mark_color", "accent_color"} {
 		if _, exists := args[field]; exists {
 			return nil, fieldError("companion.portrait", "cannot combine with %s", field)
@@ -514,7 +514,7 @@ func activePortrait(raw string) string {
 	return id
 }
 
-func (b *bridge) servePortrait(w http.ResponseWriter, r *http.Request, path, scope string) error {
+func (b *larkServer) servePortrait(w http.ResponseWriter, r *http.Request, path, scope string) error {
 	id, pose, found := strings.Cut(strings.TrimPrefix(path, "/api/portraits/"), "/")
 	pose, pngFile := strings.CutSuffix(pose, ".png")
 	if !found || !pngFile || !portraitIDPattern.MatchString(id) || !slices.Contains(portraitPoses[:], pose) {

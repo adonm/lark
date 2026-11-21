@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func companionObject(t *testing.T, b *bridge, id string) object {
+func companionObject(t *testing.T, b *larkServer, id string) object {
 	t.Helper()
 	result, err := b.companionTool(t.Context(), object{"op": "get", "device_id": id})
 	if err != nil {
@@ -26,7 +26,7 @@ func companionObject(t *testing.T, b *bridge, id string) object {
 
 func TestCompanionToolAndLiveFace(t *testing.T) {
 	title := make(chan string, 4)
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.virtual = virtualStore(b.db)
 		b.voices = deviceVoiceStore(b.db, heartVoice)
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +152,7 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 }
 
 func TestCompanionShiftsWithoutOverwritingSettledForm(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.virtual = virtualStore(b.db) })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.virtual = virtualStore(b.db) })
 	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))
 	id := str(v["id"])
 	entry := newChat("user", "You", "Let's try a new shape.", "typed")
@@ -183,7 +183,7 @@ func TestCompanionShiftsWithoutOverwritingSettledForm(t *testing.T) {
 }
 
 func TestVirtualCharacterFollowsCompanionName(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.virtual = virtualStore(b.db)
 	})
 	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Starter"}, 201))
@@ -217,7 +217,7 @@ func TestVirtualCharacterFollowsCompanionName(t *testing.T) {
 }
 
 func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.virtual = virtualStore(b.db)
 		b.voices = deviceVoiceStore(b.db, heartVoice)
 		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +364,7 @@ func TestCompanionReassign(t *testing.T) {
 			const fromID, fromSID, toSID = "lark-from", "ses_from", "ses_to"
 			interrupts := make(chan string, 2)
 			titles := make(chan string, 2)
-			b, base := wsHarness(t, func(b *bridge, dir string) {
+			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.virtual = virtualStore(b.db)
 				b.voices = deviceVoiceStore(b.db, heartVoice)
 				b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {

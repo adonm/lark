@@ -191,12 +191,12 @@ func (s *testWS) hello(t *testing.T, id, character string) wsFrame {
 	return s.until(t, isDisplay)
 }
 
-func wsHarness(t *testing.T, setup func(*bridge, string)) (*bridge, string) {
+func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 	db := testDB(t, filepath.Join(dir, "lark.db"))
-	b := &bridge{root: ctx, token: "unit", db: db, peers: peers{deviceStore(db)}, history: &chatHistory{db}}
+	b := &larkServer{root: ctx, token: "unit", db: db, peers: peers{deviceStore(db)}, history: &chatHistory{db}}
 	if setup != nil {
 		setup(b, dir)
 	}
@@ -399,7 +399,7 @@ func TestWSRecordingLimits(t *testing.T) {
 			const id = "phone-a123"
 			pcm := tc.pcm[:min(len(tc.pcm), maxPCM)]
 			sttCalled := make(chan struct{}, 1)
-			b, base := wsHarness(t, func(b *bridge, dir string) {
+			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.stt = func(_ context.Context, got []byte) (string, error) {
 					if !bytes.Equal(got, pcm) {
 						t.Errorf("STT received %d bytes, want %d with the captured PCM intact", len(got), len(pcm))
@@ -470,7 +470,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 				pcm = slices.Concat(first, tail)
 			}
 			clips := make(chan []byte, 2)
-			b, base := wsHarness(t, func(b *bridge, dir string) {
+			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.stt = func(_ context.Context, got []byte) (string, error) {
 					clips <- slices.Clone(got)
 					return "", nil
@@ -515,7 +515,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 
 func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		b := &bridge{root: t.Context()}
+		b := &larkServer{root: t.Context()}
 		c := &wsClient{role: "device", ctx: t.Context(), out: make(chan wsFrame, 8)}
 		d := &wsDevice{client: c, key: "lark-no-ack", screen: roundScreen, companion: blankCompanion()}
 		d.recording.start(time.Now(), "", false)
@@ -544,7 +544,7 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 
 func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	allowSTT := make(chan struct{})
-	_, base := wsHarness(t, func(b *bridge, dir string) {
+	_, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(ctx context.Context, _ []byte) (string, error) {
 			select {
 			case <-allowSTT:
@@ -759,7 +759,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	const first = "Stars release their own light. "
 	const last = "That lights nearby planets."
 	const raw = first + last + "\n```lark-screen\n{\"title\":\"Night sky\",\"shapes\":[{\"t\":\"btn\",\"x\":121,\"y\":212,\"w\":118,\"h\":34,\"c\":\"#ffaa33\",\"s\":\"Fact\",\"tap\":\"Stars are bright.\"}]}\n```"
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(_ context.Context, got []byte) (string, error) {
 			if !bytes.Equal(got, pcm) {
 				t.Error("STT did not receive the captured PCM")
@@ -913,7 +913,7 @@ func syncOnceClose(ch chan struct{}) func() {
 }
 
 func TestEmbeddedApp(t *testing.T) {
-	b := &bridge{}
+	b := &larkServer{}
 	assets, err := webFiles.ReadDir("web")
 	if err != nil {
 		t.Fatal(err)

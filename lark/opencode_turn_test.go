@@ -18,7 +18,7 @@ func testOpenCode(t *testing.T, ctx context.Context, dir string, handle http.Han
 	return testOpenCodeOnDB(t, ctx, dir, testDB(t, ":memory:"), handle)
 }
 
-func testOpenCodeOnDB(t *testing.T, ctx context.Context, dir string, db *bridgeDB, handle http.HandlerFunc) *openCode {
+func testOpenCodeOnDB(t *testing.T, ctx context.Context, dir string, db *larkDB, handle http.HandlerFunc) *openCode {
 	t.Helper()
 	api := httptest.NewServer(handle)
 	t.Cleanup(api.Close)
@@ -127,7 +127,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 				final = "A different first sentence. " + tail
 			}
 			prompted, sendTool, finishSSE := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			b, base := wsHarness(t, func(b *bridge, dir string) {
+			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.worker = fakeTTS(b.root, nil)
 				b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
 					switch r.URL.Path {
@@ -231,7 +231,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			const id, sid = "lark-eager", "ses-eager"
 			const first, second = "This is the first sentence.", "Here is the answer."
 			prompted, finish := make(chan struct{}), make(chan struct{})
-			b, base := wsHarness(t, func(b *bridge, dir string) {
+			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.worker = &synthWorker{requests: make(chan ttsRequest), done: make(chan struct{})}
 				b.worker.ready.Store(true)
 				b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
@@ -389,7 +389,7 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 			const id, sid = "lark-session-test", "ses-test"
 			interrupts := make(chan string, 4)
 			release := make(chan struct{})
-			b, base := wsHarness(t, func(b *bridge, dir string) {
+			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != http.MethodPost || r.URL.Path != "/api/session/"+sid+"/interrupt" {
 						w.WriteHeader(404)
@@ -527,7 +527,7 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	const reply = "Done.\n```lark-message\n{\"to\":\"Mint\",\"text\":\"Do not deliver\"}\n```"
 	titles, prompts := make(chan string, 4), make(chan string, 4)
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/session":

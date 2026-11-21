@@ -67,7 +67,7 @@ type wsClient struct {
 // The hub lock orders state changes and control frames. Socket writes,
 // playback queue waits, and backend requests never run under it.
 type wsHub struct {
-	b             *bridge
+	b             *larkServer
 	mu            sync.Mutex
 	settingsMu    sync.Mutex
 	conns         sync.WaitGroup
@@ -84,7 +84,7 @@ type wsHub struct {
 	atmosphere    bool
 }
 
-func newWSHub(b *bridge, atmosphere bool) *wsHub {
+func newWSHub(b *larkServer, atmosphere bool) *wsHub {
 	h := &wsHub{b: b, atmosphere: atmosphere, clients: make(map[*wsClient]struct{}), devices: make(map[string]*wsDevice)}
 	go h.animate(b.root)
 	return h

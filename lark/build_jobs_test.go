@@ -113,7 +113,7 @@ func (s *buildStub) handler(t *testing.T) http.HandlerFunc {
 	}
 }
 
-func runBuildManager(t *testing.T, b *bridge) func() {
+func runBuildManager(t *testing.T, b *larkServer) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(b.root)
 	done := make(chan struct{})
@@ -123,9 +123,9 @@ func runBuildManager(t *testing.T, b *bridge) func() {
 	return stop
 }
 
-func stubBuildBridge(t *testing.T, stub *buildStub, enabled bool, tts *atomic.Int32) (*bridge, string) {
+func stubBuildBridge(t *testing.T, stub *buildStub, enabled bool, tts *atomic.Int32) (*larkServer, string) {
 	t.Helper()
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.oc = testOpenCode(t, b.root, dir, stub.handler(t))
 		b.oc.settings = openCodeSettings("lark")
 		if enabled {
@@ -529,7 +529,7 @@ func TestBuildCancelAndRestartNeverPublish(t *testing.T) {
 	}
 }
 
-func waitBuildState(t *testing.T, b *bridge, id, expected string) string {
+func waitBuildState(t *testing.T, b *larkServer, id, expected string) string {
 	t.Helper()
 	var state, result string
 	if err := b.db.QueryRow(`SELECT state,result FROM build_jobs WHERE id=?`, id).Scan(&state, &result); err != nil || state != expected {

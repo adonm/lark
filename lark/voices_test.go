@@ -41,7 +41,7 @@ func TestTTSVoiceSelection(t *testing.T) {
 }
 
 func TestRetiredVoicesRemainReadable(t *testing.T) {
-	b, _ := wsHarness(t, func(b *bridge, dir string) {
+	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = deviceVoiceStore(b.db, "")
 		b.virtual = virtualStore(b.db)
 	})
@@ -107,7 +107,7 @@ func TestSpeechClipsCacheByVoice(t *testing.T) {
 }
 
 func TestDeviceVoiceDefaults(t *testing.T) {
-	b, _ := wsHarness(t, func(b *bridge, dir string) {
+	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = deviceVoiceStore(b.db, "")
 		b.virtual = virtualStore(b.db)
 		if err := b.virtual.save("virt-01234567", virtualClient{ID: "virt-01234567", Character: "Green Cat", Voice: fableVoice}, false); err != nil {
@@ -137,7 +137,7 @@ func TestDeviceVoiceDefaults(t *testing.T) {
 }
 
 func TestDeviceVoiceAPI(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = deviceVoiceStore(b.db, emmaVoice)
 		b.virtual = virtualStore(b.db)
 	})
@@ -191,7 +191,7 @@ func TestDeviceVoiceAPI(t *testing.T) {
 }
 
 func TestMenuVoicePicker(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = deviceVoiceStore(b.db, heartVoice)
 	})
 	const id = "lark-33d8"

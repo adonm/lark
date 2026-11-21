@@ -13,11 +13,11 @@ import (
 const callCake = "phone-000a"
 const callMint = "phone-000b"
 
-func callClient(t *testing.T, b *bridge, base, id, name string) *testWS {
+func callClient(t *testing.T, b *larkServer, base, id, name string) *testWS {
 	return callClientCaps(t, b, base, id, name, true)
 }
 
-func callClientCaps(t *testing.T, b *bridge, base, id, name string, tagged bool) *testWS {
+func callClientCaps(t *testing.T, b *larkServer, base, id, name string, tagged bool) *testWS {
 	t.Helper()
 	tx, err := b.db.BeginTx(t.Context(), nil)
 	if err != nil {
@@ -76,7 +76,7 @@ func checkCallStates(t *testing.T, h *wsHub, a, b callState) {
 
 func TestWSCallDuplex(t *testing.T) {
 	var stt atomic.Int32
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(context.Context, []byte) (string, error) { stt.Add(1); return "", nil }
 	})
 	cake := callClient(t, b, base, callCake, "Cake")
@@ -198,7 +198,7 @@ func TestWSCallDeclineBusyTimeoutAndDisconnect(t *testing.T) {
 }
 
 func TestWSCallCardAndVoiceCommand(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(context.Context, []byte) (string, error) { return "Can you call Mint?", nil }
 	})
 	cake := callClient(t, b, base, callCake, "Cake")
@@ -240,7 +240,7 @@ func TestParseCallCommand(t *testing.T) {
 
 func TestWSNaturalVoiceCallRequiresKnownPeer(t *testing.T) {
 	transcripts := make(chan string, 1)
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(context.Context, []byte) (string, error) { return <-transcripts, nil }
 	})
 	cake := callClient(t, b, base, callCake, "Cake")

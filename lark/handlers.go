@@ -18,8 +18,8 @@ import (
 	"time"
 )
 
-type bridge struct {
-	db        *bridgeDB
+type larkServer struct {
+	db        *larkDB
 	root      context.Context
 	token     string
 	peers     peers
@@ -66,7 +66,7 @@ func tokenHeaderMatches(h http.Header, name, want string) bool {
 	return tokenMatches(h.Values("X-Lark-"+name), want)
 }
 
-func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (b *larkServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 	w.Header().Set("Cache-Control", "no-store")
 	if path == "/mcp" {
@@ -150,11 +150,11 @@ func deviceID(r *http.Request, obj object, required bool) (string, error) {
 	return id, nil
 }
 
-func (b *bridge) voiceFor(who peer) string {
+func (b *larkServer) voiceFor(who peer) string {
 	return b.voices.get(who.DeviceID, b.voiceTheme(who))
 }
 
-func (b *bridge) voiceTheme(who peer) string {
+func (b *larkServer) voiceTheme(who peer) string {
 	theme := deviceTheme(who.Character)
 	if v, ok := b.virtualByID(strings.ToLower(who.DeviceID)); ok {
 		return deviceTheme(v.Character)
@@ -180,7 +180,7 @@ func deviceSettingID(path, setting string) (string, bool) {
 	return id, ok && deviceIDRE.MatchString(id)
 }
 
-func (b *bridge) volumeAPI(r *http.Request, id string) (any, error) {
+func (b *larkServer) volumeAPI(r *http.Request, id string) (any, error) {
 	args, err := jsonBody(r)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func (b *bridge) volumeAPI(r *http.Request, id string) (any, error) {
 	return b.ws.mcpControl(r.Context(), id, args)
 }
 
-func (b *bridge) voiceAPI(r *http.Request, id string) (any, error) {
+func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
 	obj, err := jsonBody(r)
 	if err != nil {
 		return nil, err
@@ -221,7 +221,7 @@ type answer struct {
 	AudioURL         *string
 }
 
-func (b *bridge) attachAudio(ctx context.Context, out *answer, stream *AudioStream, start time.Time) {
+func (b *larkServer) attachAudio(ctx context.Context, out *answer, stream *AudioStream, start time.Time) {
 	if stream != nil {
 		if pcm, err := stream.chunk(ctx, 0); err == nil && len(pcm) != 0 {
 			stream.traceFirst(traceFrom(ctx), start)
@@ -254,7 +254,7 @@ func intercomConfirmation(target string, recipients []peer, sent, partial bool) 
 	}
 }
 
-func (b *bridge) intercomIntent(id, text string) ([]peer, *intercomMessage, error) {
+func (b *larkServer) intercomIntent(id, text string) ([]peer, *intercomMessage, error) {
 	body := directBody(text)
 	if body == "" {
 		return nil, nil, nil
@@ -266,7 +266,7 @@ func (b *bridge) intercomIntent(id, text string) ([]peer, *intercomMessage, erro
 	return others, directMessage(others, body), nil
 }
 
-func (b *bridge) relay(ctx context.Context, sender peer, others []peer, target, text string) (answer, error) {
+func (b *larkServer) relay(ctx context.Context, sender peer, others []peer, target, text string) (answer, error) {
 	recipients := b.intercomTargets(others, target)
 	d := b.deliver(ctx, sender, recipients, text, nil)
 	_, reply := intercomConfirmation(target, recipients, len(d.delivered) != 0, len(d.failed) != 0)
@@ -287,7 +287,7 @@ func (b *bridge) relay(ctx context.Context, sender peer, others []peer, target, 
 	return out, nil
 }
 
-func (b *bridge) turn(ctx context.Context, sender peer, text string) (answer, error) {
+func (b *larkServer) turn(ctx context.Context, sender peer, text string) (answer, error) {
 	const source = "typed"
 	if traceFrom(ctx) == nil {
 		ctx = b.traceTurn(ctx, sender.DeviceID, b.companionFor(sender).Name, source, time.Now())
@@ -359,7 +359,7 @@ func turnPrompt(sender peer, web bool, source, text string, companion companionS
 
 // Play plain prose as soon as the first PCM is ready; reconcile against the
 // authoritative reply before finishing the stream.
-func (b *bridge) generateReply(ctx, audioBase context.Context, sender peer, text string, options turnOptions) (generatedReply, error) {
+func (b *larkServer) generateReply(ctx, audioBase context.Context, sender peer, text string, options turnOptions) (generatedReply, error) {
 	if traceFrom(ctx) == nil {
 		ctx = b.traceTurn(ctx, sender.DeviceID, b.companionFor(sender).Name, options.source, time.Now())
 	}
@@ -451,7 +451,7 @@ func (b *bridge) generateReply(ctx, audioBase context.Context, sender peer, text
 	return generatedReply{reply, sid, stream, ttsStart}, nil
 }
 
-func (b *bridge) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
+func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
 	switch {
 	case path == "/api/parent":

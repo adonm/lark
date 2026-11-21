@@ -8,7 +8,7 @@ import (
 )
 
 func TestParentPage(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.virtual = virtualStore(b.db)
 		b.parentToken = testParentToken
 	})

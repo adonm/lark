@@ -15,13 +15,13 @@ import (
 	"time"
 )
 
-func recoveryBridge(t *testing.T, db *bridgeDB, api *httptest.Server, hash string) *bridge {
+func recoveryServer(t *testing.T, db *larkDB, api *httptest.Server, hash string) *larkServer {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	o := newOpenCode(ctx, upstream{"OpenCode", api.Client(), fixedEndpoint{base: api.URL}}, db, "/workspace", ocSettings{})
 	o.contract = hash
-	return &bridge{db: db, root: ctx, oc: o, token: "unit", peers: peers{deviceStore(db)}, virtual: virtualStore(db),
+	return &larkServer{db: db, root: ctx, oc: o, token: "unit", peers: peers{deviceStore(db)}, virtual: virtualStore(db),
 		history: &chatHistory{db}, voices: deviceVoiceStore(db, heartVoice)}
 }
 
@@ -161,7 +161,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "bridge.db")
 	db := testDB(t, path)
-	b := recoveryBridge(t, db, api, current)
+	b := recoveryServer(t, db, api, current)
 	v := virtualClient{ID: id, Character: "Plum", CreatedAt: time.Now()}
 	if err := b.virtual.save(id, v, false); err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	// The failed/verified catalog attempts and still-stale binding survive a
 	// reopen. The old scoped credential still resolves the same companion.
 	db = testDB(t, path)
-	b = recoveryBridge(t, db, api, current)
+	b = recoveryServer(t, db, api, current)
 	if err := b.syncSchemaUpgrade(t.Context()); err != nil || reconnects.Load() != 2 {
 		t.Fatalf("verified catalog was lost after restart: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	}
 
 	db = testDB(t, path)
-	b = recoveryBridge(t, db, api, current)
+	b = recoveryServer(t, db, api, current)
 	scope = httptest.NewServer(b.scoped(v, "scoped-token"))
 	defer scope.Close()
 	testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token",
@@ -344,7 +344,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			}))
 			defer api.Close()
 			db := testDB(t, ":memory:")
-			b := recoveryBridge(t, db, api, "current")
+			b := recoveryServer(t, db, api, "current")
 			b.timers = newTimerManager(b)
 			defer b.timers.close()
 			if err := db.setMeta(t.Context(), mcpSchemaMeta, b.oc.contract); err != nil {

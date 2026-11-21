@@ -135,7 +135,7 @@ func BenchmarkSincOneSecond(b *testing.B) {
 }
 
 func TestAudioStream(t *testing.T) {
-	b := &bridge{token: "unit"}
+	b := &larkServer{token: "unit"}
 	srv := httptest.NewServer(b)
 	defer srv.Close()
 	client := srv.Client()
@@ -255,7 +255,7 @@ func TestStateAndDirectMessage(t *testing.T) {
 }
 
 func TestBridgeAuthAndBody(t *testing.T) {
-	b := &bridge{token: "correct", peers: peers{deviceStore(testDB(t, ":memory:"))}}
+	b := &larkServer{token: "correct", peers: peers{deviceStore(testDB(t, ":memory:"))}}
 	for _, tc := range []struct {
 		lark []string
 		want int

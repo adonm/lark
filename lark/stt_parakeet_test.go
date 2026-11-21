@@ -55,7 +55,7 @@ func TestParakeetRejectsWrongModel(t *testing.T) {
 }
 
 func TestSTTProbeRequiresLoopbackAndBridgeToken(t *testing.T) {
-	b := &bridge{token: "unit"}
+	b := &larkServer{token: "unit"}
 	for _, tc := range []struct {
 		addr, token string
 		want        int

@@ -8,7 +8,7 @@ import (
 )
 
 func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})

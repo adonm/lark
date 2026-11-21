@@ -23,7 +23,7 @@ type pairingResponse struct {
 	ExpiresAt time.Time     `json:"expires_at"`
 }
 
-func (b *bridge) pairOpenCode(r *http.Request) (pairingResponse, error) {
+func (b *larkServer) pairOpenCode(r *http.Request) (pairingResponse, error) {
 	if b.pairPort == 0 || b.oc == nil {
 		return pairingResponse{}, problem(503, "Dedicated OpenCode pairing is not configured")
 	}

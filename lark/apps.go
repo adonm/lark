@@ -57,7 +57,7 @@ func normalizeAppName(raw, field string) (string, error) {
 	return name, nil
 }
 
-func (b *bridge) savedAppState(ctx context.Context, name string) (object, error) {
+func (b *larkServer) savedAppState(ctx context.Context, name string) (object, error) {
 	if b.db == nil {
 		return nil, problem(503, "Apps unavailable")
 	}
@@ -78,7 +78,7 @@ func (b *bridge) savedAppState(ctx context.Context, name string) (object, error)
 	return out, nil
 }
 
-func (b *bridge) loadApp(ctx context.Context, name string) (savedApp, error) {
+func (b *larkServer) loadApp(ctx context.Context, name string) (savedApp, error) {
 	a := savedApp{Name: name}
 	if b.db == nil {
 		return a, problem(503, "Apps unavailable")
@@ -93,12 +93,12 @@ func (b *bridge) loadApp(ctx context.Context, name string) (savedApp, error) {
 	return a, err
 }
 
-func (b *bridge) saveApp(ctx context.Context, a savedApp) error {
+func (b *larkServer) saveApp(ctx context.Context, a savedApp) error {
 	_, err := b.writeApp(ctx, a)
 	return err
 }
 
-func (b *bridge) writeApp(ctx context.Context, a savedApp) (savedApp, error) {
+func (b *larkServer) writeApp(ctx context.Context, a savedApp) (savedApp, error) {
 	if b.db == nil {
 		return a, problem(503, "Apps unavailable")
 	}
@@ -122,7 +122,7 @@ func (a savedApp) dataJSON() string {
 	return string(a.Data)
 }
 
-func (b *bridge) listApps(ctx context.Context, includeCode bool) ([]object, error) {
+func (b *larkServer) listApps(ctx context.Context, includeCode bool) ([]object, error) {
 	out := []object{}
 	if b.db == nil {
 		return out, nil
@@ -162,7 +162,7 @@ func (b *bridge) listApps(ctx context.Context, includeCode bool) ([]object, erro
 	return out, rows.Err()
 }
 
-func (b *bridge) appState(ctx context.Context, includeCode bool) (object, error) {
+func (b *larkServer) appState(ctx context.Context, includeCode bool) (object, error) {
 	list, err := b.listApps(ctx, includeCode)
 	if err != nil {
 		return nil, err
@@ -175,7 +175,7 @@ func (b *bridge) appState(ctx context.Context, includeCode bool) (object, error)
 	return out, nil
 }
 
-func (b *bridge) deleteSavedApp(ctx context.Context, name string) (bool, error) {
+func (b *larkServer) deleteSavedApp(ctx context.Context, name string) (bool, error) {
 	if !slugRE.MatchString(name) {
 		return false, problem(400, "Invalid app name")
 	}
@@ -189,7 +189,7 @@ func (b *bridge) deleteSavedApp(ctx context.Context, name string) (bool, error) 
 
 type appRename struct{ from, to, title string }
 
-func (b *bridge) patchSavedApps(ctx context.Context, args object) (object, error) {
+func (b *larkServer) patchSavedApps(ctx context.Context, args object) (object, error) {
 	var names []string
 	if raw, ok := args["delete"]; ok {
 		var err error
@@ -262,7 +262,7 @@ func (b *bridge) patchSavedApps(ctx context.Context, args object) (object, error
 
 var errSavedAppEdit = problem(502, "Cannot edit saved apps")
 
-func (b *bridge) editSavedApps(ctx context.Context, names []string, renames []appRename, updates []object) (object, error) {
+func (b *larkServer) editSavedApps(ctx context.Context, names []string, renames []appRename, updates []object) (object, error) {
 	if b.db == nil {
 		return nil, problem(503, "Apps unavailable")
 	}
@@ -273,7 +273,7 @@ func (b *bridge) editSavedApps(ctx context.Context, names []string, renames []ap
 	return out, err
 }
 
-func (b *bridge) transactSavedAppEdits(ctx context.Context, names []string, renames []appRename, updates []object) (object, error) {
+func (b *larkServer) transactSavedAppEdits(ctx context.Context, names []string, renames []appRename, updates []object) (object, error) {
 	// Slug changes must be atomic with device app installation. Updates only
 	// touch disk; rendering their preview must not block the hub.
 	if b.ws != nil && len(names)+len(renames) > 0 {
@@ -345,7 +345,7 @@ func (h *wsHub) appRunning(name string) bool {
 	return false
 }
 
-func (b *bridge) renameSavedApp(ctx context.Context, tx *sql.Tx, edit appRename) (object, error) {
+func (b *larkServer) renameSavedApp(ctx context.Context, tx *sql.Tx, edit appRename) (object, error) {
 	var title string
 	err := tx.QueryRowContext(ctx, "SELECT title FROM apps WHERE name=?", edit.from).Scan(&title)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -390,7 +390,7 @@ func (b *bridge) renameSavedApp(ctx context.Context, tx *sql.Tx, edit appRename)
 	return object{"from": edit.from, "to": edit.to, "title": title}, nil
 }
 
-func (b *bridge) appAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
+func (b *larkServer) appAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
 	switch {
 	case path == "/api/apps" && r.Method == http.MethodGet:
@@ -897,15 +897,15 @@ func appDevices(raw any) ([]string, error) {
 	return ids, nil
 }
 
-func (b *bridge) runSavedApp(ctx context.Context, id, name string, menu *menuContent) (object, error) {
+func (b *larkServer) runSavedApp(ctx context.Context, id, name string, menu *menuContent) (object, error) {
 	return b.launchApp(ctx, object{"devices": id, "load": name}, menu)
 }
 
-func (b *bridge) runApp(ctx context.Context, args object) (object, error) {
+func (b *larkServer) runApp(ctx context.Context, args object) (object, error) {
 	return b.launchApp(ctx, args, nil)
 }
 
-func (b *bridge) launchApp(ctx context.Context, args object, menu *menuContent) (object, error) {
+func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuContent) (object, error) {
 	if name, present := args["delete_saved"]; present {
 		if len(args) != 1 {
 			return nil, problem(400, "Use delete_saved without other app fields")
@@ -1291,7 +1291,7 @@ func (h *wsHub) patchRunningApp(ctx context.Context, ids []string, patch json.Ra
 	}
 }
 
-func (b *bridge) appsChanged() {
+func (b *larkServer) appsChanged() {
 	if b.ws == nil {
 		return
 	}

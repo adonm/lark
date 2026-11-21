@@ -8,7 +8,7 @@ import (
 )
 
 func TestAppCDNPolicy(t *testing.T) {
-	b := &bridge{}
+	b := &larkServer{}
 	scoped := b.scoped(virtualClient{ID: "virt-12345678"}, "scoped-fixture")
 	for _, view := range []struct {
 		path   string

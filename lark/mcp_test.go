@@ -190,7 +190,7 @@ func patchControl(t *testing.T, base, id string, device object) object {
 }
 
 func TestMCPStateSlices(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
@@ -298,7 +298,7 @@ func TestMCPSavedAppReadback(t *testing.T) {
 }
 
 func TestMCPSavedAppEdits(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
@@ -437,7 +437,7 @@ func TestMCPSavedAppEdits(t *testing.T) {
 }
 
 func TestEmitIntercom(t *testing.T) {
-	_, base := wsHarness(t, func(b *bridge, _ string) {
+	_, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
 	const from, to, text = "lark-sender", "phone-bee1", "Dinner is ready."

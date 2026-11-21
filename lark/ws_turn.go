@@ -692,7 +692,7 @@ type wsReceipt struct {
 	view   *sceneView
 }
 
-func (b *bridge) intercomTargets(others []peer, target string) []peer {
+func (b *larkServer) intercomTargets(others []peer, target string) []peer {
 	if !broadcast(target) {
 		return targets(others, target)
 	}
@@ -821,7 +821,7 @@ func (h *wsHub) caption(receipts []wsReceipt, sender peer, text string) {
 	}
 }
 
-func (b *bridge) deliver(ctx context.Context, sender peer, recipients []peer, text string, raw []byte) delivery {
+func (b *larkServer) deliver(ctx context.Context, sender peer, recipients []peer, text string, raw []byte) delivery {
 	sender.Character = b.companionFor(sender).Name
 	sent := make(map[string]bool, len(recipients))
 	if b.ws != nil {
@@ -842,7 +842,7 @@ func (b *bridge) deliver(ctx context.Context, sender peer, recipients []peer, te
 	return out
 }
 
-func (b *bridge) recordIntercom(sender peer, ids []string, text string) {
+func (b *larkServer) recordIntercom(sender peer, ids []string, text string) {
 	if len(ids) == 0 {
 		return
 	}

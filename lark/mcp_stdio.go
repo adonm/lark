@@ -180,7 +180,7 @@ func proxyMCP(ctx context.Context, client *http.Client, endpoint, token string, 
 				}
 			}
 			if id != "" && reqCtx.Err() != context.Canceled {
-				failure(msg.ID, "Lark bridge did not return a JSON-RPC response")
+				failure(msg.ID, "Lark did not return a JSON-RPC response")
 			}
 		})
 	}

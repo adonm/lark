@@ -90,7 +90,7 @@ func parentUsage(row object, now time.Time) parentUsageView {
 	return view
 }
 
-func (b *bridge) routeParent(w http.ResponseWriter, r *http.Request, id string) (any, error) {
+func (b *larkServer) routeParent(w http.ResponseWriter, r *http.Request, id string) (any, error) {
 	value, err := b.parentAPI(r, id)
 	if err != nil || !parentFragmentRequest(r) {
 		return value, err

@@ -90,7 +90,7 @@ type openCode struct {
 	feed     eventFeed
 	settings ocSettings
 	project  string
-	db       *bridgeDB
+	db       *larkDB
 	contract string
 	store    *store[string]
 	turns    [64]chan struct{}
@@ -106,7 +106,7 @@ type ocReset struct {
 	done  chan struct{}
 }
 
-func newOpenCode(ctx context.Context, u upstream, db *bridgeDB, project string, settings ocSettings) *openCode {
+func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, settings ocSettings) *openCode {
 	o := &openCode{upstream: u, project: project, settings: settings, db: db,
 		store:  sessionStore(db),
 		active: make(map[string]context.CancelFunc), interrupts: make(map[string]bool), resets: make(map[string]*ocReset),

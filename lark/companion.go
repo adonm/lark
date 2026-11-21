@@ -111,7 +111,7 @@ type companionQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func (b *bridge) readActiveCompanion(ctx context.Context, q companionQuery, who peer) (companionState, error) {
+func (b *larkServer) readActiveCompanion(ctx context.Context, q companionQuery, who peer) (companionState, error) {
 	id := strings.ToLower(who.DeviceID)
 	c, err := readCompanion(q.QueryRowContext(ctx, `SELECT `+activeCompanionColumns+`,`+
 		companionVoiceSQL+` FROM companions WHERE device_id=?`, id, id, id))
@@ -128,7 +128,7 @@ func (b *bridge) readActiveCompanion(ctx context.Context, q companionQuery, who 
 	return c, err
 }
 
-func (b *bridge) companionFor(who peer) companionState {
+func (b *larkServer) companionFor(who peer) companionState {
 	if b.db == nil {
 		return blankCompanion()
 	}
@@ -256,11 +256,11 @@ func companionBool(args object, key string, fallback bool) (bool, error) {
 	return fallback, nil
 }
 
-func (b *bridge) changeCompanion(ctx context.Context, who peer, theme, op string, args object) (companionState, bool, error) {
+func (b *larkServer) changeCompanion(ctx context.Context, who peer, theme, op string, args object) (companionState, bool, error) {
 	return b.changeCompanionPrepared(ctx, who, theme, op, args, nil)
 }
 
-func (b *bridge) changeCompanionPrepared(ctx context.Context, who peer, theme, op string, args object, portrait *pendingPortrait) (companionState, bool, error) {
+func (b *larkServer) changeCompanionPrepared(ctx context.Context, who peer, theme, op string, args object, portrait *pendingPortrait) (companionState, bool, error) {
 	id := strings.ToLower(who.DeviceID)
 	unavailable := problem(502, "Cannot save companion")
 	tx, err := b.db.BeginTx(ctx, nil)
@@ -369,7 +369,7 @@ func (b *bridge) changeCompanionPrepared(ctx context.Context, who peer, theme, o
 
 func validCompanionSlug(slug string) bool { return len(slug) <= 40 && companionSlugRE.MatchString(slug) }
 
-func (b *bridge) savedCompanionState(ctx context.Context) (object, error) {
+func (b *larkServer) savedCompanionState(ctx context.Context) (object, error) {
 	out := object{}
 	if b.db == nil {
 		return out, nil
@@ -384,7 +384,7 @@ func (b *bridge) savedCompanionState(ctx context.Context) (object, error) {
 	return out, nil
 }
 
-func (b *bridge) patchCompanion(ctx context.Context, id string, args object) (any, error) {
+func (b *larkServer) patchCompanion(ctx context.Context, id string, args object) (any, error) {
 	c := withDevice(args, id)
 	op, supplied := c["op"]
 	if !supplied {
@@ -418,7 +418,7 @@ func (b *bridge) patchCompanion(ctx context.Context, id string, args object) (an
 	return result["companion"], nil
 }
 
-func (b *bridge) companionTool(ctx context.Context, args object) (object, error) {
+func (b *larkServer) companionTool(ctx context.Context, args object) (object, error) {
 	if b.db == nil {
 		return nil, problem(503, "Companion storage unavailable")
 	}
@@ -506,7 +506,7 @@ func (b *bridge) companionTool(ctx context.Context, args object) (object, error)
 	return object{"ok": true, "device_id": id, "companion": c}, nil
 }
 
-func (b *bridge) syncCompanionTitle(ctx context.Context, who peer) {
+func (b *larkServer) syncCompanionTitle(ctx context.Context, who peer) {
 	b.companionTitles.Lock()
 	defer b.companionTitles.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -521,7 +521,7 @@ func (b *bridge) syncCompanionTitle(ctx context.Context, who peer) {
 	}
 }
 
-func (b *bridge) reassignCompanions(ctx context.Context, args object) (object, error) {
+func (b *larkServer) reassignCompanions(ctx context.Context, args object) (object, error) {
 	fromID, toID := str(args["from_device_id"]), str(args["to_device_id"])
 	mode := "swap"
 	if raw, ok := args["mode"]; ok {
@@ -589,7 +589,7 @@ func (b *bridge) reassignCompanions(ctx context.Context, args object) (object, e
 	return object{"ok": true, "mode": mode, "from_device_id": fromID, "to_device_id": toID}, nil
 }
 
-func (b *bridge) transferCompanions(ctx context.Context, from, to peer, mode string) (companionState, companionState, bool, error) {
+func (b *larkServer) transferCompanions(ctx context.Context, from, to peer, mode string) (companionState, companionState, bool, error) {
 	fromTheme, toTheme := b.voiceTheme(from), b.voiceTheme(to)
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -684,7 +684,7 @@ func writeCompanionVoice(ctx context.Context, tx *sql.Tx, id, voice string) erro
 	return err
 }
 
-func (b *bridge) companionAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
+func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	switch {
 	case path == "/api/companions" && r.Method == http.MethodGet:
 		return b.companionTool(r.Context(), object{"op": "list_saved"})

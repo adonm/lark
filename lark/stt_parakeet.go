@@ -34,7 +34,7 @@ func checkParakeetModel(path string) error {
 	return nil
 }
 
-func (b *bridge) decodeClip(ctx context.Context, pcm []byte) (string, error) {
+func (b *larkServer) decodeClip(ctx context.Context, pcm []byte) (string, error) {
 	if b.stt == nil {
 		return "", errors.New("STT unavailable")
 	}
@@ -43,7 +43,7 @@ func (b *bridge) decodeClip(ctx context.Context, pcm []byte) (string, error) {
 
 // The host can check the installed TTS and STT together without creating a
 // device, touching chat history, or routing audio to a board.
-func (b *bridge) probeSTT(r *http.Request) (object, error) {
+func (b *larkServer) probeSTT(r *http.Request) (object, error) {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if !net.ParseIP(host).IsLoopback() {
 		return nil, problem(404, "Not found")

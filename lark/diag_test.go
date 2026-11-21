@@ -15,7 +15,7 @@ import (
 )
 
 func TestDiagnosticsMetricWindowAndTurns(t *testing.T) {
-	b := &bridge{}
+	b := &larkServer{}
 	t0 := time.Now()
 	for i := 1; i <= 40; i++ {
 		ctx := b.traceTurn(t.Context(), "board", "Cake", "voice", t0.Add(time.Duration(i)*time.Second))
@@ -64,7 +64,7 @@ func TestDiagnosticsProcAndShutdown(t *testing.T) {
 	}
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b := &bridge{root: root}
+	b := &larkServer{root: root}
 	stop := b.sampleDiagnostics(time.Now(), path)
 	defer stop()
 	deadline := time.NewTimer(5 * time.Second)
@@ -166,7 +166,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 }
 
 func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
-	b := &bridge{}
+	b := &larkServer{}
 	ctx := b.traceTurn(t.Context(), "box", "Mint", "voice", time.Now().Add(-10*time.Millisecond))
 	tr := traceFrom(ctx)
 	text := streamedText{onFirst: func() { tr.measure(diagLLMFirst, time.Millisecond) }}
@@ -204,7 +204,7 @@ func TestDiagnosticsTTSQueueDropsCanceledSpeechWithoutRestart(t *testing.T) {
 		}), nil
 	})
 	defer func() { stop(); <-worker.done }()
-	b := &bridge{}
+	b := &larkServer{}
 	ctx := b.traceTurn(root, "vocat", "Cake", "typed", time.Now())
 	if pcm, err := worker.synthesizeQueued(ctx, heartVoice, "First", time.Now().Add(-10*time.Millisecond)); err != nil || len(pcm) != 2 {
 		t.Fatalf("worker did not return PCM: %v, %v", pcm, err)
@@ -230,7 +230,7 @@ func TestDiagnosticsTTSQueueDropsCanceledSpeechWithoutRestart(t *testing.T) {
 
 func TestAccessibleRecordingControls(t *testing.T) {
 	transcribed := make(chan struct{}, 2)
-	_, base := wsHarness(t, func(b *bridge, dir string) {
+	_, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(context.Context, []byte) (string, error) {
 			transcribed <- struct{}{}
 			return "", nil
@@ -278,11 +278,11 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	}
 }
 
-func stopTestHarness(t *testing.T, id string) (*bridge, string, <-chan string) {
+func stopTestHarness(t *testing.T, id string) (*larkServer, string, <-chan string) {
 	t.Helper()
 	const path = "/api/session/ses-stop/interrupt"
 	interrupts := make(chan string, 4)
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != path {
 				http.NotFound(w, r)

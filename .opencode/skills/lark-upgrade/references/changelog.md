@@ -1,6 +1,46 @@
 # Lark Upgrade Changelog
 
-Apply entries chronologically from the installation's starting state to latest. Always back up `bridge.db` and `bridge.env` before mutating anything.
+Apply entries chronologically from the installation's starting state to latest. Always back up `lark.db` and `lark.env` (or `bridge.env`) before mutating anything.
+
+---
+
+## 2026-11-22 — Unified `lark` Binary, `lark.service`, `lark.env`, and Env/Kconfig Rename
+
+### Affects
+- Host / Config / Systemd / Firmware
+
+### Breaking Changes
+- **Single binary**: `lark-bridge` and `lark-eval` are replaced by `~/.local/share/lark/lark` with subcommands `serve`, `eval`, `ota`, and `mcp`. `scripts/push-ota.sh` is removed in favor of `lark ota`.
+- **Systemd**: `lark-bridge.service` is replaced by `lark.service` (`ExecStart=.../lark serve`). `lark-opencode.service` reads `~/.config/lark/lark.env`.
+- **Config & env vars**: `~/.config/lark/bridge.env` moves to `~/.config/lark/lark.env`. `LARK_BRIDGE_TOKEN`, `LARK_BRIDGE_HOST`, and `LARK_BRIDGE_PORT` are renamed to `LARK_TOKEN`, `LARK_HOST`, and `LARK_PORT`.
+- **Firmware Kconfig**: `CONFIG_LARK_BRIDGE_URL` and `CONFIG_LARK_BRIDGE_TOKEN` are renamed to `CONFIG_LARK_URL` and `CONFIG_LARK_TOKEN` (`0.10.2`).
+
+### How to Detect
+- `systemctl --user is-active lark-bridge.service` is `active`, `~/.config/lark/bridge.env` exists, or `~/.local/share/lark/opencode/config/opencode/opencode.jsonc` references `lark-bridge`.
+
+### Upgrade Steps
+1. Back up the database and env file, then stop and disable `lark-bridge.service` and `lark-opencode.service`:
+   ```sh
+   mkdir -p ~/.local/share/lark/backups
+   [ -f ~/.local/share/lark/lark.db ] && sqlite3 ~/.local/share/lark/lark.db ".backup '$HOME/.local/share/lark/backups/pre-lark-cli.db'"
+   systemctl --user disable --now lark-bridge.service 2>/dev/null || true
+   rm -f ~/.config/systemd/user/lark-bridge.service ~/.local/share/lark/lark-bridge
+   ```
+2. Rename `bridge.env` → `lark.env` and update its keys:
+   ```sh
+   cp -a ~/.config/lark/bridge.env ~/.local/share/lark/backups/bridge.env.bak
+   mv ~/.config/lark/bridge.env ~/.config/lark/lark.env
+   sed -i 's/^LARK_BRIDGE_TOKEN=/LARK_TOKEN=/; s/^LARK_BRIDGE_HOST=/LARK_HOST=/; s/^LARK_BRIDGE_PORT=/LARK_PORT=/' ~/.config/lark/lark.env
+   ```
+3. Update the MCP command in `~/.local/share/lark/opencode/config/opencode/opencode.jsonc` from `.../lark-bridge` to `.../lark`.
+4. Update `firmware/sdkconfig.local` (`CONFIG_LARK_BRIDGE_URL=` → `CONFIG_LARK_URL=`, `CONFIG_LARK_BRIDGE_TOKEN=` → `CONFIG_LARK_TOKEN=`).
+5. Run `./scripts/setup-host.sh` (pass `--gpu-index <N>` on multi-GPU hosts).
+6. Rebuild firmware (`./scripts/build.sh` for `vocat` and `box3`) and OTA devices with `~/.local/share/lark/lark ota --no-build [--board box3] <ip>`.
+
+### Verification
+- `systemctl --user is-active lark.service lark-opencode.service lark-opencode-lan.socket` reports `active`.
+- `curl -fsS http://127.0.0.1:8765/health` reports `"ok": true`.
+- `GET /api/devices` (with `X-Lark-Token`) shows all devices online on `0.10.2`.
 
 ---
 

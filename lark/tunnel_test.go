@@ -51,7 +51,7 @@ func apiObjects(t *testing.T, url, key string) []any {
 }
 
 func TestVirtualClientsPersistenceAndDeviceMerge(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.virtual = virtualStore(b.db)
 	})
 	if got := apiObjects(t, base+"/api/virtual-clients", "virtual_clients"); len(got) != 0 {
@@ -138,7 +138,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		}
 	}))
 	defer oc.Close()
-	b, base := wsHarness(t, func(b *bridge, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.virtual = virtualStore(b.db)
 		b.tunnels = newTunnelManager(b, "mock-opentunnel", r.run)
 		b.history = &chatHistory{b.db}
@@ -342,7 +342,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 
 func TestNoSpeakToolAndFinalVoiceIsPersisted(t *testing.T) {
 	var synthesis atomic.Int32
-	var b *bridge
+	var b *larkServer
 	var base string
 	const id = "lark-spoken"
 	oc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +364,7 @@ func TestNoSpeakToolAndFinalVoiceIsPersisted(t *testing.T) {
 		}
 	}))
 	defer oc.Close()
-	b, base = wsHarness(t, func(b *bridge, dir string) {
+	b, base = wsHarness(t, func(b *larkServer, dir string) {
 		b.worker = fakeTTS(b.root, &synthesis)
 		path := filepath.Join(dir, "service.json")
 		if err := writeMap(path, object{"url": oc.URL, "password": "unit"}); err != nil {

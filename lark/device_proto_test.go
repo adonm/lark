@@ -245,7 +245,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 
 func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	gotPCM := make(chan []byte, 1)
-	b, base := wsHarness(t, func(b *bridge, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.stt = func(_ context.Context, pcm []byte) (string, error) {
 			cp := make([]byte, len(pcm))
 			copy(cp, pcm)
@@ -424,7 +424,7 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 }
 
 func BenchmarkNativeUDPHandle(b *testing.B) {
-	h := newWSHub(&bridge{root: b.Context()}, false)
+	h := newWSHub(&larkServer{root: b.Context()}, false)
 	defer h.shutdown()
 	ds := &deviceServer{hub: h, peers: make(map[uint32]*nativeClient)}
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")

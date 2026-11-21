@@ -50,7 +50,7 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 	const path = "/api/devices/" + id + "/parent"
 	for _, reason := range []parentReason{parentQuiet, parentLimit, parentPause} {
 		t.Run(string(reason), func(t *testing.T) {
-			b, base := wsHarness(t, func(b *bridge, _ string) {
+			b, base := wsHarness(t, func(b *larkServer, _ string) {
 				b.parentToken = testParentToken
 				b.worker = fakeTTS(b.root, nil)
 				b.timers = newTimerManager(b)
@@ -151,7 +151,7 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 }
 
 func TestParentAdminAndChildPause(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.parentToken = testParentToken })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.parentToken = testParentToken })
 	d := testConnectWS(t, base, "unit", false)
 	const id, text = "lark-mint", "Stop working for five minutes so I can’t use you."
 	const path = "/api/devices/" + id + "/parent"
@@ -228,7 +228,7 @@ func TestParentTokenSeparateAndPrivate(t *testing.T) {
 }
 
 func TestParentTearsDownActiveAppCallAndOfflineChat(t *testing.T) {
-	b, base := wsHarness(t, func(b *bridge, _ string) { b.parentToken = testParentToken })
+	b, base := wsHarness(t, func(b *larkServer, _ string) { b.parentToken = testParentToken })
 	const id, peerID = "lark-active", "lark-partner"
 	const path = "/api/devices/" + id + "/parent"
 	d := testConnectWS(t, base, "unit", false)
@@ -276,7 +276,7 @@ func TestParentTearsDownActiveAppCallAndOfflineChat(t *testing.T) {
 func TestParentCivilTimeAndPersistence(t *testing.T) {
 	ctx := t.Context()
 	db := testDB(t, ":memory:")
-	h := &wsHub{b: &bridge{db: db}}
+	h := &wsHub{b: &larkServer{db: db}}
 	key := "lark-clock"
 	for _, tc := range []struct {
 		zone   string
@@ -321,7 +321,7 @@ func TestParentCivilTimeAndPersistence(t *testing.T) {
 			if err := db.QueryRowContext(ctx, `SELECT used_ms FROM parent_usage WHERE device_id=? AND day=?`, id, before.In(loc).Format(time.DateOnly)).Scan(&old); err != nil || old != 69000 {
 				t.Fatal("previous day was not retained", old, err)
 			}
-			restarted := &wsHub{b: &bridge{db: db}}
+			restarted := &wsHub{b: &larkServer{db: db}}
 			if r := restarted.parentRefresh(id, after); r != parentQuiet || restarted.parents[id].used != 10*time.Second {
 				t.Fatal("settings or usage did not persist across a hub restart")
 			}

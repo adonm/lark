@@ -273,7 +273,7 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 	for i := range 6 {
 		rows = append(rows, reg("stats row "+strconv.Itoa(i+1), menuCard, 55, 106+27*i, 250, 18, 90, 6))
 	}
-	hub := &wsHub{b: &bridge{}}
+	hub := &wsHub{b: &larkServer{}}
 	menu("stats", hub.statsScene(&wsDevice{client: &wsClient{role: "device"}, companion: companion, board: "esp-vocat", firmware: "0.9.1", vol: 55}), rows...)
 
 	for _, geometry := range []screenGeometry{roundScreen, {320, 240, "rect"}} {

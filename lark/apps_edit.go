@@ -35,7 +35,7 @@ func (a *savedApp) setTiming(args object) error {
 	return nil
 }
 
-func (b *bridge) updateSavedApp(ctx context.Context, tx *sql.Tx, edit object) (savedApp, error) {
+func (b *larkServer) updateSavedApp(ctx context.Context, tx *sql.Tx, edit object) (savedApp, error) {
 	name, err := normalizeAppName(str(edit["name"]), "apps.update.name")
 	if err != nil {
 		return savedApp{}, err
@@ -135,7 +135,7 @@ func storeAppEdit(ctx context.Context, tx *sql.Tx, a savedApp) (savedApp, error)
 	return a, nil
 }
 
-func (b *bridge) saveCurrentApp(ctx context.Context, id string, raw any) (object, error) {
+func (b *larkServer) saveCurrentApp(ctx context.Context, id string, raw any) (object, error) {
 	args, ok := raw.(object)
 	if !ok {
 		return nil, fieldError("save_current", "expected an object with a name")

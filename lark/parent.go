@@ -327,7 +327,7 @@ func (h *wsHub) parentOffline(ctx context.Context, key string, now time.Time) (c
 	}, nil
 }
 
-func (b *bridge) parentAllowed(id string) error {
+func (b *larkServer) parentAllowed(id string) error {
 	if h := b.ws; h != nil {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -370,7 +370,7 @@ func (h *wsHub) childPause(key string, minutes int, now time.Time) error {
 	return h.parentSet(key, s, p.loc, now)
 }
 
-func (b *bridge) parentState(id string, now time.Time) object {
+func (b *larkServer) parentState(id string, now time.Time) object {
 	out := object{"restricted": false}
 	if h := b.ws; h != nil {
 		h.mu.Lock()

@@ -26,7 +26,7 @@ func stringList(raw any, key string) ([]string, error) {
 	return out, nil
 }
 
-func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
+func (b *larkServer) mcpState(ctx context.Context, args object) (object, error) {
 	now := time.Now()
 	id := str(args["device_id"])
 	include := stateSlices[:5]
@@ -127,7 +127,7 @@ func (b *bridge) mcpState(ctx context.Context, args object) (object, error) {
 	return out, nil
 }
 
-func (b *bridge) mcpDeviceState(out object, id string, include []string) error {
+func (b *larkServer) mcpDeviceState(out object, id string, include []string) error {
 	wantDevices, wantCompanions := slices.Contains(include, "devices"), slices.Contains(include, "companions")
 	var list []object
 	if wantDevices || wantCompanions {
@@ -177,7 +177,7 @@ func (b *bridge) mcpDeviceState(out object, id string, include []string) error {
 	return nil
 }
 
-func (b *bridge) mcpPatch(ctx context.Context, args object) (object, error) {
+func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) {
 	id := str(args["device_id"])
 	out := object{"ok": true}
 	// Apply appearance before changing sleep, and leave sleep alone on appearance-only edits.
@@ -215,7 +215,7 @@ func (b *bridge) mcpPatch(ctx context.Context, args object) (object, error) {
 	return out, nil
 }
 
-func (b *bridge) patchDevice(ctx context.Context, id string, args object) (object, error) {
+func (b *larkServer) patchDevice(ctx context.Context, id string, args object) (object, error) {
 	if _, err := b.lookupDevice(id); err != nil {
 		return nil, err
 	}

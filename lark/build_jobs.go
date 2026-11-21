@@ -29,7 +29,7 @@ type buildJob struct {
 }
 
 type buildManager struct {
-	b       *bridge
+	b       *larkServer
 	wake    chan struct{}
 	mu      sync.Mutex
 	workers map[string]buildWorker // owns both execution and session cleanup
@@ -41,7 +41,7 @@ type buildWorker struct {
 	cancel context.CancelFunc
 }
 
-func newBuildManager(b *bridge) *buildManager {
+func newBuildManager(b *larkServer) *buildManager {
 	return &buildManager{b: b, wake: make(chan struct{}, 1), workers: make(map[string]buildWorker)}
 }
 

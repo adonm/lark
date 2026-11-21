@@ -3,14 +3,14 @@
 [Lark](https://github.com/adonm/lark) is a tap-to-talk companion with interactive diagrams, voice notes, live calls, and a browser mirror. It starts as a friendly cat, then can shift into any creature or character a child imagines.
 
 ```text
-Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Go bridge :8765 <-- /ws, /app: SVG --> Browser
+Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 <-- /ws, /app: SVG --> Browser
                                               |-- Parakeet (in-process Vulkan speech to text)
                                               |-- OpenCode :49375 (loopback, reply deltas over SSE)
                                               `-- Kokoro   (FP32, embedded via sherpa-onnx)
 ```
 
 **Targets:** ESP-VoCat v1.2 and ESP32-S3-BOX-3. Both use a 360×360 logical canvas,
-centered on the BOX-3’s rectangular display. The bridge runs apps and renders
+centered on the BOX-3’s rectangular display. Lark runs apps and renders
  RGB565 updates for hardware and SVG for `/app`. Boards draw a fallback face offline.
 
 **New in 0.9.3:** Both boards use the touchscreen for all touch controls.
@@ -18,7 +18,7 @@ VoCat’s capacitive head pads are disabled.
 
 **New in 0.9.2:** Live two-way **Call** and a paged voice picker in the
 on-device picker. Firmware announces features in `hello` and flushes only the
-dirty LCD columns within changed rows. The bridge and dashboard add paginated
+dirty LCD columns within changed rows. The server and dashboard add paginated
 chat history, faster face rendering, and separate turn and hardware diagnostics.
 
 ## Quickstart
@@ -32,26 +32,26 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    ./scripts/setup-host.sh
    ```
 
-   Setup builds the Go bridge with in-process Vulkan STT, installs the
+   Setup builds the `lark` binary with in-process Vulkan STT, installs the
     SHA-256-pinned Parakeet Q8_0 GGUF, Silero v5, and FP32 `kokoro-multi-lang-v1_0`
-    pack, and starts the bridge and a dedicated OpenCode service. On a multi-GPU
+    pack, and starts the Lark server and a dedicated OpenCode service. On a multi-GPU
    host, use `vulkaninfo --summary` and pass `--gpu-index INDEX` for the
-   intended device. The bridge runs Kokoro in-process via
+   intended device. Lark runs Kokoro in-process via
    `sherpa-onnx-go` and checksum-verified libraries in `$ORIGIN/lib`.
    The Vulkan loader and driver come from the OS. Host setup still uses
-   Python; the bridge has no Python runtime or TTS subprocess. Set
-   `TTS_MODEL_DIR` in `bridge.env` to load that pack from a different directory.
+   Python; the server has no Python runtime or TTS subprocess. Set
+   `TTS_MODEL_DIR` in `lark.env` to load that pack from a different directory.
    Set `LARK_REPO_DIR` when launching outside the checkout to locate the
    agent prompt and OTA files (the systemd unit sets it). Choose the models in
     the [dedicated OpenCode config](#companion-models).
 
      STT needs a Vulkan GPU, not Hex or an X display. Lark recognizes
     English without custom vocabulary. On firmware 0.9.5 and `/app`,
-    the bridge listens through thinking pauses and uses local transcription
+    Lark listens through thinking pauses and uses local transcription
     to decide when to send a turn. Clients without the capability keep their
     local VAD. You can still Send or Cancel while the mic is open. See
-    [endpoint policy and replay results](bridge/turn-taking.md) and
-    [STT measurements and artifact pins](bridge/stt-speed.md).
+    [endpoint policy and replay results](lark/turn-taking.md) and
+    [STT measurements and artifact pins](lark/stt-speed.md).
 
 2. Create the private firmware config once:
 
@@ -61,9 +61,9 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    ```
 
    Set `CONFIG_LARK_WIFI_SSID`, `CONFIG_LARK_WIFI_PASSWORD`,
-   `CONFIG_LARK_BRIDGE_URL` (`http://<bridge-host>:8765` or `lark://<bridge-host>:8766`, no trailing slash), and
-   `CONFIG_LARK_BRIDGE_TOKEN` (copy `LARK_BRIDGE_TOKEN` from
-   `~/.config/lark/bridge.env`, or use `$XDG_CONFIG_HOME`).
+   `CONFIG_LARK_URL` (`http://<lark-host>:8765` or `lark://<lark-host>:8766`, no trailing slash), and
+   `CONFIG_LARK_TOKEN` (copy `LARK_TOKEN` from
+   `~/.config/lark/lark.env`, or use `$XDG_CONFIG_HOME`).
    Both board builds use the ESP-IDF 5.5 container and read the same
    `firmware/sdkconfig.local`. Never commit that file or share the resulting binaries.
 
@@ -86,10 +86,10 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    It starts with a blank cat at `box3-xxxx.local` (last four MAC digits)
    and has no battery gauge.
 
-4. Update via `./scripts/push-ota.sh <ip|host>`; add `--no-build` to reuse the
+4. Update via `~/.local/share/lark/lark ota <ip|host>`; add `--no-build` to reuse the
    image, and prefix with `BOARD=box3` for BOX-3. The script refuses a board
-   mismatch. Direct OTA works without the bridge and reads the token from the
-    environment or `bridge.env`. The board confirms the new image after display
+   mismatch. Direct OTA works without the server and reads the token from the
+    environment or `lark.env`. The board confirms the new image after display
     initialization and Wi-Fi DHCP; the script checks the running partition.
    Builds use `lark` and `lark_box3` as the firmware project names.
 
@@ -100,14 +100,14 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    commands above (`BOARD=vocat` and `BOARD=box3`).
 
    Add `--live` to exercise the product with virtual companions and firmware
-   clients for both board layouts. It builds a fresh loopback bridge with a
+   clients for both board layouts. It builds a fresh loopback server with a
    temporary database, real Parakeet Vulkan, Silero and Kokoro, synthetic
-   photos, and a deterministic model stub. It does not connect to the installed bridge, use
+   photos, and a deterministic model stub. It does not connect to the installed server, use
    model quota, or test wake word. Allow at least two minutes for the actual
    idle timeout. Set `LARK_PARAKEET_NATIVE` to the `native/` prefix from
    `scripts/build-parakeet.sh` to reuse its verified static libraries.
    `scripts/setup-host.sh --models-only` installs the pinned Kokoro and Silero
-   assets without replacing the bridge or restarting services.
+   assets without replacing the server or restarting services.
 
    `--e2e-real` uses the dedicated local OpenCode server, its configured companion
    model and fallback, and disposable sessions; it can spend model quota.
@@ -122,7 +122,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
 
 Store a separate random token (at least 32 ASCII characters, no spaces) in
 `~/.config/lark/parent.token` (or under `$XDG_CONFIG_HOME`), mode `0600`.
-The bridge reads it at startup. On the LAN, open **Parent controls** in `/app`
+Lark reads it at startup. On the LAN, open **Parent controls** in `/app`
 and enter both tokens. Keep the parent token with the grown-ups; kids should
 use their device or a scoped share link, not the LAN dashboard. Scoped links
 cannot open the controls.
@@ -158,7 +158,7 @@ The agent can read its current policy but cannot edit it.
   without writing to flash. **Home** returns to the companion. Scoped tunnels don't
   expose Games, Memories, or Stats.
 - Say “Tell Mint dinner is ready,” “Intercom Cake, come play,” or “Tell everyone
-  good morning.” The bridge bypasses OpenCode and relays a chime, sender announcement, and normalized voice.
+  good morning.” Lark bypasses OpenCode and relays a chime, sender announcement, and normalized voice.
 - Tap **Reply to \<Sender\>** on a message card or choose a peer in
   **Menu → Talk to…** to record directly to that companion.
 - Tap **Call** on an incoming Intercom card, pick a peer in **Menu → Call**, or
@@ -170,10 +170,10 @@ The agent can read its current policy but cannot edit it.
 
 ## Browser dashboard
 
-Open `http://<host-lan-ip>:8765/app` on a trusted LAN and enter the bridge
+Open `http://<host-lan-ip>:8765/app` on a trusted LAN and enter the Lark
 token. Select a physical device to mirror and control it, or use
 **+ New Companion** to meet a virtual companion. The no-build UI ships with
-the Go bridge: Oat supplies the controls and theme, native JavaScript handles
+the Go server: Oat supplies the controls and theme, native JavaScript handles
 live screen and audio, and HTMX 4 swaps server-rendered Parent controls.
 
 Say hi to the starter cat, then ask it to become a fox, owl, dragon, robot, or
@@ -190,7 +190,7 @@ its microphone. Use **Photo** to show an image on the selected companion's
 screen and leave a card in its chat. Use **Voice** under the screen for one-click
 Heart or Fable, or choose one of six warm, kid-friendly storyteller voices:
 Heart, Bella, and Puck (US English), or Fable, Emma, and George (UK English).
-The choice is saved per device in the bridge database. Mint defaults to Fable
+The choice is saved per device in the Lark database. Mint defaults to Fable
 (`bm_fable`). Cake and other companions default to Heart (`af_heart`) unless
 `LARK_TTS_VOICE` sets a different fallback. Retired UK voices resolve to
 Emma or Fable without rewriting existing profiles.
@@ -202,10 +202,10 @@ Plain LAN HTTP supports the SVG mirror, text chat, and audio playback.
 Browser calls and recording need microphone access (HTTPS or localhost).
 Voice notes use the same adaptive silence timing as the boards. On manual stop, the browser flushes any buffered
 audio before ending the recording, without a fixed recording tail. For a remote
-phone, install the [OpenTunnel CLI](https://opentunnel.xyz) on the bridge host. If it is
-outside the bridge service's `PATH` and `~/.local/bin`, set
-`LARK_OPENTUNNEL_BIN` to its path in `bridge.env`. Restart the bridge
-with `systemctl --user restart lark-bridge.service` so it finds the CLI.
+phone, install the [OpenTunnel CLI](https://opentunnel.xyz) on the Lark host. If it is
+outside the Lark service's `PATH` and `~/.local/bin`, set
+`LARK_OPENTUNNEL_BIN` to its path in `lark.env`. Restart the server
+with `systemctl --user restart lark.service` so it finds the CLI.
 In the dashboard, select a virtual companion, choose **Create Tunnel** to start
 its route, then **Copy Share Link**. The HTTPS link opens the same companion and
 conversation as the LAN dashboard, with mic, screen, voice notes, and calls to
@@ -226,9 +226,9 @@ HTTP shows the same phone layout but can't install the app or use the mic.
 
 The shortcut opens the companion in a standalone window and uses its face as
 the icon. A share-link install retains only its private access and stops working when the link is
-revoked. A LAN install may ask for your bridge token if the browser uses
+revoked. A LAN install may ask for your Lark token if the browser uses
 separate storage. The app shell can load offline; live chat, history, audio,
-and photos still need the bridge.
+and photos still need the server.
 
 On phones, the live face sits above chat and the composer. A virtual companion goes
 offline after 45 seconds in the background or five minutes without interaction.
@@ -240,7 +240,7 @@ a companion already open elsewhere.
 
 Open **Menu → Stats** for a compact on-device HUD, or **Diagnostics** in the
 LAN `/app` dashboard for device status, pipeline timings, and CPU and memory
-usage for the bridge and host. The bridge totals include Kokoro. Firmware
+usage for the server and host. The server totals include Kokoro. Firmware
 reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM, Wi-Fi RSSI,
 and uptime every five seconds over WebSocket. The dashboard also shows
 WebSocket round-trip time.
@@ -248,12 +248,12 @@ Device status also reports the last frame revision and LCD flush duration,
 input overflows, and PCM starvation/drop counts. Turn diagnostics separate
 OpenCode gate wait and first sentence, TTS queue and inference time, first frame
 render, and elapsed time to the first queued PCM (or HTTP audio URL). The board's
-1.5–3 seconds of automatic-send silence happen before these bridge timings.
+1.5–3 seconds of automatic-send silence happen before these server timings.
 
 ## Dedicated OpenCode
 
 `lark-opencode.service` listens at `127.0.0.1:49375` with Basic auth.
-Setup generates its password in the private `bridge.env` and gives it separate
+Setup generates its password in the private `lark.env` and gives it separate
 configuration, session data, cache, state, and workspace under
 `~/.local/share/lark/opencode/` (or `$XDG_DATA_HOME`). It installs the model
 fallback plugin, links the `lark` agent and legacy `auth.json`, and imports the
@@ -262,7 +262,7 @@ CLI. It does not share your session database or load personal plugins, MCP
 servers, or coding `AGENTS.md`.
 Setup does not edit personal OpenCode configuration. If upgrading, remove the
 old `mcp.servers.lark` entry and `lark` agent symlink from your personal config.
-Without `LARK_OPENCODE_URL`, the bridge still discovers the shared service
+Without `LARK_OPENCODE_URL`, Lark still discovers the shared service
 through `service.json`. `LARK_OPENCODE_DIR` overrides the dedicated workspace.
 
 ### Companion models
@@ -284,7 +284,7 @@ same provider: OpenCode only supports routing within a provider. Keep the other
 config entries. Once OpenCode reloads the file, the next Lark turn uses the
 new selection without rotating the companion's session or restarting services. Use
 `/reload` in dedicated OpenCode if needed. Setup migrates an old
-`LARK_OPENCODE_MODEL` on upgrade; after that, `bridge.env` does not control
+`LARK_OPENCODE_MODEL` on upgrade; after that, `lark.env` does not control
 models. If you change providers, connect them on the dedicated server.
 
 An explicit rate-limit or supported upstream rejection before output or tools
@@ -298,7 +298,7 @@ Upgrades are documented as changelog entries in
 [`.opencode/skills/lark-upgrade/references/changelog.md`](.opencode/skills/lark-upgrade/references/changelog.md)
 and executed by OpenCode using the
 [`.opencode/skills/lark-upgrade/SKILL.md`](.opencode/skills/lark-upgrade/SKILL.md)
-skill across host config, SQLite, and the live bridge API/MCP tools.
+skill across host config, SQLite, and the live Lark API/MCP tools.
 
 ### Background builds
 
@@ -315,13 +315,13 @@ app. Face changes apply only if the active form hasn't changed in the meantime. 
 the saved app changed while the builder worked, it keeps the newer version.
 Tap **Cancel build** on the progress card or say “Cancel the build.” Regular
 **Stop** only stops the foreground turn or speech. A companion can have one build at
-a time. After a bridge restart, queued work can continue; in-flight work is
+a time. After a server restart, queued work can continue; in-flight work is
 reported as interrupted.
 
 Setup links the tool-free `lark-builder` agent in the dedicated OpenCode
 configuration. The builder uses `agents.lark.model` by default. To use a
 different model, add `agents.lark-builder.model` in that same JSONC file,
-using the same `provider/model#variant` format. The bridge explicitly selects
+using the same `provider/model#variant` format. Lark explicitly selects
 both the agent and model for each disposable session and deletes it afterward.
 The fallback router retains its existing foreground configuration.
 
@@ -334,16 +334,16 @@ with your personal OpenCode or work through companion share links. Keep ports `8
 and `49376` on a trusted LAN; neither uses TLS. Pair only trusted clients: a
 paired client gets access to the dedicated OpenCode server, not just companion chat.
 To turn off LAN OpenCode access, stop both forwarder units, disable
-`lark-opencode-lan.socket`, remove `LARK_OPENCODE_PAIR_PORT` from `bridge.env`,
-and restart the bridge.
+`lark-opencode-lan.socket`, remove `LARK_OPENCODE_PAIR_PORT` from `lark.env`,
+and restart `lark.service`.
 
 ### Lark MCP
 
-OpenCode runs the installed `lark-bridge mcp` stdio proxy, which forwards
-requests to the bridge's authenticated `POST /mcp` on loopback. The proxy
-reads the token from its environment or the private `bridge.env`; the
+OpenCode runs the installed `lark mcp` stdio proxy, which forwards
+requests to the server's authenticated `POST /mcp` on loopback. The proxy
+reads the token from its environment or the private `lark.env`; the
 OpenCode config contains only the executable and its argument, no secrets.
-On bridge startup after a change to MCP schemas, instructions, the agent
+On server startup after a change to MCP schemas, instructions, the agent
 prompt, or the runtime contract version, Lark reconnects `lark` MCP and
 verifies that OpenCode loaded its catalog. While that refresh is pending,
 model turns fail without dispatch; local history and device settings remain
@@ -384,8 +384,8 @@ With `device_id`, `state` always returns `me.device`, `me.companion`, and
 with `include_code:true`. Read persistent values as `memory[scope][key].value`.
 
 The agent can also use OpenCode's `websearch`. There is no `wait_event` tool:
-pointer events and bounded ticks run in the bridge without keeping an OpenCode turn open.
-The bridge uses the pure-Go `goja` sandbox to run JS that renders SVG. Apps can
+pointer events and bounded ticks run in the server without keeping an OpenCode turn open.
+Lark uses the pure-Go `goja` sandbox to run JS that renders SVG. Apps can
 target one player or share state across multiple devices with a separate SVG
 view for each player. `initial_state` seeds `ctx.initial_state` (or the state
 directly if there is no `init`). `state_patch` shallow-merges live state and
@@ -421,7 +421,7 @@ fragment. The `screen` sprite block also takes full rows.
 `ui.palette` exposes the read-only palette (`.` is transparent;
 `k w p m l s y r g a b n d c o` are colors).
 Boards blend warm dawn and dusk and a cooler night using the device's Parent
-timezone (or bridge local time); the web shell uses the browser clock.
+timezone (or server local time); the web shell uses the browser clock.
 Photo screens keep their original colors.
 
 Use `app = ui.pagedText({title, text})` for wrapped reading with built-in
@@ -432,18 +432,18 @@ Set `timer.app` to a saved app name to launch it on the connected device when
 the reminder goes off. See the [agent guide](agents/lark.md) for examples.
 
 **One Voice Rule:** Only assistant prose is spoken as the reply, not tool
-output or reasoning. The bridge checks the streamed speech against the final
+output or reasoning. Lark checks the streamed speech against the final
 reply. The prompt starts with a short identity and source header, plus setup
 or personality hints when applicable. The agent uses `state` for live context.
 
-## Bridge data
+## Server data
 
-The bridge uses native SQLite (`go-sqlite3`) in WAL mode with split reader/writer pools. Persistent state lives
+Lark uses native SQLite (`go-sqlite3`) in WAL mode with split reader/writer pools. Persistent state lives
 in `~/.local/share/lark/lark.db` (or `$XDG_DATA_HOME/lark/lark.db`);
 `LARK_DB_PATH` overrides it. Keep the data directory private (0700, database
 0600). The first boot imports valid rows from the six legacy JSON files in that
 directory in one transaction and never modifies those backups.
-The bridge also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
+Lark also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
 Active and saved forms are stored in `companions` and `saved_companions`.
@@ -457,16 +457,16 @@ saved artwork is unchanged.
 For bespoke creatures, costumes or styles use `companion.portrait: {prompt, bg?, edit?, style?}`. The dedicated
 OpenCode service sends a billed request to `opencode/gemini-nano-banana-2.1`
 using its OpenCode Console connection. OAuth needs no separate key, and this
-request creates no OpenCode session. If `OPENCODE_API_KEY` is set in the bridge
-environment, the bridge calls Console directly instead. `edit:true` sends the
+request creates no OpenCode session. If `OPENCODE_API_KEY` is set in the server
+environment, Lark calls Console directly instead. `edit:true` sends the
 current sheet back as reference.
-The bridge aligns four poses from a 2×2 sheet and uses them for the six face
+Lark aligns four poses from a 2×2 sheet and uses them for the six face
 states. `style` defaults to `"storybook"`; `"pixel"` snaps each pose to a
 64×64 grid and upscales without smoothing. Only SVG references go into the database; private PNGs under the
 local `portraits/` and `blobs/photos/` directories are stored on disk. For local, no-cost art, use
 the instant vector companion.
 The canonical `messages` table drives browser history. The v2 migration
-backfills it from legacy bridge chat events and OpenCode session history.
+backfills it from legacy chat events and OpenCode session history.
 New rows contain user text, final companion replies, intercom, and display cards,
 not tool traces or prompt headers.
 
@@ -477,11 +477,11 @@ for parent controls).
 Hardware needs firmware `0.9.0` or newer for playback acknowledgments with an
 audio ID, and announces `proto: 2` in its authenticated `/ws` `hello`.
 Firmware `0.9.2` and newer report `caps` for battery, Call, and drag. Both
-current boards use touchscreens, not head pads. The bridge remembers each
+current boards use touchscreens, not head pads. Lark remembers each
 board there, using the socket IP and port 80
 unless the hello specifies a port. The SVG renderer
 streams dirty rectangles as `0x03` RGB565 binary frames, using RLE565 when
-smaller. BOX-3 announces its native size; the bridge centers the square
+smaller. BOX-3 announces its native size; Lark centers the square
 artwork and maps raw touch coordinates back into SVG space. Browsers receive
 `op: "svg"` with `device_id`; controls share the boards’ hit targets and also
 work with Tab, Enter, and Space.
@@ -494,11 +494,11 @@ pads voiced whole-clip STT with 150 ms of silence on each side. Kokoro starts
 synthesizing sentences while OpenCode streams its reply over SSE. Firmware
 `0.9.0` removes the legacy `/speak` endpoint.
 
-| Bridge · port 8765 | Request → response |
+| Lark · port 8765 | Request → response |
 | --- | --- |
 | `GET /health` | STT engine/readiness, OpenCode, and TTS readiness |
 | `GET /ws`, `GET /app` | WebSocket hub and embedded browser UI |
-| `GET /api/diagnostics` | LAN-only device telemetry, WebSocket RTT, pipeline timings, Kokoro readiness, bridge and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
+| `GET /api/diagnostics` | LAN-only device telemetry, WebSocket RTT, pipeline timings, Kokoro readiness, server and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
 | `POST /api/diagnostics/stt` | Loopback only: synthesize and transcribe a fixed test phrase without a session or playback |
 | `GET /api/devices` | Remembered devices with `device_id`, `character`, `companion`, `voice`, and current `ws_connected`; hardware also includes `ip`, `port`, and `last_seen` |
 | `GET /api/scope` | Current scope and ordered `voices` catalog |
@@ -532,7 +532,7 @@ companion's name. Intercom requires a connected recipient.
 
 ## Networking
 
-Devices need TCP and UDP **8766** (`LARK_DEVICE_PORT`) for the native device protocol and TCP **8765** for OTA pull; browsers need TCP **8765** to the bridge; direct OTA uses TCP
+Devices need TCP and UDP **8766** (`LARK_DEVICE_PORT`) for the native device protocol and TCP **8765** for OTA pull; browsers need TCP **8765** to the server; direct OTA uses TCP
 **80** to the device. Use Avahi (`avahi-resolve -n lark-XXXX.local`) for
 mDNS or the device IP if the container cannot resolve `.local`. HTTP and WS
 are unencrypted; use a trusted LAN and keep configs and firmware images private.

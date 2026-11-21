@@ -57,21 +57,21 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS parent_usage (device_id TEXT NOT NULL, day TEXT NOT NULL, used_ms INTEGER NOT NULL, PRIMARY KEY (device_id, day))`,
 }
 
-type bridgeDB struct {
+type larkDB struct {
 	*sql.DB
 	readers    *sql.DB
 	dataDir    string
 	lastBackup atomic.Int64
 }
 
-func (d *bridgeDB) readDB() *sql.DB {
+func (d *larkDB) readDB() *sql.DB {
 	if d.readers != nil {
 		return d.readers
 	}
 	return d.DB
 }
 
-func (d *bridgeDB) Close() error {
+func (d *larkDB) Close() error {
 	var err error
 	if d.readers != nil && d.readers != d.DB {
 		err = d.readers.Close()
@@ -84,7 +84,7 @@ func (d *bridgeDB) Close() error {
 
 // VACUUM INTO produces a standalone consistent SQLite file, including WAL data,
 // without copying live database files or pausing readers.
-func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error {
+func (d *larkDB) backup(ctx context.Context, dir string, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func (d *bridgeDB) backup(ctx context.Context, dir string, now time.Time) error 
 	return nil
 }
 
-func (d *bridgeDB) backupPeriodically(ctx context.Context, dir string) {
+func (d *larkDB) backupPeriodically(ctx context.Context, dir string) {
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 	for {
@@ -184,7 +184,7 @@ func (d *bridgeDB) backupPeriodically(ctx context.Context, dir string) {
 	}
 }
 
-func (d *bridgeDB) getMeta(ctx context.Context, key string) (string, error) {
+func (d *larkDB) getMeta(ctx context.Context, key string) (string, error) {
 	var value string
 	err := d.readDB().QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -193,12 +193,12 @@ func (d *bridgeDB) getMeta(ctx context.Context, key string) (string, error) {
 	return value, err
 }
 
-func (d *bridgeDB) setMeta(ctx context.Context, key, value string) error {
+func (d *larkDB) setMeta(ctx context.Context, key, value string) error {
 	_, err := d.ExecContext(ctx, `INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
 
-func openBridgeDB(ctx context.Context, path string) (_ *bridgeDB, err error) {
+func openLarkDB(ctx context.Context, path string) (_ *larkDB, err error) {
 	var dataDir string
 	if path != ":memory:" {
 		path, err = filepath.Abs(path)
@@ -221,7 +221,7 @@ func openBridgeDB(ctx context.Context, path string) (_ *bridgeDB, err error) {
 			return nil, err
 		}
 	}
-	d := &bridgeDB{dataDir: dataDir}
+	d := &larkDB{dataDir: dataDir}
 	d.DB, err = sql.Open("lark-sqlite3", sqliteDSN(path, true))
 	if err != nil {
 		return nil, err
@@ -251,7 +251,7 @@ func openBridgeDB(ctx context.Context, path string) (_ *bridgeDB, err error) {
 	return d, nil
 }
 
-func (d *bridgeDB) initSchema(ctx context.Context) error {
+func (d *larkDB) initSchema(ctx context.Context) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("initialize Lark schema: %w", err)
@@ -267,7 +267,7 @@ func (d *bridgeDB) initSchema(ctx context.Context) error {
 
 const initialAutoVolume = 55
 
-func (b *bridge) volumePrefs(id string) (auto bool, level int) {
+func (b *larkServer) volumePrefs(id string) (auto bool, level int) {
 	auto, level = true, initialAutoVolume
 	if b.db == nil {
 		return auto, level
@@ -280,7 +280,7 @@ func (b *bridge) volumePrefs(id string) (auto bool, level int) {
 	return auto, level
 }
 
-func (b *bridge) saveVolumePrefs(ctx context.Context, id string, auto bool, level int) error {
+func (b *larkServer) saveVolumePrefs(ctx context.Context, id string, auto bool, level int) error {
 	if b.db == nil {
 		return problem(503, "Volume storage unavailable")
 	}
@@ -367,7 +367,7 @@ func (s *store[T]) save(id string, value T, remove bool) error {
 
 func placeholders(n int) string { return strings.Repeat("?,", n-1) + "?" }
 
-func deviceStore(d *bridgeDB) *store[peer] {
+func deviceStore(d *larkDB) *store[peer] {
 	return &store[peer]{db: d.DB, readDB: d.readDB(), table: "devices", key: "device_id", columns: "device_id,character,ip,port,last_seen",
 		upsert: "character=excluded.character,ip=excluded.ip,port=excluded.port,last_seen=excluded.last_seen",
 		scan: func(r rowScanner) (string, peer, error) {
@@ -377,7 +377,7 @@ func deviceStore(d *bridgeDB) *store[peer] {
 		}, values: func(id string, p peer) []any { return []any{id, p.Character, p.IP, p.Port, p.LastSeen} }}
 }
 
-func voiceStore(d *bridgeDB) *store[string] {
+func voiceStore(d *larkDB) *store[string] {
 	return &store[string]{db: d.DB, readDB: d.readDB(), table: "voices", key: "device_id", columns: "device_id,voice", upsert: "voice=excluded.voice",
 		scan: scanString, values: func(id, voice string) []any { return []any{id, voice} }}
 }
@@ -388,7 +388,7 @@ func scanString(r rowScanner) (string, string, error) {
 	return id, value, err
 }
 
-func sessionStore(d *bridgeDB) *store[string] {
+func sessionStore(d *larkDB) *store[string] {
 	return &store[string]{db: d.DB, readDB: d.readDB(), table: "sessions", key: "device_id", columns: "device_id,session_id,updated_at",
 		upsert: "session_id=excluded.session_id,updated_at=excluded.updated_at,contract_hash='',context_after_ms=excluded.updated_at",
 		scan: func(r rowScanner) (string, string, error) {
@@ -399,7 +399,7 @@ func sessionStore(d *bridgeDB) *store[string] {
 		}, values: func(id, sid string) []any { return []any{id, sid, time.Now().UnixMilli()} }}
 }
 
-func virtualStore(d *bridgeDB) *store[virtualClient] {
+func virtualStore(d *larkDB) *store[virtualClient] {
 	return &store[virtualClient]{db: d.DB, readDB: d.readDB(), table: "virtual_clients", key: "id", columns: "id,character,voice,created_at",
 		upsert: "character=excluded.character,voice=excluded.voice,created_at=excluded.created_at",
 		scan: func(r rowScanner) (string, virtualClient, error) {
@@ -415,7 +415,7 @@ func virtualStore(d *bridgeDB) *store[virtualClient] {
 		}}
 }
 
-func tunnelStore(d *bridgeDB) *store[tunnelRecord] {
+func tunnelStore(d *larkDB) *store[tunnelRecord] {
 	return &store[tunnelRecord]{db: d.DB, readDB: d.readDB(), table: "tunnels", key: "device_id", columns: "device_id,route_name,url,local_port,scoped_token,profile,created_at",
 		upsert: "route_name=excluded.route_name,url=excluded.url,local_port=excluded.local_port,scoped_token=excluded.scoped_token,profile=excluded.profile",
 		scan: func(r rowScanner) (string, tunnelRecord, error) {
