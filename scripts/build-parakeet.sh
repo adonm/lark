@@ -16,6 +16,32 @@ source_rev=bcb639faa4c74a2300ba19e30360cb2355b1663a
 verify() { printf '%s  %s\n' "$1" "$2" | sha256sum --check --status; }
 download() { curl --fail --silent --show-error --location --output "$1" "$2"; }
 
+command -v glslc >/dev/null || {
+    printf 'glslc is required on PATH for Parakeet Vulkan shader compilation.\n' >&2
+    exit 1
+}
+
+find_spirv_headers() {
+    local IFS=:
+    local dir
+    for dir in ${CMAKE_PREFIX_PATH:-} /usr /usr/local /home/linuxbrew/.linuxbrew/opt/spirv-headers /run/host/*/*/linuxbrew/.linuxbrew/opt/spirv-headers; do
+        [[ -n "$dir" ]] || continue
+        if [[ -f "$dir/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
+              -f "$dir/lib/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
+              -f "$dir/lib64/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ]]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if ! spirv_prefix=$(find_spirv_headers); then
+    printf 'SPIRV-HeadersConfig.cmake not found (install spirv-headers or set CMAKE_PREFIX_PATH).\n' >&2
+    exit 1
+fi
+export CMAKE_PREFIX_PATH="${spirv_prefix}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+
 download "$build/source.tar.gz" "https://codeload.github.com/anomalyco/transcribe.cpp/tar.gz/$source_rev"
 if ! verify "$source_sha" "$build/source.tar.gz"; then
     printf 'transcribe.cpp source archive failed SHA-256 verification.\n' >&2

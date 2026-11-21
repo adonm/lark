@@ -41,6 +41,22 @@ if ! "$models_only"; then
     for cmd in gcc c++ cmake glslc ninja opencode python3 systemctl; do
         command -v "$cmd" >/dev/null || { echo "Install $cmd before running setup." >&2; exit 1; }
     done
+    spirv_found=false
+    IFS=: read -ra prefix_dirs <<<"${CMAKE_PREFIX_PATH:-}:/usr:/usr/local:/home/linuxbrew/.linuxbrew/opt/spirv-headers"
+    for dir in "${prefix_dirs[@]}" /run/host/*/*/linuxbrew/.linuxbrew/opt/spirv-headers; do
+        [[ -n "$dir" ]] || continue
+        if [[ -f "$dir/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
+              -f "$dir/lib/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
+              -f "$dir/lib64/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ]]; then
+            export CMAKE_PREFIX_PATH="$dir${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+            spirv_found=true
+            break
+        fi
+    done
+    if ! "$spirv_found"; then
+        echo "Install SPIRV-Headers (or set CMAKE_PREFIX_PATH) before running setup." >&2
+        exit 1
+    fi
     systemctl --user show-environment >/dev/null
 fi
 
@@ -274,11 +290,11 @@ try:
     target_config = Path(root, "config/opencode/opencode.jsonc").resolve()
     router = next(p for entry in get("/api/config")
                   if entry.get("path") and Path(entry["path"]).resolve() == target_config
-                  for p in entry["info"]["plugins"]
+                  for p in entry["info"].get("plugins") or ()
                   if isinstance(p, dict) and p.get("package") == "./lark-model-router")
     fallback = router["options"]["fallback"].split("/", 1)[0]
-except (OSError, KeyError, StopIteration, TypeError, ValueError):
-    sys.exit("Could not read the Lark model settings from the dedicated OpenCode config")
+except (OSError, KeyError, StopIteration, TypeError, ValueError) as err:
+    sys.exit(f"Could not read the Lark model settings from the dedicated OpenCode config: {err}")
 for provider in sorted({primary, fallback}):
     if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", provider):
         sys.exit("Invalid Lark model provider")
