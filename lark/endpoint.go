@@ -117,6 +117,11 @@ func (p endpointPolicy) paused(at, silence time.Duration) bool {
 	return p.voiced && !p.inVoice && at-p.last >= silence
 }
 
+const (
+	smartTurnPause     = 200 * time.Millisecond
+	smartTurnThreshold = float32(0.90)
+)
+
 type endpointThresholds struct {
 	probe, quick, complete, uncertain, patient, storySpan time.Duration
 	minWords, storyWords                                  int

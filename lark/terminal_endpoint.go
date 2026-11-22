@@ -6,7 +6,8 @@ import (
 )
 
 type endpointSettings struct {
-	newVAD func() endpointVAD
+	newVAD    func() endpointVAD
+	smartTurn func([]byte) (float32, error)
 }
 
 const endpointRingSlots = 256
@@ -126,6 +127,9 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	var probe <-chan pauseTranscript
 	var probeCancel context.CancelFunc
 	var attempted bool
+	var smartTurnCh <-chan float32
+	var smartTurnChecked bool
+	var smartTurnCommit bool
 	silence := tunedEndpoint.patient
 	defer func() {
 		if probeCancel != nil {
@@ -151,6 +155,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 		}
 		if u.policy.inVoice || previous != u.policy.last {
 			attempted, cached, silence = false, pauseTranscript{}, tunedEndpoint.patient
+			smartTurnChecked, smartTurnCommit, smartTurnCh = false, false, nil
 			if probeCancel != nil {
 				probeCancel()
 			}
@@ -201,6 +206,11 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			return
 		case result := <-probe:
 			accept(result)
+		case prob := <-smartTurnCh:
+			smartTurnCh = nil
+			if !u.policy.inVoice && prob >= smartTurnThreshold {
+				smartTurnCommit = true
+			}
 		case <-c.stop:
 			commit()
 			return
@@ -217,7 +227,11 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 		at := pcmDuration(len(u.pcm))
 		decision := endpointWait
 		if vad != nil && (!c.listen || u.policy.voiced) {
-			decision = u.policy.decision(at, silence)
+			if smartTurnCommit {
+				decision = endpointCommit
+			} else {
+				decision = u.policy.decision(at, silence)
+			}
 		}
 		if decision != endpointWait {
 			h.mu.Lock()
@@ -226,18 +240,37 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 				h.recordingControl(d, time.Now(), decision == endpointDiscard)
 			}
 			h.mu.Unlock()
-		} else if !attempted && probe == nil && u.policy.paused(at, tunedEndpoint.probe) {
-			attempted = true
-			ctx, cancel := context.WithCancel(c.ctx)
-			result := make(chan pauseTranscript, 1)
-			probe, probeCancel = result, cancel
-			// The prefix is immutable; the capture worker only appends.
-			go func(pcm []byte, last time.Duration) {
-				start := time.Now()
-				sttCtx, timing := withSTTTiming(withSTTProbe(ctx))
-				text, err := h.b.decodeClip(sttCtx, pcm)
-				result <- pauseTranscript{last: last, text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run}
-			}(u.pcm, u.policy.last)
+		} else {
+			if h.b.endpoint.smartTurn != nil && vad != nil && (!c.listen || u.policy.voiced) &&
+				!smartTurnChecked && smartTurnCh == nil &&
+				u.policy.last-u.policy.first < tunedEndpoint.storySpan &&
+				u.policy.paused(at, smartTurnPause) {
+				smartTurnChecked = true
+				ch := make(chan float32, 1)
+				smartTurnCh = ch
+				pcm := u.pcm[:len(u.pcm):len(u.pcm)]
+				fn := h.b.endpoint.smartTurn
+				go func() {
+					prob, err := fn(pcm)
+					if err != nil {
+						prob = 0
+					}
+					ch <- prob
+				}()
+			}
+			if !attempted && probe == nil && u.policy.paused(at, tunedEndpoint.probe) {
+				attempted = true
+				ctx, cancel := context.WithCancel(c.ctx)
+				result := make(chan pauseTranscript, 1)
+				probe, probeCancel = result, cancel
+				// The prefix is immutable; the capture worker only appends.
+				go func(pcm []byte, last time.Duration) {
+					start := time.Now()
+					sttCtx, timing := withSTTTiming(withSTTProbe(ctx))
+					text, err := h.b.decodeClip(sttCtx, pcm)
+					result <- pauseTranscript{last: last, text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run}
+				}(u.pcm[:len(u.pcm):len(u.pcm)], u.policy.last)
+			}
 		}
 	}
 }

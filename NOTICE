@@ -25,6 +25,11 @@ Speech:
   https://github.com/anomalyco/transcribe.cpp
   https://github.com/ggml-org/ggml
   https://github.com/snakers4/silero-vad
+* Smart Turn v3.2 — BSD-2-Clause.
+  https://github.com/pipecat-ai/smart-turn
+  https://huggingface.co/pipecat-ai/smart-turn-v3
+* onnxruntime_go — MIT.
+  https://github.com/yalue/onnxruntime_go
 * Parakeet Unified EN 0.6B Q8_0 GGUF — the quantizer's pinned model
   card labels the conversion CC BY 4.0; NVIDIA lists the NVIDIA Open
   Model License Agreement for the base model. Consult both before

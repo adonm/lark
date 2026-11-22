@@ -4,6 +4,20 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Semantic End-of-Turn (Smart Turn v3.2) & Malloc Arena Cap
+
+### Affects
+- Host (`stt-models`, `lark.service`) / Lark Server
+
+### Changes
+- **Smart Turn v3.2**: Added in-process Whisper log-mel + `smart-turn-v3.2-cpu.onnx` (via `onnxruntime_go` and bundled `libonnxruntime.so`) for ~200 ms pause semantic end-of-turn detection, falling back to tuned hangover.
+- **RSS plateau**: Added `MALLOC_ARENA_MAX=2` to `lark.service` and `mallopt(M_ARENA_MAX, 2)` on Linux to bound native C/C++ arena fragmentation.
+
+### Upgrade Steps
+1. Re-run `./scripts/setup-host.sh` (or `--models-only` + rebuild) to download `smart-turn-v3.2-cpu.onnx` into `~/.local/share/lark/stt-models/` and restart `lark.service`.
+
+---
+
 ## 2026-11-22 — Interactive Stories (Twee 3), Feature Cuts & Firmware (`0.18.0`)
 
 ### Affects

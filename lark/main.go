@@ -90,6 +90,14 @@ func run() error {
 	vad.close()
 	log.Print("Lark endpoint VAD ready (in-process Silero v5)")
 	endpointConfig := &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(vadPath) }}
+	smartTurnPath := filepath.Join(local, "stt-models", smartTurnModel)
+	if st, err := openSmartTurn(smartTurnPath, min(4, runtime.GOMAXPROCS(0))); err != nil {
+		log.Printf("Smart Turn disabled: %v", err)
+	} else {
+		defer st.close()
+		endpointConfig.smartTurn = st.predictPCM16
+		log.Print("Lark semantic endpoint ready (Smart Turn v3.2)")
+	}
 	ocURL, ocPassword := os.Getenv("LARK_OPENCODE_URL"), os.Getenv("LARK_OPENCODE_PASSWORD")
 	ocAPI, err := openCodeUpstream(pooledClient(), state, ocURL, ocPassword)
 	if err != nil {

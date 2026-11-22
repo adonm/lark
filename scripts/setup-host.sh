@@ -109,6 +109,27 @@ install_silero() (
     mv -fT -- "$staged" "$destination"
 )
 install_silero
+
+install_smart_turn() (
+    local name=smart-turn-v3.2-cpu.onnx checksum=2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f
+    local models="$data/stt-models" destination staged
+    destination="$models/$name"
+    verify() { printf '%s  %s\n' "$checksum" "$1" | sha256sum --check --status; }
+    if [[ -f "$destination" ]] && verify "$destination"; then
+        return 0
+    fi
+    mkdir -p -- "$models"
+    staged=$(mktemp "$models/.$name.XXXXXXXX")
+    trap 'rm -f -- "$staged"' EXIT
+    curl --fail --silent --show-error --location --output "$staged" \
+        "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/$name"
+    if ! verify "$staged"; then
+        printf 'Smart Turn v3.2 model failed SHA-256 verification.\n' >&2
+        return 1
+    fi
+    mv -fT -- "$staged" "$destination"
+)
+install_smart_turn
 if "$models_only"; then
     exit 0
 fi

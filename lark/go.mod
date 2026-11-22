@@ -18,6 +18,7 @@ require (
 	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.8 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.8 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.8 // indirect
+	github.com/yalue/onnxruntime_go v1.31.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
