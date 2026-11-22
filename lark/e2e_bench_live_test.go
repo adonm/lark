@@ -33,6 +33,7 @@ func TestTurnBench(t *testing.T) {
 	}{
 		{"chat", "What is two plus two?"},
 		{"timer", "Set a timer for two minutes."},
+		{"reason", "Why is the sky blue?"},
 	}
 	clips := make([][]byte, len(utterances))
 	silence := make([]byte, sampleRate*2*2500/1000) // 2.5 s trailing silence for endpointing
@@ -140,6 +141,12 @@ func TestTurnBench(t *testing.T) {
 			fmtMS(tr.First), fmtMS(tr.FirstSentence),
 			fmtMS(tr.TTSQueue), fmtMS(tr.TTSInfer), fmtMS(tr.Resample),
 			fmtMS(tr.TTS), fmtMS(tr.FirstPCM), fmtMS(tr.E2E))
+	}
+	sp := report.Speculation
+	t.Logf("speculation: started=%d hit=%d abort_words=%d abort_speech=%d abort_mismatch=%d abort_other=%d overlap_avg=%.0fms",
+		sp.Started, sp.Hit, sp.AbortWords, sp.AbortSpeech, sp.AbortMismatch, sp.AbortOther, sp.OverlapAvgMS)
+	if f := report.Latency["spec_first_ms"]; f.Count > 0 && f.P50 != nil && f.P95 != nil {
+		t.Logf("speculative TTFT: p50=%.0fms p95=%.0fms n=%d", *f.P50, *f.P95, f.Count)
 	}
 	t.Log(sb.String())
 }

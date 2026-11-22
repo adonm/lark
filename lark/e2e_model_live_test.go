@@ -54,7 +54,7 @@ func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 	t.Helper()
 	m := &e2eModel{client: s.client, settings: openCodeSettings("lark"), sessions: map[string]*e2eSession{},
 		followUp: make(chan struct{}),
-		events: make(chan ocEvent, 64), usage: map[ocModel]int{}, tools: map[string]int{}}
+		events:   make(chan ocEvent, 64), usage: map[ocModel]int{}, tools: map[string]int{}}
 	m.settings.Model = ocModel{Provider: "test", ID: "deterministic"}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.stub(w, r, s) })
 	if s.real {
@@ -89,7 +89,7 @@ func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		t.Logf("dedicated model: %s/%s (%s); at most eight model prompts", m.settings.Model.Provider, m.settings.Model.ID, m.settings.Model.Variant)
+		t.Logf("dedicated model: %s/%s (%s); at most twelve model prompts", m.settings.Model.Provider, m.settings.Model.ID, m.settings.Model.Variant)
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.real(w, r, s) })
 		t.Cleanup(func() { m.cleanup(t) })
 	}
@@ -268,7 +268,7 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		case "POST /prompt":
 			in := readInput()
 			text := str(in["text"])
-			if len(text) == 0 || len(text) > 16000 || m.prompts.Add(1) > 8 {
+			if len(text) == 0 || len(text) > 16000 || m.prompts.Add(1) > 12 {
 				w.WriteHeader(429)
 				return
 			}
