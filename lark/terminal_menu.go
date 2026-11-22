@@ -232,7 +232,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		}
 		if a.kind != "menu-back" {
 			switch d.drawer {
-			case drawerBooks, drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
+			case drawerBooks, drawerGames, drawerMemories, drawerPair, drawerUnpair:
 				h.loadMenu(d)
 				return
 			}
@@ -585,23 +585,8 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pix
 			acts[id] = sceneAction{"menu-detail", strconv.Itoa(idx)}
 		}
 		return img, hits, acts, nil
-	default: // drawerHistory
-		if m.detail != nil {
-			img := renderPixelReader(spec, m.detail.title, m.detail.text, r.menuPage, 0, th)
-			hits, acts := navBarHits(spec, r.menuPage, r.menuPage+2)
-			return img, hits, acts, nil
-		}
-		items := make([]tile, 0, len(m.rows))
-		for i, row := range m.rows {
-			items = append(items, tile{
-				id:     fmt.Sprintf("history-%d", i),
-				label:  row.title,
-				detail: row.text,
-				action: sceneAction{"menu-detail", strconv.Itoa(i)},
-			})
-		}
-		img, hits, acts := renderPixelListWithHits(spec, "History", items, m.notice, r.menuPage, th, th.accent)
-		return img, hits, acts, nil
+	default:
+		return nil, nil, nil, fmt.Errorf("unknown drawer %q", r.drawer)
 	}
 }
 
@@ -755,19 +740,7 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 		}
 		return m, err
 	default:
-		page, err := b.readHistoryPage(ctx, id, 20, nil)
-		m.notice = "No messages yet"
-		for _, e := range slices.Backward(page.Messages) {
-			speaker := name
-			switch e.Role {
-			case "user":
-				speaker = "You"
-			case "intercom":
-				speaker = "From " + e.Sender
-			}
-			m.rows = append(m.rows, menuRow{menuText(speaker), menuText(e.Text)})
-		}
-		return m, err
+		return m, nil
 	}
 }
 

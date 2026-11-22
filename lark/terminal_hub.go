@@ -688,7 +688,7 @@ func (h *wsHub) openBook(d *wsTerminal, book savedApp) {
 
 func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	switch d.drawer {
-	case drawerBooks, drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
+	case drawerBooks, drawerGames, drawerMemories, drawerPair, drawerUnpair:
 	default:
 		d.menuData = nil
 	}
@@ -731,7 +731,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		r.readingBook = d.readingBook
 		r.readingPage = d.readingPage
 		switch d.drawer {
-		case drawerBooks, drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
+		case drawerBooks, drawerGames, drawerMemories, drawerPair, drawerUnpair:
 			r.view.menu = d.menuData
 		case drawerIntercom:
 			var choices []menuPeer

@@ -39,7 +39,6 @@ const (
 	drawerBookReader = "book-reader"
 	drawerGames      = "games"
 	drawerMemories   = "memories"
-	drawerHistory    = "history"
 	drawerPair       = "pair"
 	drawerUnpair     = "unpair"
 	drawerVolume     = "volume"
