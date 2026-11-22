@@ -33,6 +33,7 @@ static TaskHandle_t painter;
 static uint16_t *fb, *strip[2];
 static uint8_t *pending_pkt, *work_pkt;
 static size_t pending_len;
+static int64_t pending_rx_us, work_rx_us;
 static bool linked;
 static bool first_frame;
 static frame_bounds_t dirty_bounds;
@@ -114,6 +115,8 @@ static void paint_task(void *arg)
             pending_pkt = tmp;
             wlen = pending_len;
             pending_len = 0;
+            work_rx_us = pending_rx_us;
+            pending_rx_us = 0;
         }
         xSemaphoreGive(fb_lock);
         if (wlen > 0) {
@@ -161,6 +164,11 @@ static void paint_task(void *arg)
         dirty_bounds = (frame_bounds_t){ 0 };
         xSemaphoreGive(fb_lock);
         if (area.x0 < area.x1 && blit(area) == ESP_OK) {
+            if (work_rx_us) {
+                atomic_store_explicit(&telemetry_io.frame_flush_us,
+                                      (unsigned)(esp_timer_get_time() - work_rx_us), memory_order_relaxed);
+                work_rx_us = 0;
+            }
             xSemaphoreTake(fb_lock, portMAX_DELAY);
             if (linked && dirty_bounds.x0 == dirty_bounds.x1) atomic_store(&shown_rev, rev);
             xSemaphoreGive(fb_lock);
@@ -202,6 +210,7 @@ bool display_apply_frame(const uint8_t *data, size_t len)
     if (applied) {
         memcpy(pending_pkt, data, len);
         pending_len = len;
+        pending_rx_us = esp_timer_get_time();
     }
     xSemaphoreGive(fb_lock);
     if (applied && !(BOARD_HAS_BATTERY && display_is_sleeping())) xTaskNotifyGive(painter);

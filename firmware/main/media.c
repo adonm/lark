@@ -44,6 +44,8 @@ static struct {
 static atomic_bool recording, stop_recording, cancel_recording;
 static atomic_bool wake_enabled;
 static atomic_uint chime_epoch;
+static atomic_bool tts_await_first;
+static atomic_uint_fast64_t tts_first_byte_us;
 
 bool media_audio_ready(void)
 {
@@ -135,6 +137,7 @@ bool media_tts_start(uint32_t audio_id)
         stream.audio_id = audio_id;
         stream.open = stream.queued = true;
         stream.ended = false;
+        atomic_store_explicit(&tts_await_first, true, memory_order_relaxed);
     }
     xSemaphoreGive(lock);
     return accepted;
@@ -158,6 +161,9 @@ bool media_tts_pcm(const void *data, size_t bytes)
         // The net_service task must not wait for speaker space; writes and reads
         // only hold this lock for the short buffer copies, never codec I/O.
         if (xStreamBufferSpacesAvailable(tts) >= bytes && xStreamBufferSend(tts, data, bytes, 0) == bytes) {
+            if (atomic_exchange_explicit(&tts_await_first, false, memory_order_relaxed)) {
+                atomic_store_explicit(&tts_first_byte_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
+            }
             accepted = true;
             xTaskNotifyGive(media_task);
         } else {
@@ -249,6 +255,11 @@ static void play(void)
         if (bytes % sizeof(*chunk)) {
             err = ESP_ERR_INVALID_SIZE;
         } else if (bytes) {
+            if (!played) {
+                uint64_t dt = (uint64_t)esp_timer_get_time() -
+                              atomic_load_explicit(&tts_first_byte_us, memory_order_relaxed);
+                atomic_store_explicit(&telemetry_io.tts_first_us, (unsigned)dt, memory_order_relaxed);
+            }
             err = audio_stream_write(chunk, bytes / sizeof(*chunk));
             played = true;
             starved = false;

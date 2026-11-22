@@ -110,7 +110,7 @@ static esp_err_t status_get(httpd_req_t *request)
         snprintf(pct, sizeof(pct), "%d", battery.pct);
         snprintf(mv, sizeof(mv), "%u", battery.millivolts);
     }
-    char json[768];
+    char json[1024];
     int len = snprintf(json, sizeof(json),
              "{\"device\":\"%s\",\"character\":\"%s\",\"mac\":\"%s\",\"ip\":\"%s\",\"wifi_rssi\":%d,"
              "\"free_heap\":%zu,\"min_free_heap\":%zu,\"free_psram\":%zu,\"uptime_s\":%" PRIu64 ",\"cpu_pct\":%u,"

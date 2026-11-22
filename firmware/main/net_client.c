@@ -60,6 +60,7 @@ typedef struct {
     uint8_t target;
     bool aborted;
     int x, y;
+    int64_t ts_us;
 } input_t;
 
 typedef enum {
@@ -102,6 +103,8 @@ static bool tts_odd;
 
 static atomic_bool wifi_online;
 static atomic_uint socket_session, ready_session;
+static atomic_uint_fast64_t rec_ctrl_us;
+static atomic_bool rec_first_rtp;
 static uint32_t next_session;
 static uint16_t tx_seq;
 static int reconnect_ms = 1000;
@@ -207,7 +210,9 @@ void net_client_pointer(uint8_t kind, int x, int y, uint16_t rev_lo)
     uint32_t session = ready_socket_session();
     if (!session) return;
     input_kind_t ik = kind == LARK_PTR_DRAG ? INPUT_DRAG : kind == LARK_PTR_UP ? INPUT_UP : INPUT_TAP;
-    enqueue_session((input_t){ .kind = ik, .session = session, .x = x, .y = y, .rev_lo = rev_lo });
+    enqueue_session((input_t){
+        .kind = ik, .session = session, .x = x, .y = y, .rev_lo = rev_lo, .ts_us = esp_timer_get_time(),
+    });
 }
 
 bool net_client_wake_word(void)
@@ -271,6 +276,11 @@ static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, siz
     lark_rtp_encode(pkt, pt, seq, ts, ssrc);
     memcpy(pkt + LARK_RTP_HDR_SIZE, pcm, bytes);
     int sent = lwip_sendto(fd, pkt, LARK_RTP_HDR_SIZE + bytes, 0, (const struct sockaddr *)&dst, sizeof(dst));
+    if (sent == (int)(LARK_RTP_HDR_SIZE + bytes) &&
+        atomic_exchange_explicit(&rec_first_rtp, false, memory_order_relaxed)) {
+        uint64_t dt = (uint64_t)esp_timer_get_time() - atomic_load_explicit(&rec_ctrl_us, memory_order_relaxed);
+        atomic_store_explicit(&telemetry_io.rec_start_us, (unsigned)dt, memory_order_relaxed);
+    }
     return sent == (int)(LARK_RTP_HDR_SIZE + bytes);
 }
 
@@ -307,7 +317,10 @@ static void send_input(const input_t *input)
         .y = (uint16_t)input->y,
         .rev_lo = input->rev_lo,
     };
-    send_tcp_frame(session, LARK_MSG_POINTER, &ptr, sizeof(ptr), true);
+    if (send_tcp_frame(session, LARK_MSG_POINTER, &ptr, sizeof(ptr), true) && input->ts_us) {
+        uint64_t dt = (uint64_t)esp_timer_get_time() - (uint64_t)input->ts_us;
+        atomic_store_explicit(&telemetry_io.ptr_send_us, (unsigned)dt, memory_order_relaxed);
+    }
 }
 
 static bool send_hello(uint32_t session, uint16_t local_udp_port)
@@ -455,6 +468,8 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         if (ctrl.op == LARK_REC_STOP || ctrl.op == LARK_REC_CANCEL) {
             media_record_stop(ctrl.op == LARK_REC_CANCEL);
         } else if (ctrl.op == LARK_REC_START) {
+            atomic_store_explicit(&rec_ctrl_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
+            atomic_store_explicit(&rec_first_rtp, true, memory_order_relaxed);
             uint8_t target = ctrl.flags & LARK_REC_TARGET_INTERCOM;
             bool bridge_ep = (ctrl.flags & LARK_REC_TARGET_BRIDGE_EP) != 0;
             bool listen = (ctrl.flags & LARK_REC_TARGET_LISTEN) != 0;

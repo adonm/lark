@@ -51,5 +51,9 @@ telemetry_t telemetry_read(void)
         .input_drops = atomic_load_explicit(&telemetry_io.input_drops, memory_order_relaxed),
         .audio_underruns = atomic_load_explicit(&telemetry_io.audio_underruns, memory_order_relaxed),
         .audio_drops = atomic_load_explicit(&telemetry_io.audio_drops, memory_order_relaxed),
+        .rec_start_us = atomic_load_explicit(&telemetry_io.rec_start_us, memory_order_relaxed),
+        .tts_first_us = atomic_load_explicit(&telemetry_io.tts_first_us, memory_order_relaxed),
+        .ptr_send_us = atomic_load_explicit(&telemetry_io.ptr_send_us, memory_order_relaxed),
+        .frame_flush_us = atomic_load_explicit(&telemetry_io.frame_flush_us, memory_order_relaxed),
     };
 }
