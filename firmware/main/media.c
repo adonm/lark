@@ -1,5 +1,6 @@
 #include "media.h"
 
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -45,6 +46,9 @@ static atomic_bool recording, stop_recording, cancel_recording;
 static atomic_uint chime_epoch;
 static atomic_bool tts_await_first;
 static atomic_uint_fast64_t tts_first_byte_us;
+static SemaphoreHandle_t debug_mic_mu;
+static uint8_t *debug_mic_buf;
+static size_t debug_mic_len, debug_mic_pos;
 
 bool media_audio_ready(void)
 {
@@ -229,6 +233,8 @@ static void play(void)
     int16_t chunk[TTS_BLOCK / sizeof(int16_t)];
     esp_err_t err = ESP_OK;
     bool played = false, starved = false;
+    uint64_t sum_sq = 0;
+    uint32_t total_samples = 0;
     while (err == ESP_OK) {
         bool owns = owns_stream(serial);
         size_t bytes = owns ? xStreamBufferReceive(tts, chunk, sizeof(chunk), 0) : 0;
@@ -242,7 +248,13 @@ static void play(void)
                               atomic_load_explicit(&tts_first_byte_us, memory_order_relaxed);
                 atomic_store_explicit(&telemetry_io.tts_first_us, (unsigned)dt, memory_order_relaxed);
             }
-            err = audio_stream_write(chunk, bytes / sizeof(*chunk));
+            size_t n = bytes / sizeof(*chunk);
+            for (size_t i = 0; i < n; ++i) {
+                int64_t s = chunk[i];
+                sum_sq += (uint64_t)(s * s);
+            }
+            total_samples += (uint32_t)n;
+            err = audio_stream_write(chunk, n);
             played = true;
             starved = false;
         } else {
@@ -254,6 +266,11 @@ static void play(void)
             }
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         }
+    }
+    if (total_samples > 0) {
+        uint32_t rms = (uint32_t)sqrt((double)sum_sq / (double)total_samples);
+        atomic_store_explicit(&telemetry_io.tts_rms, rms, memory_order_relaxed);
+        atomic_store_explicit(&telemetry_io.tts_samples, total_samples, memory_order_relaxed);
     }
     esp_err_t end = audio_stream_end();
     xSemaphoreTake(lock, portMAX_DELAY);
@@ -289,11 +306,61 @@ static void worker(void *arg)
     }
 }
 
+bool media_debug_mic_load(size_t offset, const uint8_t *data, size_t len, size_t total_len, bool commit)
+{
+    if (!debug_mic_buf || !debug_mic_mu || total_len > DEBUG_MIC_MAX_BYTES || offset + len > total_len) return false;
+    xSemaphoreTake(debug_mic_mu, portMAX_DELAY);
+    if (offset == 0) {
+        debug_mic_len = 0;
+        debug_mic_pos = 0;
+    }
+    if (len > 0 && data) {
+        memcpy(debug_mic_buf + offset, data, len);
+    }
+    if (commit) {
+        debug_mic_len = total_len;
+        debug_mic_pos = 0;
+    }
+    xSemaphoreGive(debug_mic_mu);
+    return true;
+}
+
+bool media_debug_mic_active(void)
+{
+    if (!debug_mic_mu) return false;
+    xSemaphoreTake(debug_mic_mu, portMAX_DELAY);
+    bool active = debug_mic_pos < debug_mic_len;
+    xSemaphoreGive(debug_mic_mu);
+    return active;
+}
+
+bool media_debug_mic_read_10ms(int16_t *dst)
+{
+    if (!debug_mic_mu || !debug_mic_buf || !dst) return false;
+    const size_t frame_bytes = AUDIO_10MS * sizeof(int16_t);
+    xSemaphoreTake(debug_mic_mu, portMAX_DELAY);
+    if (debug_mic_pos >= debug_mic_len) {
+        xSemaphoreGive(debug_mic_mu);
+        return false;
+    }
+    size_t avail = debug_mic_len - debug_mic_pos;
+    size_t copy = avail < frame_bytes ? avail : frame_bytes;
+    memcpy(dst, debug_mic_buf + debug_mic_pos, copy);
+    if (copy < frame_bytes) {
+        memset((uint8_t *)dst + copy, 0, frame_bytes - copy);
+    }
+    debug_mic_pos += copy;
+    xSemaphoreGive(debug_mic_mu);
+    return true;
+}
+
 esp_err_t media_init(bool audio_ready)
 {
     if (!audio_ready) return ESP_OK;
     uint8_t *storage = heap_caps_malloc(TTS_BYTES + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!storage) return ESP_ERR_NO_MEM;
+    debug_mic_buf = heap_caps_malloc(DEBUG_MIC_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    debug_mic_mu = xSemaphoreCreateMutex();
+    if (!storage || !debug_mic_buf || !debug_mic_mu) return ESP_ERR_NO_MEM;
     tts = xStreamBufferCreateStatic(TTS_BYTES + 1, sizeof(int16_t), storage, &tts_control);
     lock = xSemaphoreCreateMutex();
     jobs = xQueueCreate(6, sizeof(job_t));

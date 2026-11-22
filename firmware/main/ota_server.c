@@ -6,7 +6,9 @@
 
 #include "audio.h"
 #include "board.h"
+#include "debug_parse.h"
 #include "display.h"
+#include "frame.h"
 #include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_server.h"
@@ -314,6 +316,74 @@ static esp_err_t ota_upload_post(httpd_req_t *request)
     return respond_and_reboot(request, "OTA installed; rebooting\n");
 }
 
+static esp_err_t debug_tap_post(httpd_req_t *request)
+{
+    char body[64];
+    size_t bytes = 0;
+    if (request->content_len >= sizeof(body)) {
+        return text_response(request, "400 Bad Request", "Expected {\"x\":N,\"y\":M}\n");
+    }
+    esp_err_t err = read_req_body(request, body, sizeof(body) - 1, &bytes);
+    if (err != ESP_OK) return err;
+    body[bytes] = '\0';
+    uint16_t x = 0, y = 0;
+    if (!debug_parse_tap(body, FRAME_WIDTH, FRAME_HEIGHT, &x, &y)) {
+        return text_response(request, "400 Bad Request", "Expected {\"x\":0..W-1,\"y\":0..H-1}\n");
+    }
+    if (!display_inject_tap(x, y)) {
+        return text_response(request, "503 Service Unavailable", "Touch task unavailable\n");
+    }
+    char reply[48];
+    snprintf(reply, sizeof(reply), "{\"ok\":true,\"x\":%u,\"y\":%u}\n", x, y);
+    return json_response(request, reply);
+}
+
+static esp_err_t debug_mic_post(httpd_req_t *request)
+{
+    size_t total = request->content_len;
+    if (!debug_mic_len_valid(total, DEBUG_MIC_MAX_BYTES)) {
+        return text_response(request, "400 Bad Request", "Expected 1..320000 even bytes of 16 kHz mono PCM\n");
+    }
+    uint8_t chunk[2048];
+    size_t offset = 0;
+    while (offset < total) {
+        size_t want = total - offset < sizeof(chunk) ? total - offset : sizeof(chunk);
+        int got = httpd_req_recv(request, (char *)chunk, want);
+        if (got <= 0) {
+            return text_response(request, "408 Request Timeout", "Incomplete PCM body\n");
+        }
+        bool last = offset + (size_t)got == total;
+        if (!media_debug_mic_load(offset, chunk, (size_t)got, total, last)) {
+            return text_response(request, "503 Service Unavailable", "Debug mic buffer unavailable\n");
+        }
+        offset += (size_t)got;
+    }
+    char reply[48];
+    snprintf(reply, sizeof(reply), "{\"ok\":true,\"bytes\":%zu}\n", total);
+    return json_response(request, reply);
+}
+
+static esp_err_t debug_screen_get(httpd_req_t *request)
+{
+    if (!require_token(request)) return ESP_OK;
+    char w_hdr[12], h_hdr[12];
+    snprintf(w_hdr, sizeof(w_hdr), "%d", FRAME_WIDTH);
+    snprintf(h_hdr, sizeof(h_hdr), "%d", FRAME_HEIGHT);
+    httpd_resp_set_type(request, "application/octet-stream");
+    httpd_resp_set_hdr(request, "X-Width", w_hdr);
+    httpd_resp_set_hdr(request, "X-Height", h_hdr);
+
+    enum { CHUNK_PIXELS = 2048 };
+    uint16_t chunk[CHUNK_PIXELS];
+    for (size_t off = 0; off < FRAME_PIXELS; off += CHUNK_PIXELS) {
+        size_t count = FRAME_PIXELS - off < CHUNK_PIXELS ? FRAME_PIXELS - off : CHUNK_PIXELS;
+        display_copy_fb_chunk(chunk, off, count);
+        esp_err_t err = httpd_resp_send_chunk(request, (const char *)chunk, count * sizeof(uint16_t));
+        if (err != ESP_OK) return err;
+    }
+    return httpd_resp_send_chunk(request, NULL, 0);
+}
+
 typedef struct {
     const char *uri;
     esp_err_t (*handler)(httpd_req_t *);
@@ -329,12 +399,13 @@ esp_err_t ota_server_start(void)
 {
     static const post_route_t posts[] = {
         { "/ota", ota_pull_post }, { "/ota/upload", ota_upload_post }, { "/reboot", reboot_post },
-        { "/volume", volume_post },
+        { "/volume", volume_post }, { "/debug/tap", debug_tap_post }, { "/debug/mic", debug_mic_post },
     };
     const httpd_uri_t status = { .uri = "/status", .method = HTTP_GET, .handler = status_get };
+    const httpd_uri_t debug_screen = { .uri = "/debug/screen", .method = HTTP_GET, .handler = debug_screen_get };
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_uri_handlers = 1 + sizeof(posts) / sizeof(posts[0]);
+    config.max_uri_handlers = 2 + sizeof(posts) / sizeof(posts[0]);
     config.recv_wait_timeout = 15;
     config.lru_purge_enable = true;
     httpd_handle_t server;
@@ -343,6 +414,9 @@ esp_err_t ota_server_start(void)
         return err;
     }
     err = httpd_register_uri_handler(server, &status);
+    if (err == ESP_OK) {
+        err = httpd_register_uri_handler(server, &debug_screen);
+    }
     for (size_t i = 0; err == ESP_OK && i < sizeof(posts) / sizeof(posts[0]); ++i) {
         const httpd_uri_t route = {
             .uri = posts[i].uri, .method = HTTP_POST, .handler = checked_post, .user_ctx = (void *)&posts[i],

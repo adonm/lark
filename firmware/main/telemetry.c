@@ -55,5 +55,7 @@ telemetry_t telemetry_read(void)
         .tts_first_us = atomic_load_explicit(&telemetry_io.tts_first_us, memory_order_relaxed),
         .ptr_send_us = atomic_load_explicit(&telemetry_io.ptr_send_us, memory_order_relaxed),
         .frame_flush_us = atomic_load_explicit(&telemetry_io.frame_flush_us, memory_order_relaxed),
+        .tts_rms = atomic_load_explicit(&telemetry_io.tts_rms, memory_order_relaxed),
+        .tts_samples = atomic_load_explicit(&telemetry_io.tts_samples, memory_order_relaxed),
     };
 }

@@ -29,7 +29,8 @@ static const char *TAG = "display";
 static esp_lcd_panel_handle_t panel;
 static esp_lcd_touch_handle_t touch;
 static SemaphoreHandle_t drawn, fb_lock;
-static TaskHandle_t painter;
+static TaskHandle_t painter, touch_handle;
+static atomic_uint inject_tap;
 static uint16_t *fb, *strip[2];
 static uint8_t *pending_pkt, *work_pkt;
 static size_t pending_len;
@@ -242,6 +243,24 @@ bool display_is_sleeping(void)
     return atomic_load(&brightness) == DIM;
 }
 
+bool display_inject_tap(uint16_t x, uint16_t y)
+{
+    if (x >= FRAME_WIDTH || y >= FRAME_HEIGHT || !touch_handle) return false;
+    uint32_t packed = (1u << 31) | ((uint32_t)x << 16) | (uint32_t)y;
+    atomic_store_explicit(&inject_tap, packed, memory_order_release);
+    xTaskNotifyGive(touch_handle);
+    return true;
+}
+
+void display_copy_fb_chunk(uint16_t *dst, size_t px_off, size_t px_count)
+{
+    if (!dst || !fb || px_off >= FRAME_PIXELS) return;
+    if (px_off + px_count > FRAME_PIXELS) px_count = FRAME_PIXELS - px_off;
+    xSemaphoreTake(fb_lock, portMAX_DELAY);
+    memcpy(dst, fb + px_off, px_count * sizeof(*dst));
+    xSemaphoreGive(fb_lock);
+}
+
 #if BOARD_HAS_TOUCH_IRQ
 static void touch_interrupt(esp_lcd_touch_handle_t controller)
 {
@@ -265,6 +284,24 @@ static void touch_task(void *arg)
 #else
         vTaskDelay(pdMS_TO_TICKS(gesture.down ? 12 : 30));
 #endif
+        uint32_t inj = atomic_exchange_explicit(&inject_tap, 0, memory_order_acq_rel);
+        if (inj & (1u << 31)) {
+            uint16_t ix = (uint16_t)((inj >> 16) & 0x7fff);
+            uint16_t iy = (uint16_t)(inj & 0xffff);
+            touch_event_t ev = touch_gesture_update(&gesture, true, ix, iy, now_ms());
+            if (ev.kind == TOUCH_PRESS) {
+                press_rev = atomic_load(&shown_rev);
+                display_wake();
+            }
+            vTaskDelay(pdMS_TO_TICKS(30));
+            for (int r = 0; r < 2; ++r) {
+                ev = touch_gesture_update(&gesture, false, 0, 0, now_ms());
+                if (ev.kind == TOUCH_TAP) {
+                    net_client_pointer(LARK_PTR_TAP, ev.x, ev.y, press_rev);
+                }
+            }
+            continue;
+        }
         esp_lcd_touch_point_data_t p = { 0 };
         uint8_t count = 0;
         if (esp_lcd_touch_read_data(touch) != ESP_OK ||
@@ -308,6 +345,7 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_FALSE(xTaskCreate(paint_task, "painter", 4096, NULL, 2, &painter) == pdPASS &&
                         xTaskCreate(touch_task, "touch", 3072, NULL, 4, &touch_reader) == pdPASS,
                         ESP_ERR_NO_MEM, TAG, "Display tasks");
+    touch_handle = touch_reader;
 #if BOARD_HAS_TOUCH_IRQ
     if (esp_lcd_touch_register_interrupt_callback_with_data(touch, touch_interrupt, touch_reader) == ESP_OK) {
         atomic_store_explicit(&touch_irq_ok, true, memory_order_relaxed);

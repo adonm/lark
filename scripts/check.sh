@@ -45,6 +45,9 @@ printf 'PASS host VAD tests\n'
 "${host_cc[@]}" firmware/tests/proto_test.c -o "$host_tests/proto"
 "$host_tests/proto"
 
+"${host_cc[@]}" firmware/tests/debug_parse_test.c -o "$host_tests/debug_parse"
+"$host_tests/debug_parse"
+
 for board in vocat box3; do
     flags=()
     if [[ "$board" == box3 ]]; then flags+=(-DLARK_BOX3=1); fi

@@ -10,6 +10,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "media.h"
 #include "nvs.h"
 
 enum {
@@ -188,12 +190,14 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
 
     // Drain only already-buffered stale RX DMA frames (< 3 ms); keep the first fresh frame.
     bool have_first = false;
-    for (int i = 0; i < 12; ++i) {
-        int64_t t0 = esp_timer_get_time();
-        ESP_RETURN_ON_ERROR(audio_read_10ms(chunk_buf), TAG, "Prepare recording");
-        if (esp_timer_get_time() - t0 >= 3000) {
-            have_first = true;
-            break;
+    if (!media_debug_mic_active()) {
+        for (int i = 0; i < 12; ++i) {
+            int64_t t0 = esp_timer_get_time();
+            ESP_RETURN_ON_ERROR(audio_read_10ms(chunk_buf), TAG, "Prepare recording");
+            if (esp_timer_get_time() - t0 >= 3000) {
+                have_first = true;
+                break;
+            }
         }
     }
 
@@ -204,6 +208,8 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
         int16_t *dst = chunk_buf + pending;
         if (have_first) {
             have_first = false;
+        } else if (media_debug_mic_read_10ms(dst)) {
+            vTaskDelay(pdMS_TO_TICKS(10));
         } else {
             ESP_RETURN_ON_ERROR(audio_read_10ms(dst), TAG, "Read mic");
         }

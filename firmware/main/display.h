@@ -13,3 +13,5 @@ void display_wake(void);
 void display_set_brightness(int level);
 bool display_is_sleeping(void);
 void display_sync_power_save(void);
+bool display_inject_tap(uint16_t x, uint16_t y);
+void display_copy_fb_chunk(uint16_t *dst, size_t px_off, size_t px_count);
