@@ -798,6 +798,8 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		sender:     senderName,
 		senderKind: "contact",
 	}, time.Now().In(s.b.location()))
+	s.b.setDCBuildTarget(companionID, accID, msg.ChatId)
+	defer s.b.setDCBuildTarget(companionID, 0, 0)
 	raw, _, err := s.b.oc.askPrepared(turnCtx, companionID, func() (string, string) {
 		return who.Name, prompt
 	}, turnStream{}, "deltachat", nil, nil)
@@ -805,8 +807,8 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		return
 	}
 	reply := strings.TrimSpace(fenced.ReplaceAllString(raw, ""))
-	if reply == "" {
-		reply = "Done."
+	if isSilentReply(reply) {
+		return
 	}
 	s.b.chat(companionID, newChat("companion", who.Name, reply, "deltachat"), true)
 
@@ -830,6 +832,18 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	}
 	if _, err := rpc.SendMsg(accID, msg.ChatId, outMsg); err != nil {
 		log.Printf("Delta Chat SendMsg error: %v", err)
+	}
+	if s.b.ws != nil {
+		s.b.ws.deliverNotice(ctx, terminalNotice{
+			recipientIDs: []string{companionID},
+			sender:       who,
+			text:         reply,
+			speakText:    "I told " + senderName + ": " + reply,
+			voice:        s.b.voiceFor(companionID),
+			showCard:     true,
+			replyTo:      senderName,
+			trace:        traceFrom(turnCtx),
+		})
 	}
 }
 

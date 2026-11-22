@@ -451,13 +451,6 @@ func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, te
 		h.sendIntercom(ctx, d, id, others, direct.target, direct.text, pcm)
 		return
 	}
-	if reply, job, err := h.b.buildReply(ctx, sender.ID, text); err != nil {
-		h.finishTurn(d, id, nil, nil)
-		return
-	} else if reply != "" {
-		h.buildAcknowledgement(ctx, d, id, text, source, reply, job)
-		return
-	}
 	if h.b.oc == nil {
 		h.turnError(d, id, "Chat is not ready yet.")
 		return

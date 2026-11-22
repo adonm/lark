@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -289,10 +290,10 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 	dev.hello(t, "vocat-33d8", cake.ID)
 	bindMenu(dev, b.ws, "vocat-33d8")
 
-	// Open Menu -> Next -> Next -> Pair.
+	// Open Menu -> Next -> More -> Pair.
 	tapMenu(t, dev, "menu", "menu-next")
-	tapMenu(t, dev, "menu-next", "menu-voice")
-	tapMenu(t, dev, "menu-next", "menu-pair", "menu-unpair")
+	tapMenu(t, dev, "menu-next", "menu-more")
+	tapMenu(t, dev, "menu-more", "menu-pair", "menu-unpair")
 	pairSrc := tapMenu(t, dev, "menu-pair", "pair-close")
 	if !strings.Contains(pairSrc, "pair-close") {
 		t.Fatalf("expected pair drawer, got %q", pairSrc)
@@ -452,26 +453,85 @@ func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
 			p := framePayload(f)
 			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 		})
-		dev.until(t, func(f wsFrame) bool {
+		end := dev.until(t, func(f wsFrame) bool {
 			p := framePayload(f)
-			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 		})
+		audioID := binary.LittleEndian.Uint64(framePayload(end)[1:9])
+		dev.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	}
-	waitSVG(t, b.ws, "box3-0001", "Dinner's ready")
-	waitSVG(t, b.ws, "vocat-0002", "Dinner's ready")
+	waitSVG(t, b.ws, "box3-0001", "Hello Alice!")
+	waitSVG(t, b.ws, "vocat-0002", "Hello Alice!")
 
 	spokenMu.Lock()
 	gotSpoken := slices.Clone(spoken)
 	spokenMu.Unlock()
-	wantSpeech := b.voiceFor("greg") + ":Message from Mum: Dinner's ready"
-	if len(gotSpoken) != 1 || gotSpoken[0] != wantSpeech {
-		t.Fatalf("spoken = %v, want [%q] (remote reply must not be spoken aloud)", gotSpoken, wantSpeech)
+	v := b.voiceFor("greg")
+	wantFirst := v + ":Message from Mum: Dinner's ready"
+	wantReply := v + ":I told Mum: Hello Alice!"
+	if !slices.Contains(gotSpoken, wantFirst) || !slices.Contains(gotSpoken, wantReply) {
+		t.Fatalf("spoken = %v, want %q and %q", gotSpoken, wantFirst, wantReply)
 	}
 	stub.mu.Lock()
 	if len(stub.sent) != 1 || stub.sent[0].chatID != 200 || *stub.sent[0].data.Text != "Hello Alice!" {
 		t.Fatalf("unexpected DC reply: %+v", stub.sent)
 	}
 	stub.mu.Unlock()
+}
+
+func TestDeltaChatSilentReplyProducesNeitherChatNorSpeech(t *testing.T) {
+	b, base, _ := listenHarness(t, func(string) string { return "[silent]" })
+	dcStub := newStubDCRPC()
+	b.dc = newDCService(b, "", t.TempDir(), "nine.testrun.org")
+	b.dc.rpc = dcStub
+	b.dc.ready.Store(true)
+
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-silent", "greg")
+
+	var spoken []string
+	var spokenMu sync.Mutex
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				spokenMu.Lock()
+				spoken = append(spoken, req.text)
+				spokenMu.Unlock()
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	dcStub.mu.Lock()
+	dcStub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	dcStub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	dcStub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "Okay", ViewType: deltachat.ViewtypeText}
+	dcStub.mu.Unlock()
+
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
+	waitSVG(t, b.ws, "box3-silent", "Okay")
+
+	spokenMu.Lock()
+	gotSpoken := slices.Clone(spoken)
+	spokenMu.Unlock()
+	if len(gotSpoken) != 1 || gotSpoken[0] != "Message from Mum: Okay" {
+		t.Fatalf("silent reply should only speak incoming message, got %v", gotSpoken)
+	}
+	dcStub.mu.Lock()
+	sentCount := len(dcStub.sent)
+	dcStub.mu.Unlock()
+	if sentCount != 0 {
+		t.Fatalf("silent reply should not send DC message, got %d", sentCount)
+	}
 }
 
 func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {

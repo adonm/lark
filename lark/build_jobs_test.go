@@ -142,39 +142,6 @@ func stubBuildBridge(t *testing.T, stub *buildStub, enabled bool, tts *atomic.In
 	return b, base
 }
 
-func TestBuildIntent(t *testing.T) {
-	for _, tc := range []struct {
-		text, kind, target string
-	}{
-		{"Make me a dinosaur quiz.", "new", ""},
-		{"Could you make a matching game?", "new", ""},
-		{"Create some flashcards about rocks", "new", ""},
-		{"Draw me a blue cat", "new", ""},
-		{"Edit the app `dinosaur-quiz` to add a round", "edit", "dinosaur-quiz"},
-		{"Change this game to use bigger numbers", "edit", ""},
-		{"Change your eyes to stars.", "face", ""},
-		{"Give yourself a bigger smile!", "face", ""},
-		{"Cancel the build.", "cancel", ""},
-		{"Stop the background job", "cancel", ""},
-		{"Make it better", "clarify", ""},
-		{"build something", "clarify", ""},
-		{"make me an app", "clarify-app", ""},
-		{"change your face", "clarify-face", ""},
-		{"Stop", "", ""},
-		{"Set a timer for three minutes", "", ""},
-		{"Call Mint", "", ""},
-		{"Tell Mint to make an app.", "", ""},
-		{"Play a quiz about rocks", "", ""},
-		{"Make the volume lower", "", ""},
-		{"Make a joke about a game", "", ""},
-		{"Change your voice", "", ""},
-	} {
-		if got := parseBuildIntent(tc.text); got != (buildIntent{tc.kind, tc.target}) {
-			t.Errorf("%q → %+v, want %q/%q", tc.text, got, tc.kind, tc.target)
-		}
-	}
-}
-
 func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	const device = "cat"
 	var speech atomic.Int32
@@ -185,11 +152,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	}
 	s := testConnectWS(t, base, "unit", false)
 	s.hello(t, "vocat-0001", device)
-	b.ws.mu.Lock()
-	b.ws.startTurn(b.ws.terminals["vocat-0001"], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
-		b.ws.runTurn(ctx, b.ws.terminals["vocat-0001"], turn, "Make me a dinosaur quiz.", "voice", nil)
-	})
-	b.ws.mu.Unlock()
+	toolTest(t, base, "build", object{"companion_id": device, "request": "Make me a dinosaur quiz."}, false)
 	cardAndSpeech := func(label string) {
 		t.Helper()
 		waitSVG(t, b.ws, "vocat-0001", label)
@@ -205,7 +168,6 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 		s.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 		s.barrier(t)
 	}
-	cardAndSpeech("Cancel build")
 	var job string
 	select {
 	case job = <-stub.prompted:
@@ -247,8 +209,8 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 		t.Fatalf("build did not save valid template: %v", err)
 	}
 	b.ws.announceBuild(t.Context(), buildJob{id: job, device: device, state: "ready", result: "Dinosaur Quiz is ready in Games."})
-	if got := speech.Load(); got != 2 { // Build acknowledgement and Ready.
-		t.Errorf("wanted one acknowledgement and one announcement after warmup, got %d calls", got)
+	if got := speech.Load(); got != 1 { // Ready announcement.
+		t.Errorf("wanted one announcement after warmup, got %d calls", got)
 	}
 	if sid, err := b.oc.get(device); err != nil || sid != "" {
 		t.Fatalf("builder installed a foreground mapping")
@@ -386,36 +348,71 @@ func waitBuildState(t *testing.T, b *larkServer, id, expected string) string {
 	t.Helper()
 	var state, result string
 	if err := b.db.QueryRow(`SELECT state,result FROM build_jobs WHERE id=?`, id).Scan(&state, &result); err != nil || state != expected {
-		t.Fatalf("build state %q, want %q: %v", state, expected, err)
+		t.Fatalf("build state %q (result=%q), want %q: %v", state, result, expected, err)
 	}
 	return result
 }
 
-func TestBuildForegroundLatencyStub(t *testing.T) {
-	const prompt = "Make me a dinosaur quiz."
-	const delay = 250 * time.Millisecond
-	for _, background := range []bool{false, true} {
-		t.Run(map[bool]string{false: "inline", true: "background"}[background], func(t *testing.T) {
-			stub := &buildStub{delay: delay, reply: quizProposal}
-			b, _ := stubBuildBridge(t, stub, background, nil)
-			start := time.Now()
-			reply, _, err := b.buildReply(t.Context(), "build-eval", prompt)
-			if err == nil && reply == "" {
-				var gen generatedReply
-				gen, err = b.generateReply(t.Context(), b.root, companionState{ID: "build-eval", companionLook: companionLook{Name: "Synthetic"}}, prompt, turnOptions{source: "voice"})
-				reply = gen.reply
-			}
-			elapsed := time.Since(start)
-			t.Logf("stub foreground acknowledgement: %s (fixed model delay %s)", elapsed, delay)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if background && (reply != "Building it now!" || elapsed >= delay) {
-				t.Fatalf("foreground waited for the builder: %s", elapsed)
-			}
-			if !background && elapsed < delay {
-				t.Fatal("baseline did not wait for the model")
-			}
-		})
+func TestMCPBuildToolVoiceAndDeltaChat(t *testing.T) {
+	stub := &buildStub{allow: make(chan struct{}), reply: quizProposal}
+	close(stub.allow)
+	var speech atomic.Int32
+	b, base := stubBuildBridge(t, stub, true, &speech)
+	dcStub := newStubDCRPC()
+	b.dc = newDCService(b, "", t.TempDir(), "nine.testrun.org")
+	b.dc.rpc = dcStub
+	b.dc.ready.Store(true)
+
+	_, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-bld1", "greg")
+
+	// 1. Delta Chat turn calls build -> completes -> sends DC message AND announces on terminal.
+	b.setDCBuildTarget("greg", 1, 200)
+	res := toolTest(t, base, "build", object{
+		"companion_id": "greg",
+		"request":      "Make a dinosaur quiz.",
+	}, false)
+	b.setDCBuildTarget("greg", 0, 0)
+	jobID := str(res["job_id"])
+	if jobID == "" {
+		t.Fatalf("expected job_id, got %v", res)
+	}
+	expectValue(t, stub.deleted, jobID)
+	waitBuildState(t, b, jobID, "ready")
+	b.builders.signal()
+	waitSVG(t, b.ws, "box3-bld1", "Dinosaur Quiz is ready in Games.")
+	dcStub.mu.Lock()
+	dcCount := len(dcStub.sent)
+	dcStub.mu.Unlock()
+	if dcCount != 1 || dcStub.sent[0].chatID != 200 || !strings.Contains(*dcStub.sent[0].data.Text, "Dinosaur Quiz is ready in Games.") {
+		t.Fatalf("expected DC completion message, got %+v", dcStub.sent)
+	}
+
+	// 2. Voice turn calls build to edit the saved app -> completes -> announces on terminal without extra DC message.
+	stub.reply = `{"title":"Dinosaur Quiz 2"}`
+	editRes := toolTest(t, base, "build", object{
+		"companion_id": "greg",
+		"app":          "dinosaur-quiz",
+		"request":      "Edit dinosaur-quiz to add a timer.",
+	}, false)
+	editJob := str(editRes["job_id"])
+	if editJob == "" {
+		t.Fatalf("expected edit job_id, got %v", editRes)
+	}
+	expectValue(t, stub.deleted, editJob)
+	waitBuildState(t, b, editJob, "ready")
+	b.builders.signal()
+	if speech.Load() < 1 {
+		t.Fatalf("expected terminal speech announcement, got %d", speech.Load())
+	}
+	dcStub.mu.Lock()
+	dcCountAfter := len(dcStub.sent)
+	dcStub.mu.Unlock()
+	if dcCountAfter != 1 {
+		t.Fatalf("voice build should not send DC message, got %d", dcCountAfter)
 	}
 }

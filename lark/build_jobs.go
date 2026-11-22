@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chatmail/rpc-client-go/v2/deltachat"
 )
 
 const (
@@ -16,11 +18,41 @@ const (
 	buildSlots   = 4
 )
 
+type buildIntent struct {
+	kind, target string
+}
+
+type dcBuildTarget struct {
+	accID, chatID uint32
+}
+
+func (b *larkServer) setDCBuildTarget(companionID string, accID, chatID uint32) {
+	b.dcBuildMu.Lock()
+	defer b.dcBuildMu.Unlock()
+	if b.dcBuildTargets == nil {
+		b.dcBuildTargets = make(map[string]dcBuildTarget)
+	}
+	id := strings.ToLower(companionID)
+	if accID == 0 || chatID == 0 {
+		delete(b.dcBuildTargets, id)
+	} else {
+		b.dcBuildTargets[id] = dcBuildTarget{accID: accID, chatID: chatID}
+	}
+}
+
+func (b *larkServer) getDCBuildTarget(companionID string) dcBuildTarget {
+	b.dcBuildMu.Lock()
+	defer b.dcBuildMu.Unlock()
+	return b.dcBuildTargets[strings.ToLower(companionID)]
+}
+
 type buildSpec struct {
 	Kind, Prompt, Character string
-	App                     *savedApp `json:",omitempty"`
+	App                     *savedApp       `json:",omitempty"`
 	Face                    *companionState `json:",omitempty"`
-	FaceVersion             int64     `json:",omitempty"`
+	FaceVersion             int64           `json:",omitempty"`
+	ReplyAccountID          uint32          `json:",omitempty"`
+	ReplyChatID             uint32          `json:",omitempty"`
 }
 
 type buildJob struct {
@@ -58,7 +90,14 @@ func (m *buildManager) enqueue(ctx context.Context, companionID string, intent b
 	}
 	id := strings.ToLower(companionID)
 	who := m.b.companionFor(id)
-	spec := buildSpec{Kind: intent.kind, Prompt: text, Character: who.Name}
+	tgt := m.b.getDCBuildTarget(id)
+	spec := buildSpec{
+		Kind:           intent.kind,
+		Prompt:         text,
+		Character:      who.Name,
+		ReplyAccountID: tgt.accID,
+		ReplyChatID:    tgt.chatID,
+	}
 	switch intent.kind {
 	case "edit":
 		if intent.target == "" {
@@ -269,6 +308,14 @@ func (m *buildManager) start(ctx context.Context, job buildJob, cleanup bool) {
 				message = "That build took too long. Try a smaller change."
 			}
 			m.fail(ctx, job.id, message)
+		}
+		if ctx.Err() == nil && job.spec.ReplyAccountID != 0 && job.spec.ReplyChatID != 0 && m.b.dc != nil {
+			var res string
+			if m.b.db.readDB().QueryRowContext(ctx, `SELECT result FROM build_jobs WHERE id=? AND state IN ('ready','failed')`, job.id).Scan(&res) == nil && res != "" {
+				if rpc := m.b.dc.getRPC(); rpc != nil {
+					_, _ = rpc.SendMsg(job.spec.ReplyAccountID, job.spec.ReplyChatID, deltachat.MessageData{Text: &res})
+				}
+			}
 		}
 		// On shutdown, recovery will report the running job and retry cleanup.
 		if ctx.Err() == nil {
