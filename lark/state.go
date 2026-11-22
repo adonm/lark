@@ -24,7 +24,7 @@ var (
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 const (
-	emmaVoice  = "bf_emma"
+	lilyVoice  = "bf_lily"
 	fableVoice = "bm_fable"
 	heartVoice = "af_heart"
 )
@@ -40,10 +40,12 @@ type voiceChoice struct {
 var voiceCatalog = [...]voiceChoice{
 	{heartVoice, "Heart", "en-us", 3},
 	{fableVoice, "Fable", "en-gb", 25},
-	{emmaVoice, "Emma", "en-gb", 21},
+	{lilyVoice, "Lily", "en-gb", 23},
 	{"bm_george", "George", "en-gb", 26},
 	{"af_bella", "Bella", "en-us", 2},
 	{"am_puck", "Puck", "en-us", 18},
+	{"bf_alice", "Alice", "en-gb", 20},
+	{"bf_isabella", "Isabella", "en-gb", 22},
 }
 
 func voiceByID(id string) voiceChoice {
@@ -62,7 +64,7 @@ func storedVoice(id string) string {
 	case id == "", voiceByID(id).ID != "":
 		return id
 	case strings.HasPrefix(id, "bf_"):
-		return emmaVoice
+		return lilyVoice
 	case strings.HasPrefix(id, "bm_"):
 		return fableVoice
 	default:

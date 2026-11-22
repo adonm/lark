@@ -77,6 +77,22 @@ func (s *testWS) tap(t *testing.T, x, y int, rev uint16) {
 	s.sendProto(t, msgPointer, encodePointer(ptrTap, uint16(x), uint16(y), rev))
 }
 
+func (s *testWS) drag(t *testing.T, x, y int, rev uint16) {
+	t.Helper()
+	s.sendProto(t, msgPointer, encodePointer(ptrDrag, uint16(x), uint16(y), rev))
+}
+
+func (s *testWS) up(t *testing.T, x, y int, rev uint16) {
+	t.Helper()
+	s.sendProto(t, msgPointer, encodePointer(ptrUp, uint16(x), uint16(y), rev))
+}
+
+func (s *testWS) swipeUp(t *testing.T) {
+	t.Helper()
+	s.drag(t, 160, 180, 0)
+	s.up(t, 160, 100, 0)
+}
+
 func (s *testWS) recStart(t *testing.T, target string) {
 	t.Helper()
 	b := binary.LittleEndian.AppendUint16(nil, 1)

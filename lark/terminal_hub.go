@@ -101,6 +101,9 @@ type wsTerminal struct {
 	menuData      *menuContent
 	menuHintUntil time.Time
 	bootHint      bool
+	swipeActive   bool
+	swipeStartX   int
+	swipeStartY   int
 	readingBook   *savedApp
 	readingPage   int
 	statsAt       time.Time
@@ -880,10 +883,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					hits = []hitBox{{id: "listen-stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
 					r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
 				case status == "listening":
-					btnH := 14
-					if !spec.round {
-						btnH = 18
-					}
+					btnH := pixelNavHeight(spec)
 					y := spec.safe.Max.Y - btnH
 					gap := 4
 					bw := (spec.safe.Dx() - gap) / 2
@@ -891,16 +891,16 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					hits = addLogicalHit(hits, spec, "rec-send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
 					r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
 				case status == "thinking" || status == "speaking":
-					btnW, btnH := 38, 14
+					btnW, btnH := 42, pixelNavHeight(spec)
 					if !spec.round {
-						btnW, btnH = 44, 18
+						btnW = 48
 					}
 					btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
 					hits = addLogicalHit(hits, spec, "stop", btn)
 					r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
 				default:
-					hits = []hitBox{{id: "menu", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
-					r.view.actions = map[string]sceneAction{"menu": {"menu", ""}}
+					hits = []hitBox{{id: "listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+					r.view.actions = map[string]sceneAction{"listen": {"listen", ""}}
 				}
 			}
 			if err == nil && img != nil {
@@ -911,6 +911,11 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					srcParts = append(srcParts, r.drawer)
 					if r.drawer == drawerMenu {
 						for _, it := range pixelHomeMenuItems {
+							srcParts = append(srcParts, it.label)
+						}
+					}
+					if r.drawer == drawerMore {
+						for _, it := range pixelMoreMenuItems {
 							srcParts = append(srcParts, it.label)
 						}
 					}

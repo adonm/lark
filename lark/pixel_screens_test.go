@@ -95,14 +95,38 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 		safePhys := physicalRect(spec.safe, spec.artScale)
 		th := defaultPixelTheme()
+		voiceP1, v1Hits, _ := renderPixelVoiceWithHits(spec, lilyVoice, 0, th)
+		voiceP2, _, _ := renderPixelVoiceWithHits(spec, lilyVoice, 1, th)
+		moreImg, _, _ := renderPixelMoreWithHits(spec, 0, th)
+		volImg, _, _ := renderPixelVolumeWithHits(spec, false, 60, 0, th)
+		statsImg, _, _ := renderPixelStatsWithHits(spec, []menuRow{{"Companion", "Greg"}, {"Voice", "Heart"}}, th)
+		wantVoiceP1 := 3
+		if !spec.round {
+			wantVoiceP1 = 6
+		}
+		voiceCount := 0
+		for _, hb := range v1Hits {
+			if strings.HasPrefix(hb.id, "voice-") {
+				voiceCount++
+			}
+		}
+		if voiceCount != wantVoiceP1 {
+			t.Fatalf("%s voice page 1 items = %d, want %d", spec.name, voiceCount, wantVoiceP1)
+		}
 		screens := []struct {
 			name string
 			img  *image.RGBA
 		}{
 			{"home", renderPixelHome(spec, nil, nil, gradeDay, "listening", 0, "", false)},
+			{"home-listen-win", renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, 0, "listening", 0, "", false, 0.7)},
 			{"home-hint", renderPixelHome(spec, nil, nil, gradeDay, "", 0, "", true)},
 			{"home-caption", renderPixelHome(spec, nil, nil, gradeDay, "speaking", 0, "Message from Mum: dinner's ready", false)},
 			{"menu", renderPixelMenu(spec, 0, th)},
+			{"more", moreImg},
+			{"voice-p1", voiceP1},
+			{"voice-p2", voiceP2},
+			{"volume", volImg},
+			{"stats", statsImg},
 			{"books", renderPixelBooksList(spec, books, 0, th)},
 			{"games", renderPixelGamesList(spec, games, 0, th)},
 			{"reader", renderPixelReader(spec, "The Lost Island", "Once upon a time in a faraway land.", 0, 0, th)},
@@ -124,7 +148,7 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 				t.Fatalf("%s %s bounds = %v, want %dx%d", spec.name, sc.name, sc.img.Bounds(), wantW, wantH)
 			}
 			// On non-home, non-pair UI screens without a backdrop, no non-background pixel may appear outside the safe area.
-			if sc.name != "home" && sc.name != "home-hint" && sc.name != "home-caption" && sc.name != "pair" {
+			if sc.name != "home" && sc.name != "home-listen-win" && sc.name != "home-hint" && sc.name != "home-caption" && sc.name != "pair" {
 				for y := range wantH {
 					for x := range wantW {
 						if image.Pt(x, y).In(safePhys) {
@@ -222,6 +246,12 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 			save(fmt.Sprintf("%s-home-%s-talk", spec.name, g.name),
 				renderPixelHome(spec, gregBG, poses[2], g.grade, "speaking", 0, "", false))
 		}
+		save(spec.name+"-home-hint",
+			renderPixelHome(spec, gregBG, poses[0], gradeDay, "", 0, "", true))
+		save(spec.name+"-home-listening",
+			renderPixelHome(spec, gregBG, poses[0], gradeDay, "listening", 0, "", false))
+		save(spec.name+"-home-listen-win",
+			renderPixelHomeListen(spec, gregBG, poses[0], gradeDay, weatherClear, 0, "listening", 0, "", false, 0.7))
 		save(spec.name+"-home-caption",
 			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "Message from Mum: dinner's ready", false))
 		save(spec.name+"-home-cloudy",
@@ -229,6 +259,19 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		save(spec.name+"-home-rain",
 			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherRain, 5, "", 0, "", false))
 		save(spec.name+"-menu-p1", renderPixelMenu(spec, 0, th))
+		if spec.round {
+			save(spec.name+"-menu-p2", renderPixelMenu(spec, 1, th))
+		}
+		moreImg, _, _ := renderPixelMoreWithHits(spec, 0, th)
+		save(spec.name+"-more", moreImg)
+		voiceP1, _, _ := renderPixelVoiceWithHits(spec, heartVoice, 0, th)
+		voiceP2, _, _ := renderPixelVoiceWithHits(spec, heartVoice, 1, th)
+		save(spec.name+"-voice-p1", voiceP1)
+		save(spec.name+"-voice-p2", voiceP2)
+		volImg, _, _ := renderPixelVolumeWithHits(spec, false, 60, 0, th)
+		save(spec.name+"-volume", volImg)
+		statsImg, _, _ := renderPixelStatsWithHits(spec, []menuRow{{"Companion", "Greg"}, {"Battery", "88%"}, {"Voice", "Heart"}}, th)
+		save(spec.name+"-stats", statsImg)
 		save(spec.name+"-books-list", renderPixelBooksList(spec, books, 0, th))
 		save(spec.name+"-games-list", renderPixelGamesList(spec, games, 0, th))
 		save(spec.name+"-reader", renderPixelReader(spec, "The Lost Island", lostIslandText, 0, 0, th))

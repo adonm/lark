@@ -20,9 +20,10 @@ func TestTTSVoiceSelection(t *testing.T) {
 		id, lang string
 		sid      int
 	}{
-		{heartVoice, "en-us", 3}, {emmaVoice, "en-gb", 21}, {fableVoice, "en-gb", 25},
+		{heartVoice, "en-us", 3}, {lilyVoice, "en-gb", 23}, {fableVoice, "en-gb", 25},
 		{"af_bella", "en-us", 2}, {"am_puck", "en-us", 18}, {"bm_george", "en-gb", 26},
-		{"bf_alice", "en-gb", 21}, {"bm_lewis", "en-gb", 25},
+		{"bf_alice", "en-gb", 20}, {"bf_isabella", "en-gb", 22},
+		{"bf_emma", "en-gb", 23}, {"bm_lewis", "en-gb", 25},
 		{"", "en-us", 3}, {"unsupported", "en-us", 3},
 	} {
 		const text = "Café"
@@ -47,7 +48,7 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	for old, want := range map[string]string{
-		"bf_alice": emmaVoice, "bf_isabella": emmaVoice, "bf_lily": emmaVoice,
+		"bf_emma": lilyVoice, "bf_kelly": lilyVoice,
 		"bm_daniel": fableVoice, "bm_lewis": fableVoice, "retired": heartVoice,
 	} {
 		if _, err := b.db.Exec(`UPDATE companions SET voice=? WHERE id=?`, old, id); err != nil {
@@ -64,7 +65,7 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 }
 
 func TestMCPVoiceCatalog(t *testing.T) {
-	want := []string{heartVoice, fableVoice, emmaVoice, "bm_george", "af_bella", "am_puck"}
+	want := []string{heartVoice, fableVoice, lilyVoice, "bm_george", "af_bella", "am_puck", "bf_alice", "bf_isabella"}
 	if len(voiceCatalog) != len(want) {
 		t.Fatalf("got %d voice choices, want %d", len(voiceCatalog), len(want))
 	}
@@ -80,7 +81,7 @@ func TestSpeechClipsCacheByVoice(t *testing.T) {
 	var calls atomic.Int32
 	w := fakeTTS(ctx, &calls)
 	var clips speechClips
-	for _, voice := range []string{emmaVoice, fableVoice, emmaVoice, fableVoice} {
+	for _, voice := range []string{lilyVoice, fableVoice, lilyVoice, fableVoice} {
 		if pcm, err := clips.get(ctx, w, voice, "Hello!"); err != nil || len(pcm) == 0 {
 			t.Fatalf("voice %s: no PCM (%v)", voice, err)
 		}
@@ -112,9 +113,9 @@ func TestCompanionVoiceDefaults(t *testing.T) {
 			t.Errorf("%s: got voice %q, want %q", tc.id, got, tc.want)
 		}
 	}
-	configured := companionVoiceStore(b.db, emmaVoice)
+	configured := companionVoiceStore(b.db, lilyVoice)
 	if !configured.allowed(heartVoice) ||
-		configured.get("cake", "cake") != emmaVoice ||
+		configured.get("cake", "cake") != lilyVoice ||
 		configured.get("mint", "mint") != fableVoice {
 		t.Fatal("explicit fallback voice or the Mint default was not respected")
 	}
@@ -122,13 +123,13 @@ func TestCompanionVoiceDefaults(t *testing.T) {
 
 func TestCompanionVoiceAPI(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.voices = companionVoiceStore(b.db, emmaVoice)
+		b.voices = companionVoiceStore(b.db, lilyVoice)
 	})
 	cake := testConnectWS(t, base, "unit", false)
 	cake.hello(t, "vocat-33d8", "Cake")
 	path := "/api/companions/CAKE/voice"
 	testRequest(t, "POST", base+path, "", object{"voice": fableVoice}, 401)
-	for _, voice := range []any{"bad", "bf_alice", 1, nil} {
+	for _, voice := range []any{"bad", "bf_emma", 1, nil} {
 		testRequest(t, "POST", base+path, "unit", object{"voice": voice}, 400)
 	}
 	testRequest(t, "POST", base+path, "unit", object{"voice": heartVoice}, 200)
@@ -161,7 +162,7 @@ func TestMenuVoicePicker(t *testing.T) {
 	const id = "cake"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, termID, "Cake")
-	c.tap(t, 180, 316, 0)
+	c.swipeUp(t)
 	waitSVG(t, b.ws, termID, "menu-next")
 	c.tap(t, 248, 294, 0)
 	p2svg := waitSVG(t, b.ws, termID, "menu-voice")

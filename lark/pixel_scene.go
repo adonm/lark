@@ -45,6 +45,7 @@ func poseFrame(now, moodAt, last time.Time, mood string, pct, vol int, charging,
 
 const (
 	drawerMenu       = "menu"
+	drawerMore       = "more"
 	drawerBooks      = "books"
 	drawerBookReader = "book-reader"
 	drawerGames      = "games"
@@ -166,10 +167,7 @@ func addLogicalHit(hits []hitBox, spec pixelDisplaySpec, id string, r image.Rect
 }
 
 func navBarHits(spec pixelDisplaySpec, page, totalPages int) ([]hitBox, map[string]sceneAction) {
-	navH := 14
-	if !spec.round {
-		navH = 20
-	}
+	navH := pixelNavHeight(spec)
 	y := spec.safe.Max.Y - navH
 	x0 := spec.safe.Min.X
 	w := spec.safe.Dx()
@@ -181,14 +179,11 @@ func navBarHits(spec pixelDisplaySpec, page, totalPages int) ([]hitBox, map[stri
 
 	var hits []hitBox
 	actions := map[string]sceneAction{}
+	hits = addLogicalHit(hits, spec, "menu-back", midRect)
+	actions["menu-back"] = sceneAction{"menu-back", ""}
 	if page > 0 {
 		hits = addLogicalHit(hits, spec, "menu-prev", leftRect)
 		actions["menu-prev"] = sceneAction{"menu-page", strconv.Itoa(page - 1)}
-		hits = addLogicalHit(hits, spec, "menu-back", midRect)
-		actions["menu-back"] = sceneAction{"menu-back", ""}
-	} else {
-		hits = addLogicalHit(hits, spec, "menu-back", leftRect)
-		actions["menu-back"] = sceneAction{"menu-back", ""}
 	}
 	if page+1 < totalPages {
 		hits = addLogicalHit(hits, spec, "menu-next", rightRect)
@@ -217,10 +212,7 @@ func renderPixelSceneCard(spec pixelDisplaySpec, v sceneView, th pixelTheme) (*i
 	titleBox := physicalRect(image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH), s)
 	texts = addCenteredText(texts, titleBox, truncateEllipsisPx(titleStr, dogica.Bold, spec.bodyTextScale, titleBox.Dx()), dogica.Bold, spec.bodyTextScale, th.accent)
 
-	btnH := 14
-	if !spec.round {
-		btnH = 18
-	}
+	btnH := pixelNavHeight(spec)
 	btnRect := image.Rect(spec.safe.Min.X, spec.safe.Max.Y-btnH, spec.safe.Max.X, spec.safe.Max.Y)
 	panelRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y+titleH+2, spec.safe.Max.X, btnRect.Min.Y-3)
 	c.panel(panelRect.Min.X, panelRect.Min.Y, panelRect.Dx(), panelRect.Dy(), pxTileBG, th.border)
@@ -291,11 +283,10 @@ func renderPixelListWithHits(spec pixelDisplaySpec, title string, items []tile, 
 	texts = addCenteredText(texts, physicalRect(titleRect, s), title, dogica.Bold, spec.titleTextScale, accent)
 
 	perPage := 2
-	navH := 14
 	if !spec.round {
 		perPage = 3
-		navH = 20
 	}
+	navH := pixelNavHeight(spec)
 	totalPages := max(1, (len(items)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
@@ -357,23 +348,22 @@ func renderPixelListWithHits(spec pixelDisplaySpec, title string, items []tile, 
 	return finishPixelScreen(c, spec, texts), hits, actions
 }
 
-func renderPixelMenuWithHits(spec pixelDisplaySpec, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
-	if th.border.A == 0 {
-		th = defaultPixelTheme()
-	}
+func menuGridHits(spec pixelDisplaySpec, items []pixelMenuItem, page int, actionFn func(pixelMenuItem) (string, sceneAction)) ([]hitBox, map[string]sceneAction) {
 	cols, rows := 1, 3
-	navH := 14
 	if !spec.round {
 		cols, rows = 2, 3
-		navH = 20
 	}
+	navH := pixelNavHeight(spec)
 	perPage := cols * rows
-	totalPages := (len(pixelHomeMenuItems) + perPage - 1) / perPage
+	totalPages := max(1, (len(items)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
 	gridTop := spec.safe.Min.Y + 12 + 2
 	gridBottom := spec.safe.Max.Y - navH - 2
 	gapX, gapY := 4, 2
+	if !spec.round {
+		gapX = 2
+	}
 	tileW := (spec.safe.Dx() - (cols-1)*gapX) / cols
 	tileH := (gridBottom - gridTop - (rows-1)*gapY) / rows
 
@@ -381,27 +371,42 @@ func renderPixelMenuWithHits(spec pixelDisplaySpec, page int, th pixelTheme) (*i
 	start := page * perPage
 	for idx := range perPage {
 		itemIdx := start + idx
-		if itemIdx >= len(pixelHomeMenuItems) {
+		if itemIdx >= len(items) {
 			break
 		}
-		item := pixelHomeMenuItems[itemIdx]
+		item := items[itemIdx]
 		col := idx % cols
 		row := idx / cols
 		tx := spec.safe.Min.X + col*(tileW+gapX)
 		ty := gridTop + row*(tileH+gapY)
-		id := "menu-" + item.id
-		if item.id == "talk" {
-			id = "menu-intercom"
-		}
+		id, act := actionFn(item)
 		hits = addLogicalHit(hits, spec, id, image.Rect(tx, ty, tx+tileW, ty+tileH))
-		switch item.id {
-		case "talk":
-			actions[id] = sceneAction{"menu-open", drawerIntercom}
-		default:
-			actions[id] = sceneAction{"menu-open", item.id}
-		}
+		actions[id] = act
 	}
+	return hits, actions
+}
+
+func renderPixelMenuWithHits(spec pixelDisplaySpec, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
+	hits, actions := menuGridHits(spec, pixelHomeMenuItems, page, func(item pixelMenuItem) (string, sceneAction) {
+		if item.id == "talk" {
+			return "menu-intercom", sceneAction{"menu-open", drawerIntercom}
+		}
+		return "menu-" + item.id, sceneAction{"menu-open", item.id}
+	})
 	return renderPixelMenu(spec, page, th), hits, actions
+}
+
+func renderPixelMoreWithHits(spec pixelDisplaySpec, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
+	hits, actions := menuGridHits(spec, pixelMoreMenuItems, page, func(item pixelMenuItem) (string, sceneAction) {
+		return "menu-" + item.id, sceneAction{"menu-open", item.id}
+	})
+	return renderPixelMenuGrid(spec, "More", pixelMoreMenuItems, page, th, ""), hits, actions
 }
 
 func renderPixelVolumeWithHits(spec pixelDisplaySpec, auto bool, vol, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
@@ -418,21 +423,22 @@ func renderPixelVolumeWithHits(spec pixelDisplaySpec, auto bool, vol, page int, 
 }
 
 func renderPixelVoiceWithHits(spec pixelDisplaySpec, current string, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
-	items := make([]tile, 0, len(voiceCatalog))
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
+	items := make([]pixelMenuItem, 0, len(voiceCatalog))
 	for _, v := range voiceCatalog {
-		det := v.Lang
-		if v.ID == current {
-			det = "Current"
-		}
-		items = append(items, tile{
-			id:     "voice-" + v.ID,
+		items = append(items, pixelMenuItem{
+			id:     v.ID,
 			label:  v.Name,
-			detail: det,
 			icon:   "voice",
-			action: sceneAction{"voice-set", v.ID},
+			accent: th.accent2,
 		})
 	}
-	return renderPixelListWithHits(spec, "Voice", items, "No voices", page, th, th.accent2)
+	hits, actions := menuGridHits(spec, items, page, func(item pixelMenuItem) (string, sceneAction) {
+		return "voice-" + item.id, sceneAction{"voice-set", item.id}
+	})
+	return renderPixelMenuGrid(spec, "Voice", items, page, th, current), hits, actions
 }
 
 func renderPixelStatsWithHits(spec pixelDisplaySpec, rows []menuRow, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {

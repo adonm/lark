@@ -32,8 +32,11 @@ var pixelHomeMenuItems = []pixelMenuItem{
 	{id: "books", label: "Books", icon: "books", accent: pxMint},
 	{id: "games", label: "Games", icon: "games", accent: pxSky},
 	{id: "memories", label: "Memories", icon: "memories", accent: pxDanger},
-	{id: "history", label: "History", icon: "history", accent: pxWarn},
 	{id: "voice", label: "Voice", icon: "voice", accent: pxMint},
+	{id: "more", label: "More", icon: "stats", accent: pxSky},
+}
+
+var pixelMoreMenuItems = []pixelMenuItem{
 	{id: "volume", label: "Volume", icon: "volume", accent: pxSky},
 	{id: "pair", label: "Pair", icon: "pair", accent: pxPeach},
 	{id: "unpair", label: "Unpair", icon: "unpair", accent: pxDanger},
@@ -81,12 +84,16 @@ func physicalRect(r image.Rectangle, artScale int) image.Rectangle {
 	return image.Rect(r.Min.X*artScale, r.Min.Y*artScale, r.Max.X*artScale, r.Max.Y*artScale)
 }
 
+func pixelNavHeight(spec pixelDisplaySpec) int {
+	if !spec.round {
+		return 24 // 48 px physical on BOX-3 (2x)
+	}
+	return 16 // 48 px physical on VoCat (3x)
+}
+
 func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page, totalPages int, centerLabel string, border imagecolor.RGBA) []pixelTextOp {
 	s := spec.artScale
-	navH := 14
-	if !spec.round {
-		navH = 20 // 40 px physical on BOX-3 (2x)
-	}
+	navH := pixelNavHeight(spec)
 	y := spec.safe.Max.Y - navH
 	x0 := spec.safe.Min.X
 	w := spec.safe.Dx()
@@ -97,37 +104,22 @@ func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page
 	midRect := image.Rect(x0+btnW+gap, y, x0+2*btnW+gap, y+navH)
 	rightRect := image.Rect(x0+2*(btnW+gap), y, x0+w, y+navH)
 
-	leftLabel := "Back"
 	if page > 0 {
-		leftLabel = "< Prev"
-	}
-	c.panel(leftRect.Min.X, leftRect.Min.Y, leftRect.Dx(), leftRect.Dy(), pxTileBG, border)
-	texts = addCenteredText(texts, physicalRect(leftRect, s), leftLabel, dogica.Regular, spec.bodyTextScale, pxInk)
-
-	if centerLabel == "" && totalPages > 1 {
-		centerLabel = fmt.Sprintf("%d/%d", page+1, totalPages)
-	}
-	if centerLabel != "" {
-		if page > 0 {
-			c.panel(midRect.Min.X, midRect.Min.Y, midRect.Dx(), midRect.Dy(), pxTileBG, border)
-			texts = addCenteredText(texts, physicalRect(midRect, s), "Back", dogica.Regular, spec.bodyTextScale, pxMuted)
-		} else {
-			texts = addCenteredText(texts, physicalRect(midRect, s), centerLabel, dogica.Regular, spec.bodyTextScale, pxMuted)
-		}
+		c.panel(leftRect.Min.X, leftRect.Min.Y, leftRect.Dx(), leftRect.Dy(), pxTileBG, border)
+		texts = addCenteredText(texts, physicalRect(leftRect, s), "< Prev", dogica.Regular, spec.bodyTextScale, pxInk)
+	} else if totalPages > 1 {
+		texts = addCenteredText(texts, physicalRect(leftRect, s), fmt.Sprintf("%d/%d", page+1, totalPages), dogica.Regular, spec.bodyTextScale, pxMuted)
 	}
 
-	nextCol := pxInk
-	nextBorder := border
-	if page+1 >= totalPages {
-		nextCol = pxMuted
-		nextBorder = pxPanelBG
+	c.panel(midRect.Min.X, midRect.Min.Y, midRect.Dx(), midRect.Dy(), pxTileBG, border)
+	texts = addCenteredText(texts, physicalRect(midRect, s), "Back", dogica.Regular, spec.bodyTextScale, pxInk)
+
+	if page+1 < totalPages {
+		c.panel(rightRect.Min.X, rightRect.Min.Y, rightRect.Dx(), rightRect.Dy(), pxTileBG, border)
+		texts = addCenteredText(texts, physicalRect(rightRect, s), "Next >", dogica.Regular, spec.bodyTextScale, pxInk)
+	} else if page > 0 && totalPages > 1 {
+		texts = addCenteredText(texts, physicalRect(rightRect, s), fmt.Sprintf("%d/%d", page+1, totalPages), dogica.Regular, spec.bodyTextScale, pxMuted)
 	}
-	c.panel(rightRect.Min.X, rightRect.Min.Y, rightRect.Dx(), rightRect.Dy(), pxTileBG, nextBorder)
-	rightLabel := "Next >"
-	if page+1 >= totalPages {
-		rightLabel = "End"
-	}
-	texts = addCenteredText(texts, physicalRect(rightRect, s), rightLabel, dogica.Regular, spec.bodyTextScale, nextCol)
 	return texts
 }
 
@@ -216,10 +208,7 @@ func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade
 			c.rect(bx+1, by+1, innerW, barH-2, pxMint)
 		}
 	} else if status == "listening" {
-		btnH := 14
-		if !spec.round {
-			btnH = 18
-		}
+		btnH := pixelNavHeight(spec)
 		y := spec.safe.Max.Y - btnH
 		gap := 4
 		bw := (spec.safe.Dx() - gap) / 2
@@ -230,27 +219,31 @@ func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade
 		texts = addCenteredText(texts, physicalRect(left, s), "Cancel", dogica.Regular, spec.bodyTextScale, pxDanger)
 		texts = addCenteredText(texts, physicalRect(right, s), "Send", dogica.Bold, spec.bodyTextScale, pxMint)
 	} else if status == "thinking" || status == "speaking" {
-		btnW, btnH := 38, 14
+		btnW, btnH := 42, pixelNavHeight(spec)
 		if !spec.round {
-			btnW, btnH = 44, 18
+			btnW = 48
 		}
 		btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
 		c.panel(btn.Min.X, btn.Min.Y, btn.Dx(), btn.Dy(), pxPanelBG, pxDanger)
 		texts = addCenteredText(texts, physicalRect(btn, s), "Stop", dogica.Regular, spec.bodyTextScale, pxDanger)
 	} else if showMenuHint {
-		btnW, btnH := 36, 14
+		btnW, btnH := 44, 14
 		if !spec.round {
-			btnW, btnH = 44, 20
+			btnW, btnH = 54, 18
 		}
 		btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
 		c.panel(btn.Min.X, btn.Min.Y, btn.Dx(), btn.Dy(), pxPanelBG, pxPanelBorder)
-		texts = addCenteredText(texts, physicalRect(btn, s), "Menu", dogica.Regular, spec.bodyTextScale, pxInk)
+		texts = addCenteredText(texts, physicalRect(btn, s), "^ Menu", dogica.Regular, spec.bodyTextScale, pxInk)
 	}
 
 	return finishPixelScreen(c, spec, texts)
 }
 
 func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA {
+	return renderPixelMenuGrid(spec, "Menu", pixelHomeMenuItems, page, th, "")
+}
+
+func renderPixelMenuGrid(spec pixelDisplaySpec, title string, items []pixelMenuItem, page int, th pixelTheme, activeID string) *image.RGBA {
 	if th.border.A == 0 {
 		th = defaultPixelTheme()
 	}
@@ -261,16 +254,15 @@ func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA
 
 	titleH := 12
 	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
-	texts = addCenteredText(texts, physicalRect(titleRect, s), "Menu", dogica.Bold, spec.titleTextScale, th.accent)
+	texts = addCenteredText(texts, physicalRect(titleRect, s), title, dogica.Bold, spec.titleTextScale, th.accent)
 
 	cols, rows := 1, 3
-	navH := 14
 	if !spec.round {
 		cols, rows = 2, 3
-		navH = 20
 	}
+	navH := pixelNavHeight(spec)
 	perPage := cols * rows
-	totalPages := (len(pixelHomeMenuItems) + perPage - 1) / perPage
+	totalPages := max(1, (len(items)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
 	gridTop := spec.safe.Min.Y + titleH + 2
@@ -285,15 +277,21 @@ func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA
 	start := page * perPage
 	for idx := range perPage {
 		itemIdx := start + idx
-		if itemIdx >= len(pixelHomeMenuItems) {
+		if itemIdx >= len(items) {
 			break
 		}
-		item := pixelHomeMenuItems[itemIdx]
+		item := items[itemIdx]
 		col := idx % cols
 		row := idx / cols
 		tx := spec.safe.Min.X + col*(tileW+gapX)
 		ty := gridTop + row*(tileH+gapY)
-		c.panel(tx, ty, tileW, tileH, pxTileBG, th.border)
+		border := th.border
+		ink := pxInk
+		if activeID != "" && item.id == activeID {
+			border = pxMint
+			ink = pxMint
+		}
+		c.panel(tx, ty, tileW, tileH, pxTileBG, border)
 		iconX, labelX := tx+4, tx+19
 		if !spec.round {
 			iconX, labelX = tx+3, tx+17
@@ -307,7 +305,7 @@ func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA
 		thPx := dogica.Regular.Ascent * spec.bodyTextScale
 		texts = append(texts, pixelTextOp{
 			x: physLabel.Min.X, y: physLabel.Min.Y + (physLabel.Dy()-thPx)/2,
-			text: label, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
+			text: label, font: dogica.Regular, scale: spec.bodyTextScale, color: ink,
 		})
 	}
 
@@ -329,11 +327,10 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th
 	texts = addCenteredText(texts, physicalRect(titleRect, s), "Books", dogica.Bold, spec.titleTextScale, th.accent2)
 
 	perPage := 2
-	navH := 14
 	if !spec.round {
 		perPage = 3
-		navH = 20
 	}
+	navH := pixelNavHeight(spec)
 	totalPages := max(1, (len(books)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
@@ -391,11 +388,10 @@ func renderPixelGamesList(spec pixelDisplaySpec, games []pixelGame, page int, th
 	texts = addCenteredText(texts, physicalRect(titleRect, s), "Games", dogica.Bold, spec.titleTextScale, th.accent)
 
 	perPage := 2
-	navH := 14
 	if !spec.round {
 		perPage = 3
-		navH = 20
 	}
+	navH := pixelNavHeight(spec)
 	totalPages := max(1, (len(games)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
@@ -420,10 +416,9 @@ func renderPixelGamesList(spec pixelDisplaySpec, games []pixelGame, page int, th
 
 		badgeW := 0
 		if gm.Saved {
-			badgeW = 24
-			bx, by := rx+rw-badgeW-3, ry+(rowH-10)/2
-			c.panel(bx, by, badgeW, 10, th.accent2, th.accent2)
-			texts = addCenteredText(texts, physicalRect(image.Rect(bx, by, bx+badgeW, by+10), s), "Saved", dogica.Bold, 1, pxPanelBG)
+			badgeW = 8
+			bx, by := rx+rw-9, ry+(rowH-4)/2
+			c.rect(bx, by, 4, 4, th.accent2)
 		}
 		physText := physicalRect(image.Rect(rx+19, ry+2, rx+rw-4-badgeW, ry+rowH-2), s)
 		title := truncateEllipsisPx(gm.Title, dogica.Bold, spec.bodyTextScale, physText.Dx())
@@ -471,10 +466,7 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 		texts = addCenteredText(texts, lineBox, line, dogica.Bold, spec.bodyTextScale, th.accent2)
 	}
 
-	navH := 14
-	if !spec.round {
-		navH = 20
-	}
+	navH := pixelNavHeight(spec)
 	panelRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y+titleH+1, spec.safe.Max.X, spec.safe.Max.Y-navH-2)
 	c.panel(panelRect.Min.X, panelRect.Min.Y, panelRect.Dx(), panelRect.Dy(), pxTileBG, th.border)
 
@@ -618,11 +610,10 @@ func renderPixelMemoriesList(spec pixelDisplaySpec, items []pixelMemoryItem, tit
 	texts = addCenteredText(texts, physicalRect(titleRect, s), "Memories", dogica.Bold, spec.titleTextScale, th.accent)
 
 	perPage := 2
-	navH := 14
 	if !spec.round {
 		perPage = 3
-		navH = 20
 	}
+	navH := pixelNavHeight(spec)
 	totalPages := max(1, (len(items)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
@@ -753,10 +744,10 @@ func renderPixelPair(spec pixelDisplaySpec, companionName, invite string) (*imag
 		}
 		if companionName != "" && sideW >= 20 {
 			nameW := measureTextPx(companionName, dogica.Regular, 2)
-			if nameW <= sideW-6 {
+			if nameW <= sideW-8 {
 				ny := (phys.Bounds().Dy() - dogica.Regular.Ascent*2) / 2
 				drawTextPhysical(phys, (sideW-nameW)/2, ny, companionName, dogica.Regular, 2, pxInk)
-			} else if nameW := measureTextPx(companionName, dogica.Regular, 1); nameW <= sideW-4 {
+			} else if nameW := measureTextPx(companionName, dogica.Regular, 1); nameW <= sideW-6 {
 				ny := (phys.Bounds().Dy() - dogica.Regular.Ascent) / 2
 				drawTextPhysical(phys, (sideW-nameW)/2, ny, companionName, dogica.Regular, 1, pxInk)
 			}

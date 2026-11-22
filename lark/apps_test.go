@@ -384,7 +384,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 		t.Fatal(got)
 	}
 	toolTest(t, base, "app", object{"companions": webID, "exit": true}, false)
-	waitSVG(t, b.ws, "vocat-0005", `data-id="menu"`)
+	waitSVG(t, b.ws, "vocat-0005", `data-id="listen"`)
 	toolTest(t, base, "app", object{"delete_saved": "players"}, false)
 	saved := toolTest(t, base, "state", object{"include": []string{"apps"}}, false)
 	if len(saved["apps"].(object)) != 0 {

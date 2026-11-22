@@ -4,6 +4,35 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Tap-to-Talk, Simplified Menu & Curated Voices
+
+### Affects
+- SQLite / Lark Server & MCP / Agents
+
+### Breaking Changes
+- **Home & Menu gestures**: Restored tap-anywhere-on-Home to start talking (`listen`); swipe up on Home opens Menu. Touchscreen-only on both VoCat and BOX-3 (no head pads).
+- **Simplified Menu**: Reduced main Menu to 6 items (`Talk to…`, `Books`, `Games`, `Memories`, `Voice`, `More`), moved `Volume`, `Pair`, `Unpair`, `Stats` under `More`, removed `History` from the device menu, centered `Back` consistently, and enlarged bottom/nav touch targets to >= 48 physical px.
+- **Voice catalog**: Removed `bf_emma` ("too clinical") and restored the curated 8-voice kid-friendly catalog (`af_heart` Heart, `bm_fable` Fable, `bf_lily` Lily, `bm_george` George, `af_bella` Bella, `am_puck` Puck, `bf_alice` Alice, `bf_isabella` Isabella).
+- **Mint voice**: Moved Mint from `bf_emma` to `af_heart` ("Heart").
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, voice FROM companions WHERE voice='bf_emma';"` returns rows.
+
+### Upgrade Steps
+1. Stop `lark.service`, back up `lark.db`, and move Mint (and any `bf_emma` companion) to `af_heart`:
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   sqlite3 ~/.local/share/lark/lark.db "UPDATE companions SET voice='af_heart' WHERE voice='bf_emma';"
+   ```
+2. Run `./scripts/setup-host.sh --gpu-index 0`.
+
+### Verification
+- `lark status` shows `ok=true` and all terminals online.
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, voice FROM companions;"` shows `mint` using `af_heart` and no `bf_emma`.
+
+---
+
 ## 2026-11-22 — Listening Mode & Firmware (`0.15.0`)
 
 ### Affects

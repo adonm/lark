@@ -96,7 +96,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	board := testConnectWS(t, base, "unit", false)
 	const id = "vocat-diag"
 	board.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
-		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
+		protoVersion: protoVersion1, kind: termKindHardware, capsMask: capDrag, displayFormats: dispRGB565, frameCodecs: codecBitAll,
 		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3", firmware: "0.12.0", token: "unit",
 	}))
 	board.until(t, hasProto(msgWelcome, ""))
@@ -142,13 +142,13 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		t.Fatalf("invalid device telemetry: %+v", d)
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
-	tap(160, 120)
-	svg := waitSVG(t, b.ws, id, "menu-next")
-	nx, ny, ok := hitCenter(svg, "menu-next")
+	board.swipeUp(t)
+	svg := waitSVG(t, b.ws, id, "menu-more")
+	mx, my, ok := hitCenter(svg, "menu-more")
 	if !ok {
-		t.Fatal("missing menu-next")
+		t.Fatal("missing menu-more")
 	}
-	tap(nx, ny)
+	tap(mx, my)
 	svg = waitSVG(t, b.ws, id, "menu-stats")
 	sx, sy, ok := hitCenter(svg, "menu-stats")
 	if !ok {
@@ -171,7 +171,10 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	svg = waitSVG(t, b.ws, id, "menu-stats")
 	bx, by, _ = hitCenter(svg, "menu-back")
 	tap(bx, by)
-	waitSVG(t, b.ws, id, `data-id="menu"`)
+	svg = waitSVG(t, b.ws, id, "menu-more")
+	bx, by, _ = hitCenter(svg, "menu-back")
+	tap(bx, by)
+	waitSVG(t, b.ws, id, `data-id="listen"`)
 }
 
 func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
@@ -266,7 +269,7 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	})
 	dev.recEnd(t, "", false)
 	dev.barrier(t)
-	waitSVG(t, b.ws, id, `data-id="menu"`)
+	waitSVG(t, b.ws, id, `data-id="listen"`)
 	select {
 	case <-transcribed:
 		t.Fatal("cancelled PCM reached STT")
@@ -371,7 +374,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
 	})
-	waitSVG(t, b.ws, id, `data-id="menu"`)
+	waitSVG(t, b.ws, id, `data-id="listen"`)
 	expectValue(t, cancelled, true)
 	expectValue(t, interrupts, "/api/session/ses-stop/interrupt")
 	b.ws.mu.Lock()
@@ -396,6 +399,7 @@ func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
 	b.ws.mu.Unlock()
 	waitSVG(t, b.ws, id, "stop")
 	dev.tap(t, 180, 290, 0)
+	dev.barrier(t)
 	b.ws.mu.Lock()
 	playback := b.ws.play(d, stream)
 	b.ws.mu.Unlock()
@@ -415,7 +419,7 @@ func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStop
 	})
-	waitSVG(t, b.ws, id, `data-id="menu"`)
+	waitSVG(t, b.ws, id, `data-id="listen"`)
 	if playback.Err() == nil {
 		t.Fatal("one Stop tap did not stop playback")
 	}

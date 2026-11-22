@@ -77,7 +77,8 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		h.clearDoneOrErrorStatus(d)
 		if evName == "tap" {
 			h.pointer(d, evName, x, y, rev, now, native)
-		} else if d.caps.Drag && (native || c.kind == "web") && d.displayApp != nil && d.app == d.displayApp && !d.asleep {
+		} else if d.caps.Drag && (native || c.kind == "web") && !d.asleep &&
+			(d.displayApp != nil && d.app == d.displayApp || d.drawer == "" && d.view == nil && d.card == nil) {
 			h.pointer(d, evName, x, y, rev, now, native)
 		}
 	case msgRecStart:
@@ -158,6 +159,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		return
 	}
 	if d.displayApp != nil {
+		d.swipeActive = false
 		if d.app == d.displayApp {
 			if i := slices.Index(d.app.terminals, d); i >= 0 {
 				h.updateApp(d.app, appEvent{kind: evName, i: i, id: key, x: x, y: y, now: now})
@@ -165,6 +167,35 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		}
 		return
 	}
+	if evName == "drag" || evName == "up" {
+		if d.drawer == "" && d.view == nil && d.card == nil && !d.recording.active() && !d.busy && !d.ttsStarted && !d.awaitAck {
+			if evName == "drag" {
+				if !d.swipeActive {
+					d.swipeActive = true
+					d.swipeStartX, d.swipeStartY = x, y
+				}
+			} else if d.swipeActive {
+				dy := d.swipeStartY - y
+				dx := x - d.swipeStartX
+				if dx < 0 {
+					dx = -dx
+				}
+				d.swipeActive = false
+				if dy >= 20 && dy >= dx {
+					h.chime(d, "tap")
+					d.bootHint = true
+					d.drawer, d.card, d.pending = drawerMenu, nil, nil
+					d.menuPage = 0
+					d.view = nil
+					h.render(d, now, false)
+				}
+			}
+		} else {
+			d.swipeActive = false
+		}
+		return
+	}
+	d.swipeActive = false
 	switch a.kind {
 	case "menu":
 		h.chime(d, "tap")
@@ -174,7 +205,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		d.view = nil
 		h.render(d, now, false)
 	case "menu-open", "menu-back", "menu-page":
-		if d.drawer != drawerMenu && d.drawer != drawerVolume && d.drawer != drawerVoice &&
+		if d.drawer != drawerMenu && d.drawer != drawerMore && d.drawer != drawerVolume && d.drawer != drawerVoice &&
 			d.drawer != drawerIntercom && d.drawer != drawerStats && d.drawer != drawerBookReader &&
 			d.scene.menu != d.menuData {
 			return
@@ -183,7 +214,9 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		wasPair := d.drawer == drawerPair
 		switch a.kind {
 		case "menu-open":
-			d.homePage = d.menuPage
+			if d.drawer == drawerMenu {
+				d.homePage = d.menuPage
+			}
 			d.drawer, d.menuPage = a.value, 0
 			if d.drawer == drawerPair {
 				h.pushPower(d, 100, true)
@@ -201,6 +234,8 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			} else if d.drawer == drawerMenu {
 				d.drawer = ""
 				d.menuHintUntil = now.Add(3 * time.Second)
+			} else if d.drawer == drawerVolume || d.drawer == drawerPair || d.drawer == drawerUnpair || d.drawer == drawerStats {
+				d.drawer, d.menuPage = drawerMore, 0
 			} else {
 				d.drawer, d.menuPage = drawerMenu, d.homePage
 			}
@@ -327,7 +362,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
 		}
 	case "listen", "reply":
-		if key == "companion-ring" && (d.busy || d.ttsStarted || d.awaitAck) {
+		if (key == "companion-ring" || key == "listen") && (d.busy || d.ttsStarted || d.awaitAck) {
 			return // The previous idle frame may still have a Talk target.
 		}
 		if d.recording.active() {
@@ -439,6 +474,9 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pix
 	case drawerMenu:
 		img, hits, acts := renderPixelMenuWithHits(spec, r.menuPage, th)
 		return img, hits, acts, nil
+	case drawerMore:
+		img, hits, acts := renderPixelMoreWithHits(spec, r.menuPage, th)
+		return img, hits, acts, nil
 	case drawerVolume:
 		img, hits, acts := renderPixelVolumeWithHits(spec, r.autoVol, r.vol, r.menuPage, th)
 		return img, hits, acts, nil
@@ -496,10 +534,7 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pix
 		page := max(0, min(r.menuPage, totalPages-1))
 		hits, acts := navBarHits(spec, page, totalPages)
 		listTop := spec.safe.Min.Y + 14
-		navH := 14
-		if !spec.round {
-			navH = 20
-		}
+		navH := pixelNavHeight(spec)
 		listBottom := spec.safe.Max.Y - navH - 3
 		gapY := 3
 		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
@@ -529,10 +564,7 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pix
 		page := max(0, min(r.menuPage, totalPages-1))
 		hits, acts := navBarHits(spec, page, totalPages)
 		listTop := spec.safe.Min.Y + 14
-		navH := 14
-		if !spec.round {
-			navH = 20
-		}
+		navH := pixelNavHeight(spec)
 		listBottom := spec.safe.Max.Y - navH - 3
 		gapY := 3
 		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
@@ -570,10 +602,7 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pix
 		page := max(0, min(r.menuPage, totalPages-1))
 		hits, acts := navBarHits(spec, page, totalPages)
 		listTop := spec.safe.Min.Y + 14
-		navH := 14
-		if !spec.round {
-			navH = 20
-		}
+		navH := pixelNavHeight(spec)
 		listBottom := spec.safe.Max.Y - navH - 3
 		gapY := 3
 		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage

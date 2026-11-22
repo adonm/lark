@@ -62,6 +62,10 @@ func menuFrame(t *testing.T, c *testWS, want ...string) string {
 
 func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 	t.Helper()
+	if id == "menu" {
+		c.swipeUp(t)
+		return menuFrame(t, c, want...)
+	}
 	x, y, ok := hitCenter(lastMenuSVG[c], id)
 	if !ok {
 		t.Fatalf("control %q not found in SVG", id)
@@ -77,17 +81,13 @@ func TestWSMainMenuPages(t *testing.T) {
 	c.hello(t, "vocat-0001", "cake")
 	bindMenu(c, b.ws, "vocat-0001")
 	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-books", "menu-games", "menu-next")
-	page2 := tapMenu(t, c, "menu-next", "menu-memories", "menu-prev", "menu-history", "menu-voice", "menu-next")
-	page3 := tapMenu(t, c, "menu-next", "menu-volume", "menu-prev", "menu-pair", "menu-unpair", "menu-next")
-	page4 := tapMenu(t, c, "menu-next", "menu-stats", "menu-prev")
+	page2 := tapMenu(t, c, "menu-next", "menu-memories", "menu-prev", "menu-voice", "menu-more")
 	for _, check := range []struct {
 		svg  string
 		omit []string
 	}{
-		{page1, []string{"menu-prev", "menu-memories", "menu-voice", "menu-volume", "menu-pair", "menu-unpair", "menu-stats"}},
-		{page2, []string{"menu-intercom", "menu-books", "menu-games", "menu-volume", "menu-pair", "menu-stats"}},
-		{page3, []string{"menu-intercom", "menu-memories", "menu-history", "menu-voice", "menu-stats"}},
-		{page4, []string{"menu-next", "menu-voice", "menu-volume", "menu-pair", "menu-unpair"}},
+		{page1, []string{"menu-prev", "menu-memories", "menu-voice", "menu-more"}},
+		{page2, []string{"menu-next", "menu-intercom", "menu-books", "menu-games"}},
 	} {
 		for _, id := range check.omit {
 			if strings.Contains(check.svg, id) {
@@ -95,10 +95,8 @@ func TestWSMainMenuPages(t *testing.T) {
 			}
 		}
 	}
-	tapMenu(t, c, "menu-prev", "menu-volume", "menu-pair")
-	tapMenu(t, c, "menu-prev", "menu-memories", "menu-voice")
 	tapMenu(t, c, "menu-prev", "menu-intercom", "menu-next")
-	tapMenu(t, c, "menu-back", `data-id="menu"`)
+	tapMenu(t, c, "menu-back", `data-id="listen"`)
 }
 
 func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
@@ -165,20 +163,6 @@ func TestWSMenuListDetails(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{drawerHistory, "No messages yet", "Message 21", "From Mint", func(t *testing.T, b *larkServer) {
-			for i := range 22 {
-				e := newChat("user", "", fmt.Sprintf("Message %02d", i), "typed")
-				e.Timestamp = time.Unix(int64(i), 0)
-				switch i {
-				case 18:
-					e.Role, e.Sender, e.Text = "intercom", "Mint", body
-				case 20:
-					e.Role, e.Sender = "companion", "Cake"
-				}
-				b.history.add(id, e)
-			}
-			b.history.add("other", newChat("user", "", "Not this cat's message", "typed"))
-		}},
 	} {
 		t.Run(tc.drawer, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
@@ -187,7 +171,7 @@ func TestWSMenuListDetails(t *testing.T) {
 			c.hello(t, "vocat-0001", id)
 			bindMenu(c, b.ws, "vocat-0001")
 			tapMenu(t, c, "menu", "menu-next")
-			tapMenu(t, c, "menu-next", "menu-history")
+			tapMenu(t, c, "menu-next", "menu-memories")
 			open := "menu-" + tc.drawer
 			tapMenu(t, c, open, tc.empty, "menu-back")
 			tapMenu(t, c, "menu-back", open)
@@ -269,5 +253,66 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 				t.Fatal("leaving Games didn't cancel the stale launch")
 			}
 		}
+	}
+}
+
+func TestHomeTapStartsRecordingAndSwipeUpOpensMenu(t *testing.T) {
+	for _, tc := range []struct {
+		name, termID, board string
+		shape               uint8
+		w, h                uint16
+		tapX, tapY          int
+	}{
+		{"vocat", "vocat-tap1", "esp-vocat", shapeRound, 360, 360, 180, 180},
+		{"box3", "box3-tap1", "esp-box-3", shapeRect, 320, 240, 160, 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, base := wsHarness(t, nil)
+			_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
+			dev := testConnectWS(t, base, "unit", false)
+			dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+				protoVersion: protoVersion1, kind: termKindHardware, capsMask: capDrag | capBridgeEndpoint,
+				displayFormats: dispRGB565, frameCodecs: codecBitAll,
+				width: tc.w, height: tc.h, shape: tc.shape, terminalID: tc.termID, board: tc.board,
+				firmware: "0.15.0", token: "unit", companionID: "cake",
+			}))
+			dev.until(t, hasProto(msgWelcome, ""))
+			dev.until(t, isDisplay)
+
+			// Tap anywhere on Home starts recording.
+			dev.tap(t, tc.tapX, tc.tapY, 0)
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetListen == 0
+			})
+			b.ws.mu.Lock()
+			d := b.ws.terminals[tc.termID]
+			rec := d.recording.active()
+			drawer := d.drawer
+			b.ws.mu.Unlock()
+			if !rec || drawer != "" {
+				t.Fatalf("home tap: recording=%v drawer=%q, want true and empty", rec, drawer)
+			}
+
+			// Cancel recording to return to Home.
+			b.ws.mu.Lock()
+			b.ws.recordingControl(d, time.Now(), true)
+			b.ws.mu.Unlock()
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
+			})
+
+			// Swipe up on Home opens Menu without starting recording.
+			dev.swipeUp(t)
+			waitSVG(t, b.ws, tc.termID, "menu-intercom")
+			b.ws.mu.Lock()
+			rec = d.recording.active()
+			drawer = d.drawer
+			b.ws.mu.Unlock()
+			if rec || drawer != drawerMenu {
+				t.Fatalf("swipe up: recording=%v drawer=%q, want false and %q", rec, drawer, drawerMenu)
+			}
+		})
 	}
 }
