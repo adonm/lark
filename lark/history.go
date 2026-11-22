@@ -22,8 +22,11 @@ func stripLarkHeader(text string) string {
 			strings.Contains(first, ") · hardware · ") ||
 			strings.Contains(first, ") · web · ") ||
 			strings.Contains(first, " · now: ") {
-			return rest
+			text = rest
 		}
+	}
+	if i := strings.LastIndex(text, "\n[state: "); i >= 0 && strings.HasSuffix(strings.TrimSuffix(text, "\r"), "]") {
+		text = text[:i]
 	}
 	return text
 }

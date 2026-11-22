@@ -311,14 +311,36 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 	default:
 		prefix = fmt.Sprintf("In person at %s's device · %s (%s) · %s", companion.Name, companion.Name, companionID, source)
 	}
-	extra := " · now: " + formatLocalTimeIn(now, now.Location())
 	if !companion.Configured {
-		extra += " · setup"
+		extra := " · setup"
+		if companion.Personality != "" {
+			extra += " · vibe: " + companion.Personality
+		}
+		return "[" + prefix + extra + "]"
 	}
 	if companion.Personality != "" {
-		extra += " · vibe: " + companion.Personality
+		return "[" + prefix + " · vibe: " + companion.Personality + "]"
 	}
-	return "[" + prefix + extra + "]"
+	return "[" + prefix + "]"
+}
+
+func turnStateLine(now time.Time, companion companionState, terminals, timers, books string) string {
+	parts := []string{"now: " + formatLocalTimeIn(now, now.Location())}
+	if companion.ListenSeconds > 0 {
+		parts = append(parts, fmt.Sprintf("listen: %ds", companion.ListenSeconds))
+	} else {
+		parts = append(parts, "listen: off")
+	}
+	if terminals != "" {
+		parts = append(parts, "terminals: "+terminals)
+	}
+	if timers != "" {
+		parts = append(parts, "timers: "+timers)
+	}
+	if books != "" {
+		parts = append(parts, "books: "+books)
+	}
+	return "[state: " + strings.Join(parts, " · ") + "]"
 }
 
 func turnPrompt(companionID string, source, text string, companion companionState) string {
@@ -330,7 +352,73 @@ func turnPromptAt(companionID string, source, text string, companion companionSt
 }
 
 func turnPromptChannelAt(companionID, source, text string, companion companionState, ch turnChannel, now time.Time) string {
-	return turnHeader(companionID, source, companion, ch, now) + "\n" + text
+	return turnHeader(companionID, source, companion, ch, now) + "\n" + text + "\n" + turnStateLine(now, companion, "", "", "")
+}
+
+func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, source, text string, companion companionState, ch turnChannel, now time.Time) string {
+	var termParts []string
+	if terms, err := b.terminalList(false); err == nil {
+		for _, t := range terms {
+			if str(t["companion"]) != companionID {
+				continue
+			}
+			status := "offline"
+			if b, _ := t["online"].(bool); b {
+				status = "online"
+			}
+			vol := fmt.Sprintf("vol:%v", t["volume"])
+			if auto, _ := t["auto_volume"].(bool); auto {
+				vol += ",auto"
+			}
+			termParts = append(termParts, fmt.Sprintf("%s(%s,%s)", str(t["id"]), status, vol))
+		}
+	}
+	terminals := "none"
+	if len(termParts) > 0 {
+		terminals = strings.Join(termParts, ",")
+	}
+
+	var timerParts []string
+	if b.timers != nil {
+		if list, err := b.timers.list(ctx, companionID); err == nil {
+			for _, tm := range list {
+				rem := max(0, int(tm.FireAt.Sub(now).Round(time.Second)/time.Second))
+				if tm.AppName != "" {
+					timerParts = append(timerParts, fmt.Sprintf("%s(%s,%ds)", tm.ID, tm.AppName, rem))
+				} else if tm.Label != "" {
+					timerParts = append(timerParts, fmt.Sprintf("%s(%q,%ds)", tm.ID, tm.Label, rem))
+				} else {
+					timerParts = append(timerParts, fmt.Sprintf("%s(%ds)", tm.ID, rem))
+				}
+			}
+		}
+	}
+	timers := "none"
+	if len(timerParts) > 0 {
+		timers = strings.Join(timerParts, ",")
+	}
+
+	var bookParts []string
+	if apps, err := b.listApps(ctx, false); err == nil {
+		for _, a := range apps {
+			if str(a["kind"]) != "book" {
+				continue
+			}
+			slug := str(a["name"])
+			title := str(a["title"])
+			if title != "" && title != slug {
+				bookParts = append(bookParts, fmt.Sprintf("%s(%q)", slug, title))
+			} else {
+				bookParts = append(bookParts, slug)
+			}
+		}
+	}
+	books := "none"
+	if len(bookParts) > 0 {
+		books = strings.Join(bookParts, ",")
+	}
+
+	return turnHeader(companionID, source, companion, ch, now) + "\n" + text + "\n" + turnStateLine(now, companion, terminals, timers, books)
 }
 
 func isSilentReply(s string) bool {
@@ -399,7 +487,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	}}
 	prepare := func() (string, string) {
 		companion := b.companionFor(sender.ID)
-		return companion.Name, turnPromptChannelAt(sender.ID, options.source, text, companion, options.channel, time.Now().In(b.location()))
+		return companion.Name, b.turnPromptWithState(ctx, sender.ID, options.source, text, companion, options.channel, time.Now().In(b.location()))
 	}
 	raw, sid, err := b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source,
 		nil, func(entry chatEntry) {

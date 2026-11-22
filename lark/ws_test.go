@@ -792,8 +792,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 			case "/api/session/ses-ws/prompt":
 				var prompt struct{ Text string }
 				if err := json.NewDecoder(r.Body).Decode(&prompt); err != nil ||
-					!strings.HasPrefix(prompt.Text, "[In person at Cake's device · Cake (cake) · voice · now: ") ||
-					!strings.HasSuffix(prompt.Text, "]\nWhat are stars?") {
+					!strings.HasPrefix(prompt.Text, "[In person at Cake's device · Cake (cake) · voice]\nWhat are stars?\n[state: now: ") {
 					t.Errorf("unexpected voice prompt: %q (%v)", prompt.Text, err)
 				}
 				close(kick)

@@ -1010,7 +1010,7 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 	promptsMu.Lock()
 	gotPrompts := slices.Clone(prompts)
 	promptsMu.Unlock()
-	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[Delta Chat from Mum (contact) · private · Greg (greg)") || !strings.HasSuffix(gotPrompts[0], "\nSecret plan") {
+	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[Delta Chat from Mum (contact) · private · Greg (greg)") || !strings.Contains(gotPrompts[0], "\nSecret plan\n[state: ") {
 		t.Fatalf("unexpected agent prompts: %v", gotPrompts)
 	}
 

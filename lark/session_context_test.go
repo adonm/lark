@@ -139,8 +139,8 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 				want = "And what fruit grows there?"
 			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || !seeded.Load() || !connected.Load() ||
-				!strings.HasPrefix(in.Text, "[In person at Plum's device · Plum ("+id+") · voice · now: ") ||
-				!strings.HasSuffix(in.Text, "]\n"+want) || in.Metadata["larkSource"] != "voice" {
+				!strings.HasPrefix(in.Text, "[In person at Plum's device · Plum ("+id+") · voice]") ||
+				!strings.Contains(in.Text, "\n"+want+"\n[state: ") || in.Metadata["larkSource"] != "voice" {
 				t.Errorf("current turn changed after handoff: %+v", in)
 			}
 			promptID = fmt.Sprintf("msg-user-%d", n)
@@ -315,7 +315,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 					testSeed(t, w, r, freshSID, []string{"Mango Island"}, []string{failedPrompt, nextPrompt, "Once only"})
 				case "POST /api/session/" + freshSID + "/prompt":
 					var in struct{ Text string }
-					if json.NewDecoder(r.Body).Decode(&in) != nil || !strings.HasSuffix(in.Text, "\n"+nextPrompt) {
+					if json.NewDecoder(r.Body).Decode(&in) != nil || !strings.Contains(in.Text, "\n"+nextPrompt+"\n[state: ") {
 						t.Errorf("unexpected prompt after recovery: %q", in.Text)
 					}
 					newPrompts.Add(1)

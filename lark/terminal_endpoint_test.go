@@ -409,7 +409,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 					t.Error("unverified steering must stay off")
 				}
 				i := count.Add(1)
-				prompts <- strings.TrimSpace(input.Text[strings.LastIndex(input.Text, "\n")+1:])
+				prompts <- strings.TrimSpace(stripLarkHeader(input.Text))
 				fmt.Fprintf(w, `{"data":{"id":"prompt%d"}}`, i)
 			case "/api/experimental/session/" + sid + "/wait":
 				select {

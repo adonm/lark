@@ -599,7 +599,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	expectValue(t, titles, "Lark: Cake (cake)")
 	select {
 	case text := <-prompts:
-		if !strings.HasSuffix(text, "Next quiz round!") {
+		if !strings.Contains(text, "\nNext quiz round!\n[state: ") {
 			t.Fatal("turn did not submit its explicit prompt")
 		}
 	case <-time.After(2 * time.Second):

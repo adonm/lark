@@ -956,7 +956,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		})
 	}
 
-	prompt := turnPromptChannelAt(companionID, "deltachat", text, who, turnChannel{
+	prompt := s.b.turnPromptWithState(turnCtx, companionID, "deltachat", text, who, turnChannel{
 		channel:    "deltachat",
 		sender:     senderName,
 		senderKind: "contact",
