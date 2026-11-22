@@ -90,6 +90,16 @@ func TestSentencesAndFence(t *testing.T) {
 	if got := SplitSentences("**Whoa!** Dr. Lee found a 3.2-inch shell. Ooh, awesome question! What made it spiral?"); !slices.Equal(got, want) {
 		t.Fatal(got)
 	}
+	var ex sentenceExtractor
+	var clauses []string
+	for _, chunk := range []string{"Well, ", "short, ", "and now a much longer opening clause, ", "followed by more, ", "and the end."} {
+		clauses = append(clauses, ex.add(chunk)...)
+	}
+	clauses = append(clauses, ex.flush()...)
+	wantStream := []string{"Well, short, and now a much longer opening clause,", "followed by more, and the end."}
+	if !slices.Equal(clauses, wantStream) {
+		t.Fatalf("sentenceExtractor clause flush = %q, want %q", clauses, wantStream)
+	}
 	var s sentenceExtractor
 	var streamed []string
 	for _, delta := range []string{"**Whoa!** Dr. Lee found a 3.", "2-inch shell. ", "Ooh, awesome question!", " What made it spiral in circles?\n", "``", "`lark-screen", "\nNever say this. \n```", "Not eager even after fence. "} {

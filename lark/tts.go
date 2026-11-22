@@ -167,6 +167,13 @@ type clip struct {
 	err  error
 }
 
+var thinkingFillers = []string{
+	"Let me check.",
+	"One moment.",
+	"Hang on.",
+	"Let me see.",
+}
+
 func (c *speechClips) peek(voice, text string) []byte {
 	c.mu.Lock()
 	item := c.clips[clipKey{voice, text}]
@@ -181,6 +188,31 @@ func (c *speechClips) peek(voice, text string) []byte {
 		}
 	}
 	return nil
+}
+
+func (c *speechClips) peekAny(voice string, phrases []string, seed uint64) []byte {
+	if c == nil || len(phrases) == 0 {
+		return nil
+	}
+	start := int(seed % uint64(len(phrases)))
+	for i := range phrases {
+		if pcm := c.peek(voice, phrases[(start+i)%len(phrases)]); len(pcm) > 0 {
+			return pcm
+		}
+	}
+	return nil
+}
+
+func (c *speechClips) warmFillers(ctx context.Context, w *synthWorker, voice string) {
+	if c == nil || w == nil || voice == "" {
+		return
+	}
+	for _, phrase := range thinkingFillers {
+		if ctx.Err() != nil {
+			return
+		}
+		_, _ = c.getWith(ctx, w.warm, voice, phrase)
+	}
 }
 
 func (c *speechClips) get(ctx context.Context, w *synthWorker, voice, text string) ([]byte, error) {
@@ -203,7 +235,7 @@ func (c *speechClips) getWith(ctx context.Context, synth func(context.Context, s
 		}
 	}
 	item := &clip{done: make(chan struct{})}
-	if len(c.clips) == 32 {
+	if len(c.clips) == 128 {
 		delete(c.clips, c.order[0])
 		c.order = c.order[1:]
 	}
@@ -417,29 +449,40 @@ func spokenText(text string) (string, error) {
 	return text, nil
 }
 
+type speechItem struct {
+	text string
+	pcm  []byte
+}
+
 type speechTurn struct {
 	stream      *AudioStream
 	cancel      context.CancelFunc
-	queue       chan string
+	queue       chan speechItem
 	sent        []string
 	length      int
 	firstQueued time.Time // Published to the worker by the first queue send.
 }
 
 func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorker, voice string, onFirst func(*AudioStream)) *speechTurn {
-	t := &speechTurn{stream: newAudioStream(), cancel: cancel, queue: make(chan string, maxText)}
+	t := &speechTurn{stream: newAudioStream(), cancel: cancel, queue: make(chan speechItem, maxText)}
 	go func() {
 		defer cancel()
 		first := true
-		for s := range t.queue {
-			at := t.firstQueued
-			if !first {
-				at = time.Now()
-			}
-			pcm, err := w.synthesizeQueued(ctx, voice, s, at)
-			if err != nil {
-				t.stream.finish(err)
-				return
+		for item := range t.queue {
+			var pcm []byte
+			if len(item.pcm) > 0 {
+				pcm = item.pcm
+			} else {
+				at := t.firstQueued
+				if !first {
+					at = time.Now()
+				}
+				var err error
+				pcm, err = w.synthesizeQueued(ctx, voice, item.text, at)
+				if err != nil {
+					t.stream.finish(err)
+					return
+				}
 			}
 			if !first {
 				pcm = append(make([]byte, sampleRate/5, sampleRate/5+len(pcm)), pcm...)
@@ -469,7 +512,14 @@ func (t *speechTurn) send(s string) {
 	}
 	t.length += n
 	t.sent = append(t.sent, s)
-	t.queue <- s
+	t.queue <- speechItem{text: s}
+}
+
+func (t *speechTurn) sendPCM(pcm []byte) {
+	if len(pcm) == 0 {
+		return
+	}
+	t.queue <- speechItem{pcm: pcm}
 }
 
 func (t *speechTurn) discard() {
@@ -479,15 +529,20 @@ func (t *speechTurn) discard() {
 }
 
 func (t *speechTurn) complete(final []string) bool {
-	if len(t.sent) > len(final) {
+	return t.completeAfter(0, final)
+}
+
+func (t *speechTurn) completeAfter(offset int, final []string) bool {
+	sent := t.sent[min(offset, len(t.sent)):]
+	if len(sent) > len(final) {
 		return false
 	}
-	for i, s := range t.sent {
+	for i, s := range sent {
 		if s != final[i] {
 			return false
 		}
 	}
-	for _, s := range final[len(t.sent):] {
+	for _, s := range final[len(sent):] {
 		t.send(s)
 	}
 	close(t.queue)

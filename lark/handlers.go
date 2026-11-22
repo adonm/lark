@@ -445,6 +445,8 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	var eager *speechTurn
 	var ttsStart time.Time
 	published := false
+	spoken := false
+	preToolCount := 0
 	drop := func(abort bool) {
 		if eager == nil {
 			return
@@ -455,6 +457,20 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		eager.discard()
 		eager = nil
 		published = false
+	}
+	ensureEager := func(start time.Time) {
+		if eager != nil {
+			return
+		}
+		ttsStart = start
+		eager = makeSpeech(func(stream *AudioStream) {
+			mu.Lock()
+			defer mu.Unlock()
+			if options.publish != nil && !published && eager != nil && eager.stream == stream && ctx.Err() == nil {
+				options.publish(stream, start)
+				published = true
+			}
+		})
 	}
 	onSentence := func(s string) {
 		if isSilentReply(s) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "[silent") {
@@ -467,23 +483,23 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if eager == nil {
-			ttsStart = start
-			eager = makeSpeech(func(stream *AudioStream) {
-				mu.Lock()
-				defer mu.Unlock()
-				if options.publish != nil && !published && eager != nil && eager.stream == stream && ctx.Err() == nil {
-					options.publish(stream, start)
-					published = true
-				}
-			})
-		}
+		spoken = true
+		ensureEager(start)
 		eager.send(clean)
 	}
 	pieces := turnStream{sentence: onSentence, tool: func() {
 		mu.Lock()
 		defer mu.Unlock()
-		drop(true)
+		if eager != nil {
+			preToolCount = len(eager.sent)
+			return
+		}
+		if !spoken && b.worker != nil && b.worker.ready.Load() {
+			if pcm := b.clips.peekAny(b.voiceFor(sender.ID), thinkingFillers, uint64(time.Now().UnixNano())); len(pcm) > 0 {
+				ensureEager(time.Now())
+				eager.sendPCM(pcm)
+			}
+		}
 	}}
 	prepare := func() (string, string) {
 		companion := b.companionFor(sender.ID)
@@ -510,8 +526,9 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
 	if speechErr == nil && (eager != nil || b.worker != nil && b.worker.ready.Load()) {
-		final := SplitSentences(clean)
-		if eager == nil || !eager.complete(final) {
+		var ex sentenceExtractor
+		final := append(ex.add(clean), ex.flush()...)
+		if eager == nil || !eager.completeAfter(preToolCount, final) {
 			drop(false) // Publishing its replacement invalidates the old generation.
 			ttsStart = time.Now()
 			eager = makeSpeech(nil)

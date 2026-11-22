@@ -216,7 +216,7 @@ func SplitSentences(text string) []string { return sentences(plainText(text), tr
 type sentenceExtractor struct {
 	text              strings.Builder
 	start, clause     int
-	punct             byte
+	punct             rune
 	closers, space    bool
 	ticks, seen       int
 	utf8Tail          string
@@ -238,6 +238,24 @@ func (s *sentenceExtractor) boundary(out []string) []string {
 			return out
 		}
 	}
+	if punct == ',' || punct == ';' || punct == ':' || punct == '—' {
+		if s.start != 0 {
+			return out
+		}
+		n := 0
+		for _, r := range text[s.start:] {
+			if alphaNum(r) {
+				n++
+			}
+		}
+		if n < 24 {
+			return out
+		}
+		s.clause = len(text)
+		out = append(out, strings.TrimSpace(text[s.start:]))
+		s.start = len(text)
+		return out
+	}
 	s.clause = len(text)
 	if punct != '.' {
 		n := 0
@@ -255,6 +273,20 @@ func (s *sentenceExtractor) boundary(out []string) []string {
 	out = append(out, strings.TrimSpace(text[s.start:]))
 	s.start = len(text)
 	return out
+}
+
+func (s *sentenceExtractor) flush() []string {
+	if s.halted || !s.hasLetter {
+		return nil
+	}
+	rest := strings.TrimSpace(s.text.String()[s.start:])
+	s.start = s.text.Len()
+	s.clause = s.text.Len()
+	s.punct, s.closers = 0, false
+	if rest == "" {
+		return nil
+	}
+	return []string{rest}
 }
 
 func (s *sentenceExtractor) add(delta string) (out []string) {
@@ -299,11 +331,18 @@ func (s *sentenceExtractor) add(delta string) (out []string) {
 		switch {
 		case strings.ContainsRune(".!?", r):
 			if s.punct == 0 || s.closers {
-				s.punct, s.closers = byte(r), false
+				s.punct, s.closers = r, false
+			}
+		case s.start == 0 && strings.ContainsRune(",;:—", r):
+			if s.punct == 0 || s.closers {
+				s.punct, s.closers = r, false
 			}
 		case s.punct != 0 && strings.ContainsRune("\"'”’)]", r):
 			s.closers = true
 		default:
+			if s.punct == '—' {
+				out = s.boundary(out)
+			}
 			s.punct, s.closers = 0, false
 		}
 		s.text.WriteRune(r)

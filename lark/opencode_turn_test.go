@@ -126,6 +126,8 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 			final := prefix + tail
 			if mode == "divergent" {
 				final = "A different first sentence. " + tail
+			} else if mode == "tool" {
+				final = tail
 			}
 			prompted, sendTool, finishSSE := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -204,10 +206,6 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 			})
 			if mode == "tool" {
 				close(sendTool)
-				abort := device.until(t, ttsMsg(ttsOpStop))
-				if ttsAudio(abort) != startAudio {
-					t.Fatal("tool did not abort the speculative generation")
-				}
 			}
 			close(finishSSE)
 			var endAudio uint64
@@ -223,7 +221,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 						t.Fatal("unexpected audio abort", f.data)
 					}
 				case ttsMsg(ttsOpStart)(f):
-					if mode == "matching" || ttsAudio(f) == startAudio {
+					if mode != "divergent" || ttsAudio(f) == startAudio {
 						t.Fatal("unexpected audio generation", f.data)
 					}
 				case ttsMsg(ttsOpEnd)(f):
@@ -231,7 +229,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 					hasEnd = true
 				}
 			}
-			if !continued || (startAudio == endAudio) != (mode == "matching") {
+			if !continued || (startAudio == endAudio) != (mode == "matching" || mode == "tool") {
 				t.Fatalf("unexpected completion: continued=%t, start=%d, end=%d", continued, startAudio, endAudio)
 			}
 		})

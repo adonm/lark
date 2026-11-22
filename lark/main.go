@@ -211,6 +211,17 @@ func run() error {
 		ctx, cancel := context.WithTimeout(root, ttsWait)
 		defer cancel()
 		_, _ = b.clips.getWith(ctx, worker.warm, b.voices.fallback, "Sent to everyone!")
+		b.clips.warmFillers(ctx, worker, b.voices.fallback)
+		if list, err := b.allCompanions(ctx); err == nil {
+			seen := map[string]bool{b.voices.fallback: true}
+			for _, c := range list {
+				v := b.voiceFor(c.ID)
+				if !seen[v] {
+					seen[v] = true
+					b.clips.warmFillers(ctx, worker, v)
+				}
+			}
+		}
 	}()
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 105 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}

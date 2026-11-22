@@ -417,15 +417,25 @@ stream:
 				break stream
 			default:
 				if strings.HasPrefix(event.Type, "session.tool.") {
+					if stream.sentence != nil {
+						for _, s := range streamed.flush() {
+							if trace != nil && !firstSentence && strings.ContainsFunc(s, alphaNum) {
+								trace.measure(diagFirstSentence, time.Since(start))
+								firstSentence = true
+							}
+							stream.sentence(s)
+						}
+					}
+					streamed.sentenceExtractor = sentenceExtractor{}
 					markTool()
 				}
-				if !usedTool && stream.sentence != nil || trace != nil && (!firstSentence || streamed.onFirst != nil) {
+				if stream.sentence != nil || trace != nil && (!firstSentence || streamed.onFirst != nil) {
 					for _, s := range streamed.addEvent(event) {
 						if trace != nil && !firstSentence && strings.ContainsFunc(s, alphaNum) {
 							trace.measure(diagFirstSentence, time.Since(start))
 							firstSentence = true
 						}
-						if !usedTool && stream.sentence != nil {
+						if stream.sentence != nil {
 							stream.sentence(s)
 						}
 					}
