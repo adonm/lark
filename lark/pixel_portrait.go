@@ -52,13 +52,70 @@ func normalizePortraitSheet(sheet image.Image, targetH int) ([4]*image.RGBA, err
 
 	scale := min(float64(targetH)/float64(maxCropH), float64(pixelPortraitMaxW)/float64(maxCropW))
 	for i, crop := range crops {
+		cell := image.Rect(0, 0, side, side).Add(image.Pt(i%2*side, i/2*side))
+		cw, ch := cell.Dx(), cell.Dy()
+		// Build a foreground mask with tighter tolerance (18) and seal 2px outline gaps
+		// before flood-filling from the quadrant borders so interior light fur never leaks.
+		fg := make([]bool, cw*ch)
+		for ly := range ch {
+			for lx := range cw {
+				c := rgba.RGBAAt(cell.Min.X+lx, cell.Min.Y+ly)
+				if c.A >= 128 && portraitDiff(c, bgs[i]) > 18*18 {
+					fg[ly*cw+lx] = true
+				}
+			}
+		}
+		sealed := make([]bool, cw*ch)
+		copy(sealed, fg)
+		for ly := 2; ly < ch-2; ly++ {
+			for lx := 2; lx < cw-2; lx++ {
+				if sealed[ly*cw+lx] {
+					continue
+				}
+				if (fg[ly*cw+lx-1] || fg[ly*cw+lx-2]) && (fg[ly*cw+lx+1] || fg[ly*cw+lx+2]) ||
+					(fg[(ly-1)*cw+lx] || fg[(ly-2)*cw+lx]) && (fg[(ly+1)*cw+lx] || fg[(ly+2)*cw+lx]) {
+					sealed[ly*cw+lx] = true
+				}
+			}
+		}
+		bgMask := make([]bool, cw*ch)
+		var q []int
+		tryPush := func(lx, ly int) {
+			if lx < 0 || ly < 0 || lx >= cw || ly >= ch {
+				return
+			}
+			idx := ly*cw + lx
+			if bgMask[idx] || sealed[idx] {
+				return
+			}
+			bgMask[idx] = true
+			q = append(q, idx)
+		}
+		for lx := range cw {
+			tryPush(lx, 0)
+			tryPush(lx, ch-1)
+		}
+		for ly := range ch {
+			tryPush(0, ly)
+			tryPush(cw-1, ly)
+		}
+		for head := 0; head < len(q); head++ {
+			pos := q[head]
+			lx, ly := pos%cw, pos/cw
+			tryPush(lx-1, ly)
+			tryPush(lx+1, ly)
+			tryPush(lx, ly-1)
+			tryPush(lx, ly+1)
+		}
+
 		masked := image.NewRGBA(image.Rect(0, 0, crop.Dx(), crop.Dy()))
 		for y := crop.Min.Y; y < crop.Max.Y; y++ {
 			for x := crop.Min.X; x < crop.Max.X; x++ {
-				c := rgba.RGBAAt(x, y)
-				if c.A < 128 || portraitDiff(c, bgs[i]) <= 28*28 {
+				lx, ly := x-cell.Min.X, y-cell.Min.Y
+				if bgMask[ly*cw+lx] {
 					continue
 				}
+				c := rgba.RGBAAt(x, y)
 				masked.SetRGBA(x-crop.Min.X, y-crop.Min.Y, imagecolor.RGBA{c.R, c.G, c.B, 255})
 			}
 		}
@@ -78,8 +135,32 @@ func normalizePortraitSheet(sheet image.Image, targetH int) ([4]*image.RGBA, err
 					c.R = uint8(min(255, int(c.R)*255/int(c.A)))
 					c.G = uint8(min(255, int(c.G)*255/int(c.A)))
 					c.B = uint8(min(255, int(c.B)*255/int(c.A)))
-					c.A = 255
-					dst.SetRGBA(x, y, c)
+				}
+				c.A = 255
+				dst.SetRGBA(x, y, c)
+			}
+		}
+		// Remove isolated 1 px fringe specks after downscaling.
+		for y := range h {
+			for x := range w {
+				if dst.RGBAAt(x, y).A == 0 {
+					continue
+				}
+				n := 0
+				if x > 0 && dst.RGBAAt(x-1, y).A > 0 {
+					n++
+				}
+				if x+1 < w && dst.RGBAAt(x+1, y).A > 0 {
+					n++
+				}
+				if y > 0 && dst.RGBAAt(x, y-1).A > 0 {
+					n++
+				}
+				if y+1 < h && dst.RGBAAt(x, y+1).A > 0 {
+					n++
+				}
+				if n <= 1 {
+					dst.SetRGBA(x, y, imagecolor.RGBA{})
 				}
 			}
 		}

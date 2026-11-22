@@ -158,7 +158,8 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrNormalizePoses(%s): %v", gregDir, err)
 	}
-	th := derivePixelTheme(nil, poses[:])
+	gregBG, _ := loadBackgroundPNG(gregDir)
+	th := derivePixelTheme(gregBG, poses[:])
 
 	books := []pixelBook{
 		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
@@ -217,9 +218,9 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 		for _, g := range grades {
 			save(fmt.Sprintf("%s-home-%s-idle", spec.name, g.name),
-				renderPixelHome(spec, nil, poses[0], g.grade, "", 0, "", false))
+				renderPixelHome(spec, gregBG, poses[0], g.grade, "", 0, "", false))
 			save(fmt.Sprintf("%s-home-%s-talk", spec.name, g.name),
-				renderPixelHome(spec, nil, poses[2], g.grade, "speaking", 0, "", false))
+				renderPixelHome(spec, gregBG, poses[2], g.grade, "speaking", 0, "", false))
 		}
 		save(spec.name+"-home-caption",
 			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "Message from Mum: dinner's ready", false))
@@ -260,6 +261,35 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		// Offline sample.
 		offImg := renderPixelListWithHitsImg(spec, "Offline", th)
 		save(spec.name+"-offline", offImg)
+	}
+
+	// Regenerate and sample all local companion portraits (cake, mint, george) plus mint before/after.
+	for _, comp := range []struct{ name, id string }{
+		{"cake", "0ba6d163e84af09a85e8501c06fd17ee"},
+		{"mint", "97f7705ad6ecd5f87f7ee43ef2ccac9e"},
+		{"george", "888c1435c752965e68fde60d14edb409"},
+	} {
+		dir := filepath.Join(home, ".local", "share", "lark", "portraits", comp.id)
+		cPoses, err := loadOrNormalizePoses(dir, pixelPortraitHeight)
+		if err != nil {
+			continue
+		}
+		cBG, _ := loadBackgroundPNG(dir)
+		for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
+			save(fmt.Sprintf("%s-home-%s-day", spec.name, comp.name),
+				renderPixelHome(spec, cBG, cPoses[0], gradeDay, "", 0, "", false))
+		}
+		if comp.name == "mint" {
+			save("vocat-mint-after", renderPixelHome(pixelSpecVoCat, cBG, cPoses[0], gradeDay, "", 0, "", false))
+			if bf, err := os.Open(filepath.Join(outDir, "mint-pose-before.png")); err == nil {
+				if bImg, err := png.Decode(bf); err == nil {
+					bRGBA := image.NewRGBA(bImg.Bounds())
+					draw.Draw(bRGBA, bRGBA.Bounds(), bImg, bImg.Bounds().Min, draw.Src)
+					save("vocat-mint-before", renderPixelHome(pixelSpecVoCat, cBG, bRGBA, gradeDay, "", 0, "", false))
+				}
+				_ = bf.Close()
+			}
+		}
 	}
 
 	const cols = 4

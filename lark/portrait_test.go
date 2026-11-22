@@ -318,3 +318,69 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 		t.Fatal(edited)
 	}
 }
+
+func TestPortraitInteriorMatchesBGStaysOpaque(t *testing.T) {
+	bg := imagecolor.RGBA{240, 244, 240, 255}
+	outline := imagecolor.RGBA{45, 70, 55, 255}
+	sheet := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))
+	draw.Draw(sheet, sheet.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
+	// Draw a closed outline ring in each quadrant whose interior has the exact background colour
+	// (and even transparent pixels) — the flood-fill must keep the entire interior opaque.
+	for i := range portraitPoses {
+		cx, cy := i%2*512+256, i/2*512+256
+		for y := -120; y <= 120; y++ {
+			for x := -120; x <= 120; x++ {
+				d2 := x*x + y*y
+				if d2 <= 120*120 && d2 >= 96*96 {
+					sheet.SetRGBA(cx+x, cy+y, outline)
+				} else if d2 < 96*96 && (x+y)%5 == 0 {
+					// Interior transparent pixel must also become opaque.
+					sheet.SetRGBA(cx+x, cy+y, imagecolor.RGBA{})
+				}
+			}
+		}
+	}
+	poses, err := normalizePortraitSheet(sheet, pixelPortraitHeight)
+	if err != nil {
+		t.Fatalf("normalizePortraitSheet: %v", err)
+	}
+	for i, pose := range poses {
+		b := pose.Bounds()
+		cx, cy := b.Min.X+b.Dx()/2, b.Min.Y+b.Dy()/2
+		for dy := -5; dy <= 5; dy++ {
+			for dx := -5; dx <= 5; dx++ {
+				if got := pose.RGBAAt(cx+dx, cy+dy); got.A != 255 {
+					t.Fatalf("pose %d interior pixel (%d,%d) became transparent: %v", i, cx+dx, cy+dy, got)
+				}
+			}
+		}
+		// Binary alpha only.
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				a := pose.RGBAAt(x, y).A
+				if a != 0 && a != 255 {
+					t.Fatalf("pose %d has partial alpha %d at (%d,%d)", i, a, x, y)
+				}
+			}
+		}
+	}
+
+	// Also verify against mint's real sheet if present locally.
+	home, err := os.UserHomeDir()
+	if err == nil {
+		mintSheetPath := filepath.Join(home, ".local", "share", "lark", "portraits", "97f7705ad6ecd5f87f7ee43ef2ccac9e", "sheet.png")
+		if f, err := os.Open(mintSheetPath); err == nil {
+			defer f.Close()
+			if img, err := png.Decode(f); err == nil {
+				mPoses, err := normalizePortraitSheet(img, pixelPortraitHeight)
+				if err != nil {
+					t.Fatalf("mint normalizePortraitSheet: %v", err)
+				}
+				mb := mPoses[0].Bounds()
+				if got := mPoses[0].RGBAAt(mb.Min.X+mb.Dx()/2, mb.Min.Y+mb.Dy()/2); got.A != 255 {
+					t.Fatalf("mint center face pixel is transparent: %v", got)
+				}
+			}
+		}
+	}
+}
