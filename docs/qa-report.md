@@ -20,8 +20,30 @@
 
 ---
 
-Date: 2026-11-22  
+Date: 2026-11-23  
 Target: `main` (`6f444c9`..`35ec120`), firmware `0.19.0` (`vocat-33d8`, `vocat-2cac`, `box3-b324`)
+
+## Panel v4: naming, history, and voice selection
+
+The panel keeps the header design, but the app was still branded "Lark Control" and two bugs made it unusable: History vanished and changing voice never updated the selected button.
+
+### Root causes
+
+1. **History disappeared — server re-applied its own status updates.** `handleWebxdcUpdate` reads `GetWebxdcStatusUpdates`, which also returns updates this bot pushed. Those payloads were re-parsed as commands. A `history` *response* is `{"op":"history",...}` with no `limit`, so the old `cmd.Limit == -1` guard never matched: every response became a new request, which pushed another response, which triggered another status-update event. `greg`'s live panel message (`msgs_status_updates` id 267) had accumulated **708,630 history updates** (vs 8 `state` and 4 `set_voice`). Opening or interacting with the panel replayed that flood; each history callback rebuilt the DOM and replaced `hist.items` with page 1 of an arbitrary stale filter, often an empty one ("No matching messages").
+   - Fix: skip outgoing payloads (`dir:"out"` marker plus response-shaped `items`) and apply an explicit command-op allowlist. The panel also tags each history request with a per-instance `sid` and a monotonic `seq`, and ignores responses that do not match its latest request (replayed updates, superseded filters, or crossed responses).
+2. **Voice selection did not update — the new state was buried in the flood.** Post-`set_voice` state did contain the new voice (verified in the live DB: `set_voice` → `ack` → `state` with `bm_fable`), but the panel had to process hundreds of thousands of history callbacks before/while rendering, so the fresh state never reached a visible render. Any later stale history response could also re-render over it.
+   - Fix: the echo loop above, plus `ack` now carries the current `voice`; the panel applies it and re-renders the settings grid immediately, without waiting for a state push.
+
+### Naming and icon
+
+- `manifest.toml` is generated per panel: `name` is the companion display name (`greg`, `cake`, `mint`) and `description` is neutral. `icon.png` is the companion's rasterised avatar (`companionAvatarPNG`), so the panel icon and header portrait are the same image. The panel `dc_panel` version key now includes the name, so a rename re-sends the panel and deletes the previous message.
+- The header shows only portrait, name, form, and live-state pill; the placeholder logo and "Lark Control" branding are gone. `/help` now says "/panel — open my panel".
+
+### Tests
+
+- `./scripts/check.sh --panel-ui`: headless-Chromium DOM suite (8 tests, ~6 s) that serves `lark/webxdc/panel/` and drives a fake `webxdc` update stream. Covers header/portrait/state, Say + feedback + ack, listen pills, volume sliders, story progress/Continue/Start over, history rows/paging/filters/search, voice pressed state, keyboard tab navigation, labels, and both regressions above. Screenshots: `/tmp/opencode/panel/`.
+- Go: `TestWebxdcPanelDoesNotEchoOwnUpdates` (fails before the guard), `TestWebxdcPanelVoiceInAckAndState`, `TestWebxdcPanelHistoryPaginationAcrossLiveState`, and the panel XDC packaging test now asserts manifest name and portrait icon.
+- Playwright tests are dev-only; plain `./scripts/check.sh` still runs only `codec.test.mjs` and the other fast Node tests.
 
 ## Latency Investigation (`sim` vs bench)
 

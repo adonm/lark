@@ -114,7 +114,9 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    `--deployed` runs the older deployed-service and OTA probes (no upload or
    flash).
    `--qa` runs the repeatable `lark sim` QA suite (`lark/qa/*.sim`); `--qa-hw`
-   adds the live hardware QA suite.
+   adds the live hardware QA suite. `--panel-ui` runs the headless-Chromium
+   webxdc panel tests (needs `playwright` or `playwright-core`; set
+   `LARK_PLAYWRIGHT_MODULE` if it is not in a standard location).
 
 ## Controls, voice notes, and calls
 

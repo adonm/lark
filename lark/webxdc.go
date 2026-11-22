@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	dcPanelVersion     = "3"
-	panelAppName       = "Lark Control"
+	dcPanelVersion     = "4"
+	legacyPanelAppName = "Lark Control"
 	panelActiveTTL     = 5 * time.Minute
 	panelPushThrottle  = 1 * time.Second
 	panelWatchInterval = 750 * time.Millisecond
@@ -87,7 +87,50 @@ func buildStoryXDC(twee string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func buildPanelXDC() ([]byte, error) {
+func panelDisplayName(c companionState) string {
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = strings.TrimSpace(c.ID)
+	}
+	if name == "" {
+		return "Lark"
+	}
+	return name
+}
+
+// tomlQuote renders a single-line TOML basic string.
+func tomlQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// buildPanelXDC packages the panel with a manifest named after the companion
+// and the companion's portrait as the app icon.
+func buildPanelXDC(name string, iconPNG []byte) ([]byte, error) {
+	if strings.TrimSpace(name) == "" {
+		name = "Lark"
+	}
 	entries, err := fs.ReadDir(panelAssets, "webxdc/panel")
 	if err != nil {
 		return nil, err
@@ -97,16 +140,7 @@ func buildPanelXDC() ([]byte, error) {
 	})
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasSuffix(name, ".test.mjs") {
-			continue
-		}
-		data, err := panelAssets.ReadFile("webxdc/panel/" + name)
-		if err != nil {
-			_ = zw.Close()
-			return nil, err
-		}
+	write := func(name string, data []byte) error {
 		hdr := &zip.FileHeader{
 			Name:     name,
 			Method:   zip.Deflate,
@@ -114,13 +148,38 @@ func buildPanelXDC() ([]byte, error) {
 		}
 		w, err := zw.CreateHeader(hdr)
 		if err != nil {
+			return err
+		}
+		_, err = w.Write(data)
+		return err
+	}
+	for _, entry := range entries {
+		entryName := entry.Name()
+		if entry.IsDir() || strings.HasSuffix(entryName, ".test.mjs") || entryName == "manifest.toml" || entryName == "icon.png" {
+			continue
+		}
+		data, err := panelAssets.ReadFile("webxdc/panel/" + entryName)
+		if err != nil {
 			_ = zw.Close()
 			return nil, err
 		}
-		if _, err := w.Write(data); err != nil {
+		if err := write(entryName, data); err != nil {
 			_ = zw.Close()
 			return nil, err
 		}
+	}
+	manifest := "name = " + tomlQuote(name) + "\n" +
+		"description = " + tomlQuote("Status, stories, history, and settings.") + "\n"
+	if len(iconPNG) > 0 {
+		manifest += "icon = \"icon.png\"\n"
+		if err := write("icon.png", iconPNG); err != nil {
+			_ = zw.Close()
+			return nil, err
+		}
+	}
+	if err := write("manifest.toml", []byte(manifest)); err != nil {
+		_ = zw.Close()
+		return nil, err
 	}
 	if err := zw.Close(); err != nil {
 		return nil, err
@@ -134,19 +193,23 @@ type panelUpdateEnvelope struct {
 }
 
 type panelCommand struct {
-	V        int    `json:"v"`
-	Op       string `json:"op"`
-	App      string `json:"app,omitempty"`
-	Voice    string `json:"voice,omitempty"`
-	Terminal string `json:"terminal,omitempty"`
-	Volume   int    `json:"volume,omitempty"`
-	Seconds  int    `json:"seconds,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Channel  string `json:"channel,omitempty"`
-	Q        string `json:"q,omitempty"`
-	BeforeTS int64  `json:"before_ts,omitempty"`
-	BeforeID string `json:"before_id,omitempty"`
-	Limit    int    `json:"limit,omitempty"`
+	V        int             `json:"v"`
+	Op       string          `json:"op"`
+	App      string          `json:"app,omitempty"`
+	Voice    string          `json:"voice,omitempty"`
+	Terminal string          `json:"terminal,omitempty"`
+	Volume   int             `json:"volume,omitempty"`
+	Seconds  int             `json:"seconds,omitempty"`
+	Text     string          `json:"text,omitempty"`
+	Channel  string          `json:"channel,omitempty"`
+	Q        string          `json:"q,omitempty"`
+	BeforeTS int64           `json:"before_ts,omitempty"`
+	BeforeID string          `json:"before_id,omitempty"`
+	Limit    int             `json:"limit,omitempty"`
+	SID      string          `json:"sid,omitempty"`
+	Seq      int             `json:"seq,omitempty"`
+	Dir      string          `json:"dir,omitempty"`
+	Items    json.RawMessage `json:"items,omitempty"`
 }
 
 func (s *dcService) sendPanelXDC(ctx context.Context, c companionState, accID, chatID uint32, ct *deltachat.Contact) error {
@@ -154,6 +217,8 @@ func (s *dcService) sendPanelXDC(ctx context.Context, c companionState, accID, c
 	if rpc == nil {
 		return problem(503, "Delta Chat unavailable")
 	}
+	name := panelDisplayName(c)
+	panelKey := dcPanelVersion + ":" + name
 	var prevMsgID uint32
 	var contactKey string
 	if ct != nil {
@@ -167,7 +232,11 @@ func (s *dcService) sendPanelXDC(ctx context.Context, c companionState, accID, c
 		}
 	}
 
-	xdcBytes, err := buildPanelXDC()
+	var iconPNG []byte
+	if pngBytes, err := companionAvatarPNG(s.b, c); err == nil {
+		iconPNG = pngBytes
+	}
+	xdcBytes, err := buildPanelXDC(name, iconPNG)
 	if err != nil {
 		return err
 	}
@@ -191,7 +260,7 @@ func (s *dcService) sendPanelXDC(ctx context.Context, c companionState, accID, c
 		return err
 	}
 	if ct != nil && s.b != nil && s.b.db != nil {
-		_ = s.b.db.setMeta(ctx, "dc_panel:"+c.ID+":"+contactKey, dcPanelVersion)
+		_ = s.b.db.setMeta(ctx, "dc_panel:"+c.ID+":"+contactKey, panelKey)
 		_ = s.b.db.setMeta(ctx, "dc_panel_msg:"+c.ID+":"+contactKey, strconv.FormatUint(uint64(msgID), 10))
 
 		var toDelete []uint32
@@ -204,7 +273,7 @@ func (s *dcService) sendPanelXDC(ctx context.Context, c companionState, accID, c
 					if mid == msgID {
 						continue
 					}
-					if info, err := rpc.GetWebxdcInfo(accID, mid); err == nil && info.IsAppSender && info.Name == panelAppName {
+					if info, err := rpc.GetWebxdcInfo(accID, mid); err == nil && info.IsAppSender && (info.Name == name || info.Name == legacyPanelAppName) {
 						toDelete = append(toDelete, mid)
 					}
 				}
@@ -233,7 +302,8 @@ func (s *dcService) sendPanelIfNeeded(ctx context.Context, c companionState, acc
 		return
 	}
 	key := "dc_panel:" + c.ID + ":" + dcContactKey(ct)
-	if seen, err := s.b.db.getMeta(ctx, key); err == nil && seen == dcPanelVersion {
+	panelKey := dcPanelVersion + ":" + panelDisplayName(c)
+	if seen, err := s.b.db.getMeta(ctx, key); err == nil && seen == panelKey {
 		return
 	}
 	chatID, err := rpc.CreateChatByContactId(accID, ct.Id)
@@ -324,7 +394,16 @@ func (s *dcService) handleWebxdcUpdate(ctx context.Context, accID, msgID uint32)
 		if err := json.Unmarshal(u.Payload, &cmd); err != nil || cmd.V != 1 {
 			continue
 		}
-		if cmd.Op == "state" || cmd.Op == "ack" || cmd.Op == "live_state" || cmd.Op == "history" && cmd.Limit == -1 {
+		// GetWebxdcStatusUpdates also returns updates this bot pushed. They must
+		// never be applied as commands: a history response parsed as a history
+		// request used to push another response, and each response triggered a
+		// new status-update event (one live panel accumulated >700k updates).
+		if cmd.Dir == "out" || cmd.Items != nil {
+			continue
+		}
+		switch cmd.Op {
+		case "sync", "say", "open_book", "open_story", "restart_story", "set_voice", "set_volume", "set_listen", "history":
+		default:
 			continue
 		}
 		s.applyPanelCommand(ctx, accID, msgID, companionID, senderName, cmd)
@@ -452,25 +531,25 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 	case "say":
 		words := strings.TrimSpace(cmd.Text)
 		if words == "" {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Enter something to say.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Enter something to say.")
 			return
 		}
 		clean, err := spokenText(words)
 		if err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, err.Error())
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, err.Error())
 			return
 		}
 		s.sayOnCompanion(ctx, companionID, senderName, clean)
-		s.pushPanelAck(accID, msgID, cmd.Op, true, "Said it.")
+		s.pushPanelAck(accID, msgID, companionID, cmd.Op, true, "Said it.")
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "open_book", "open_story":
 		if strings.TrimSpace(cmd.App) == "" {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Missing story ID.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Missing story ID.")
 			return
 		}
 		st, err := s.b.loadStory(ctx, cmd.App)
 		if err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Story not found.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Story not found.")
 			return
 		}
 		s.b.ws.mu.Lock()
@@ -480,20 +559,20 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 			}
 		}
 		s.b.ws.mu.Unlock()
-		s.pushPanelAck(accID, msgID, cmd.Op, true, "Opened on device.")
+		s.pushPanelAck(accID, msgID, companionID, cmd.Op, true, "Opened on device.")
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "restart_story":
 		if strings.TrimSpace(cmd.App) == "" {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Missing story ID.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Missing story ID.")
 			return
 		}
 		st, err := s.b.loadStory(ctx, cmd.App)
 		if err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Story not found.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Story not found.")
 			return
 		}
 		if err := s.b.clearStoryProgress(ctx, companionID, st.ID); err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Could not reset progress.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Could not reset progress.")
 			return
 		}
 		s.b.ws.mu.Lock()
@@ -503,61 +582,64 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 			}
 		}
 		s.b.ws.mu.Unlock()
-		s.pushPanelAck(accID, msgID, cmd.Op, true, "Started over on device.")
+		s.pushPanelAck(accID, msgID, companionID, cmd.Op, true, "Started over on device.")
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "set_voice":
 		if !s.b.voices.allowed(cmd.Voice) {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Unknown voice.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Unknown voice.")
 			return
 		}
 		if _, err := s.b.patchCompanion(ctx, companionID, object{"voice": cmd.Voice}); err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, err.Error())
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, err.Error())
 			return
 		}
 		s.previewVoiceOnCompanion(companionID, cmd.Voice)
-		s.pushPanelAck(accID, msgID, cmd.Op, true, "Voice updated.")
+		s.pushPanelAck(accID, msgID, companionID, cmd.Op, true, "Voice updated.")
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "set_volume":
 		if cmd.Volume < 0 || cmd.Volume > 100 || strings.TrimSpace(cmd.Terminal) == "" {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Invalid volume.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Invalid volume.")
 			return
 		}
 		if err := s.b.setCompanionTerminalVolume(ctx, companionID, cmd.Terminal, cmd.Volume); err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, err.Error())
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, err.Error())
 			return
 		}
-		s.pushPanelAck(accID, msgID, cmd.Op, true, fmt.Sprintf("Volume set to %d%%.", cmd.Volume))
+		s.pushPanelAck(accID, msgID, companionID, cmd.Op, true, fmt.Sprintf("Volume set to %d%%.", cmd.Volume))
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "set_listen":
 		if !slices.Contains([]int{0, 30, 60, 120, 300}, cmd.Seconds) {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Invalid listening duration.")
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, "Invalid listening duration.")
 			return
 		}
 		if _, err := s.b.patchCompanion(ctx, companionID, object{"listen_seconds": cmd.Seconds}); err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, err.Error())
+			s.pushPanelAck(accID, msgID, companionID, cmd.Op, false, err.Error())
 			return
 		}
-		s.pushPanelAck(accID, msgID, cmd.Op, true, "Listening mode updated.")
+		s.pushPanelAck(accID, msgID, companionID, cmd.Op, true, "Listening mode updated.")
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "history":
 		s.pushPanelHistory(ctx, accID, msgID, companionID, cmd)
 	}
 }
 
-func (s *dcService) pushPanelAck(accID, msgID uint32, reqOp string, ok bool, message string) {
+func (s *dcService) pushPanelAck(accID, msgID uint32, companionID, reqOp string, ok bool, message string) {
 	rpc := s.getRPC()
 	if rpc == nil {
 		return
 	}
-	data, err := json.Marshal(object{
-		"payload": object{
-			"v":       1,
-			"op":      "ack",
-			"req_op":  reqOp,
-			"ok":      ok,
-			"message": message,
-		},
-	})
+	payload := object{
+		"v":       1,
+		"op":      "ack",
+		"req_op":  reqOp,
+		"ok":      ok,
+		"message": message,
+		"dir":     "out",
+	}
+	if s.b != nil && companionID != "" {
+		payload["voice"] = s.b.voiceFor(companionID)
+	}
+	data, err := json.Marshal(object{"payload": payload})
 	if err != nil {
 		return
 	}
@@ -574,6 +656,7 @@ func (s *dcService) pushPanelLiveState(accID, msgID uint32, liveState string) {
 			"v":          1,
 			"op":         "live_state",
 			"live_state": liveState,
+			"dir":        "out",
 		},
 	})
 	if err != nil {
@@ -755,6 +838,7 @@ func (s *dcService) pushPanelState(ctx context.Context, accID, msgID uint32, com
 		"payload": object{
 			"v":         1,
 			"op":        "state",
+			"dir":       "out",
 			"companion": compObj,
 			"terminals": termList,
 			"stories":   stories,
@@ -825,7 +909,7 @@ func (s *dcService) pushPanelHistory(ctx context.Context, accID, msgID uint32, c
 	switch ch {
 	case "", "all", "in_person", "deltachat", "intercom":
 	default:
-		s.pushPanelAck(accID, msgID, "history", false, "Unknown history filter.")
+		s.pushPanelAck(accID, msgID, companionID, "history", false, "Unknown history filter.")
 		return
 	}
 	q := strings.TrimSpace(cmd.Q)
@@ -858,7 +942,7 @@ func (s *dcService) pushPanelHistory(ctx context.Context, accID, msgID uint32, c
 
 	rows, err := s.b.db.readDB().QueryContext(ctx, query, args...)
 	if err != nil {
-		s.pushPanelAck(accID, msgID, "history", false, "Could not load history.")
+		s.pushPanelAck(accID, msgID, companionID, "history", false, "Could not load history.")
 		return
 	}
 	defer rows.Close()
@@ -869,7 +953,7 @@ func (s *dcService) pushPanelHistory(ctx context.Context, accID, msgID uint32, c
 		var id, role, sender, text, source, rowCh string
 		var ts int64
 		if err := rows.Scan(&id, &role, &sender, &text, &source, &rowCh, &ts); err != nil {
-			s.pushPanelAck(accID, msgID, "history", false, "Could not load history.")
+			s.pushPanelAck(accID, msgID, companionID, "history", false, "Could not load history.")
 			return
 		}
 		if rowCh == "" {
@@ -886,7 +970,7 @@ func (s *dcService) pushPanelHistory(ctx context.Context, accID, msgID uint32, c
 		})
 	}
 	if err := rows.Err(); err != nil {
-		s.pushPanelAck(accID, msgID, "history", false, "Could not load history.")
+		s.pushPanelAck(accID, msgID, companionID, "history", false, "Could not load history.")
 		return
 	}
 	hasMore := len(items) > limit
@@ -896,11 +980,18 @@ func (s *dcService) pushPanelHistory(ctx context.Context, accID, msgID uint32, c
 	payload := object{
 		"v":        1,
 		"op":       "history",
+		"dir":      "out",
 		"items":    items,
 		"has_more": hasMore,
 		"append":   appendMode,
 		"channel":  ch,
 		"q":        q,
+	}
+	if cmd.SID != "" {
+		payload["sid"] = cmd.SID
+	}
+	if cmd.Seq > 0 {
+		payload["seq"] = cmd.Seq
 	}
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]

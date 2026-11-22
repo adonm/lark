@@ -31,6 +31,18 @@ Apply entries chronologically from the installation's starting state to latest. 
 ### Upgrade Steps
 1. Re-run `./scripts/setup-host.sh` (migrates the generated config and imports Zen auth if missing), or edit `opencode.jsonc` to the three ids above and restart `lark-opencode.service`.
 
+## 2026-11-23 — Webxdc Panel v4: Companion Name, History Echo Fix
+
+### Affects
+- Lark Server / Webxdc (`dc_panel` v4)
+
+### Changes
+- **Panel v4 naming**: The webxdc manifest `name` is the companion's display name and `icon.png` is the companion's rasterised portrait. Renaming a companion re-sends the panel (`dc_panel` meta stores `<version>:<name>`) and deletes the previous message. The header logo and "Lark Control" branding are gone; `/help` says "/panel — open my panel".
+- **History/voice fixes**: Status updates pushed by the bot are no longer re-applied as commands (a history response could spawn another history request recursively; one live panel reached >700k updates). The panel correlates history responses by `sid`/`seq`, ignores replays, and applies the voice from the `set_voice` `ack`.
+
+### Upgrade Steps
+1. Restart `lark.service`. On the next startup sync (or `/panel`) each verified contact gets the v4 panel named after the companion, and the old panel message is deleted for everyone (`dcPanelVersion` `"4"`). No DB migration is needed; stale `msgs_status_updates` rows disappear with the old message.
+
 ---
 
 ## 2026-11-22 — Webxdc Panel Upgrade, Old Panel Cleanup & History Tab

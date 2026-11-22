@@ -1048,7 +1048,7 @@ func welcomeText(c companionState) string {
 		"/private <words> — just between us",
 		"/stories — list interactive stories",
 		"/story <name> — play and download a story",
-		"/panel — open my control panel",
+		"/panel — open my panel",
 		"/help — this message",
 		"Send a .twee file to import a story. When listening mode is on, people at home can answer you out loud.",
 	}, "\n")

@@ -47,6 +47,13 @@ test("encodeCommand builds versioned payloads", () => {
     before_id: "m1",
     limit: 20,
   });
+  assert.deepEqual(codec.encodeCommand("history", { channel: "all", sid: "abc123", seq: 2 }), {
+    v: 1,
+    op: "history",
+    channel: "all",
+    sid: "abc123",
+    seq: 2,
+  });
 });
 
 test("encodeCommand rejects invalid inputs", () => {

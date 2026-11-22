@@ -6,7 +6,13 @@
   const stateLabels = { idle: "Idle", listening: "Listening", thinking: "Thinking", speaking: "Speaking", sleeping: "Sleeping", offline: "Offline" };
   const chanLabels = { in_person: "In person", deltachat: "Delta Chat", intercom: "Intercom", timer: "Timer" };
   let state = { companion: {}, terminals: [], stories: [], voices: [] };
-  let hist = { loaded: false, loading: false, channel: "all", q: "", items: [], has_more: false, next_cursor: null };
+  // sid identifies this panel instance. History responses are only rendered when
+  // they answer a request from this instance, so replayed or cross-filter
+  // responses cannot replace the list.
+  const historySession = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+    : Math.random().toString(16).slice(2, 14);
+  let hist = { loaded: false, loading: false, channel: "all", q: "", items: [], has_more: false, next_cursor: null, sid: historySession, seq: 0 };
   let bannerTimer = null, pendingBtn = null;
 
   function el(tag, attrs, children) {
@@ -49,16 +55,29 @@
 
   function renderHeader() {
     const c = state.companion || {};
-    document.getElementById("comp-name").textContent = c.name || "Lark Companion";
+    const name = c.name || "Lark";
+    document.title = name;
+    document.getElementById("comp-name").textContent = name;
     document.getElementById("comp-form").textContent = c.form || "Waiting for status…";
     const live = c.live_state || (state.terminals.some((t) => t.online) ? "idle" : "offline");
     document.getElementById("live-state").dataset.state = live;
     document.getElementById("live-state-text").textContent = stateLabels[live] || live;
     const wrap = document.getElementById("portrait-wrap");
-    if (c.portrait && !wrap.querySelector("img")) {
-      wrap.className = "";
-      wrap.innerHTML = "";
-      wrap.appendChild(el("img", { class: "portrait", src: c.portrait, alt: (c.name || "Companion") + " portrait" }));
+    let img = wrap.querySelector("img.portrait");
+    if (c.portrait) {
+      if (!img) {
+        wrap.className = "";
+        wrap.innerHTML = "";
+        img = el("img", { class: "portrait", alt: name + " portrait" });
+        wrap.appendChild(img);
+      }
+      if (img.getAttribute("src") !== c.portrait) img.src = c.portrait;
+      img.alt = name + " portrait";
+      wrap.removeAttribute("aria-hidden");
+    } else if (img) {
+      img.remove();
+      wrap.className = "portrait-placeholder";
+      wrap.setAttribute("aria-hidden", "true");
     }
   }
 
@@ -132,8 +151,9 @@
 
   function loadHistory(append) {
     hist.loading = true;
+    hist.seq += 1;
     renderHistory();
-    const fields = { channel: hist.channel, q: hist.q, limit: 20 };
+    const fields = { channel: hist.channel, q: hist.q, limit: 20, sid: hist.sid, seq: hist.seq };
     if (append && hist.next_cursor) { fields.before_ts = hist.next_cursor.ts_ms; fields.before_id = hist.next_cursor.id; }
     sendOp("history", fields);
   }
@@ -211,16 +231,30 @@
     window.webxdc.setUpdateListener((update) => {
       const msg = codec.decodeUpdate(update && update.payload);
       if (!msg) return;
-      clearPending();
       if (msg.op === "state" || msg.op === "live_state") {
         state = codec.applyStateUpdate(state, msg);
         if (msg.op === "live_state") renderHeader();
         else renderAll();
       } else if (msg.op === "history") {
+        // Only accept the answer to this instance's latest request. Replayed
+        // updates and responses to superseded filters must not touch the list.
+        if (msg.sid !== hist.sid || Number(msg.seq) !== hist.seq) return;
+        clearPending();
         hist.loaded = true; hist.loading = false; hist.has_more = !!msg.has_more; hist.next_cursor = msg.next_cursor || null;
         hist.items = msg.append ? hist.items.concat(msg.items || []) : (msg.items || []);
         renderHistory();
-      } else if (msg.op === "ack") showBanner(msg.message || (msg.ok ? "Done." : "Failed."), msg.ok ? "ok" : "error");
+      } else if (msg.op === "ack") {
+        clearPending();
+        if (msg.req_op === "history" && !msg.ok) { hist.loading = false; renderHistory(); }
+        if (typeof msg.voice === "string" && msg.voice) {
+          const voice = msg.voice;
+          if (voice !== state.companion.voice) {
+            state = Object.assign({}, state, { companion: Object.assign({}, state.companion, { voice }) });
+            renderSettings();
+          }
+        }
+        showBanner(msg.message || (msg.ok ? "Done." : "Failed."), msg.ok ? "ok" : "error");
+      }
     }, 0).then(() => sendOp("sync"));
   } else {
     state = codec.applyStateUpdate(state, {

@@ -3,8 +3,8 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 case "$#:${1-}" in
-    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw) ;;
-    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw]\n' "$0" >&2; exit 2 ;;
+    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw|1:--panel-ui) ;;
+    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw | --panel-ui]\n' "$0" >&2; exit 2 ;;
 esac
 
 for script in scripts/*.sh; do
@@ -108,4 +108,26 @@ elif [[ ${1-} == --qa ]]; then
     (cd lark && "$GO_BIN" test -tags=live -v -count=1 -run '^TestQASimSuite$' .)
 elif [[ ${1-} == --qa-hw ]]; then
     (cd lark && LARK_QA_HW=1 "$GO_BIN" test -tags=live -v -count=1 -run '^(TestQASimSuite|TestQAHardwareSuite)$' .)
+elif [[ ${1-} == --panel-ui ]]; then
+    # Headless-Chromium DOM tests for the webxdc panel. Dev-only and slower
+    # than the fast path; never required for a plain ./scripts/check.sh.
+    panel_ui_module=${LARK_PLAYWRIGHT_MODULE:-}
+    if [[ -z $panel_ui_module ]]; then
+        for candidate in /tmp/opencode/node_modules "${XDG_DATA_HOME:-$HOME/.local/share}/opencode/node_modules" "$HOME/.npm-global/lib/node_modules"; do
+            for module in playwright playwright-core; do
+                if [[ -d $candidate/$module ]]; then
+                    panel_ui_module=$candidate/$module
+                    break 2
+                fi
+            done
+        done
+    fi
+    if [[ -z $panel_ui_module || ! -d $panel_ui_module ]]; then
+        printf 'panel UI tests need playwright or playwright-core; set LARK_PLAYWRIGHT_MODULE to the module directory\n' >&2
+        exit 2
+    fi
+    started=$(date +%s%3N)
+    LARK_PLAYWRIGHT_MODULE=$panel_ui_module NODE_PATH=$(dirname -- "$panel_ui_module") \
+        node --test lark/webxdc/panel-ui/panel.test.mjs
+    printf 'PASS panel UI tests (%s ms)\n' "$(( $(date +%s%3N) - started ))"
 fi

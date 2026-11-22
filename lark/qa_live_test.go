@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +198,56 @@ func TestQADeltaChatLive(t *testing.T) {
 		}
 	}
 
+	// Panel v4 is named after the companion and carries its portrait icon.
+	info, err := qadc.rpc.GetWebxdcInfo(qadc.accID, panel.Id)
+	if err != nil {
+		t.Fatalf("GetWebxdcInfo: %v", err)
+	}
+	if info.Name != compID {
+		t.Fatalf("panel name = %q, want companion name %q", info.Name, compID)
+	}
+
+	panelUpdates := func() []map[string]any {
+		t.Helper()
+		raw, err := qadc.rpc.GetWebxdcStatusUpdates(qadc.accID, panel.Id, 0)
+		if err != nil {
+			t.Fatalf("GetWebxdcStatusUpdates: %v", err)
+		}
+		var envs []struct {
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(raw), &envs); err != nil {
+			t.Fatalf("decode panel updates: %v", err)
+		}
+		out := make([]map[string]any, 0, len(envs))
+		for _, e := range envs {
+			if e.Payload != nil {
+				out = append(out, e.Payload)
+			}
+		}
+		return out
+	}
+	waitPanel := func(what string, pred func(map[string]any) bool) map[string]any {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, p := range panelUpdates() {
+				if pred(p) {
+					return p
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for panel %s", what)
+		return nil
+	}
+	sendPanel := func(payload string) {
+		t.Helper()
+		if err := qadc.rpc.SendWebxdcStatusUpdate(qadc.accID, panel.Id, payload, nil); err != nil {
+			t.Fatalf("SendWebxdcStatusUpdate: %v", err)
+		}
+	}
+
 	sendText("/help")
 	waitMsg(15*time.Second, func(m deltachat.Message) bool {
 		return strings.Contains(m.Text, "/say") && strings.Contains(m.Text, "/stories")
@@ -243,7 +294,84 @@ func TestQADeltaChatLive(t *testing.T) {
 	if !listenOK {
 		t.Fatalf("webxdc set_listen=60 did not take effect")
 	}
-	_ = qadc.rpc.SendWebxdcStatusUpdate(qadc.accID, panel.Id, `{"payload":{"v":1,"op":"set_listen","seconds":0}}`, nil)
+	sendPanel(`{"payload":{"v":1,"op":"set_listen","seconds":0}}`)
+
+	// Voice: the state and the ack both carry the saved voice.
+	sendPanel(`{"payload":{"v":1,"op":"set_voice","voice":"bf_lily"}}`)
+	waitPanel("ack with voice", func(p map[string]any) bool {
+		return p["op"] == "ack" && p["req_op"] == "set_voice" && p["ok"] == true && p["voice"] == "bf_lily"
+	})
+	waitPanel("state with voice", func(p map[string]any) bool {
+		comp, _ := p["companion"].(map[string]any)
+		return p["op"] == "state" && comp != nil && comp["voice"] == "bf_lily"
+	})
+
+	// One history request must yield exactly one response, even after more
+	// panel updates arrive (the v3 echo loop produced thousands).
+	sendPanel(`{"payload":{"v":1,"op":"history","channel":"all","limit":5,"sid":"qa","seq":1}}`)
+	historyResp := waitPanel("history response", func(p map[string]any) bool {
+		return p["op"] == "history" && p["sid"] == "qa" && p["seq"] == float64(1)
+	})
+	if historyResp["dir"] != "out" {
+		t.Fatalf("history response missing direction marker: %+v", historyResp)
+	}
+	countHistory := func() int {
+		n := 0
+		for _, p := range panelUpdates() {
+			if p["op"] == "history" && p["has_more"] != nil {
+				n++
+			}
+		}
+		return n
+	}
+	before := countHistory()
+	sendPanel(`{"payload":{"v":1,"op":"sync"}}`)
+	waitPanel("state after sync", func(p map[string]any) bool { return p["op"] == "state" })
+	time.Sleep(2 * time.Second)
+	if after := countHistory(); after != before {
+		t.Fatalf("history echo: %d responses before sync, %d after", before, after)
+	}
+
+	// /panel resends under the new version and deletes the previous panel.
+	sendText("/panel")
+	var newPanel deltachat.Message
+	deadline = time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false)
+		if err == nil {
+			for _, id := range ids {
+				m, err := qadc.rpc.GetMessage(qadc.accID, id)
+				if err == nil && m.ViewType == deltachat.ViewtypeWebxdc && m.Id != panel.Id {
+					newPanel = m
+				}
+			}
+		}
+		if newPanel.Id != 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if newPanel.Id == 0 {
+		t.Fatal("resend did not deliver a new panel message")
+	}
+	if _, err := qadc.rpc.GetWebxdcInfo(qadc.accID, newPanel.Id); err != nil || info.Name != compID {
+		t.Fatalf("resent panel name = %q err=%v, want %q", info.Name, err, compID)
+	}
+	mediaDeadline := time.Now().Add(15 * time.Second)
+	oldGone := false
+	for time.Now().Before(mediaDeadline) {
+		mediaIDs, err := qadc.rpc.GetChatMedia(qadc.accID, &chatID, deltachat.ViewtypeWebxdc, nil, nil)
+		if err == nil {
+			oldGone = !slices.Contains(mediaIDs, panel.Id) && slices.Contains(mediaIDs, newPanel.Id)
+			if oldGone {
+				break
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !oldGone {
+		t.Fatalf("old panel message %d was not deleted for everyone after resend", panel.Id)
+	}
 
 	ttsReq, _ := json.Marshal(object{"text": "What is one plus two?"})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/tts", bytes.NewReader(ttsReq))

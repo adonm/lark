@@ -44,6 +44,8 @@
           out.before_id = f.before_id;
         }
         if (Number(f.limit) > 0) out.limit = Math.min(50, Math.round(Number(f.limit)));
+        if (typeof f.sid === "string" && f.sid.trim()) out.sid = f.sid.trim().slice(0, 32);
+        if (Number.isFinite(Number(f.seq)) && Number(f.seq) >= 0) out.seq = Math.round(Number(f.seq));
         return out;
       }
       default: throw new Error("unknown op: " + op);
