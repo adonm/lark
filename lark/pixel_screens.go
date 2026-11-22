@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"image"
 	imagecolor "image/color"
+	"math"
 	"slices"
 	"strings"
+	"unicode"
 
 	"lark/fonts/dogica"
 	"rsc.io/qr"
@@ -39,10 +41,18 @@ var pixelHomeMenuItems = []pixelMenuItem{
 }
 
 type pixelBook struct {
+	Name  string
 	Title string
 	Page  int
 	Total int
 	Color imagecolor.RGBA
+}
+
+type pixelGame struct {
+	Name  string
+	Title string
+	Kind  string
+	Saved bool
 }
 
 type pixelMemoryItem struct {
@@ -71,7 +81,7 @@ func physicalRect(r image.Rectangle, artScale int) image.Rectangle {
 	return image.Rect(r.Min.X*artScale, r.Min.Y*artScale, r.Max.X*artScale, r.Max.Y*artScale)
 }
 
-func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page, totalPages int, centerLabel string) []pixelTextOp {
+func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page, totalPages int, centerLabel string, border imagecolor.RGBA) []pixelTextOp {
 	s := spec.artScale
 	navH := 14
 	if !spec.round {
@@ -91,7 +101,7 @@ func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page
 	if page > 0 {
 		leftLabel = "< Prev"
 	}
-	c.panel(leftRect.Min.X, leftRect.Min.Y, leftRect.Dx(), leftRect.Dy(), pxTileBG, pxTileBorder)
+	c.panel(leftRect.Min.X, leftRect.Min.Y, leftRect.Dx(), leftRect.Dy(), pxTileBG, border)
 	texts = addCenteredText(texts, physicalRect(leftRect, s), leftLabel, dogica.Regular, spec.bodyTextScale, pxInk)
 
 	if centerLabel == "" && totalPages > 1 {
@@ -99,7 +109,7 @@ func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page
 	}
 	if centerLabel != "" {
 		if page > 0 {
-			c.panel(midRect.Min.X, midRect.Min.Y, midRect.Dx(), midRect.Dy(), pxTileBG, pxTileBorder)
+			c.panel(midRect.Min.X, midRect.Min.Y, midRect.Dx(), midRect.Dy(), pxTileBG, border)
 			texts = addCenteredText(texts, physicalRect(midRect, s), "Back", dogica.Regular, spec.bodyTextScale, pxMuted)
 		} else {
 			texts = addCenteredText(texts, physicalRect(midRect, s), centerLabel, dogica.Regular, spec.bodyTextScale, pxMuted)
@@ -107,7 +117,7 @@ func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page
 	}
 
 	nextCol := pxInk
-	nextBorder := pxTileBorder
+	nextBorder := border
 	if page+1 >= totalPages {
 		nextCol = pxMuted
 		nextBorder = pxPanelBG
@@ -121,13 +131,20 @@ func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page
 	return texts
 }
 
-func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, bobY int, caption string) *image.RGBA {
-	c := newPixelCanvas(spec.logicalW, spec.logicalH)
-	if bg != nil {
-		c.blit(0, 0, bg)
-	} else {
+func blitCenteredBG(c *pixelCanvas, bg *image.RGBA) {
+	if bg == nil {
 		drawDefaultPixelBackground(c)
+		return
 	}
+	b := bg.Bounds()
+	ox := (c.w - b.Dx()) / 2
+	oy := (c.h - b.Dy()) / 2
+	c.blit(ox, oy, bg)
+}
+
+func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, bobY int, caption string, showMenuHint bool) *image.RGBA {
+	c := newPixelCanvas(spec.logicalW, spec.logicalH)
+	blitCenteredBG(c, bg)
 	if poseImg != nil {
 		b := poseImg.Bounds()
 		px := (spec.logicalW - b.Dx()) / 2
@@ -175,7 +192,7 @@ func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade grade
 				text: line, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
 			})
 		}
-	} else {
+	} else if showMenuHint {
 		btnW, btnH := 36, 14
 		if !spec.round {
 			btnW, btnH = 44, 20
@@ -188,20 +205,23 @@ func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade grade
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelMenu(spec pixelDisplaySpec, page int) *image.RGBA {
+func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
-	c.fill(pxPanelBG)
+	darkenBackground(c, th.bg)
 	s := spec.artScale
 	var texts []pixelTextOp
 
 	titleH := 12
 	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
-	texts = addCenteredText(texts, physicalRect(titleRect, s), "Menu", dogica.Bold, spec.titleTextScale, pxPeach)
+	texts = addCenteredText(texts, physicalRect(titleRect, s), "Menu", dogica.Bold, spec.titleTextScale, th.accent)
 
 	cols, rows := 1, 3
 	navH := 14
 	if !spec.round {
-		cols, rows = 3, 2
+		cols, rows = 2, 3
 		navH = 20
 	}
 	perPage := cols * rows
@@ -225,43 +245,36 @@ func renderPixelMenu(spec pixelDisplaySpec, page int) *image.RGBA {
 		row := idx / cols
 		tx := spec.safe.Min.X + col*(tileW+gapX)
 		ty := gridTop + row*(tileH+gapY)
-		c.panel(tx, ty, tileW, tileH, pxTileBG, pxTileBorder)
-		if spec.round {
-			if sprite, ok := pxMenuSprites[item.icon]; ok {
-				c.blitSprite(tx+4, ty+(tileH-12)/2, sprite, pxIconPalette, 1)
-			}
-			labelBox := image.Rect(tx+20, ty+1, tx+tileW-4, ty+tileH-1)
-			physLabel := physicalRect(labelBox, s)
-			label := truncateEllipsisPx(item.label, dogica.Regular, spec.bodyTextScale, physLabel.Dx())
-			th := dogica.Regular.Ascent * spec.bodyTextScale
-			texts = append(texts, pixelTextOp{
-				x: physLabel.Min.X, y: physLabel.Min.Y + (physLabel.Dy()-th)/2,
-				text: label, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
-			})
-		} else {
-			if sprite, ok := pxMenuSprites[item.icon]; ok {
-				c.blitSprite(tx+(tileW-12)/2, ty+4, sprite, pxIconPalette, 1)
-			}
-			labelBox := image.Rect(tx+2, ty+17, tx+tileW-2, ty+tileH-2)
-			physLabel := physicalRect(labelBox, s)
-			label := truncateEllipsisPx(item.label, dogica.Regular, spec.bodyTextScale, physLabel.Dx()-2)
-			texts = addCenteredText(texts, physLabel, label, dogica.Regular, spec.bodyTextScale, pxInk)
+		c.panel(tx, ty, tileW, tileH, pxTileBG, th.border)
+		if sprite, ok := pxMenuSprites[item.icon]; ok {
+			c.blitSprite(tx+4, ty+(tileH-12)/2, sprite, pxIconPalette, 1)
 		}
+		labelBox := image.Rect(tx+19, ty+1, tx+tileW-3, ty+tileH-1)
+		physLabel := physicalRect(labelBox, s)
+		label := truncateEllipsisPx(item.label, dogica.Regular, spec.bodyTextScale, physLabel.Dx())
+		thPx := dogica.Regular.Ascent * spec.bodyTextScale
+		texts = append(texts, pixelTextOp{
+			x: physLabel.Min.X, y: physLabel.Min.Y + (physLabel.Dy()-thPx)/2,
+			text: label, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
+		})
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages))
+	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int) *image.RGBA {
+func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th pixelTheme) *image.RGBA {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
-	c.fill(pxPanelBG)
+	darkenBackground(c, th.bg)
 	s := spec.artScale
 	var texts []pixelTextOp
 
 	titleH := 12
 	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
-	texts = addCenteredText(texts, physicalRect(titleRect, s), "Books", dogica.Bold, spec.titleTextScale, pxMint)
+	texts = addCenteredText(texts, physicalRect(titleRect, s), "Books", dogica.Bold, spec.titleTextScale, th.accent2)
 
 	perPage := 2
 	navH := 14
@@ -287,16 +300,19 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int) *i
 		ry := listTop + i*(rowH+gapY)
 		rx := spec.safe.Min.X
 		rw := spec.safe.Dx()
-		c.panel(rx, ry, rw, rowH, pxTileBG, pxTileBorder)
+		c.panel(rx, ry, rw, rowH, pxTileBG, th.border)
 
-		// Cover tile on left.
+		coverCol := bk.Color
+		if coverCol.A == 0 {
+			coverCol = th.accent
+		}
 		coverX, coverY := rx+3, ry+(rowH-14)/2
-		c.panel(coverX, coverY, 14, 14, bk.Color, pxInk)
+		c.panel(coverX, coverY, 14, 14, coverCol, pxInk)
 		c.blitSprite(coverX+1, coverY+1, pxMenuSprites["books"], pxIconPalette, 1)
 
 		physText := physicalRect(image.Rect(rx+20, ry+2, rx+rw-3, ry+rowH-2), s)
 		title := truncateEllipsisPx(bk.Title, dogica.Bold, spec.bodyTextScale, physText.Dx())
-		prog := fmt.Sprintf("p %d/%d", bk.Page, bk.Total)
+		prog := fmt.Sprintf("p %d/%d", max(1, bk.Page), max(1, bk.Total))
 		lineH := dogica.Regular.LineHeight * spec.bodyTextScale
 		topY := physText.Min.Y + max(0, (physText.Dy()-2*lineH)/2)
 		texts = append(texts,
@@ -305,13 +321,87 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int) *i
 		)
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages))
+	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScaleOverride int) *image.RGBA {
+func renderPixelGamesList(spec pixelDisplaySpec, games []pixelGame, page int, th pixelTheme) *image.RGBA {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
-	c.fill(pxPanelBG)
+	darkenBackground(c, th.bg)
+	s := spec.artScale
+	var texts []pixelTextOp
+
+	titleH := 12
+	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
+	texts = addCenteredText(texts, physicalRect(titleRect, s), "Games", dogica.Bold, spec.titleTextScale, th.accent)
+
+	perPage := 2
+	navH := 14
+	if !spec.round {
+		perPage = 3
+		navH = 20
+	}
+	totalPages := max(1, (len(games)+perPage-1)/perPage)
+	page = max(0, min(page, totalPages-1))
+
+	listTop := spec.safe.Min.Y + titleH + 2
+	listBottom := spec.safe.Max.Y - navH - 3
+	gapY := 3
+	rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
+
+	start := page * perPage
+	for i := range perPage {
+		idx := start + i
+		if idx >= len(games) {
+			break
+		}
+		gm := games[idx]
+		ry := listTop + i*(rowH+gapY)
+		rx := spec.safe.Min.X
+		rw := spec.safe.Dx()
+		c.panel(rx, ry, rw, rowH, pxTileBG, th.border)
+
+		c.blitSprite(rx+4, ry+(rowH-12)/2, pxMenuSprites["games"], pxIconPalette, 1)
+
+		badgeW := 0
+		if gm.Saved {
+			badgeW = 24
+			bx, by := rx+rw-badgeW-3, ry+(rowH-10)/2
+			c.panel(bx, by, badgeW, 10, th.accent2, th.accent2)
+			texts = addCenteredText(texts, physicalRect(image.Rect(bx, by, bx+badgeW, by+10), s), "Saved", dogica.Bold, 1, pxPanelBG)
+		}
+		physText := physicalRect(image.Rect(rx+19, ry+2, rx+rw-4-badgeW, ry+rowH-2), s)
+		title := truncateEllipsisPx(gm.Title, dogica.Bold, spec.bodyTextScale, physText.Dx())
+		thPx := dogica.Bold.Ascent * spec.bodyTextScale
+		texts = append(texts, pixelTextOp{
+			x: physText.Min.X, y: physText.Min.Y + (physText.Dy()-thPx)/2,
+			text: title, font: dogica.Bold, scale: spec.bodyTextScale, color: pxInk,
+		})
+	}
+
+	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
+	return finishPixelScreen(c, spec, texts)
+}
+
+func wrapTitleLines(title string, f dogica.Font, scale, maxW, maxLines int) []string {
+	lines := wrapTextPx(title, f, scale, maxW)
+	if len(lines) <= maxLines {
+		return lines
+	}
+	out := slices.Clone(lines[:maxLines])
+	out[maxLines-1] = truncateEllipsisPx(out[maxLines-1]+" …", f, scale, maxW)
+	return out
+}
+
+func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScaleOverride int, th pixelTheme) *image.RGBA {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
+	c := newPixelCanvas(spec.logicalW, spec.logicalH)
+	darkenBackground(c, th.bg)
 	s := spec.artScale
 	bodyScale := spec.bodyTextScale
 	if bodyScaleOverride > 0 {
@@ -319,17 +409,22 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 	}
 	var texts []pixelTextOp
 
-	titleH := 12
-	titleBox := physicalRect(image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH), s)
-	titleStr := truncateEllipsisPx(title, dogica.Bold, spec.bodyTextScale, titleBox.Dx())
-	texts = addCenteredText(texts, titleBox, titleStr, dogica.Bold, spec.bodyTextScale, pxMint)
+	safePhys := physicalRect(spec.safe, s)
+	titleLines := wrapTitleLines(title, dogica.Bold, spec.bodyTextScale, safePhys.Dx(), 2)
+	titleLineH := dogica.Bold.LineHeight * spec.bodyTextScale
+	titlePhysH := max(12*s, len(titleLines)*titleLineH)
+	titleH := (titlePhysH + s - 1) / s
+	for i, line := range titleLines {
+		lineBox := image.Rect(safePhys.Min.X, safePhys.Min.Y+i*titleLineH, safePhys.Max.X, safePhys.Min.Y+(i+1)*titleLineH)
+		texts = addCenteredText(texts, lineBox, line, dogica.Bold, spec.bodyTextScale, th.accent2)
+	}
 
 	navH := 14
 	if !spec.round {
 		navH = 20
 	}
 	panelRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y+titleH+1, spec.safe.Max.X, spec.safe.Max.Y-navH-2)
-	c.panel(panelRect.Min.X, panelRect.Min.Y, panelRect.Dx(), panelRect.Dy(), pxTileBG, pxPanelBorder)
+	c.panel(panelRect.Min.X, panelRect.Min.Y, panelRect.Dx(), panelRect.Dy(), pxTileBG, th.border)
 
 	physPanel := physicalRect(panelRect, s)
 	padX, padY := 10, 10
@@ -345,8 +440,45 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 		})
 	}
 
-	texts = drawNavBar(c, spec, texts, page, len(pages), fmt.Sprintf("%d/%d", page+1, len(pages)))
+	texts = drawNavBar(c, spec, texts, page, len(pages), fmt.Sprintf("%d/%d", page+1, len(pages)), th.border)
 	return finishPixelScreen(c, spec, texts)
+}
+
+func humanizeKey(key string) string {
+	k := strings.TrimSpace(key)
+	for _, p := range []string{"story_", "book_", "reading:", "reading_", "game_", "app:"} {
+		if strings.HasPrefix(k, p) {
+			k = strings.TrimPrefix(k, p)
+			break
+		}
+	}
+	k = strings.ReplaceAll(k, "_", " ")
+	k = strings.ReplaceAll(k, "-", " ")
+	words := strings.Fields(k)
+	for i, w := range words {
+		runes := []rune(w)
+		if len(runes) > 0 {
+			runes[0] = unicode.ToUpper(runes[0])
+			words[i] = string(runes)
+		}
+	}
+	if len(words) == 0 {
+		return key
+	}
+	return strings.Join(words, " ")
+}
+
+func formatMemoryTitle(section, key string, titles map[string]string) string {
+	if titles != nil {
+		if t := strings.TrimSpace(titles[key]); t != "" {
+			return t
+		}
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(key, "reading:"), "app:")
+		if t := strings.TrimSpace(titles[trimmed]); t != "" {
+			return t
+		}
+	}
+	return humanizeKey(key)
 }
 
 // formatMemoryLines converts structured memory JSON into readable prose or key: value lines.
@@ -420,15 +552,18 @@ func formatMemoryScalar(v any) string {
 	}
 }
 
-func renderPixelMemoriesList(spec pixelDisplaySpec, items []pixelMemoryItem, page int) *image.RGBA {
+func renderPixelMemoriesList(spec pixelDisplaySpec, items []pixelMemoryItem, titles map[string]string, page int, th pixelTheme) *image.RGBA {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
-	c.fill(pxPanelBG)
+	darkenBackground(c, th.bg)
 	s := spec.artScale
 	var texts []pixelTextOp
 
 	titleH := 12
 	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
-	texts = addCenteredText(texts, physicalRect(titleRect, s), "Memories", dogica.Bold, spec.titleTextScale, pxDanger)
+	texts = addCenteredText(texts, physicalRect(titleRect, s), "Memories", dogica.Bold, spec.titleTextScale, th.accent)
 
 	perPage := 2
 	navH := 14
@@ -454,81 +589,126 @@ func renderPixelMemoriesList(spec pixelDisplaySpec, items []pixelMemoryItem, pag
 		ry := listTop + i*(rowH+gapY)
 		rx := spec.safe.Min.X
 		rw := spec.safe.Dx()
-		c.panel(rx, ry, rw, rowH, pxTileBG, pxTileBorder)
+		c.panel(rx, ry, rw, rowH, pxTileBG, th.border)
 
 		physText := physicalRect(image.Rect(rx+3, ry+2, rx+rw-3, ry+rowH-2), s)
-		header := truncateEllipsisPx(it.Section+" · "+it.Key, dogica.Bold, spec.bodyTextScale, physText.Dx())
+		readableTitle := formatMemoryTitle(it.Section, it.Key, titles)
+		header := truncateEllipsisPx(it.Section+": "+readableTitle, dogica.Bold, spec.bodyTextScale, physText.Dx())
 		preview := strings.Join(formatMemoryLines(it.Value), " ")
 		preview = truncateEllipsisPx(preview, dogica.Regular, spec.bodyTextScale, physText.Dx())
 
 		lineH := dogica.Regular.LineHeight * spec.bodyTextScale
 		topY := physText.Min.Y + max(0, (physText.Dy()-2*lineH)/2)
 		texts = append(texts,
-			pixelTextOp{x: physText.Min.X, y: topY, text: header, font: dogica.Bold, scale: spec.bodyTextScale, color: pxPeach},
+			pixelTextOp{x: physText.Min.X, y: topY, text: header, font: dogica.Bold, scale: spec.bodyTextScale, color: th.accent},
 			pixelTextOp{x: physText.Min.X, y: topY + lineH, text: preview, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk},
 		)
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages))
+	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelMemoryDetail(spec pixelDisplaySpec, item pixelMemoryItem, page, bodyScaleOverride int) *image.RGBA {
+func renderPixelMemoryDetail(spec pixelDisplaySpec, item pixelMemoryItem, titles map[string]string, page, bodyScaleOverride int, th pixelTheme) *image.RGBA {
 	body := strings.Join(formatMemoryLines(item.Value), "\n")
-	return renderPixelReader(spec, item.Section+": "+item.Key, body, page, bodyScaleOverride)
+	title := item.Section + ": " + formatMemoryTitle(item.Section, item.Key, titles)
+	return renderPixelReader(spec, title, body, page, bodyScaleOverride, th)
 }
 
-func renderPixelPair(spec pixelDisplaySpec, title, invite string) (*image.RGBA, error) {
+type pairQRLayout struct {
+	version int
+	modules int
+	quiet   int
+	modPx   int
+	qrRect  image.Rectangle // physical pixels including quiet zone
+	code    *qr.Code
+}
+
+func computePairQRLayout(spec pixelDisplaySpec, invite string) (pairQRLayout, error) {
 	code, err := qr.Encode(invite, qr.L)
+	if err != nil {
+		return pairQRLayout{}, err
+	}
+	physW := spec.logicalW * spec.artScale
+	physH := spec.logicalH * spec.artScale
+	var availSide int
+	if spec.round {
+		// Largest square inscribed in circle of diameter physW.
+		availSide = int(math.Floor(float64(physW) / math.Sqrt2))
+	} else {
+		// Full height on BOX-3.
+		availSide = physH
+	}
+	quiet := 2
+	modPx2 := max(1, availSide/(code.Size+2*2))
+	modPx4 := max(1, availSide/(code.Size+2*4))
+	modPx := modPx2
+	if modPx4 == modPx2 {
+		quiet = 4
+	}
+	qrSide := (code.Size + 2*quiet) * modPx
+	qx0 := (physW - qrSide) / 2
+	qy0 := (physH - qrSide) / 2
+	version := (code.Size - 17) / 4
+	return pairQRLayout{
+		version: version,
+		modules: code.Size,
+		quiet:   quiet,
+		modPx:   modPx,
+		qrRect:  image.Rect(qx0, qy0, qx0+qrSide, qy0+qrSide),
+		code:    code,
+	}, nil
+}
+
+func renderPixelPair(spec pixelDisplaySpec, companionName, invite string) (*image.RGBA, error) {
+	layout, err := computePairQRLayout(spec, invite)
 	if err != nil {
 		return nil, err
 	}
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
 	c.fill(pxPanelBG)
-	s := spec.artScale
-	var texts []pixelTextOp
+	phys := c.scaleNearest(spec.artScale)
 
-	titleH := 12
-	titleBox := physicalRect(image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH), s)
-	titleStr := truncateEllipsisPx(title, dogica.Bold, spec.titleTextScale, titleBox.Dx())
-	texts = addCenteredText(texts, titleBox, titleStr, dogica.Bold, spec.titleTextScale, pxPeach)
-
-	// Draw QR at an integer physical module size with >= 2 modules quiet zone.
-	phys := c.scaleNearest(s)
-	safePhys := physicalRect(spec.safe, s)
-	availW := safePhys.Dx()
-	availH := safePhys.Dy() - titleBox.Dy() - 4
-	const quiet = 2
-	totalMods := code.Size + 2*quiet
-	modPx := max(1, min(availW, availH)/totalMods)
-	qrSide := totalMods * modPx
-	qx0 := safePhys.Min.X + (availW-qrSide)/2
-	qy0 := titleBox.Max.Y + 4 + (availH-qrSide)/2
-
-	// White quiet zone background.
-	for y := qy0; y < qy0+qrSide; y++ {
-		for x := qx0; x < qx0+qrSide; x++ {
-			phys.SetRGBA(x, y, pxQRWhite)
+	// Pure white quiet zone and pure black modules; never graded, tinted, or weathered.
+	pureBlack := imagecolor.RGBA{0, 0, 0, 255}
+	pureWhite := imagecolor.RGBA{255, 255, 255, 255}
+	r := layout.qrRect
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			phys.SetRGBA(x, y, pureWhite)
 		}
 	}
-	// Black QR modules.
-	for my := range code.Size {
-		for mx := range code.Size {
-			if !code.Black(mx, my) {
+	for my := range layout.modules {
+		for mx := range layout.modules {
+			if !layout.code.Black(mx, my) {
 				continue
 			}
-			px0 := qx0 + (mx+quiet)*modPx
-			py0 := qy0 + (my+quiet)*modPx
-			for dy := range modPx {
-				for dx := range modPx {
-					phys.SetRGBA(px0+dx, py0+dy, pxQRDark)
+			px0 := r.Min.X + (mx+layout.quiet)*layout.modPx
+			py0 := r.Min.Y + (my+layout.quiet)*layout.modPx
+			for dy := range layout.modPx {
+				for dx := range layout.modPx {
+					phys.SetRGBA(px0+dx, py0+dy, pureBlack)
 				}
 			}
 		}
 	}
 
-	for _, t := range texts {
-		drawTextPhysical(phys, t.x, t.y, t.text, t.font, t.scale, t.color)
+	// Only draw a small back indicator and companion name on BOX-3 side space if it fits outside the QR.
+	if !spec.round {
+		sideW := r.Min.X
+		if sideW >= 24 {
+			drawTextPhysical(phys, 6, 6, "<", dogica.Bold, 2, pxMuted)
+		}
+		if companionName != "" && sideW >= 20 {
+			nameW := measureTextPx(companionName, dogica.Regular, 2)
+			if nameW <= sideW-6 {
+				ny := (phys.Bounds().Dy() - dogica.Regular.Ascent*2) / 2
+				drawTextPhysical(phys, (sideW-nameW)/2, ny, companionName, dogica.Regular, 2, pxInk)
+			} else if nameW := measureTextPx(companionName, dogica.Regular, 1); nameW <= sideW-4 {
+				ny := (phys.Bounds().Dy() - dogica.Regular.Ascent) / 2
+				drawTextPhysical(phys, (sideW-nameW)/2, ny, companionName, dogica.Regular, 1, pxInk)
+			}
+		}
 	}
 	return phys, nil
 }

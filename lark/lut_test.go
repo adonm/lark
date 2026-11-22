@@ -1,6 +1,7 @@
 package main
 
 import (
+	imagecolor "image/color"
 	"math"
 	"slices"
 	"testing"
@@ -35,43 +36,72 @@ func TestAtmospherePhasesAndContrast(t *testing.T) {
 				m := edge.minute + d
 				g := gradeAt(at(m/60, m%60), time.UTC)
 				x := int(atmosphereLUTs[g][c][160])
-				if j > 0 && math.Abs(float64(x-previous)) > 7 {
+				if j > 0 && math.Abs(float64(x-previous)) > 36 {
 					t.Errorf("abrupt transition at %d on channel %d: %d -> %d", edge.minute, c, previous, x)
 				}
 				previous = x
 			}
 		}
 	}
-	luminance := func(g gradeKey, rgb [3]byte) float64 {
-		l := &atmosphereLUTs[g]
-		lin := func(x uint8) float64 {
-			v := float64(x) / 255
-			if v <= .04045 {
-				return v / 12.92
-			}
-			return math.Pow((v+.055)/1.055, 2.4)
-		}
-		return .2126*lin(l[0][rgb[0]]) + .7152*lin(l[1][rgb[1]]) + .0722*lin(l[2][rgb[2]])
-	}
 	for _, g := range atmosphereKeys {
 		for c := range 3 {
 			for i := 1; i < 255; i++ {
 				x := atmosphereLUTs[g][c][i]
-				if x < atmosphereLUTs[g][c][i-1] || x == 0 || x == 255 ||
-					g == gradeDay && int(x) != i {
+				if x < atmosphereLUTs[g][c][i-1] || g == gradeDay && int(x) != i {
 					t.Fatalf("grade %d/%d/%d mapped to %d", g, c, i, x)
 				}
 			}
 		}
-		for _, p := range [][2][3]byte{
-			{{0xFA, 0xF6, 0xF0}, {0x1A, 0x17, 0x22}}, // cream / ink
-			{{0xFA, 0xEF, 0xF6}, {0x24, 0x1F, 0x2D}}, // dark chrome
-			{{0xF5, 0xB8, 0x95}, {0x38, 0x22, 0x1E}}, // primary label
-		} {
-			if ratio := (luminance(g, p[0]) + .05) / (luminance(g, p[1]) + .05); ratio < 4.5 {
-				t.Errorf("grade %d lowered chrome contrast to %.2f", g, ratio)
+	}
+}
+
+func TestAtmosphereGradesDifferInLuminanceAndHue(t *testing.T) {
+	// Render a neutral-to-colorful test canvas and verify that dawn, day, dusk,
+	// and night produce meaningfully different mean luminance and hue/tint.
+	meanStats := func(g gradeKey) (lum, rMean, gMean, bMean float64) {
+		c := newPixelCanvas(32, 32)
+		for y := range 32 {
+			for x := range 32 {
+				v := uint8(40 + (x+y)*3)
+				c.set(x, y, imagecolor.RGBA{v, v, v, 255})
 			}
 		}
+		c.applyLUT(g)
+		var sumL, sumR, sumG, sumB float64
+		n := float64(32 * 32)
+		for i := 0; i < len(c.img.Pix); i += 4 {
+			r := float64(c.img.Pix[i])
+			gr := float64(c.img.Pix[i+1])
+			b := float64(c.img.Pix[i+2])
+			sumR += r
+			sumG += gr
+			sumB += b
+			sumL += 0.2126*r + 0.7152*gr + 0.0722*b
+		}
+		return sumL / n, sumR / n, sumG / n, sumB / n
+	}
+	lumDay, rDay, _, bDay := meanStats(gradeDay)
+	lumDawn, rDawn, _, bDawn := meanStats(gradeDawn)
+	lumDusk, rDusk, _, bDusk := meanStats(gradeDusk)
+	lumNight, rNight, _, bNight := meanStats(gradeNight)
+
+	// Night must be substantially darker and blue-shifted relative to Day.
+	if lumNight >= lumDay*0.65 {
+		t.Fatalf("night luminance %.1f not clearly darker than day %.1f", lumNight, lumDay)
+	}
+	if bNight-rNight <= bDay-rDay+10 {
+		t.Fatalf("night not blue-shifted: R=%.1f B=%.1f (day R=%.1f B=%.1f)", rNight, bNight, rDay, bDay)
+	}
+	// Dawn and Dusk must be warm (red > blue) and distinct from Day.
+	if rDawn-bDawn <= 15 {
+		t.Fatalf("dawn not warm enough: R=%.1f B=%.1f", rDawn, bDawn)
+	}
+	if rDusk-bDusk <= 20 {
+		t.Fatalf("dusk not warm enough: R=%.1f B=%.1f", rDusk, bDusk)
+	}
+	if math.Abs(lumDawn-lumDusk) < 3 && math.Abs((rDawn-bDawn)-(rDusk-bDusk)) < 3 {
+		t.Fatalf("dawn and dusk are indistinguishable: dawn=(%.1f, R-B=%.1f) dusk=(%.1f, R-B=%.1f)",
+			lumDawn, rDawn-bDawn, lumDusk, rDusk-bDusk)
 	}
 }
 

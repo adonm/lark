@@ -443,6 +443,45 @@ func (s *dcService) companionByAddr(addr string) (string, bool) {
 	return "", false
 }
 
+// shortenDeltaChatInvite strips optional display-name and version query parameters
+// from a Delta Chat invite URL so the QR version and module count stay as small as possible.
+func shortenDeltaChatInvite(raw string) string {
+	idx := strings.IndexByte(raw, '#')
+	if idx < 0 {
+		return raw
+	}
+	prefix := raw[:idx+1]
+	frag := raw[idx+1:]
+	parts := strings.Split(frag, "&")
+	if len(parts) <= 1 {
+		return raw
+	}
+	kept := []string{parts[0]}
+	for _, p := range parts[1:] {
+		if strings.HasPrefix(p, "n=") || strings.HasPrefix(p, "v=") {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return prefix + strings.Join(kept, "&")
+}
+
+func (s *dcService) pairInvite(companionID string) (string, error) {
+	rpc := s.getRPC()
+	if rpc == nil {
+		return "", errors.New("Delta Chat unavailable")
+	}
+	accID := s.accountForCompanion(companionID)
+	if accID == 0 {
+		return "", errors.New("Companion has no Delta Chat account")
+	}
+	qr, err := rpc.GetChatSecurejoinQrCode(accID, nil)
+	if err != nil {
+		return "", err
+	}
+	return shortenDeltaChatInvite(qr), nil
+}
+
 func (s *dcService) pairQR(companionID string) (string, error) {
 	rpc := s.getRPC()
 	if rpc == nil {

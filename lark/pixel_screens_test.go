@@ -12,43 +12,40 @@ import (
 	"testing"
 
 	"lark/fonts/dogica"
-	"rsc.io/qr"
 )
 
 func TestPixelQRModuleRoundTrip(t *testing.T) {
-	const invite = "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&a=greg%40example.org"
-	code, err := qr.Encode(invite, qr.L)
-	if err != nil {
-		t.Fatalf("qr.Encode: %v", err)
+	const rawInvite = "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&v=1&n=Greg&i=abcdef1234567890&s=1234567890abcdef&a=greg%40example.org"
+	invite := shortenDeltaChatInvite(rawInvite)
+	if strings.Contains(invite, "&n=") || strings.Contains(invite, "&v=") {
+		t.Fatalf("shortenDeltaChatInvite did not strip optional params: %q", invite)
 	}
+	pureBlack := imagecolor.RGBA{0, 0, 0, 255}
+	pureWhite := imagecolor.RGBA{255, 255, 255, 255}
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
-		img, err := renderPixelPair(spec, "Pair", invite)
+		layout, err := computePairQRLayout(spec, invite)
+		if err != nil {
+			t.Fatalf("%s computePairQRLayout: %v", spec.name, err)
+		}
+		img, err := renderPixelPair(spec, "Greg", invite)
 		if err != nil {
 			t.Fatalf("%s renderPixelPair: %v", spec.name, err)
 		}
 		if img.Bounds().Dx() != spec.logicalW*spec.artScale || img.Bounds().Dy() != spec.logicalH*spec.artScale {
 			t.Fatalf("%s bounds = %v", spec.name, img.Bounds())
 		}
-		// Verify finder pattern (7x7 black border at top-left of QR) is crisp and un-antialiased.
-		safePhys := physicalRect(spec.safe, spec.artScale)
-		titleH := 12 * spec.artScale
-		availW := safePhys.Dx()
-		availH := safePhys.Dy() - titleH - 4
-		const quiet = 2
-		totalMods := code.Size + 2*quiet
-		modPx := max(1, min(availW, availH)/totalMods)
-		qrSide := totalMods * modPx
-		qx0 := safePhys.Min.X + (availW-qrSide)/2
-		qy0 := safePhys.Min.Y + titleH + 4 + (availH-qrSide)/2
-		for my := range code.Size {
-			for mx := range code.Size {
-				want := pxQRWhite
-				if code.Black(mx, my) {
-					want = pxQRDark
+		for my := range layout.modules {
+			for mx := range layout.modules {
+				want := pureWhite
+				if layout.code.Black(mx, my) {
+					want = pureBlack
 				}
-				for dy := range modPx {
-					for dx := range modPx {
-						got := img.RGBAAt(qx0+(mx+quiet)*modPx+dx, qy0+(my+quiet)*modPx+dy)
+				for dy := range layout.modPx {
+					for dx := range layout.modPx {
+						got := img.RGBAAt(
+							layout.qrRect.Min.X+(mx+layout.quiet)*layout.modPx+dx,
+							layout.qrRect.Min.Y+(my+layout.quiet)*layout.modPx+dy,
+						)
 						if got != want {
 							t.Fatalf("%s module (%d,%d) pixel (%d,%d) = %v, want %v", spec.name, mx, my, dx, dy, got, want)
 						}
@@ -59,7 +56,7 @@ func TestPixelQRModuleRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFormatMemoryLines(t *testing.T) {
+func TestFormatMemoryLinesAndTitles(t *testing.T) {
 	if got := formatMemoryLines(`{"text":"Once upon a time."}`); len(got) != 1 || got[0] != "Once upon a time." {
 		t.Fatalf("text field: %v", got)
 	}
@@ -70,34 +67,49 @@ func TestFormatMemoryLines(t *testing.T) {
 	if len(got) != 2 || got[0] != "Cake: 0" || got[1] != "Mint: 4" {
 		t.Fatalf("object fields: %v", got)
 	}
+	titles := map[string]string{"monsters": "Monsters", "lost_island": "The Lost Island"}
+	if got := formatMemoryTitle("Game saves", "monsters", titles); got != "Monsters" {
+		t.Fatalf("game save title = %q, want Monsters", got)
+	}
+	if got := formatMemoryTitle("Reading", "story_lost_island", nil); got != "Lost Island" {
+		t.Fatalf("humanized story title = %q, want Lost Island", got)
+	}
 }
 
 func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 	books := []pixelBook{
-		{Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
-		{Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
+		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
+		{Name: "clockwork_owl", Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
+	}
+	games := []pixelGame{
+		{Name: "monsters", Title: "Monsters", Kind: "game", Saved: true},
+		{Name: "fireworks", Title: "Fireworks", Kind: "game", Saved: false},
 	}
 	memories := []pixelMemoryItem{
 		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed."}`},
 		{Section: "Game saves", Key: "monsters", Value: `{"Mint":4,"Cake":0}`},
 	}
-	const invite = "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&a=greg%40example.org"
+	titles := map[string]string{"monsters": "Monsters"}
+	invite := shortenDeltaChatInvite("https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&i=abcdef1234567890&s=1234567890abcdef&a=greg%40example.org")
 
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 		safePhys := physicalRect(spec.safe, spec.artScale)
+		th := defaultPixelTheme()
 		screens := []struct {
 			name string
 			img  *image.RGBA
 		}{
-			{"home", renderPixelHome(spec, nil, nil, gradeDay, "listening", 0, "")},
-			{"home-caption", renderPixelHome(spec, nil, nil, gradeDay, "speaking", 0, "Message from Mum: dinner's ready")},
-			{"menu", renderPixelMenu(spec, 0)},
-			{"books", renderPixelBooksList(spec, books, 0)},
-			{"reader", renderPixelReader(spec, "The Lost Island", "Once upon a time in a faraway land.", 0, 0)},
-			{"memories", renderPixelMemoriesList(spec, memories, 0)},
-			{"memory-detail", renderPixelMemoryDetail(spec, memories[0], 0, 0)},
+			{"home", renderPixelHome(spec, nil, nil, gradeDay, "listening", 0, "", false)},
+			{"home-hint", renderPixelHome(spec, nil, nil, gradeDay, "", 0, "", true)},
+			{"home-caption", renderPixelHome(spec, nil, nil, gradeDay, "speaking", 0, "Message from Mum: dinner's ready", false)},
+			{"menu", renderPixelMenu(spec, 0, th)},
+			{"books", renderPixelBooksList(spec, books, 0, th)},
+			{"games", renderPixelGamesList(spec, games, 0, th)},
+			{"reader", renderPixelReader(spec, "The Lost Island", "Once upon a time in a faraway land.", 0, 0, th)},
+			{"memories", renderPixelMemoriesList(spec, memories, titles, 0, th)},
+			{"memory-detail", renderPixelMemoryDetail(spec, memories[1], titles, 0, 0, th)},
 		}
-		pairImg, err := renderPixelPair(spec, "Pair", invite)
+		pairImg, err := renderPixelPair(spec, "Greg", invite)
 		if err != nil {
 			t.Fatalf("%s pair: %v", spec.name, err)
 		}
@@ -111,8 +123,8 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 			if sc.img.Bounds() != image.Rect(0, 0, wantW, wantH) {
 				t.Fatalf("%s %s bounds = %v, want %dx%d", spec.name, sc.name, sc.img.Bounds(), wantW, wantH)
 			}
-			// On non-home UI screens, no non-background pixel may appear outside the safe area.
-			if sc.name != "home" && sc.name != "home-caption" {
+			// On non-home, non-pair UI screens without a backdrop, no non-background pixel may appear outside the safe area.
+			if sc.name != "home" && sc.name != "home-hint" && sc.name != "home-caption" && sc.name != "pair" {
 				for y := range wantH {
 					for x := range wantW {
 						if image.Pt(x, y).In(safePhys) {
@@ -146,11 +158,17 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrNormalizePoses(%s): %v", gregDir, err)
 	}
+	th := derivePixelTheme(nil, poses[:])
 
 	books := []pixelBook{
-		{Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
-		{Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
-		{Title: "Moonlight Meadow", Page: 4, Total: 4, Color: pxSky},
+		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
+		{Name: "clockwork_owl", Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
+		{Name: "moonlight_meadow", Title: "Moonlight Meadow", Page: 4, Total: 4, Color: pxSky},
+	}
+	games := []pixelGame{
+		{Name: "monsters", Title: "Monsters", Kind: "game", Saved: true},
+		{Name: "fireworks", Title: "Fireworks", Kind: "game", Saved: false},
+		{Name: "picture_math", Title: "Picture Math", Kind: "game", Saved: true},
 	}
 	lostIslandText := "Once upon a time in a faraway land, there were people who always told tales about this island. All of them thought it was true, so they tried hunting for the Lost Island."
 	memories := []pixelMemoryItem{
@@ -159,7 +177,11 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		{Section: "Game saves", Key: "monsters", Value: `{"Mint":4,"Cake":0,"Greg":7}`},
 		{Section: "Shared", Key: "household", Value: `{"dinner":"6:30 PM","mum":"paired"}`},
 	}
-	const invite = "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&a=greg%40example.org"
+	titles := map[string]string{
+		"story_lost_island": "The Lost Island",
+		"monsters":          "Monsters",
+	}
+	invite := shortenDeltaChatInvite("https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&i=abcdef1234567890&s=1234567890abcdef&a=greg%40example.org")
 
 	type sampleEntry struct {
 		name string
@@ -195,46 +217,25 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 		for _, g := range grades {
 			save(fmt.Sprintf("%s-home-%s-idle", spec.name, g.name),
-				renderPixelHome(spec, nil, poses[0], g.grade, "", 0, ""))
+				renderPixelHome(spec, nil, poses[0], g.grade, "", 0, "", false))
 			save(fmt.Sprintf("%s-home-%s-talk", spec.name, g.name),
-				renderPixelHome(spec, nil, poses[2], g.grade, "speaking", 0, ""))
+				renderPixelHome(spec, nil, poses[2], g.grade, "speaking", 0, "", false))
 		}
 		save(spec.name+"-home-caption",
-			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "Message from Mum: dinner's ready"))
-		save(spec.name+"-menu-p1", renderPixelMenu(spec, 0))
-		save(spec.name+"-books-list", renderPixelBooksList(spec, books, 0))
-		save(spec.name+"-reader", renderPixelReader(spec, "The Lost Island", lostIslandText, 0, 0))
-		save(spec.name+"-memories-list", renderPixelMemoriesList(spec, memories, 0))
-		save(spec.name+"-memories-detail", renderPixelMemoryDetail(spec, memories[2], 0, 0))
-		pairImg, err := renderPixelPair(spec, "Pair", invite)
+			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "Message from Mum: dinner's ready", false))
+		save(spec.name+"-menu-p1", renderPixelMenu(spec, 0, th))
+		save(spec.name+"-books-list", renderPixelBooksList(spec, books, 0, th))
+		save(spec.name+"-games-list", renderPixelGamesList(spec, games, 0, th))
+		save(spec.name+"-reader", renderPixelReader(spec, "The Lost Island", lostIslandText, 0, 0, th))
+		save(spec.name+"-memories-list", renderPixelMemoriesList(spec, memories, titles, 0, th))
+		save(spec.name+"-memories-detail", renderPixelMemoryDetail(spec, memories[2], titles, 0, 0, th))
+		pairImg, err := renderPixelPair(spec, "Greg", invite)
 		if err != nil {
 			t.Fatal(err)
 		}
 		save(spec.name+"-pair-qr", pairImg)
 	}
 
-	// Side-by-side 2x vs 3x body text comparisons on VoCat.
-	sideBySide := func(name string, left, right *image.RGBA, labelL, labelR string) {
-		w := left.Bounds().Dx() + right.Bounds().Dx() + 16
-		h := max(left.Bounds().Dy(), right.Bounds().Dy()) + 28
-		comb := image.NewRGBA(image.Rect(0, 0, w, h))
-		draw.Draw(comb, comb.Bounds(), image.NewUniform(imagecolor.RGBA{18, 16, 26, 255}), image.Point{}, draw.Src)
-		draw.Draw(comb, left.Bounds().Add(image.Pt(0, 24)), left, image.Point{}, draw.Src)
-		draw.Draw(comb, right.Bounds().Add(image.Pt(left.Bounds().Dx()+16, 24)), right, image.Point{}, draw.Src)
-		drawTextPhysical(comb, 8, 4, labelL, dogica.Bold, 2, pxPeach)
-		drawTextPhysical(comb, left.Bounds().Dx()+24, 4, labelR, dogica.Bold, 2, pxMint)
-		save(name, comb)
-	}
-	sideBySide("vocat-reader-2x-vs-3x",
-		renderPixelReader(pixelSpecVoCat, "The Lost Island", lostIslandText, 0, 2),
-		renderPixelReader(pixelSpecVoCat, "The Lost Island", lostIslandText, 0, 3),
-		"VoCat Reader 2x (16px)", "VoCat Reader 3x (24px)")
-	sideBySide("vocat-memory-2x-vs-3x",
-		renderPixelMemoryDetail(pixelSpecVoCat, memories[0], 0, 2),
-		renderPixelMemoryDetail(pixelSpecVoCat, memories[0], 0, 3),
-		"VoCat Memory 2x (16px)", "VoCat Memory 3x (24px)")
-
-	// Contact sheet combining all samples in a 4-column grid.
 	const cols = 4
 	const cellW, cellH = 380, 400
 	rows := (len(samples) + cols - 1) / cols
@@ -246,7 +247,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		drawTextPhysical(sheet, x0, row*cellH+6, strings.TrimSuffix(smp.name, ".png"), dogica.Bold, 2, pxInk)
 		b := smp.img.Bounds()
 		if b.Dx() > cellW-20 {
-			// Half-size nearest-neighbor fit for wide side-by-side comparisons.
 			hw, hh := b.Dx()/2, b.Dy()/2
 			for y := range hh {
 				for x := range hw {

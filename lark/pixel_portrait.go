@@ -277,3 +277,156 @@ func loadOrNormalizePoses(dir string, targetH int) ([4]*image.RGBA, error) {
 	_ = saveNormalizedPoses(dir, poses)
 	return poses, nil
 }
+
+type pixelTheme struct {
+	bg      *image.RGBA
+	accent  imagecolor.RGBA
+	accent2 imagecolor.RGBA
+	border  imagecolor.RGBA
+}
+
+func defaultPixelTheme() pixelTheme {
+	return pixelTheme{
+		accent:  pxPeach,
+		accent2: pxMint,
+		border:  pxTileBorder,
+	}
+}
+
+func ensureBrightAccent(c imagecolor.RGBA) imagecolor.RGBA {
+	// Ensure high contrast against dark panel/tile backgrounds (~pxPanelBG 30,26,43).
+	lum := 0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)
+	if lum < 145 {
+		mix := (165 - lum) / max(1, 255-lum)
+		c.R = uint8(min(255, int(float64(c.R)+(255-float64(c.R))*mix)))
+		c.G = uint8(min(255, int(float64(c.G)+(255-float64(c.G))*mix)))
+		c.B = uint8(min(255, int(float64(c.B)+(255-float64(c.B))*mix)))
+	}
+	c.A = 255
+	return c
+}
+
+func derivePixelTheme(bg *image.RGBA, poses []*image.RGBA) pixelTheme {
+	th := defaultPixelTheme()
+	th.bg = bg
+	type bucket struct {
+		r, g, b int
+		count   int
+		score   float64
+	}
+	buckets := map[uint32]*bucket{}
+	for _, img := range poses {
+		if img == nil {
+			continue
+		}
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				c := img.RGBAAt(x, y)
+				if c.A < 128 {
+					continue
+				}
+				key := uint32(c.R>>4)<<8 | uint32(c.G>>4)<<4 | uint32(c.B>>4)
+				bk := buckets[key]
+				if bk == nil {
+					bk = &bucket{}
+					buckets[key] = bk
+				}
+				bk.r += int(c.R)
+				bk.g += int(c.G)
+				bk.b += int(c.B)
+				bk.count++
+			}
+		}
+	}
+	if len(buckets) == 0 {
+		return th
+	}
+	var list []*bucket
+	for _, bk := range buckets {
+		r := float64(bk.r) / float64(bk.count)
+		g := float64(bk.g) / float64(bk.count)
+		bl := float64(bk.b) / float64(bk.count)
+		maxC := max(r, max(g, bl))
+		minC := min(r, min(g, bl))
+		sat := maxC - minC
+		lum := 0.2126*r + 0.7152*g + 0.0722*bl
+		if lum < 35 || lum > 245 {
+			continue
+		}
+		bk.score = sat*2.0 + math.Sqrt(float64(bk.count))
+		list = append(list, bk)
+	}
+	if len(list) == 0 {
+		return th
+	}
+	slices.SortFunc(list, func(a, b *bucket) int {
+		if b.score > a.score {
+			return 1
+		}
+		if b.score < a.score {
+			return -1
+		}
+		return 0
+	})
+	avgColor := func(bk *bucket) imagecolor.RGBA {
+		return imagecolor.RGBA{
+			R: uint8(bk.r / bk.count),
+			G: uint8(bk.g / bk.count),
+			B: uint8(bk.b / bk.count),
+			A: 255,
+		}
+	}
+	c1 := ensureBrightAccent(avgColor(list[0]))
+	th.accent = c1
+	th.border = imagecolor.RGBA{
+		R: uint8((int(c1.R)*3 + int(pxPanelBG.R)*5) / 8),
+		G: uint8((int(c1.G)*3 + int(pxPanelBG.G)*5) / 8),
+		B: uint8((int(c1.B)*3 + int(pxPanelBG.B)*5) / 8),
+		A: 255,
+	}
+	for _, bk := range list[1:] {
+		c2 := ensureBrightAccent(avgColor(bk))
+		if portraitDiff(c1, c2) > 55*55 {
+			th.accent2 = c2
+			break
+		}
+	}
+	return th
+}
+
+// darkenBackground scales a companion background to the canvas size (center-cropped)
+// and darkens it toward pxPanelBG in pixel space so UI chrome stays legible.
+func darkenBackground(c *pixelCanvas, bg *image.RGBA) {
+	if bg == nil {
+		c.fill(pxPanelBG)
+		return
+	}
+	b := bg.Bounds()
+	ox := (b.Dx() - c.w) / 2
+	oy := (b.Dy() - c.h) / 2
+	for y := range c.h {
+		sy := b.Min.Y + oy + y
+		if sy < b.Min.Y {
+			sy = b.Min.Y
+		} else if sy >= b.Max.Y {
+			sy = b.Max.Y - 1
+		}
+		for x := range c.w {
+			sx := b.Min.X + ox + x
+			if sx < b.Min.X {
+				sx = b.Min.X
+			} else if sx >= b.Max.X {
+				sx = b.Max.X - 1
+			}
+			src := bg.RGBAAt(sx, sy)
+			// 26% scene + 74% dark panel base for readable contrast.
+			c.set(x, y, imagecolor.RGBA{
+				R: uint8((int(src.R)*26 + int(pxPanelBG.R)*74) / 100),
+				G: uint8((int(src.G)*26 + int(pxPanelBG.G)*74) / 100),
+				B: uint8((int(src.B)*26 + int(pxPanelBG.B)*74) / 100),
+				A: 255,
+			})
+		}
+	}
+}

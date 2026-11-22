@@ -28,10 +28,11 @@ var atmosphereLUTs, atmosphereKeys = makeAtmosphere()
 func makeAtmosphere() ([gradeBlend + 48]colorLUT, [48]gradeKey) {
 	var tables [gradeBlend + 48]colorLUT
 	var keys [48]gradeKey
-	// Dark and light endpoints per channel; the modest, monotonic
-	// changes leave the palette recognizable and preserve contrast.
-	shadow := [4][3]int{{0, 0, 0}, {6, 0, 1}, {5, 1, 0}, {1, 0, 9}}
-	light := [4][3]int{{255, 255, 255}, {255, 244, 245}, {255, 248, 232}, {235, 232, 252}}
+	// Dark and light endpoints per channel for the world/companion layer.
+	// UI panels and text are drawn after grading, so night can be genuinely
+	// dark blue and dawn/dusk unmistakably warm without hurting chrome contrast.
+	shadow := [4][3]int{{0, 0, 0}, {22, 8, 10}, {26, 8, 18}, {2, 4, 24}}
+	light := [4][3]int{{255, 255, 255}, {255, 224, 194}, {255, 198, 152}, {105, 125, 195}}
 	for phase := range gradeBlend {
 		for c := range 3 {
 			for i := range 256 {
