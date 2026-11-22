@@ -28,9 +28,6 @@ func (h *wsHub) bridgeEndpoint(d *wsTerminal) bool {
 }
 
 func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, request bool) {
-	if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
-		return
-	}
 	bridgeEndpoint := request && target == "" && h.bridgeEndpoint(d)
 	if bridgeEndpoint && d.queuedVoice != nil {
 		// Recording remains explicitly initiated; no automatic reopening.
@@ -131,7 +128,7 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	d := c.terminal
-	if d == nil || !h.active(d) || (d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) != "") {
+	if d == nil || !h.active(d) {
 		return
 	}
 	if d.callState != callNone {
@@ -172,9 +169,6 @@ func (h *wsHub) stopRecordingAtLimit(d *wsTerminal, now time.Time) {
 }
 
 func (h *wsHub) endRecording(d *wsTerminal, reqTarget string, cancelled bool, now time.Time) {
-	if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
-		return
-	}
 	if d.recording.endpoint != nil && !cancelled {
 		h.finishEndpoint(d, now)
 		return
@@ -229,7 +223,7 @@ func (h *wsHub) cancelLocalTurn(d *wsTerminal) {
 }
 
 func (h *wsHub) startTurn(d *wsTerminal, now time.Time, keepView bool, source string, run func(context.Context, uint64)) bool {
-	if d.companionID == "" || h.parentRefresh(d.companionID, now) != "" {
+	if d.companionID == "" {
 		return false
 	}
 	h.cancelTurn(d, "superseded")
@@ -404,18 +398,6 @@ func (h *wsHub) runTurn(ctx context.Context, d *wsTerminal, id uint64, text, sou
 		h.finishTurn(d, id, nil, nil)
 		return
 	}
-	if minutes := childPauseMinutes(text); minutes > 0 && source != "timer" {
-		h.mu.Lock()
-		var err error
-		if h.active(d) && d.turn == id && ctx.Err() == nil {
-			err = h.childPause(d.companionID, minutes, time.Now())
-		}
-		h.mu.Unlock()
-		if err != nil {
-			h.turnError(d, id, "I couldn't start a break. Please ask a grown-up.")
-		}
-		return
-	}
 	if target := parseCallCommand(text); target != "" {
 		others, _ := h.peerSnapshot(sender.ID)
 		if matches := targets(others, target); len(matches) == 1 {
@@ -507,7 +489,7 @@ func (h *wsHub) sayTurn(ctx context.Context, d *wsTerminal, id uint64, text stri
 func (h *wsHub) publish(d *wsTerminal, id uint64, ctx context.Context, stream *AudioStream, start time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !h.active(d) || d.turn != id || ctx.Err() != nil || (d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) != "") {
+	if !h.active(d) || d.turn != id || ctx.Err() != nil {
 		return
 	}
 	if stream == nil {
@@ -768,12 +750,12 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender companionState, recipi
 	receipts := make([]wsReceipt, 0, len(connected))
 	h.mu.Lock()
 	now := time.Now()
-	if ctx.Err() != nil || (sender.ID != "" && h.parentRefresh(strings.ToLower(sender.ID), now) != "") {
+	if ctx.Err() != nil {
 		h.mu.Unlock()
 		return nil
 	}
 	for _, d := range connected {
-		if !h.active(d) || h.parentRefresh(d.companionID, now) != "" || d.callState != callNone {
+		if !h.active(d) || d.callState != callNone {
 			continue
 		}
 		view := (intercomCard{sender, text}).scene(false)

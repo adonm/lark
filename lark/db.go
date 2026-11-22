@@ -50,8 +50,6 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS build_jobs (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, state TEXT NOT NULL, spec TEXT NOT NULL,
 		created_at INTEGER NOT NULL, result TEXT NOT NULL DEFAULT '', announced INTEGER NOT NULL DEFAULT 0, cleanup INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE INDEX IF NOT EXISTS build_jobs_state ON build_jobs (state, companion_id)`,
-	`CREATE TABLE IF NOT EXISTS parent_settings (companion_id TEXT PRIMARY KEY, timezone TEXT NOT NULL, quiet_start TEXT NOT NULL, quiet_end TEXT NOT NULL, daily_minutes INTEGER NOT NULL, pause_until_ms INTEGER NOT NULL, override_until_ms INTEGER NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS parent_usage (companion_id TEXT NOT NULL, day TEXT NOT NULL, used_ms INTEGER NOT NULL, PRIMARY KEY (companion_id, day))`,
 }
 
 type larkDB struct {

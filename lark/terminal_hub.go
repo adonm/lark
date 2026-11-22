@@ -112,8 +112,6 @@ type wsTerminal struct {
 	asleep    bool
 	wakeWord  bool
 
-	parentReason parentReason
-
 	callState                   callState
 	callID                      uint32
 	callPeer                    string
@@ -564,9 +562,6 @@ func (h *wsHub) sendSnapshotState(d *wsTerminal) {
 	}
 	h.pushVolume(d, false, true)
 	h.pushPower(d, d.brightness(), true)
-	if d.parentReason != "" {
-		h.pushProto(d, msgEvent, encodeEventMsg(h.nextSeq(), eventParentPolicy, d.companionID, string(d.parentReason), parentMessage(d.parentReason)), true)
-	}
 }
 
 func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
@@ -737,11 +732,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 	}
 	snapSeq := h.nextSeq()
 	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
-	if d.companionID == "" || h.parentRefresh(d.companionID, now) == "" {
-		h.render(d, now, true)
-	} else {
-		h.announce(d)
-	}
+	h.render(d, now, true)
 	return true
 }
 
@@ -838,11 +829,7 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 	}
 	snapSeq := h.nextSeq()
 	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
-	if d.companionID == "" || h.parentRefresh(d.companionID, now) == "" {
-		h.render(d, now, true)
-	} else {
-		h.announce(d)
-	}
+	h.render(d, now, true)
 	return true
 }
 
@@ -945,11 +932,7 @@ func (h *wsHub) frameGrade(d *wsTerminal, now time.Time) gradeKey {
 	if !h.atmosphere || d.virtual() {
 		return gradeDay
 	}
-	var loc *time.Location
-	if p := h.parents[d.companionID]; p != nil && p.configured {
-		loc = p.loc
-	}
-	return gradeAt(now, loc)
+	return gradeAt(now, nil)
 }
 
 func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
@@ -959,7 +942,6 @@ func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
 }
 
 func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
-	h.parentObserve(d, now)
 	switch d.drawer {
 	case drawerGames, drawerMemories, drawerHistory:
 	default:
@@ -992,8 +974,6 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	r := renderRequest{full: full || d.renderNext != nil && d.renderNext.full, trace: d.trace, grade: h.frameGrade(d, now)}
 	d.grade.Store(uint32(r.grade))
 	switch {
-	case d.parentReason != "":
-		r.view = parentScene(d.parentReason)
 	case d.callState != callNone:
 		if p := h.callPeer(d); p != nil {
 			var elapsed time.Duration
@@ -1191,17 +1171,11 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 }
 
 func (h *wsHub) wake(d *wsTerminal, now time.Time) {
-	if d.parentReason != "" {
-		return
-	}
 	d.last = now
 	h.setSleeping(d, false)
 }
 
 func (h *wsHub) setSleeping(d *wsTerminal, asleep bool) {
-	if !asleep && d.parentReason != "" {
-		return
-	}
 	if asleep && d.callState != callNone {
 		return
 	}
@@ -1212,10 +1186,6 @@ func (h *wsHub) setSleeping(d *wsTerminal, asleep bool) {
 }
 
 func (d *wsTerminal) brightness() int {
-	if d.parentReason != "" {
-		// Firmware turns the battery panel off at 12; keep the notice visible.
-		return 20
-	}
 	if d.asleep {
 		return 12
 	}
@@ -1242,11 +1212,6 @@ func (h *wsHub) animate(ctx context.Context) {
 			if checkGrade {
 				nextGrade = now.Truncate(time.Minute).Add(time.Minute)
 			}
-			for key, p := range h.parents {
-				if len(p.offline) > 0 && len(h.terminalsFor(key)) == 0 {
-					h.parentRefresh(key, now)
-				}
-			}
 			for _, d := range h.terminals {
 				if !h.active(d) {
 					continue
@@ -1254,12 +1219,6 @@ func (h *wsHub) animate(ctx context.Context) {
 				if checkGrade && !d.virtual() && !(d.asleep && d.caps.PanelSleep) &&
 					d.svg.grade != h.frameGrade(d, now) {
 					h.render(d, now, false)
-				}
-				if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
-					if d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(4*time.Second)) {
-						h.playbackDone(d, now)
-					}
-					continue
 				}
 				if d.callState != callNone {
 					if d.callState == callActive && now.Sub(d.callStarted).Truncate(time.Second) > d.callSecond {

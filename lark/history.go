@@ -236,16 +236,11 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 	if !ok {
 		return nil, problem(404, "Companion not found")
 	}
-	minutes := childPauseMinutes(text)
 	if b.ws != nil {
 		b.ws.mu.Lock()
 		key, now := strings.ToLower(id), time.Now()
-		if r := b.ws.parentRefresh(key, now); r != "" {
-			b.ws.mu.Unlock()
-			return nil, r.err()
-		}
 		if t := b.ws.voiceOwner(key); t != nil {
-			if b.oc == nil && minutes == 0 {
+			if b.oc == nil {
 				b.ws.mu.Unlock()
 				return nil, problem(503, "Chat unavailable")
 			}
@@ -259,32 +254,17 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 			b.ws.mu.Unlock()
 			return object{"ok": true, "companion_id": sender.ID}, nil
 		}
-		if minutes > 0 {
-			err := b.ws.childPause(key, minutes, now)
-			b.ws.mu.Unlock()
-			_, reply := parentPause.notice()
-			return object{"ok": true, "companion_id": sender.ID, "reply": reply}, err
-		}
 		if b.oc == nil {
 			b.ws.mu.Unlock()
 			return nil, problem(503, "Chat unavailable")
 		}
-		child, done, err := b.ws.parentOffline(ctx, key, now)
 		b.ws.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		defer done()
-		ctx = child
 	}
 	if b.oc == nil {
 		return nil, problem(503, "Chat unavailable")
 	}
 	out, err := b.turn(ctx, sender, text)
 	if ctx.Err() != nil {
-		if policyErr := b.parentAllowed(id); policyErr != nil {
-			return nil, policyErr
-		}
 		return nil, ctx.Err()
 	}
 	if err != nil {

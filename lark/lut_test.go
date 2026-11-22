@@ -21,11 +21,9 @@ func TestAtmospherePhasesAndContrast(t *testing.T) {
 	if g := hub.frameGrade(&wsTerminal{}, at(23, 0)); g != gradeDay {
 		t.Fatalf("unconfigured hub did not keep the identity grade: %d", g)
 	}
-	board := &wsTerminal{key: "board", kind: "hardware", companionID: "board", client: &wsClient{kind: "hardware"}}
 	hub.atmosphere = true
-	hub.parents = map[string]*parentRuntime{"board": {loc: time.FixedZone("configured", 9*60*60), configured: true}}
-	if g := hub.frameGrade(board, at(13, 0)); g != gradeNight {
-		t.Fatalf("device timezone not used: %d", g)
+	if gradeAt(at(13, 0), time.FixedZone("configured", 9*60*60)) != gradeNight {
+		t.Fatalf("configured timezone not used")
 	}
 	if gradeAt(at(5, 1), time.UTC) != gradeAt(at(5, 29), time.UTC) {
 		t.Fatal("grade changed within a 30-minute bucket")

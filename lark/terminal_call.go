@@ -70,7 +70,7 @@ func (h *wsHub) callNotice(d *wsTerminal, message string, now time.Time) {
 }
 
 func (h *wsHub) startCall(caller *wsTerminal, peerID string) {
-	if err := h.ringCall(caller, peerID, callRingLimit); err != nil && h.active(caller) && caller.parentReason == "" && caller.callState == callNone {
+	if err := h.ringCall(caller, peerID, callRingLimit); err != nil && h.active(caller) && caller.callState == callNone {
 		now := time.Now()
 		h.interruptForCall(caller, now)
 		h.callNotice(caller, err.Error(), now)
@@ -84,14 +84,6 @@ func (h *wsHub) ringCall(caller *wsTerminal, peerCompanionID string, limit time.
 	key := strings.ToLower(peerCompanionID)
 	callee := h.voiceOwner(key)
 	now := time.Now()
-	if caller.companionID != "" {
-		if r := h.parentRefresh(caller.companionID, now); r != "" {
-			return r.err()
-		}
-	}
-	if callee != nil && h.active(callee) && h.parentRefresh(key, now) != "" {
-		return problem(423, callee.companion.Name+" is resting right now. Try again later.")
-	}
 	// The first request already installed both halves. A reciprocal request
 	// from the ringing callee is an answer, not a second call.
 	if caller.callState == callRingingIn && callee != nil && h.callPeer(caller) == callee &&
@@ -248,11 +240,6 @@ func (h *wsHub) ringUntilAnswered(ctx context.Context, caller *wsTerminal, id ui
 				h.mu.Unlock()
 				return
 			}
-			now := time.Now()
-			if h.parentRefresh(caller.companionID, now) != "" || h.parentRefresh(peer.companionID, now) != "" {
-				h.mu.Unlock()
-				return
-			}
 			h.chime(caller, "ring")
 			h.chime(peer, "ring")
 			h.mu.Unlock()
@@ -270,9 +257,6 @@ func (h *wsHub) answerCall(callee *wsTerminal) {
 		return
 	}
 	now := time.Now()
-	if h.parentRefresh(callee.companionID, now) != "" || h.parentRefresh(caller.companionID, now) != "" {
-		return
-	}
 	h.takeVoiceOwnership(callee)
 	caller.callCancel()
 	caller.callCancel = nil
@@ -323,7 +307,7 @@ func (h *wsHub) endCall(d *wsTerminal, reason string) {
 		side.callOrigin, side.callFramesIn, side.callFramesOut = false, 0, 0
 		if h.active(side) {
 			h.pushCallEnd(side, id, reason)
-			if answered && side.parentReason == "" {
+			if answered {
 				h.chime(side, "cancel")
 			}
 			h.wake(side, now)
@@ -333,10 +317,6 @@ func (h *wsHub) endCall(d *wsTerminal, reason string) {
 			}
 			if outgoing && p != nil && reason == "no answer" {
 				h.callNotice(side, "No answer from "+p.companion.Name, now)
-				continue
-			}
-			if side.parentReason == "" && reason == "Companion is resting" {
-				h.callNotice(side, "The other companion is resting. Try again later.", now)
 				continue
 			}
 			h.render(side, now, false)
@@ -381,7 +361,7 @@ func (h *wsHub) relayCallPCMBytes(d *wsTerminal, pcm []byte) {
 		return
 	}
 	p := h.callPeer(d)
-	if p == nil || !h.active(p) || p.callState != callActive || h.parentRefresh(p.companionID, time.Now()) != "" {
+	if p == nil || !h.active(p) || p.callState != callActive {
 		return
 	}
 	c := p.client

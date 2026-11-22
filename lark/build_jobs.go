@@ -108,13 +108,6 @@ func (m *buildManager) enqueue(ctx context.Context, companionID string, intent b
 		return "", err
 	}
 	jobID := builderSessionPrefix + randomHex(16)
-	if h := m.b.ws; h != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if r := h.parentRefresh(id, time.Now()); r != "" {
-			return "", r.err()
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -285,13 +278,6 @@ func (m *buildManager) start(ctx context.Context, job buildJob, cleanup bool) {
 }
 
 func (m *buildManager) claim(ctx context.Context, job buildJob) bool {
-	if h := m.b.ws; h != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if h.parentRefresh(job.device, time.Now()) != "" {
-			return false
-		}
-	}
 	var id string
 	return m.b.db.QueryRowContext(ctx, `UPDATE build_jobs SET state='running',cleanup=1
 		WHERE id=? AND state='queued' RETURNING id`, job.id).Scan(&id) == nil

@@ -42,8 +42,6 @@ type larkServer struct {
 	diag            diagnostics
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
 	companionTitles sync.Mutex
-
-	parentToken string
 }
 
 func sendBytes(w http.ResponseWriter, status int, kind string, data []byte) {
@@ -431,8 +429,6 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
 	switch {
-	case path == "/api/parent":
-		return b.routeParent(w, r, "")
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/portraits/"):
 		return nil, b.servePortrait(w, r, path, "")
 	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/"):
@@ -455,12 +451,6 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 		switch {
 		case path == "/":
 			http.Redirect(w, r, "/app", http.StatusFound)
-			return nil, nil
-		case path == "/app/parent":
-			if !parentLAN(r) {
-				return nil, problem(403, "Open parent controls directly on your LAN")
-			}
-			serveAppFile(w, "parent.html", "text/html; charset=utf-8")
 			return nil, nil
 		case b.servePWA(w, r, path, nil, "") || serveApp(w, path):
 			return nil, nil
@@ -512,11 +502,6 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			id, err := companionIDArg(r, obj, false)
 			if err != nil {
 				return nil, err
-			}
-			if id != "" {
-				if err := b.parentAllowed(id); err != nil {
-					return nil, err
-				}
 			}
 			voice := b.voices.defaultFor("")
 			if id != "" {

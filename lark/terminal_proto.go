@@ -149,7 +149,6 @@ const (
 	eventTimers          uint8 = 2
 	eventChat            uint8 = 3
 	eventHistoryArchived uint8 = 4
-	eventParentPolicy    uint8 = 5
 
 	// RTP constants
 	rtpVersionByte uint8 = 0x80

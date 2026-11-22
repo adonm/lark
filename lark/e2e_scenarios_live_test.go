@@ -32,10 +32,6 @@ func TestVirtualE2E(t *testing.T) {
 			t.Parallel()
 			s.callTimeout(t)
 		})
-		t.Run("ParentBudget", func(t *testing.T) {
-			t.Parallel()
-			s.parentBudget(t)
-		})
 		t.Run("Product", func(t *testing.T) {
 			t.Parallel() // Keep idle/call sockets reading throughout the real timeouts.
 			t.Run("VoiceTypedAndStop", s.voiceTypedStop)
@@ -46,7 +42,6 @@ func TestVirtualE2E(t *testing.T) {
 			t.Run("IntercomReply", s.intercom)
 			t.Run("Calls", s.calls)
 			t.Run("Apps", s.apps)
-			t.Run("BuilderAndParents", s.builderParents)
 			t.Run("TimersMemoryHistory", s.data)
 			t.Run("ScopedTunnel", s.scopedTunnel)
 			t.Run("Diagnostics", s.diagnostics)
@@ -135,8 +130,6 @@ func e2eFields(f wsFrame, op string, pairs ...string) bool {
 			}
 		}
 		return true
-	case "parent_policy":
-		return mt == msgEvent && len(p) >= 5 && p[4] == eventParentPolicy
 	case "capabilities":
 		return mt == msgWelcome && len(p) >= 2 && p[1]&1 != 0
 	case "error":
@@ -557,8 +550,6 @@ func (s *e2eSuite) rawFramebuffer(t *testing.T) {
 	if zone == "" {
 		t.Fatal("could not find a stable non-day test timezone")
 	}
-	e2eRequest(t, s.liveClient, "POST", "/api/devices/"+c.id+"/parent", s.parent,
-		object{"action": "settings", "timezone": zone, "quiet_start": "", "quiet_end": "", "daily_minutes": 0}, 200)
 	// Two otherwise-identical scenes make an incompressible dirty patch.
 	const background = `<svg><rect width="360" height="360" fill="black"/><text x="180" y="95">Raw pixels</text>`
 	s.tool(t, "app", object{"devices": c.id, "svg": background + "</svg>"}, false)

@@ -479,10 +479,6 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	}
 	h.mu.Lock()
 	key, now := strings.ToLower(t.CompanionID), time.Now()
-	if h.parentRefresh(key, now) != "" {
-		h.mu.Unlock()
-		return
-	}
 	if !t.WakeAgent {
 		defer func() {
 			entry := newChat("card", who.Name, "Time's up! "+message, "timer")
@@ -533,13 +529,7 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 		return
 	}
 	if t.WakeAgent && b.oc != nil {
-		child, done, err := h.parentOffline(ctx, key, now)
 		h.mu.Unlock()
-		if err != nil {
-			return
-		}
-		defer done()
-		ctx = child
 		ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 		defer cancel()
 		_, _ = b.generateReply(ctx, ctx, who, "Timer fired: "+message, turnOptions{source: "timer"})
@@ -576,9 +566,6 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 		if err != nil {
 			return nil, err
 		}
-		if err := b.parentAllowed(id); err != nil {
-			return nil, err
-		}
 		if err := m.set(ctx, t); err != nil {
 			return nil, err
 		}
@@ -606,9 +593,6 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 		}
 		if !timerIDRE.MatchString(timerID) || hasAll || fields < 1 {
 			return nil, fieldError("timer", "update requires id and at least one field to change")
-		}
-		if err := b.parentAllowed(id); err != nil {
-			return nil, err
 		}
 		now := time.Now()
 		t, err := m.update(ctx, timerID, id, args, now)

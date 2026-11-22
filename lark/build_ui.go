@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 )
 
@@ -14,9 +13,6 @@ func (b *larkServer) buildReply(ctx context.Context, companionID, text string) (
 	intent := parseBuildIntent(text)
 	if intent.kind == "" {
 		return "", "", nil
-	}
-	if err = b.parentAllowed(companionID); err != nil {
-		return "", "", err
 	}
 	if err = ctx.Err(); err != nil {
 		return "", "", err
@@ -70,13 +66,6 @@ func (b *larkServer) buildChat(id string, entries ...chatEntry) {
 }
 
 func (b *larkServer) deliverOfflineBuildReply(ctx context.Context, who companionState, text, reply, source string) error {
-	if h := b.ws; h != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if r := h.parentRefresh(strings.ToLower(who.ID), time.Now()); r != "" {
-			return r.err()
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -99,7 +88,7 @@ func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsTerminal, turn ui
 		view = buildingScene(job)
 	}
 	h.mu.Lock()
-	allowed := h.active(d) && turn == d.turn && d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) == "" && ctx.Err() == nil
+	allowed := h.active(d) && turn == d.turn && d.companionID != "" && ctx.Err() == nil
 	if allowed {
 		h.b.buildChat(d.companionID, newChat("user", "You", text, source), newChat("companion", d.companion.Name, reply, source))
 		for _, td := range h.terminalsFor(d.companionID) {
@@ -118,7 +107,7 @@ func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsTerminal, turn ui
 func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	h.mu.Lock()
 	d := h.voiceOwner(job.device)
-	if d == nil || !h.active(d) || h.parentRefresh(d.companionID, time.Now()) != "" ||
+	if d == nil || !h.active(d) ||
 		d.announcing || d.busy || d.queuedVoice != nil || d.recording.active() || d.callState != callNone ||
 		d.stopAudio != nil || d.awaitAck || d.asleep || d.drawer != "" || d.card != nil && d.card.build != job.id {
 		h.mu.Unlock()

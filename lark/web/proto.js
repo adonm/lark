@@ -29,7 +29,7 @@ export const REC_OP = { 0: "stop", 1: "start", 2: "cancel" };
 export const TTS_OP = { 0: "stop", 1: "start", 2: "end" };
 export const CALL_OP = { 0: "end", 1: "start", 2: "mute", 3: "unmute" };
 export const CHIME = { 0: "tap", 1: "think", 2: "cancel", 3: "intercom", 4: "ring" };
-export const EVENT_KIND = { 1: "saved_apps", 2: "timers", 3: "chat", 4: "history_archived", 5: "parent_policy" };
+export const EVENT_KIND = { 1: "saved_apps", 2: "timers", 3: "chat", 4: "history_archived" };
 export const RTP_PT = { REC_PCM: 96, CALL_UP: 97, CALL_DOWN: 98 };
 
 const enc = new TextEncoder();

@@ -416,18 +416,6 @@ function handleServerMsg(type, msg) {
       else if (msg.kind === "chat" && msg.companionId === state.view.id) {
         try { receiveChat(JSON.parse(msg.arg2)); } catch {}
       } else if (msg.kind === "history_archived" && msg.companionId === state.view.id) reloadArchivedHistory();
-      else if (msg.kind === "parent_policy" && msg.companionId === state.view.id) {
-        const wasResting = !!state.view.parentMessage;
-        state.view.parentMessage = msg.arg2 || "";
-        if (state.view.parentMessage) {
-          endMic(true, false, false, true);
-          stopCall();
-          updateStatus(state.view.parentMessage);
-        } else if (wasResting) {
-          updateStatus(`${companionName(state.view.companion)} is available.`);
-        }
-        renderCurrent();
-      }
       break;
   }
 }

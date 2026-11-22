@@ -161,7 +161,6 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 				"face_svg":     c.FaceSVG,
 				"online":       entry["online"],
 				"dormant":      entry["dormant"],
-				"parent_policy": b.parentState(c.ID, time.Now()),
 			}
 			var activeApp any
 			termList := []object{}

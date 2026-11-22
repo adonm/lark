@@ -573,8 +573,6 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 		`DELETE FROM messages WHERE companion_id=?`,
 		`DELETE FROM timers WHERE companion_id=?`,
 		`DELETE FROM build_jobs WHERE companion_id=?`,
-		`DELETE FROM parent_settings WHERE companion_id=?`,
-		`DELETE FROM parent_usage WHERE companion_id=?`,
 		`DELETE FROM memory WHERE scope=?`,
 		`DELETE FROM companions WHERE id=?`,
 	} {
@@ -638,12 +636,6 @@ func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path s
 			return nil, problem(400, "Invalid companion ID")
 		}
 		return b.voiceAPI(r, strings.ToLower(id))
-	}
-	if id, ok := strings.CutSuffix(rest, "/parent"); ok {
-		if !validCompanionID(strings.ToLower(id)) {
-			return nil, problem(400, "Invalid companion ID")
-		}
-		return b.routeParent(w, r, strings.ToLower(id))
 	}
 	if strings.Contains(rest, "/") {
 		return nil, problem(404, "Not found")

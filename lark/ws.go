@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,7 +81,6 @@ type wsHub struct {
 	clients           map[*wsClient]struct{}
 	pending           int
 	terminals         map[string]*wsTerminal
-	parents           map[string]*parentRuntime
 	closed            bool
 	peersKey          string
 	storedPeers       []peerDisplay
@@ -123,12 +121,6 @@ func (h *wsHub) shutdown() {
 	h.mu.Lock()
 	if !h.closed {
 		h.closed = true
-		now := time.Now()
-		for key, p := range h.parents {
-			if err := h.parentAccount(key, p, now, true); err != nil {
-				log.Printf("Lark parent usage checkpoint for %s: %v", key, err)
-			}
-		}
 		for c := range h.clients {
 			c.cancel()
 		}
@@ -634,9 +626,6 @@ func (h *wsHub) teardownTerminal(d *wsTerminal) {
 	if wasOwner {
 		h.fallbackVoiceOwnership(d.companionID, d.id)
 	}
-	if d.companionID != "" && len(h.terminalsFor(d.companionID)) == 0 {
-		h.parentFinishActivity(d.companionID, now)
-	}
 	h.broadcastPeers()
 	h.sig.notify()
 }
@@ -695,9 +684,7 @@ func (h *wsHub) attachTerminal(termID, compID string) {
 	}
 	h.clearView(d)
 	now := time.Now()
-	if compID == "" || h.parentRefresh(compID, now) == "" {
-		h.render(d, now, true)
-	}
+	h.render(d, now, true)
 	h.sendSnapshotState(d)
 	h.broadcastPeers()
 }

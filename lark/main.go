@@ -66,10 +66,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	parentToken, err := loadParentToken(filepath.Join(env("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "lark", "parent.token"), token)
-	if err != nil {
-		return err
-	}
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	state := env("XDG_STATE_HOME", filepath.Join(home, ".local/state"))
 	local := filepath.Join(data, "lark")
@@ -170,7 +166,7 @@ func run() error {
 	worker := newSynthWorker(root, func() (speechEngine, error) {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
 	})
-	b := &larkServer{root: root, token: token, parentToken: parentToken, db: db, terminals: terminalStore(db),
+	b := &larkServer{root: root, token: token, db: db, terminals: terminalStore(db),
 		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, pairPort: pairPort, worker: worker,
 		voices:  companionVoiceStore(db, fallbackVoice),
 		history: &chatHistory{db},

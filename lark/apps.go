@@ -950,12 +950,6 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			h.mu.Unlock()
 			return nil, problem(409, "Companion is not connected: "+id)
 		}
-		if args["exit"] != true {
-			if r := h.parentRefresh(id, time.Now()); r != "" {
-				h.mu.Unlock()
-				return nil, r.err()
-			}
-		}
 		for _, d := range terms {
 			if args["exit"] != true && d.callState != callNone {
 				h.mu.Unlock()
@@ -1118,10 +1112,6 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			h.mu.Unlock()
 			return nil, problem(409, "Terminal disconnected: "+d.id)
 		}
-		if r := h.parentRefresh(d.companionID, time.Now()); r != "" {
-			h.mu.Unlock()
-			return nil, r.err()
-		}
 		if d.appGen != gens[i] {
 			h.mu.Unlock()
 			return nil, problem(409, "Companion view changed: "+d.companionID)
@@ -1266,7 +1256,7 @@ func (h *wsHub) patchRunningApp(ctx context.Context, ids []string, patch json.Ra
 	var a *appInstance
 	for _, id := range ids {
 		terms := h.terminalsFor(id)
-		if len(terms) == 0 || h.parentRefresh(id, time.Now()) != "" {
+		if len(terms) == 0 {
 			h.mu.Unlock()
 			return nil, problem(409, "No running JS app on "+id)
 		}
@@ -1532,7 +1522,7 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 			a.timeOfSpeech = now
 		}
 		for j, d := range a.terminals {
-			if d == nil || !h.active(d) || ev.i >= 0 && j != ev.i && !e.all || (d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) != "") {
+			if d == nil || !h.active(d) || ev.i >= 0 && j != ev.i && !e.all {
 				continue
 			}
 			if h.voiceOwner(d.companionID) != d {

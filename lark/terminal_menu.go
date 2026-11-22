@@ -80,9 +80,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 				if owner := h.voiceOwner(target.companionID); owner != nil {
 					c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(h.nextSeq(), target.companionID, owner.id))
 				}
-				if target.parentReason != "" {
-					c.enqueueProto(msgEvent, encodeEventMsg(h.nextSeq(), eventParentPolicy, target.companionID, string(target.parentReason), parentMessage(target.parentReason)))
-				}
 			} else {
 				c.watch = ""
 			}
@@ -107,21 +104,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	}
 
 	native := c.kind == "hardware"
-	if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
-		switch msgType {
-		case msgTelemetry, msgTTSAck, msgRecEnd:
-		case msgRecStart:
-			h.pushRecStop(d, "", true)
-			return
-		default:
-			if native && msgType == msgPointer {
-				if evName, _, _, _, ok := parsePointer(payload); ok && evName == "tap" {
-					h.pushPower(d, d.brightness(), false)
-				}
-			}
-			return
-		}
-	}
 	if d.callState != callNone {
 		switch msgType {
 		case msgTelemetry, msgPointer, msgCallReq, msgTTSAck:

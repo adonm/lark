@@ -486,11 +486,6 @@ func (h *wsHub) terminalVolumeControl(ctx context.Context, id string, args objec
 		}
 		return object{"ok": true, "terminal_id": id, "volume": level, "auto_volume": auto, "sleeping": false}, nil
 	}
-	if setSleep && !asleep && d.companionID != "" {
-		if r := h.parentRefresh(d.companionID, time.Now()); r != "" {
-			return nil, r.err()
-		}
-	}
 	if setVolume {
 		if err := h.setVolume(ctx, d, auto, level, ""); err != nil {
 			return nil, err
@@ -498,11 +493,6 @@ func (h *wsHub) terminalVolumeControl(ctx context.Context, id string, args objec
 	}
 	if setSleep {
 		now := time.Now()
-		if d.companionID != "" {
-			if r := h.parentRefresh(d.companionID, now); !asleep && r != "" {
-				return nil, r.err()
-			}
-		}
 		d.last = now
 		h.setSleeping(d, asleep)
 		h.render(d, now, false)
@@ -536,9 +526,6 @@ func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
 	d := h.voiceOwner(companionID)
 	if d == nil {
 		return nil, "not_connected"
-	}
-	if r := h.parentRefresh(d.companionID, time.Now()); r != "" {
-		return nil, string(r)
 	}
 	if d.callState != callNone {
 		return nil, "on_call"
@@ -587,9 +574,6 @@ func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []ob
 	sender, ok := b.companionByID(fromID)
 	if !ok {
 		return nil, nil, problem(404, "Companion not found")
-	}
-	if err := b.parentAllowed(sender.ID); err != nil {
-		return nil, nil, err
 	}
 	text := shortText(args["text"], maxMessage, true)
 	if _, err := spokenText(text); err != nil {

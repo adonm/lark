@@ -16,7 +16,6 @@ func TestAppCDNPolicy(t *testing.T) {
 	}{
 		{"/app", false},
 		{"/app", true},
-		{"/app/parent", false},
 	} {
 		r := httptest.NewRequest("GET", view.path, nil)
 		r.RemoteAddr = "127.0.0.1:12345"
@@ -30,10 +29,9 @@ func TestAppCDNPolicy(t *testing.T) {
 		if w.Code != 200 || w.Header().Get("Referrer-Policy") != "no-referrer" {
 			t.Fatal("app and private page referrers must not be shared")
 		}
-		for _, asset := range []string{oatCDN + "css", oatCDN + "js", htmxCDN} {
-			want := asset != htmxCDN || view.path == "/app/parent"
-			if strings.Contains(policy, asset) != want ||
-				bytes.Contains(w.Body.Bytes(), []byte(`="`+asset+`" integrity="sha384-`)) != want {
+		for _, asset := range []string{oatCDN + "css", oatCDN + "js"} {
+			if !strings.Contains(policy, asset) ||
+				!bytes.Contains(w.Body.Bytes(), []byte(`="`+asset+`" integrity="sha384-`)) {
 				t.Errorf("%+v: CDN asset %s missing integrity or allowed on the wrong surface", view, asset)
 			}
 		}
