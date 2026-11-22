@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -945,3 +951,137 @@ func (b *larkServer) nextAvailableStorySlug(ctx context.Context, title string) s
 }
 
 var _ = maps.Clone[map[string]storyVal]
+
+type storySession struct {
+	id         string
+	title      string
+	compiled   *compiledStory
+	passageIdx int
+	flags      []storyVal
+	text       string
+	choices    []storyChoice
+	end        bool
+	bg         string
+	bgImg      *image.RGBA
+}
+
+func (s *storySession) currentPassageName() string {
+	if s == nil || s.compiled == nil || s.passageIdx < 0 || s.passageIdx >= len(s.compiled.Passages) {
+		return ""
+	}
+	return s.compiled.Passages[s.passageIdx].Name
+}
+
+func (s *storySession) enterPassage(idx int, applySets bool) {
+	if s == nil || s.compiled == nil || idx < 0 || idx >= len(s.compiled.Passages) {
+		return
+	}
+	s.passageIdx = idx
+	p := s.compiled.Passages[idx]
+	s.end = p.End
+	s.bg = p.BG
+	s.bgImg = nil
+	s.text, s.choices = s.compiled.evalPassage(idx, s.flags, applySets)
+}
+
+func storyBGPrompt(desc string) string {
+	return `Create a cozy indie-game pixel art background scene (Stardew Valley or GBA style) depicting: ` + strings.TrimSpace(desc) +
+		`. Use crisp pixel clusters, soft atmospheric lighting, and a harmonious limited palette. No characters, no creatures, no text, no UI, no borders, no frames.`
+}
+
+func (b *larkServer) storyBGPath(storyID, passageName, bgDesc string) string {
+	if b == nil || b.portraits == nil || b.portraits.dir == "" || strings.TrimSpace(bgDesc) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(passageName + "\x00" + strings.TrimSpace(bgDesc)))
+	key := hex.EncodeToString(sum[:12])
+	return filepath.Join(filepath.Dir(b.portraits.dir), "story-bg", storyID, key+".png")
+}
+
+func (b *larkServer) loadStoryBG(storyID, passageName, bgDesc string) *image.RGBA {
+	p := b.storyBGPath(storyID, passageName, bgDesc)
+	if p == "" {
+		return nil
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil
+	}
+	rgba, ok := img.(*image.RGBA)
+	if !ok {
+		bnds := img.Bounds()
+		rgba = image.NewRGBA(image.Rect(0, 0, bnds.Dx(), bnds.Dy()))
+		for y := range bnds.Dy() {
+			for x := range bnds.Dx() {
+				rgba.Set(x, y, img.At(bnds.Min.X+x, bnds.Min.Y+y))
+			}
+		}
+	}
+	return rgba
+}
+
+func (b *larkServer) ensureStoryBGAsync(d *wsTerminal, storyID, passageName, bgDesc string) {
+	if b == nil || b.portraits == nil || b.portraits.generate == nil || strings.TrimSpace(bgDesc) == "" {
+		return
+	}
+	dst := b.storyBGPath(storyID, passageName, bgDesc)
+	if dst == "" {
+		return
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	b.storyBGMu.Lock()
+	if b.storyBGInflight == nil {
+		b.storyBGInflight = map[string]bool{}
+	}
+	if b.storyBGInflight[dst] {
+		b.storyBGMu.Unlock()
+		return
+	}
+	b.storyBGInflight[dst] = true
+	b.storyBGMu.Unlock()
+
+	go func() {
+		defer func() {
+			b.storyBGMu.Lock()
+			delete(b.storyBGInflight, dst)
+			b.storyBGMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(b.root, portraitTimeout)
+		defer cancel()
+		raw, err := b.portraits.generate(ctx, storyBGPrompt(bgDesc), nil)
+		if err != nil {
+			return
+		}
+		img, _, err := image.Decode(bytes.NewReader(raw))
+		if err != nil {
+			return
+		}
+		norm, err := normalizeBackground(img, pixelSpecBox3.logicalW, pixelSpecBox3.logicalH)
+		if err != nil {
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return
+		}
+		if err := writePortraitPNG(filepath.Dir(dst), filepath.Base(dst), norm); err != nil {
+			return
+		}
+		if b.ws == nil || d == nil {
+			return
+		}
+		b.ws.mu.Lock()
+		if b.ws.active(d) && d.drawer == drawerStoryReader && d.story != nil &&
+			d.story.id == storyID && d.story.currentPassageName() == passageName {
+			d.story.bgImg = norm
+			b.ws.render(d, time.Now(), false)
+		}
+		b.ws.mu.Unlock()
+	}()
+}

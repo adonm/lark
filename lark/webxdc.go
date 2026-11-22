@@ -221,20 +221,20 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 	switch cmd.Op {
 	case "sync":
 		s.pushPanelState(ctx, accID, msgID, companionID, true)
-	case "open_book":
+	case "open_book", "open_story":
 		if strings.TrimSpace(cmd.App) == "" {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Missing app name.")
+			s.pushPanelAck(accID, msgID, cmd.Op, false, "Missing story ID.")
 			return
 		}
-		a, err := s.b.loadApp(ctx, cmd.App)
-		if err != nil || a.Kind != "book" {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, "Book not found.")
+		st, err := s.b.loadStory(ctx, cmd.App)
+		if err != nil {
+			s.pushPanelAck(accID, msgID, cmd.Op, false, "Story not found.")
 			return
 		}
 		s.b.ws.mu.Lock()
 		for _, d := range s.b.ws.terminalsFor(companionID) {
 			if s.b.ws.active(d) {
-				s.b.ws.openBook(d, a)
+				s.b.ws.openStory(d, st)
 			}
 		}
 		s.b.ws.mu.Unlock()
@@ -323,15 +323,9 @@ func (s *dcService) pushPanelState(ctx context.Context, accID, msgID uint32, com
 	}
 
 	var books, games []object
-	if apps, err := s.b.listApps(ctx, false); err == nil {
-		for _, a := range apps {
-			entry := object{"name": a["name"], "title": a["title"]}
-			switch str(a["kind"]) {
-			case "book":
-				books = append(books, entry)
-			case "game":
-				games = append(games, entry)
-			}
+	if stories, err := s.b.listStories(ctx); err == nil {
+		for _, st := range stories {
+			books = append(books, object{"name": st.ID, "title": st.Title})
 		}
 	}
 

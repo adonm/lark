@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -81,14 +80,14 @@ func TestWSMainMenuPages(t *testing.T) {
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "cake")
 	bindMenu(c, b.ws, "vocat-0001")
-	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-books", "menu-memories", "menu-next")
+	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-stories", "menu-memories", "menu-next")
 	page2 := tapMenu(t, c, "menu-next", "menu-voice", "menu-more", "menu-prev")
 	for _, check := range []struct {
 		svg  string
 		omit []string
 	}{
 		{page1, []string{"menu-prev", "menu-voice", "menu-more", "menu-games"}},
-		{page2, []string{"menu-next", "menu-intercom", "menu-books", "menu-memories", "menu-games"}},
+		{page2, []string{"menu-next", "menu-intercom", "menu-stories", "menu-memories", "menu-games"}},
 	} {
 		for _, id := range check.omit {
 			if strings.Contains(check.svg, id) {
@@ -163,9 +162,8 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	web := testConnectWS(t, base, "unit", false)
 	web.hello(t, "vocat-0002", "Cake")
 	bindMenu(web, b.ws, "vocat-0002")
-	tapMenu(t, web, "menu", "menu-books")
-	if err := b.saveApp(t.Context(), savedApp{Name: "slow", Title: "Slow Book", Kind: "book",
-		Data: json.RawMessage(`{"text":"Once upon a time."}`)}); err != nil {
+	tapMenu(t, web, "menu", "menu-stories")
+	if _, _, err := b.saveStory(t.Context(), "slow", ":: StoryTitle\nSlow Story\n\n:: Start {\"end\":true}\nOnce upon a time.\n", "", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,9 +174,9 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	}
 	defer conn.Close()
 	wait := b.db.readDB().Stats().WaitCount
-	x, y, ok := hitCenter(lastMenuSVG[web], "menu-books")
+	x, y, ok := hitCenter(lastMenuSVG[web], "menu-stories")
 	if !ok {
-		t.Fatalf("control %q not found", "menu-books")
+		t.Fatalf("control %q not found", "menu-stories")
 	}
 	web.tap(t, x, y, 0)
 	waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
@@ -189,7 +187,7 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.db.readDB().SetMaxOpenConns(8)
-	menuFrame(t, web, "Slow Book")
+	menuFrame(t, web, "Slow Story")
 }
 
 func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {

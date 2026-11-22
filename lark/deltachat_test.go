@@ -1126,7 +1126,7 @@ func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
 	}
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-xdc", "greg")
-	if err := b.saveApp(t.Context(), savedApp{Name: "lost_island", Title: "Lost Island", Kind: "book", Data: json.RawMessage(`{"text":"Page one.\n\nPage two."}`)}); err != nil {
+	if _, _, err := b.saveStory(t.Context(), "lost_island", ":: StoryTitle\nLost Island\n\n:: Start\nPage one.\n\n[[Next->Page2]]\n\n:: Page2 {\"end\":true}\nPage two.\n", "", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1178,16 +1178,16 @@ func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
 	d := b.ws.terminals["box3-xdc"]
 	vol := d.vol
 	drawer := d.drawer
-	bookName := ""
-	if d.readingBook != nil {
-		bookName = d.readingBook.Name
+	storyID := ""
+	if d.story != nil {
+		storyID = d.story.id
 	}
 	b.ws.mu.Unlock()
 	if vol != 45 {
 		t.Fatalf("terminal volume = %d, want 45", vol)
 	}
-	if drawer != drawerBookReader || bookName != "lost_island" {
-		t.Fatalf("expected book reader with lost_island, got drawer=%q book=%q", drawer, bookName)
+	if drawer != drawerStoryReader || storyID != "lost_island" {
+		t.Fatalf("expected story reader with lost_island, got drawer=%q story=%q", drawer, storyID)
 	}
 
 	// 3. Unverified sender update is ignored.

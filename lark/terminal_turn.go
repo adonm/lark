@@ -91,6 +91,52 @@ func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
 	return true
 }
 
+func (h *wsHub) startStoryChoiceListen(d *wsTerminal, now time.Time) bool {
+	if !h.active(d) || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 ||
+		h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+		return false
+	}
+	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck {
+		return false
+	}
+	h.wake(d, now)
+	secs := d.companion.ListenSeconds
+	if secs <= 0 {
+		secs = 12
+	}
+	span := time.Duration(secs) * time.Second
+	d.recording.start(now, "", true)
+	d.recording.listen = true
+	d.recording.listenSpan = span
+	d.recording.listenUntil = now.Add(span)
+	d.recSession++
+	h.startEndpoint(d)
+	h.pushRecStart(d, "", true, true)
+	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
+	h.render(d, now, false)
+	return true
+}
+
+func (h *wsHub) tryStoryVoiceChoice(d *wsTerminal, turnID uint64, text string) bool {
+	h.mu.Lock()
+	if !h.active(d) || d.turn != turnID || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
+		h.mu.Unlock()
+		return false
+	}
+	idx, ok := matchStoryChoice(text, d.story.choices)
+	if !ok {
+		h.mu.Unlock()
+		return false
+	}
+	target := d.story.choices[idx].Target
+	d.busy = false
+	d.turn = 0
+	h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
+	h.advanceStoryPassage(d, target)
+	h.mu.Unlock()
+	return true
+}
+
 func (h *wsHub) stopListeningWindow(d *wsTerminal, now time.Time) {
 	if d.recording.active() && d.recording.listen {
 		d.replyTo = ""
@@ -423,6 +469,9 @@ func (h *wsHub) runVoice(ctx context.Context, d *wsTerminal, id uint64, target s
 		h.finishTurn(d, id, nil, nil)
 		return
 	}
+	if h.tryStoryVoiceChoice(d, id, text) {
+		return
+	}
 	h.runTurn(ctx, d, id, text, "voice", pcm)
 }
 
@@ -729,6 +778,9 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time, aborted bool) {
 		}
 	}
 	if h.maybeStartVoice(d, now) || h.maybeStartNoticeLocked(d, now) {
+		return
+	}
+	if !aborted && h.startStoryChoiceListen(d, now) {
 		return
 	}
 	if !aborted && h.startListeningWindow(d, now) {

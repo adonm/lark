@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"image"
 	"log"
@@ -93,8 +92,8 @@ type wsTerminal struct {
 	menuData      *menuContent
 	menuHintUntil time.Time
 	bootHint      bool
-	readingBook   *savedApp
-	readingPage   int
+	story         *storySession
+	storyPage     int
 	statsAt       time.Time
 	rev       uint64
 	nativeRev uint16
@@ -629,8 +628,12 @@ type renderRequest struct {
 	voice        string
 	peers        []menuPeer
 	statsRows    []menuRow
-	readingBook  *savedApp
-	readingPage  int
+	storyTitle   string
+	storyText    string
+	storyChoices []storyChoice
+	storyEnd     bool
+	storyBG      *image.RGBA
+	storyPage    int
 	full         bool
 	listenWindow bool
 	trace        *turnTrace
@@ -656,28 +659,84 @@ func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
 	}
 }
 
-func (h *wsHub) openBook(d *wsTerminal, book savedApp) {
-	d.drawer = drawerBookReader
-	d.readingBook = &book
-	d.readingPage = 0
+func (h *wsHub) openStory(d *wsTerminal, st savedStory) {
+	cs, err := parseTwee(st.Twee)
+	if err != nil {
+		return
+	}
+	sess := &storySession{
+		id:       st.ID,
+		title:    cs.Title,
+		compiled: cs,
+		flags:    cs.flagsSlice(nil),
+	}
+	page := 0
 	if h.b != nil && h.b.db != nil && d.companionID != "" {
-		var raw string
-		if h.b.db.readDB().QueryRowContext(d.client.ctx, `SELECT value_json FROM memory WHERE scope=? AND key=?`,
-			"companion:"+d.companionID, "reading:"+book.Name).Scan(&raw) == nil {
-			var prog struct {
-				Page int `json:"page"`
-			}
-			if json.Unmarshal([]byte(raw), &prog) == nil && prog.Page > 0 {
-				d.readingPage = prog.Page - 1
+		if prog, ok, perr := h.b.getStoryProgress(d.client.ctx, d.companionID, st.ID); perr == nil && ok {
+			if idx, exists := cs.ByName[prog.Passage]; exists {
+				sess.flags = cs.flagsSlice(prog.Flags)
+				sess.enterPassage(idx, false)
+				page = prog.Page
 			}
 		}
+	}
+	if sess.currentPassageName() == "" {
+		sess.enterPassage(cs.Start, true)
+	}
+	if sess.bg != "" && h.b != nil {
+		if img := h.b.loadStoryBG(st.ID, sess.currentPassageName(), sess.bg); img != nil {
+			sess.bgImg = img
+		} else {
+			h.b.ensureStoryBGAsync(d, st.ID, sess.currentPassageName(), sess.bg)
+		}
+	}
+	d.drawer = drawerStoryReader
+	d.story = sess
+	d.storyPage = page
+	now := time.Now()
+	h.stopPlayback(d, true)
+	if sess.text != "" {
+		h.speakLocal(d, sess.text)
+	}
+	h.render(d, now, false)
+}
+
+func (h *wsHub) advanceStoryPassage(d *wsTerminal, targetIdx int) {
+	if d.story == nil || d.story.compiled == nil {
+		return
+	}
+	sess := d.story
+	sess.enterPassage(targetIdx, true)
+	d.storyPage = 0
+	if sess.bg != "" && h.b != nil {
+		if img := h.b.loadStoryBG(sess.id, sess.currentPassageName(), sess.bg); img != nil {
+			sess.bgImg = img
+		} else {
+			h.b.ensureStoryBGAsync(d, sess.id, sess.currentPassageName(), sess.bg)
+		}
+	}
+	if h.b != nil && h.b.db != nil && d.companionID != "" {
+		prog := storyProgress{
+			CompanionID: d.companionID,
+			StoryID:     sess.id,
+			Passage:     sess.currentPassageName(),
+			Page:        0,
+			Flags:       sess.compiled.flagsMap(sess.flags),
+		}
+		go func() {
+			_ = h.b.setStoryProgress(context.Background(), prog)
+		}()
+	}
+	h.stopPlayback(d, true)
+	if sess.text != "" {
+		h.speakLocal(d, sess.text)
 	}
 	h.render(d, time.Now(), false)
 }
 
 func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	switch d.drawer {
-	case drawerBooks, drawerMemories, drawerPair, drawerUnpair:
+	case drawerStories, drawerMemories, drawerPair, drawerUnpair:
 	default:
 		d.menuData = nil
 	}
@@ -711,16 +770,22 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	}
 	d.grade.Store(uint32(r.grade))
 	switch {
-	case d.drawer != "" && mood == "idle":
+	case d.drawer != "" && (mood == "idle" || (d.drawer == drawerStoryReader && (mood == "speaking" || d.recording.listen))):
 		r.drawer = d.drawer
 		r.menuPage = d.menuPage
 		r.autoVol = d.autoVol
 		r.vol = d.vol
 		r.voice = d.voice
-		r.readingBook = d.readingBook
-		r.readingPage = d.readingPage
+		if d.story != nil {
+			r.storyTitle = d.story.title
+			r.storyText = d.story.text
+			r.storyChoices = slices.Clone(d.story.choices)
+			r.storyEnd = d.story.end
+			r.storyBG = d.story.bgImg
+		}
+		r.storyPage = d.storyPage
 		switch d.drawer {
-		case drawerBooks, drawerMemories, drawerPair, drawerUnpair:
+		case drawerStories, drawerMemories, drawerPair, drawerUnpair:
 			r.view.menu = d.menuData
 		case drawerIntercom:
 			var choices []menuPeer
@@ -845,7 +910,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			var hits []hitBox
 			switch {
 			case r.drawer != "":
-				img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, th)
+				img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, poses[poseIndexForMood(r.pose)], th)
 			case r.view.title != "" || r.view.heading != "" || r.view.text != "":
 				img, hits = renderPixelSceneCard(spec, r.view, th)
 			default:
@@ -936,11 +1001,17 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 						for _, g := range r.view.menu.games {
 							srcParts = append(srcParts, g.label)
 						}
-						for _, bk := range r.view.menu.books {
-							srcParts = append(srcParts, bk.Title)
+						for _, st := range r.view.menu.stories {
+							srcParts = append(srcParts, st.Title)
 						}
 						for _, row := range r.view.menu.rows {
 							srcParts = append(srcParts, row.title, row.text)
+						}
+					}
+					if r.drawer == drawerStoryReader {
+						srcParts = append(srcParts, r.storyTitle, r.storyText)
+						for _, ch := range r.storyChoices {
+							srcParts = append(srcParts, ch.Label)
 						}
 					}
 				} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {

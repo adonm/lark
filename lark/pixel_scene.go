@@ -33,11 +33,11 @@ func poseFrame(now, moodAt, last time.Time, mood string, pct, vol int, charging,
 }
 
 const (
-	drawerMenu       = "menu"
-	drawerMore       = "more"
-	drawerBooks      = "books"
-	drawerBookReader = "book-reader"
-	drawerMemories   = "memories"
+	drawerMenu        = "menu"
+	drawerMore        = "more"
+	drawerStories     = "stories"
+	drawerStoryReader = "story-reader"
+	drawerMemories    = "memories"
 	drawerPair       = "pair"
 	drawerUnpair     = "unpair"
 	drawerVolume     = "volume"

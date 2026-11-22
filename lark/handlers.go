@@ -42,6 +42,8 @@ type larkServer struct {
 	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
 	companionTitles sync.Mutex
+	storyBGMu       sync.Mutex
+	storyBGInflight map[string]bool
 }
 
 func (b *larkServer) location() *time.Location {

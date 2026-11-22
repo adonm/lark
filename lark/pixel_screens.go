@@ -7,6 +7,7 @@ import (
 	imagecolor "image/color"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -29,7 +30,7 @@ type pixelMenuItem struct {
 
 var pixelHomeMenuItems = []pixelMenuItem{
 	{id: "talk", label: "Talk to…", icon: "talk", accent: pxPeach},
-	{id: "books", label: "Books", icon: "books", accent: pxMint},
+	{id: "stories", label: "Stories", icon: "books", accent: pxMint},
 	{id: "memories", label: "Memories", icon: "memories", accent: pxDanger},
 	{id: "voice", label: "Voice", icon: "voice", accent: pxMint},
 	{id: "more", label: "More", icon: "stats", accent: pxSky},
@@ -42,12 +43,12 @@ var pixelMoreMenuItems = []pixelMenuItem{
 	{id: "stats", label: "Stats", icon: "stats", accent: pxMint},
 }
 
-type pixelBook struct {
-	Name  string
-	Title string
-	Page  int
-	Total int
-	Color imagecolor.RGBA
+type pixelStory struct {
+	ID       string
+	Title    string
+	Passage  string
+	Passages int
+	Color    imagecolor.RGBA
 }
 
 type pixelMemoryItem struct {
@@ -298,7 +299,7 @@ func renderPixelMenuGrid(spec pixelDisplaySpec, title string, items []pixelMenuI
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th pixelTheme) *image.RGBA {
+func renderPixelStoriesList(spec pixelDisplaySpec, stories []pixelStory, page int, th pixelTheme) *image.RGBA {
 	if th.border.A == 0 {
 		th = defaultPixelTheme()
 	}
@@ -309,14 +310,14 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th
 
 	titleH := 12
 	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
-	texts = addCenteredText(texts, physicalRect(titleRect, s), "Books", dogica.Bold, spec.titleTextScale, th.accent2)
+	texts = addCenteredText(texts, physicalRect(titleRect, s), "Stories", dogica.Bold, spec.titleTextScale, th.accent2)
 
 	perPage := 2
 	if !spec.round {
 		perPage = 3
 	}
 	navH := pixelNavHeight(spec)
-	totalPages := max(1, (len(books)+perPage-1)/perPage)
+	totalPages := max(1, (len(stories)+perPage-1)/perPage)
 	page = max(0, min(page, totalPages-1))
 
 	listTop := spec.safe.Min.Y + titleH + 2
@@ -327,16 +328,16 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th
 	start := page * perPage
 	for i := range perPage {
 		idx := start + i
-		if idx >= len(books) {
+		if idx >= len(stories) {
 			break
 		}
-		bk := books[idx]
+		st := stories[idx]
 		ry := listTop + i*(rowH+gapY)
 		rx := spec.safe.Min.X
 		rw := spec.safe.Dx()
 		c.panel(rx, ry, rw, rowH, pxTileBG, th.border)
 
-		coverCol := bk.Color
+		coverCol := st.Color
 		if coverCol.A == 0 {
 			coverCol = th.accent
 		}
@@ -345,8 +346,11 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th
 		c.blitSprite(coverX+1, coverY+1, pxMenuSprites["books"], pxIconPalette, 1)
 
 		physText := physicalRect(image.Rect(rx+20, ry+2, rx+rw-3, ry+rowH-2), s)
-		title := truncateEllipsisPx(bk.Title, dogica.Bold, spec.bodyTextScale, physText.Dx())
-		prog := fmt.Sprintf("p %d/%d", max(1, bk.Page), max(1, bk.Total))
+		title := truncateEllipsisPx(st.Title, dogica.Bold, spec.bodyTextScale, physText.Dx())
+		prog := fmt.Sprintf("%d scenes", max(1, st.Passages))
+		if st.Passage != "" {
+			prog = truncateEllipsisPx(st.Passage, dogica.Regular, spec.bodyTextScale, physText.Dx())
+		}
 		lineH := dogica.Regular.LineHeight * spec.bodyTextScale
 		topY := physText.Min.Y + max(0, (physText.Dy()-2*lineH)/2)
 		texts = append(texts,
@@ -414,9 +418,124 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 	return finishPixelScreen(c, spec, texts)
 }
 
+func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, choices []storyChoice, end bool, page int, bg, narrator *image.RGBA, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, int) {
+	if th.border.A == 0 {
+		th = defaultPixelTheme()
+	}
+	if bg == nil {
+		bg = th.bg
+	}
+	c := newPixelCanvas(spec.logicalW, spec.logicalH)
+	darkenBackground(c, bg)
+	if narrator != nil {
+		nb := narrator.Bounds()
+		nx := spec.safe.Max.X - nb.Dx()/2 - 4
+		ny := max(2, spec.safe.Min.Y-2)
+		c.blit(nx, ny, narrator)
+	}
+
+	s := spec.artScale
+	bodyScale := spec.bodyTextScale
+	var texts []pixelTextOp
+
+	safePhys := physicalRect(spec.safe, s)
+	titleLines := wrapTitleLines(title, dogica.Bold, spec.bodyTextScale, safePhys.Dx(), 1)
+	titleLineH := dogica.Bold.LineHeight * spec.bodyTextScale
+	titleH := max(10, (titleLineH+s-1)/s)
+
+	navH := pixelNavHeight(spec)
+	panelRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y+titleH+1, spec.safe.Max.X, spec.safe.Max.Y-navH-2)
+	physPanel := physicalRect(panelRect, s)
+	padX, padY := 10, 8
+	lineH := dogica.Regular.LineHeight * bodyScale
+	lines := wrapTextPx(body, dogica.Regular, bodyScale, physPanel.Dx()-2*padX)
+	pages := paginateLines(lines, lineH, physPanel.Dy()-2*padY)
+	textPages := len(pages)
+	totalPages := textPages
+	if len(choices) > 0 {
+		totalPages++
+	}
+	page = max(0, min(page, totalPages-1))
+
+	if len(choices) > 0 && page == totalPages-1 {
+		// Choice page: up to 3 choices, each >= 48 physical px tall, plus Prev/Back.
+		choiceH := max(16, (48+s-1)/s)
+		topY := spec.safe.Min.Y
+		bottomY := spec.safe.Max.Y
+		tH := titleH
+		gapY := 2
+		btnNavH := max(navH, choiceH)
+		if topY+tH+2+len(choices)*choiceH+(len(choices)-1)*gapY+2+btnNavH > bottomY {
+			tH = 7
+			gapY = 0
+			btnNavH = choiceH
+		}
+		tBox := physicalRect(image.Rect(spec.safe.Min.X, topY, spec.safe.Max.X, topY+tH), s)
+		texts = addCenteredText(texts, tBox, truncateEllipsisPx(title, dogica.Bold, spec.bodyTextScale, tBox.Dx()), dogica.Bold, spec.bodyTextScale, th.accent2)
+
+		listTop := topY + tH + 1
+		if gapY > 0 {
+			listTop = topY + tH + 2
+		}
+		hits := make([]hitBox, 0, len(choices)+2)
+		acts := make(map[string]sceneAction, len(choices)+2)
+		for i, ch := range choices {
+			if i >= maxStoryChoices {
+				break
+			}
+			ry := listTop + i*(choiceH+gapY)
+			r := image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+choiceH)
+			c.panel(r.Min.X, r.Min.Y, r.Dx(), r.Dy(), pxTileBG, th.accent)
+			pBox := physicalRect(image.Rect(r.Min.X+3, r.Min.Y+1, r.Max.X-3, r.Max.Y-1), s)
+			label := truncateEllipsisPx(ch.Label, dogica.Bold, bodyScale, pBox.Dx())
+			texts = addCenteredText(texts, pBox, label, dogica.Bold, bodyScale, pxInk)
+			id := fmt.Sprintf("choice-%d", i)
+			hits = addLogicalHit(hits, spec, id, r)
+			acts[id] = sceneAction{"story-choice", strconv.Itoa(i)}
+		}
+		navY := bottomY - btnNavH
+		gap := 4
+		bw := (spec.safe.Dx() - gap) / 2
+		prevR := image.Rect(spec.safe.Min.X, navY, spec.safe.Min.X+bw, bottomY)
+		backR := image.Rect(spec.safe.Min.X+bw+gap, navY, spec.safe.Max.X, bottomY)
+		c.panel(prevR.Min.X, prevR.Min.Y, prevR.Dx(), prevR.Dy(), pxTileBG, th.border)
+		c.panel(backR.Min.X, backR.Min.Y, backR.Dx(), backR.Dy(), pxTileBG, th.border)
+		texts = addCenteredText(texts, physicalRect(prevR, s), "Prev", dogica.Bold, bodyScale, pxInk)
+		texts = addCenteredText(texts, physicalRect(backR, s), "Back", dogica.Bold, bodyScale, pxInk)
+		hits = addLogicalHit(hits, spec, "menu-prev", prevR)
+		hits = addLogicalHit(hits, spec, "menu-back", backR)
+		acts["menu-prev"] = sceneAction{"menu-page", strconv.Itoa(page - 1)}
+		acts["menu-back"] = sceneAction{"menu-back", ""}
+		return finishPixelScreen(c, spec, texts), hits, acts, totalPages
+	}
+
+	// Text page.
+	for i, line := range titleLines {
+		lineBox := image.Rect(safePhys.Min.X, safePhys.Min.Y+i*titleLineH, safePhys.Max.X, safePhys.Min.Y+(i+1)*titleLineH)
+		texts = addCenteredText(texts, lineBox, line, dogica.Bold, spec.bodyTextScale, th.accent2)
+	}
+	c.panel(panelRect.Min.X, panelRect.Min.Y, panelRect.Dx(), panelRect.Dy(), pxTileBG, th.border)
+	for i, line := range pages[page] {
+		texts = append(texts, pixelTextOp{
+			x: physPanel.Min.X + padX, y: physPanel.Min.Y + padY + i*lineH,
+			text: line, font: dogica.Regular, scale: bodyScale, color: pxInk,
+		})
+	}
+	if end && page == textPages-1 {
+		endBox := physicalRect(image.Rect(panelRect.Min.X+4, panelRect.Max.Y-12, panelRect.Max.X-4, panelRect.Max.Y-2), s)
+		texts = addCenteredText(texts, endBox, "— The End —", dogica.Bold, bodyScale, th.accent2)
+	}
+	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
+	hits, acts := navBarHits(spec, page, totalPages)
+	if page == 0 {
+		acts["menu-back"] = sceneAction{"menu-back", ""}
+	}
+	return finishPixelScreen(c, spec, texts), hits, acts, totalPages
+}
+
 func humanizeKey(key string) string {
 	k := strings.TrimSpace(key)
-	for _, p := range []string{"story_", "book_", "reading:", "reading_"} {
+	for _, p := range []string{"story_", "reading:", "reading_"} {
 		if strings.HasPrefix(k, p) {
 			k = strings.TrimPrefix(k, p)
 			break

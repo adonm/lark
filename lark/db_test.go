@@ -39,7 +39,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if err := os.WriteFile(unrelated, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`INSERT INTO apps (name,title,kind,code,updated_at) VALUES ('sun','Sun','game','function render(){}',100)`); err != nil {
+	if _, err := d.Exec(`INSERT INTO stories (id,title,twee,updated_at,passages) VALUES ('sun','Sun',':: StoryTitle\nSun\n:: Start {"end":true}\nHi\n',100,1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.backup(t.Context(), dir, now); err != nil {
@@ -53,7 +53,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if info.Mode().Perm() != 0o600 || d.lastBackup.Load() != info.ModTime().Unix() {
 		t.Fatalf("backup mode or timestamp: %v %d", info.Mode(), d.lastBackup.Load())
 	}
-	if _, err := d.Exec(`UPDATE apps SET title='Moon'`); err != nil {
+	if _, err := d.Exec(`UPDATE stories SET title='Moon'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.backup(t.Context(), dir, now); err != nil {
@@ -75,7 +75,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	}
 	defer backup.Close()
 	var title string
-	if err := backup.QueryRow(`SELECT title FROM apps WHERE name='sun'`).Scan(&title); err != nil || title != "Sun" {
+	if err := backup.QueryRow(`SELECT title FROM stories WHERE id='sun'`).Scan(&title); err != nil || title != "Sun" {
 		t.Fatalf("backup did not preserve WAL data: %q %v", title, err)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -505,6 +506,18 @@ func (b *larkServer) preparePortrait(ctx context.Context, companionID string, ar
 		return nil, err
 	}
 	return b.portraits.prepare(ctx, current, raw)
+}
+
+func parseHexRGBA(s string, fallback imagecolor.RGBA) imagecolor.RGBA {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "#") || len(s) != 7 {
+		return fallback
+	}
+	v, err := strconv.ParseUint(s[1:], 16, 32)
+	if err != nil {
+		return fallback
+	}
+	return imagecolor.RGBA{uint8(v >> 16), uint8(v >> 8), uint8(v), 255}
 }
 
 func readPortraitSpec(raw any) (portraitSpec, error) {

@@ -77,9 +77,14 @@ func TestFormatMemoryLinesAndTitles(t *testing.T) {
 }
 
 func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
-	books := []pixelBook{
-		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
-		{Name: "clockwork_owl", Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
+	stories := []pixelStory{
+		{ID: "lost_island", Title: "The Lost Island", Passage: "Harbor", Passages: 7, Color: pxMint},
+		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: pxPeach},
+	}
+	storyChoices := []storyChoice{
+		{Label: "Take the mossy path", Target: 1},
+		{Label: "Follow the lantern", Target: 2},
+		{Label: "Wait here", Target: 3},
 	}
 	memories := []pixelMemoryItem{
 		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed."}`},
@@ -123,8 +128,21 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 			{"voice-p2", voiceP2},
 			{"volume", volImg},
 			{"stats", statsImg},
-			{"books", renderPixelBooksList(spec, books, 0, th)},
+			{"stories", renderPixelStoriesList(spec, stories, 0, th)},
 			{"reader", renderPixelReader(spec, "The Lost Island", "Once upon a time in a faraway land.", 0, 0, th)},
+			{"story-bg", func() *image.RGBA {
+				img, _, _, _ := renderPixelStoryReaderWithHits(spec, "Woods", "Fork in the trail.", storyChoices, false, 0, nil, nil, th)
+				return img
+			}()},
+			{"story-choices", func() *image.RGBA {
+				img, hits, _, _ := renderPixelStoryReaderWithHits(spec, "Woods", "Fork in the trail.", storyChoices, false, 1, nil, nil, th)
+				for _, h := range hits {
+					if strings.HasPrefix(h.id, "choice-") && (h.y2-h.y1+1) < 48 {
+						t.Fatalf("%s choice %s height %dpx < 48px", spec.name, h.id, h.y2-h.y1+1)
+					}
+				}
+				return img
+			}()},
 			{"memories", renderPixelMemoriesList(spec, memories, titles, 0, th)},
 			{"memory-detail", renderPixelMemoryDetail(spec, memories[1], titles, 0, 0, th)},
 		}
@@ -180,10 +198,15 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	gregBG, _ := loadBackgroundPNG(gregDir)
 	th := derivePixelTheme(gregBG, poses[:])
 
-	books := []pixelBook{
-		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
-		{Name: "clockwork_owl", Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
-		{Name: "moonlight_meadow", Title: "Moonlight Meadow", Page: 4, Total: 4, Color: pxSky},
+	stories := []pixelStory{
+		{ID: "lost_island", Title: "The Lost Island", Passage: "Harbor", Passages: 7, Color: pxMint},
+		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: pxPeach},
+		{ID: "moonlight_meadow", Title: "Moonlight Meadow", Passage: "Clearing", Passages: 4, Color: pxSky},
+	}
+	storyChoices := []storyChoice{
+		{Label: "Take the mossy path", Target: 1},
+		{Label: "Follow the lantern", Target: 2},
+		{Label: "Wait here", Target: 3},
 	}
 	lostIslandText := "Once upon a time in a faraway land, there were people who always told tales about this island. All of them thought it was true, so they tried hunting for the Lost Island."
 	memories := []pixelMemoryItem{
@@ -258,8 +281,17 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		save(spec.name+"-volume", volImg)
 		statsImg, _, _ := renderPixelStatsWithHits(spec, []menuRow{{"Companion", "Greg"}, {"Battery", "88%"}, {"Voice", "Heart"}}, th)
 		save(spec.name+"-stats", statsImg)
-		save(spec.name+"-books-list", renderPixelBooksList(spec, books, 0, th))
+		save(spec.name+"-stories-list", renderPixelStoriesList(spec, stories, 0, th))
 		save(spec.name+"-reader", renderPixelReader(spec, "The Lost Island", lostIslandText, 0, 0, th))
+		storyTextImg, _, _, _ := renderPixelStoryReaderWithHits(spec, "The Whispering Woods", "You stand at a fork in the trail.", storyChoices, false, 0, gregBG, poses[0], th)
+		save(spec.name+"-story-bg", storyTextImg)
+		storyChoicesImg, choiceHits, _, _ := renderPixelStoryReaderWithHits(spec, "The Whispering Woods", "You stand at a fork in the trail.", storyChoices, false, 1, gregBG, poses[0], th)
+		save(spec.name+"-story-choices", storyChoicesImg)
+		for _, ch := range choiceHits {
+			if strings.HasPrefix(ch.id, "choice-") && (ch.y2-ch.y1+1) < 48 {
+				t.Fatalf("%s choice %s height %dpx < 48px", spec.name, ch.id, ch.y2-ch.y1+1)
+			}
+		}
 		save(spec.name+"-memories-list", renderPixelMemoriesList(spec, memories, titles, 0, th))
 		save(spec.name+"-memories-detail", renderPixelMemoryDetail(spec, memories[2], titles, 0, 0, th))
 		pairImg, err := renderPixelPair(spec, "Greg", invite)
