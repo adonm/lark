@@ -25,7 +25,6 @@ type terminalCaps struct {
 	PointerRev     bool `json:"pointer_rev,omitempty"`
 	BridgeEndpoint bool `json:"bridge_endpoint,omitempty"`
 	Battery        bool `json:"battery"`
-	HeadPads       bool `json:"head_pads"`
 	Drag           bool `json:"drag"`
 }
 

@@ -70,7 +70,6 @@ const (
 
 	// Capability bits
 	capBattery        uint32 = 1 << 0
-	capHeadPads       uint32 = 1 << 1
 	capDrag           uint32 = 1 << 4
 	capPointerRev     uint32 = 1 << 5
 	capBridgeEndpoint uint32 = 1 << 6
@@ -333,7 +332,6 @@ func encodeTerminalResume(protoVer uint8, token [resumeTokenLen]byte, lastSeq ui
 func helloCapsFromMask(mask uint32) terminalCaps {
 	return terminalCaps{
 		Battery:        mask&capBattery != 0,
-		HeadPads:       mask&capHeadPads != 0,
 		Drag:           mask&capDrag != 0,
 		PointerRev:     mask&capPointerRev != 0,
 		BridgeEndpoint: mask&capBridgeEndpoint != 0,
@@ -346,9 +344,6 @@ func capsMaskFromCaps(c terminalCaps) uint32 {
 	var m uint32
 	if c.Battery {
 		m |= capBattery
-	}
-	if c.HeadPads {
-		m |= capHeadPads
 	}
 	if c.Drag {
 		m |= capDrag

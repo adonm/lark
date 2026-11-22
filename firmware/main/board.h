@@ -1,7 +1,6 @@
 #pragma once
 
 #define BOARD_HAS_DRAG 1
-#define BOARD_HAS_HEAD_PADS 0
 
 #ifdef LARK_BOX3
 #define BOARD_NAME "esp-box-3"

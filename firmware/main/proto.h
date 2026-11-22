@@ -81,7 +81,6 @@ enum {
 // Capability bits in HELLO.caps_mask
 enum {
     LARK_CAP_BATTERY = 1u << 0,
-    LARK_CAP_HEAD_PADS = 1u << 1,
     LARK_CAP_DRAG = 1u << 4,
     LARK_CAP_POINTER_REV = 1u << 5,
     LARK_CAP_BRIDGE_ENDPOINT = 1u << 6,

@@ -329,7 +329,6 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
     }
     uint32_t caps = LARK_CAP_DRAG | LARK_CAP_POINTER_REV;
     if (BOARD_HAS_BATTERY) caps |= LARK_CAP_BATTERY | LARK_CAP_PANEL_SLEEP;
-    if (BOARD_HAS_HEAD_PADS) caps |= LARK_CAP_HEAD_PADS;
     if (media_audio_ready()) {
         caps |= LARK_CAP_BRIDGE_ENDPOINT | LARK_CAP_WAKE_WORD;
     }

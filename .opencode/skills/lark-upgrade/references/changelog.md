@@ -4,6 +4,30 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Strict Stored Voice Validation & Head-Pad Removal (`0.16.0`)
+
+### Affects
+- SQLite / Lark Server / Firmware (`0.16.0`)
+
+### Breaking Changes
+- **Removed `storedVoice` compat shim**: Legacy voice IDs (such as `bf_emma`) are no longer mapped silently to curated voices. Any unknown non-empty stored voice in `companions.voice` or TTS requests now fails validation with an error.
+- **Removed head-pad capability**: Removed `LARK_CAP_HEAD_PADS`, `BOARD_HAS_HEAD_PADS`, `capHeadPads`, and `head_pads` from firmware, binary protocol, and server.
+- **Firmware `0.16.0`**: Bumped `PROJECT_VER` to `0.16.0` on VoCat and BOX-3.
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, voice FROM companions WHERE voice != '' AND voice NOT IN ('af_heart','bm_fable','bf_lily','bm_george','af_bella','am_puck','bf_alice','bf_isabella');"` returns rows.
+- Terminals report firmware `< 0.16.0`.
+
+### Upgrade Steps
+1. Ensure all `companions.voice` rows use curated voices (`af_heart`, `bm_fable`, `bf_lily`, `bm_george`, `af_bella`, `am_puck`, `bf_alice`, `bf_isabella`).
+2. Run `./scripts/setup-host.sh --gpu-index 0`.
+3. Build and OTA firmware `0.16.0` (`vocat-33d8` → `vocat-2cac` → `box3-b324`).
+
+### Verification
+- `lark status` shows `ok=true` and all terminals online on `0.16.0`.
+
+---
+
 ## 2026-11-22 — Tap-to-Talk, Simplified Menu & Curated Voices
 
 ### Affects
