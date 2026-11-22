@@ -25,9 +25,38 @@ def put(path, content):
             Path(tmp.name).unlink(missing_ok=True)
 
 
-PRIMARY_MODEL = "opencode-go/deepseek-v4.1-flash#low"
-FALLBACK_MODEL = "opencode-go/glm-5.3-flash#low"
-DEEP_MODEL = "opencode-go/glm-5.3#high"
+PRIMARY_MODEL = "opencode/deepseek-v4.1-flash#low"
+FALLBACK_MODEL = "opencode/glm-5.3-flash#low"
+DEEP_MODEL = "opencode/glm-5.3#high"
+# Earlier releases defaulted to the opencode-go gateway. Rewrite only an
+# untouched generated config so installs keep deliberate model selections.
+LEGACY_MODELS = {
+    "lark": "opencode-go/deepseek-v4.1-flash#low",
+    "deep": "opencode-go/glm-5.3#high",
+}
+LEGACY_FALLBACK = "opencode-go/glm-5.3-flash#low"
+
+
+def migrate(path):
+    try:
+        current = json.loads(path.read_text())
+        agents = current["agents"]
+        plugins = current["plugins"]
+        fallback = next(p["options"]["fallback"] for p in plugins
+                        if isinstance(p, dict) and p.get("package") == package)
+    except (OSError, ValueError, KeyError, StopIteration, TypeError, AttributeError):
+        return
+    if any(agents.get(name, {}).get("model") != model for name, model in LEGACY_MODELS.items()):
+        return
+    if fallback != LEGACY_FALLBACK:
+        return
+    agents["lark"]["model"] = PRIMARY_MODEL
+    agents["deep"]["model"] = DEEP_MODEL
+    for plugin in plugins:
+        if isinstance(plugin, dict) and plugin.get("package") == package:
+            plugin["options"]["fallback"] = FALLBACK_MODEL
+    put(path, (json.dumps(current, indent=2) + "\n").encode())
+
 
 router = directory / package
 router.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -48,3 +77,5 @@ if not config.exists():
         "plugins": [{"package": package, "options": {"fallback": FALLBACK_MODEL}}],
     }
     put(config, (json.dumps(update, indent=2) + "\n").encode())
+else:
+    migrate(config)

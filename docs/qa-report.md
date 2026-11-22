@@ -1,5 +1,21 @@
 # Lark QA Report
 
+## 2026-11-23 — OpenCode Zen Gateway
+
+- **Models**: `lark` = `opencode/deepseek-v4.1-flash#low`, `deep` = `opencode/glm-5.3#high`, fallback = `opencode/glm-5.3-flash#low`. The `opencode` provider auth was already imported in `~/.local/share/lark/opencode` (`state/imported-provider-opencode`); a direct generation on every id succeeded.
+- **Benchmark** (20 interleaved warm chat turns on `127.0.0.1:49375`, same session per provider, `lark` agent + MCP):
+
+  | Provider | `session.step.started` p50 / p95 | First text delta p50 / p95 | Uncached input | Cache read | Reasoning |
+  | --- | --- | --- | --- | --- | --- |
+  | `opencode-go/deepseek-v4.1-flash#low` (before) | 1,087 / 1,448 ms | 1,087 / 1,448 ms | 13–130 | 3,456–3,712 | 0–2 |
+  | `opencode/deepseek-v4.1-flash#low` (after) | 1,058 / 1,523 ms | 1,066 / 1,523 ms | 18–139 | 3,456–3,712 | 0–3 |
+
+  Gateway latency on this host varies by ±300 ms between runs; a standalone 20-turn run measured 987 ms p50 on `opencode` and 978 ms on `opencode-go`. Zen is not slower, and the switch keeps one provider for primary, deep, and fallback.
+- **Tool accuracy**: 5/5 hard prompts passed a fresh-session rubric — timer (`lark.patch` `timer` set to 120 s), story (short story read), intercom (`lark.emit` to Mint), reasoning (correct Rayleigh-style answer), deep delegation (`subagent` to `deep` for a plan + story).
+- **Live turn bench**: `TestTurnBench` confirmed `opencode/deepseek-v4.1-flash (low)` for all 9 prompts (e2e chat 724–890 ms, timer 435–572 ms, reasoning 854–1,278 ms; speculative TTFT p50 1,228 ms).
+
+---
+
 Date: 2026-11-22  
 Target: `main` (`6f444c9`..`35ec120`), firmware `0.19.0` (`vocat-33d8`, `vocat-2cac`, `box3-b324`)
 

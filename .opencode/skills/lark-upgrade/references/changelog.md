@@ -4,6 +4,21 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-23 — OpenCode Zen Gateway
+
+### Affects
+- Config / Lark Server / Agents
+
+### Changes
+- **Models on `opencode` Zen**: `lark` now uses `opencode/deepseek-v4.1-flash#low`, the `deep` subagent `opencode/glm-5.3#high`, and the router fallback `opencode/glm-5.3-flash#low` (previously all `opencode-go/…`). `setup-opencode-config.py` rewrites only an untouched generated config; custom model choices are kept. The fallback plugin still requires the fallback on the same provider.
+- **Auth**: the dedicated instance imports `opencode` credentials once via `setup-host.sh` and marks `state/imported-provider-opencode`; no manual step when that marker exists.
+- **Measured** (20 interleaved warm chat turns each, same host): `session.step.started` p50/p95 **1,087/1,448 ms** on `opencode-go` vs **1,058/1,523 ms** on `opencode`; first text delta **1,087/1,448** vs **1,066/1,523 ms**; uncached input 18–139 tokens, cache read 3,456–3,712; 5/5 hard-prompt rubric (timer, story, intercom, reasoning, deep delegation).
+
+### Upgrade Steps
+1. Re-run `./scripts/setup-host.sh` (migrates the generated config and imports Zen auth if missing), or edit `opencode.jsonc` to the three ids above and restart `lark-opencode.service`.
+
+---
+
 ## 2026-11-22 — Webxdc Panel Upgrade, Old Panel Cleanup & History Tab
 
 ### Affects
