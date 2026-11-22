@@ -41,7 +41,7 @@ Apply entries chronologically from the installation's starting state to latest. 
 - **History/voice fixes**: Status updates pushed by the bot are no longer re-applied as commands (a history response could spawn another history request recursively; one live panel reached >700k updates). The panel correlates history responses by `sid`/`seq`, ignores replays, and applies the voice from the `set_voice` `ack`.
 
 ### Upgrade Steps
-1. Restart `lark.service`. On the next startup sync (or `/panel`) each verified contact gets the v4 panel named after the companion, and the old panel message is deleted for everyone (`dcPanelVersion` `"4"`). No DB migration is needed; stale `msgs_status_updates` rows disappear with the old message.
+1. Restart `lark.service`. On the next startup sync (or `/panel`) each verified contact gets the v4 panel named after the companion, and the old panel message is deleted for everyone (`dcPanelVersion` `"4.1"`; the patch bump re-sends the panel with the own-echo fix). No DB migration is needed; stale `msgs_status_updates` rows disappear with the old message.
 
 ---
 

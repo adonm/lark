@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	dcPanelVersion     = "4"
+	dcPanelVersion     = "4.1"
 	legacyPanelAppName = "Lark Control"
 	panelActiveTTL     = 5 * time.Minute
 	panelPushThrottle  = 1 * time.Second
