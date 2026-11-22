@@ -123,8 +123,8 @@ type endpointThresholds struct {
 }
 
 var tunedEndpoint = endpointThresholds{
-	probe: 600 * time.Millisecond, quick: 950 * time.Millisecond,
-	complete: 2100 * time.Millisecond, uncertain: 3300 * time.Millisecond, patient: 4500 * time.Millisecond,
+	probe: 450 * time.Millisecond, quick: 650 * time.Millisecond,
+	complete: 1100 * time.Millisecond, uncertain: 1700 * time.Millisecond, patient: 4500 * time.Millisecond,
 	storySpan: 8 * time.Second, minWords: 3, storyWords: 23,
 }
 
