@@ -55,8 +55,18 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 	if newSeq <= snapSeq {
 		t.Fatalf("resume welcome seq %d <= prior %d", newSeq, snapSeq)
 	}
-	vo := hw2r.until(t, hasProto(msgVoiceOwner, "vocat-2cac"))
-	hw2r.until(t, isDisplay)
+	var vo wsFrame
+	var gotDisplay, gotVO bool
+	for !gotDisplay || !gotVO {
+		f := hw2r.read(t)
+		if isDisplay(f) {
+			gotDisplay = true
+		}
+		if hasProto(msgVoiceOwner, "vocat-2cac")(f) {
+			vo = f
+			gotVO = true
+		}
+	}
 	voSeq := binary.LittleEndian.Uint32(framePayload(vo)[0:4])
 	if voSeq <= newSeq {
 		t.Fatalf("snapshot VOICE_OWNER seq %d <= welcome seq %d", voSeq, newSeq)

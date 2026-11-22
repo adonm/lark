@@ -271,7 +271,7 @@ func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) 
 				}
 				out[key], err = b.patchTerminal(ctx, id, edit)
 			case "timer":
-				if id == "" {
+				if id == "" && strings.TrimSpace(str(edit["companion_id"])) == "" {
 					return nil, fieldError("companion_id", "required; pass the companion ID from the turn header")
 				}
 				out[key], err = b.patchTimer(ctx, id, edit)
