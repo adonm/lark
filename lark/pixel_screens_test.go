@@ -81,10 +81,6 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
 		{Name: "clockwork_owl", Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
 	}
-	games := []pixelGame{
-		{Name: "monsters", Title: "Monsters", Kind: "game", Saved: true},
-		{Name: "fireworks", Title: "Fireworks", Kind: "game", Saved: false},
-	}
 	memories := []pixelMemoryItem{
 		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed."}`},
 		{Section: "Game saves", Key: "monsters", Value: `{"Mint":4,"Cake":0}`},
@@ -128,7 +124,6 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 			{"volume", volImg},
 			{"stats", statsImg},
 			{"books", renderPixelBooksList(spec, books, 0, th)},
-			{"games", renderPixelGamesList(spec, games, 0, th)},
 			{"reader", renderPixelReader(spec, "The Lost Island", "Once upon a time in a faraway land.", 0, 0, th)},
 			{"memories", renderPixelMemoriesList(spec, memories, titles, 0, th)},
 			{"memory-detail", renderPixelMemoryDetail(spec, memories[1], titles, 0, 0, th)},
@@ -189,11 +184,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		{Name: "lost_island", Title: "The Lost Island", Page: 3, Total: 7, Color: pxMint},
 		{Name: "clockwork_owl", Title: "The Clockwork Owl", Page: 1, Total: 5, Color: pxPeach},
 		{Name: "moonlight_meadow", Title: "Moonlight Meadow", Page: 4, Total: 4, Color: pxSky},
-	}
-	games := []pixelGame{
-		{Name: "monsters", Title: "Monsters", Kind: "game", Saved: true},
-		{Name: "fireworks", Title: "Fireworks", Kind: "game", Saved: false},
-		{Name: "picture_math", Title: "Picture Math", Kind: "game", Saved: true},
 	}
 	lostIslandText := "Once upon a time in a faraway land, there were people who always told tales about this island. All of them thought it was true, so they tried hunting for the Lost Island."
 	memories := []pixelMemoryItem{
@@ -269,7 +259,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		statsImg, _, _ := renderPixelStatsWithHits(spec, []menuRow{{"Companion", "Greg"}, {"Battery", "88%"}, {"Voice", "Heart"}}, th)
 		save(spec.name+"-stats", statsImg)
 		save(spec.name+"-books-list", renderPixelBooksList(spec, books, 0, th))
-		save(spec.name+"-games-list", renderPixelGamesList(spec, games, 0, th))
 		save(spec.name+"-reader", renderPixelReader(spec, "The Lost Island", lostIslandText, 0, 0, th))
 		save(spec.name+"-memories-list", renderPixelMemoriesList(spec, memories, titles, 0, th))
 		save(spec.name+"-memories-detail", renderPixelMemoryDetail(spec, memories[2], titles, 0, 0, th))
@@ -283,20 +272,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		}
 		save(spec.name+"-pair-qr", pairImg)
 
-		// One sample per app template.
-		geom := roundScreen
-		if !spec.round {
-			geom = screenGeometry{320, 240, "rect"}
-		}
-		d := &wsTerminal{kind: "hardware", screen: geom, client: &wsClient{kind: "hardware"}}
-		for _, tpl := range templateNames() {
-			var appSpec savedApp
-			_ = appSpec.setTemplate(tpl, map[string]any{})
-			if _, views, err := initApp(appSpec, []appPlayer{{id: "sample"}}, nil, []*wsTerminal{d}, nil, nil); err == nil && len(views) > 0 {
-				var enc frameEncoder
-				save(spec.name+"-tpl-"+tpl, enc.rgbaFromFB(views[0].fb, image.Rect(0, 0, geom.width, geom.height), geom.width))
-			}
-		}
 		// Offline sample.
 		offImg := renderPixelListWithHitsImg(spec, "Offline", th)
 		save(spec.name+"-offline", offImg)

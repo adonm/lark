@@ -1126,10 +1126,7 @@ func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
 	}
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-xdc", "greg")
-	if _, err := b.runApp(t.Context(), object{"companions": "greg", "kind": "book", "title": "Lost Island", "text": "Page one.\n\nPage two.", "save_as": "lost_island"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.runApp(t.Context(), object{"companions": "greg", "exit": true}); err != nil {
+	if err := b.saveApp(t.Context(), savedApp{Name: "lost_island", Title: "Lost Island", Kind: "book", Data: json.RawMessage(`{"text":"Page one.\n\nPage two."}`)}); err != nil {
 		t.Fatal(err)
 	}
 

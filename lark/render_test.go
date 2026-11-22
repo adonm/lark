@@ -148,7 +148,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 }
 
 func TestBox3HelloAndRawAppTaps(t *testing.T) {
-	b, base := wsHarness(t, nil)
+	_, base := wsHarness(t, nil)
 	box := testConnectWS(t, base, "unit", false)
 	round := testConnectWS(t, base, "unit", false)
 	const boxID, roundID = "box3-test", "vocat-round"
@@ -169,17 +169,6 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 		boxStatus["ws_connected"] != true {
 		t.Fatal(boxStatus)
 	}
-
-	code := `function init(){ return {hits:"untouched"} }
-	function render(s,p,g){ g.clear("#123456"); g.button("corner", 4, 4, 20, 20, "", "#FF0000"); g.text(20, 40, s.hits); }
-	function onTap(s,p,id,x,y){ s.hits=id+":"+x+","+y; }`
-	toolTest(t, base, "app", object{"companions": []string{"new-companion", "cake"}, "code": code}, false)
-	waitSVG(t, b.ws, boxID, "untouched")
-	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); !r.In(image.Rect(0, 0, 320, 240)) {
-		t.Fatalf("BOX-3 app sent an out-of-bounds frame: %v", r)
-	}
-	box.tap(t, 12, 15, 0)
-	waitSVG(t, b.ws, boxID, "corner:12,15")
 }
 
 func TestFrameCodecsAndSmartSelector(t *testing.T) {

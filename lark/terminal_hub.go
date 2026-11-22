@@ -77,17 +77,11 @@ type wsTerminal struct {
 	telemetry   wsStatus
 	frame       *diagFrame
 	svg         svgScreen
-	grade       atomic.Uint32 // App workers read the board's grade without the hub lock.
-	displayApp  *appInstance
+	grade       atomic.Uint32
 	encoder     frameEncoder
 	renderGen   uint64
 	rendering   bool
 	renderNext  *renderRequest
-	app         *appInstance
-	appView     svgScreen
-	appGen      uint64
-
-	lastAppError object
 
 	scene     sceneView
 	view      *sceneView
@@ -430,7 +424,6 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 	}
 	if old := h.terminals[d.key]; old != nil {
 		old.client.cancel()
-		h.dropApp(old)
 		old.recording.clear()
 		h.cancelTurn(old, "reconnect")
 		h.stopPlayback(old, true)
@@ -521,7 +514,6 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 
 	if old := h.terminals[d.key]; old != nil {
 		old.client.cancel()
-		h.dropApp(old)
 		old.recording.clear()
 		h.cancelTurn(old, "reconnect")
 		h.stopPlayback(old, true)
@@ -628,7 +620,6 @@ type renderRequest struct {
 	view         sceneView
 	companion    *companionState
 	pose         companionPose
-	app          *appInstance
 	screen       svgScreen
 	grade        gradeKey
 	drawer       string
@@ -686,7 +677,7 @@ func (h *wsHub) openBook(d *wsTerminal, book savedApp) {
 
 func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	switch d.drawer {
-	case drawerBooks, drawerGames, drawerMemories, drawerPair, drawerUnpair:
+	case drawerBooks, drawerMemories, drawerPair, drawerUnpair:
 	default:
 		d.menuData = nil
 	}
@@ -729,7 +720,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		r.readingBook = d.readingBook
 		r.readingPage = d.readingPage
 		switch d.drawer {
-		case drawerBooks, drawerGames, drawerMemories, drawerPair, drawerUnpair:
+		case drawerBooks, drawerMemories, drawerPair, drawerUnpair:
 			r.view.menu = d.menuData
 		case drawerIntercom:
 			var choices []menuPeer
@@ -757,9 +748,6 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		r.drawer = ""
 	case d.card != nil && (mood == "idle" || mood == "speaking" || mood != "sleepy" && d.card.duringTurn):
 		r.view = *d.card
-	case d.app != nil && mood != "sleepy":
-		r.app, r.screen = d.app, d.appView
-		r.view.title = d.app.spec.Title
 	case d.view != nil && mood != "sleepy":
 		r.view = *d.view
 	default:
@@ -768,7 +756,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	if card := r.view.intercom; card != nil {
 		r.view = card.scene()
 	}
-	if r.drawer == "" && r.view.title == "" && r.app == nil && (mood == "thinking" || mood == "speaking") {
+	if r.drawer == "" && r.view.title == "" && (mood == "thinking" || mood == "speaking") {
 		r.view.actions = maps.Clone(r.view.actions)
 		r.view.stopControl(pose.stopTaps)
 	}
@@ -850,7 +838,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 
 		screen := r.screen
 		var err error
-		if r.app == nil {
+		if true {
 			spec := pixelSpecForGeometry(geometry)
 			bg, poses, th := h.companionAssets(r.companion)
 			var img *image.RGBA
@@ -897,7 +885,16 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				}
 			}
 			if err == nil && img != nil {
-				screen, err = rgbaToSVGScreenCompat(img, hits)
+				b := img.Bounds()
+				w, h := b.Dx(), b.Dy()
+				fb := make([]uint16, w*h)
+				for y := range h {
+					for x := range w {
+						c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
+						fb[y*w+x] = pack565(c.R, c.G, c.B)
+					}
+				}
+				screen = svgScreen{fb: fb, hits: hits}
 				screen.grade = r.grade
 				var srcParts []string
 				if r.drawer != "" {
@@ -938,9 +935,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 						}
 						for _, g := range r.view.menu.games {
 							srcParts = append(srcParts, g.label)
-						}
-						for _, g := range r.view.menu.pixelGames {
-							srcParts = append(srcParts, g.Title)
 						}
 						for _, bk := range r.view.menu.books {
 							srcParts = append(srcParts, bk.Title)
@@ -983,7 +977,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				if !rect.Empty() {
 					frameCodecs := codecs
 					fullScene := prev.fb == nil || r.full || screen.grade != prev.grade
-					if !fullScene || r.drawer != "" || r.app != nil || r.view.title != "" || r.view.heading != "" || r.view.text != "" {
+					if !fullScene || r.drawer != "" || r.view.title != "" || r.view.heading != "" || r.view.text != "" {
 						frameCodecs &^= codecBitJPEG
 					}
 					native = d.encoder.encodeWithCodecs(screen.fb, nil, rect, rev, geometry.width, frameCodecs)
@@ -1001,7 +995,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			log.Printf("Lark screen: %v", err)
 			continue
 		}
-		d.scene, d.displayApp, d.svg = r.view, r.app, screen
+		d.scene, d.svg = r.view, screen
 		h.sig.notify()
 		if native.data != nil {
 			d.rev = rev
@@ -1093,7 +1087,6 @@ func (h *wsHub) animate(ctx context.Context) {
 					h.render(d, now, false)
 				}
 			}
-			h.tickApps(now)
 			if now.Sub(sincePeers) > 15*time.Second {
 				h.broadcastPeers()
 				sincePeers = now

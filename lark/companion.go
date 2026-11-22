@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"regexp"
 	"strings"
@@ -534,6 +535,12 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 		}
 	}
 	return c, nil
+}
+
+func withCompanion(args object, id string) object {
+	out := maps.Clone(args)
+	out["companion_id"] = id
+	return out
 }
 
 func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {

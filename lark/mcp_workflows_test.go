@@ -27,7 +27,6 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 		t.Fatal("a stale callback claimed the rescheduled timer")
 	}
 	patchTimerTest(t, base, object{"companion_id": "another-cat", "id": timerID, "op": "update", "label": "Wrong owner"}, true)
-	patchTimerTest(t, base, object{"companion_id": id, "id": timerID, "op": "update", "app": "missing"}, true)
 	read := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
 	if len(read) != 1 || read[0].(object)["label"] != "Later" || read[0].(object)["created_at"] != timer["created_at"] {
 		t.Fatal(read)

@@ -111,13 +111,8 @@ func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
 	}
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0001", id)
-	toolTest(t, base, "app", object{"companions": id, "code": `function render(s,p,g){g.text(20,20,"Party")}`}, false)
 	testRequest(t, "POST", base+"/api/companions/"+id+"/reset", "unit", object{}, 200)
 	waitSVG(t, b.ws, "vocat-0001", "home")
-	s := stateMe(t, base, id)
-	if s["active_app"] != nil {
-		t.Fatal("reset did not close app", s)
-	}
 	if sid, err := b.oc.get(id); err != nil || sid != "" {
 		t.Fatal("reset did not clear active session mapping", sid, err)
 	}

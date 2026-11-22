@@ -29,7 +29,6 @@ type savedTimer struct {
 	Chime     string    `json:"chime"`
 	WakeAgent bool      `json:"wake_agent"`
 	Notes     []string  `json:"notes,omitempty"`
-	AppName   string    `json:"app,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	FireAt    time.Time `json:"fire_at"`
 }
@@ -50,7 +49,7 @@ type timerManager struct {
 
 type timerHandle struct{ timer *time.Timer }
 
-const timerColumns = "id,companion_id,label,say,chime,wake_agent,created_at,fire_at,notes_json,app_name"
+const timerColumns = "id,companion_id,label,say,chime,wake_agent,created_at,fire_at,notes_json"
 
 func newTimerManager(b *larkServer) *timerManager {
 	ctx, cancel := context.WithCancel(b.root)
@@ -61,7 +60,7 @@ func scanTimer(r rowScanner) (savedTimer, error) {
 	var t savedTimer
 	var wake int
 	var created, fire, notes string
-	err := r.Scan(&t.ID, &t.CompanionID, &t.Label, &t.Say, &t.Chime, &wake, &created, &fire, &notes, &t.AppName)
+	err := r.Scan(&t.ID, &t.CompanionID, &t.Label, &t.Say, &t.Chime, &wake, &created, &fire, &notes)
 	if err != nil {
 		return t, err
 	}
@@ -109,7 +108,7 @@ func (t savedTimer) state(now time.Time) object {
 		notes = []string{}
 	}
 	return object{"id": t.ID, "companion_id": t.CompanionID, "label": t.Label, "say": t.Say, "notes": notes,
-		"app": t.AppName, "wake_agent": t.WakeAgent, "created_at": t.CreatedAt.In(loc), "chime": t.Chime,
+		"wake_agent": t.WakeAgent, "created_at": t.CreatedAt.In(loc), "chime": t.Chime,
 		"fire_at": t.FireAt.In(loc), "fire_at_local": formatLocalTimeIn(t.FireAt, loc),
 		"remaining_s": (remaining + time.Second - 1) / time.Second}
 }
@@ -237,13 +236,6 @@ func editTimer(t savedTimer, args object, now time.Time, update bool) (savedTime
 			}
 		}
 	}
-	if raw, present := args["app"]; present {
-		var ok bool
-		t.AppName, ok = raw.(string)
-		if !ok || (!update || t.AppName != "") && !slugRE.MatchString(t.AppName) {
-			return t, fieldError("timer.app", "expected a saved app name")
-		}
-	}
 	return t, nil
 }
 
@@ -279,18 +271,9 @@ func (m *timerManager) update(ctx context.Context, id, companion string, args ob
 	if t.WakeAgent && m.fromTimerTurn[strings.ToLower(t.CompanionID)] != 0 {
 		return t, problem(409, "Cannot schedule a wake-agent timer during a timer-triggered turn")
 	}
-	if t.AppName != "" {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM apps WHERE name=?)", t.AppName).Scan(&exists); err != nil {
-			return t, unavailable
-		}
-		if !exists {
-			return t, problem(404, "App not found")
-		}
-	}
 	notes, _ := json.Marshal(t.Notes)
-	if _, err := tx.ExecContext(ctx, `UPDATE timers SET label=?,say=?,chime=?,wake_agent=?,fire_at=?,notes_json=?,app_name=? WHERE id=?`,
-		t.Label, t.Say, t.Chime, t.WakeAgent, t.FireAt.Format(time.RFC3339Nano), string(notes), t.AppName, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE timers SET label=?,say=?,chime=?,wake_agent=?,fire_at=?,notes_json=? WHERE id=?`,
+		t.Label, t.Say, t.Chime, t.WakeAgent, t.FireAt.Format(time.RFC3339Nano), string(notes), id); err != nil {
 		return t, unavailable
 	}
 	if err := tx.Commit(); err != nil {
@@ -314,10 +297,10 @@ func (m *timerManager) set(ctx context.Context, t savedTimer) error {
 	}
 	notes, _ := json.Marshal(t.Notes)
 	result, err := m.b.db.ExecContext(ctx, `INSERT INTO timers (`+timerColumns+`)
-		SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE companion_id=?) < 8
-		AND (SELECT count(*) FROM timers) < 32 AND (?='' OR EXISTS(SELECT 1 FROM apps WHERE name=?))`,
+		SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE companion_id=?) < 8
+		AND (SELECT count(*) FROM timers) < 32`,
 		t.ID, t.CompanionID, t.Label, t.Say, t.Chime, t.WakeAgent, t.CreatedAt.Format(time.RFC3339Nano), t.FireAt.Format(time.RFC3339Nano),
-		string(notes), t.AppName, t.CompanionID, t.AppName, t.AppName)
+		string(notes), t.CompanionID)
 	if err != nil {
 		return problem(502, "Cannot save timer")
 	}
@@ -326,11 +309,6 @@ func (m *timerManager) set(ctx context.Context, t savedTimer) error {
 		return problem(502, "Cannot save timer")
 	}
 	if n == 0 {
-		if t.AppName != "" {
-			if _, err := m.b.loadApp(ctx, t.AppName); err != nil {
-				return err
-			}
-		}
 		return problem(409, "Timer limit reached (8 per device, 32 total)")
 	}
 	m.armLocked(t.ID, time.Until(t.FireAt))
@@ -494,13 +472,6 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	}
 	d := h.voiceOwner(key)
 	if d != nil {
-		if t.AppName != "" {
-			defer func() {
-				if _, err := b.runSavedApp(ctx, t.CompanionID, t.AppName, nil); err != nil && ctx.Err() == nil {
-					log.Printf("Lark could not launch timer app %q: %v", t.AppName, err)
-				}
-			}()
-		}
 		if t.WakeAgent {
 			completed := make(chan struct{})
 			started := h.startTurn(d, now, true, "timer", func(turnCtx context.Context, id uint64) {

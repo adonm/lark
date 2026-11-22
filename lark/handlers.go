@@ -379,9 +379,7 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 		if list, err := b.timers.list(ctx, companionID); err == nil {
 			for _, tm := range list {
 				rem := max(0, int(tm.FireAt.Sub(now).Round(time.Second)/time.Second))
-				if tm.AppName != "" {
-					timerParts = append(timerParts, fmt.Sprintf("%s(%s,%ds)", tm.ID, tm.AppName, rem))
-				} else if tm.Label != "" {
+				if tm.Label != "" {
 					timerParts = append(timerParts, fmt.Sprintf("%s(%q,%ds)", tm.ID, tm.Label, rem))
 				} else {
 					timerParts = append(timerParts, fmt.Sprintf("%s(%ds)", tm.ID, rem))

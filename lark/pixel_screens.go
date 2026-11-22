@@ -30,7 +30,6 @@ type pixelMenuItem struct {
 var pixelHomeMenuItems = []pixelMenuItem{
 	{id: "talk", label: "Talk to…", icon: "talk", accent: pxPeach},
 	{id: "books", label: "Books", icon: "books", accent: pxMint},
-	{id: "games", label: "Games", icon: "games", accent: pxSky},
 	{id: "memories", label: "Memories", icon: "memories", accent: pxDanger},
 	{id: "voice", label: "Voice", icon: "voice", accent: pxMint},
 	{id: "more", label: "More", icon: "stats", accent: pxSky},
@@ -49,13 +48,6 @@ type pixelBook struct {
 	Page  int
 	Total int
 	Color imagecolor.RGBA
-}
-
-type pixelGame struct {
-	Name  string
-	Title string
-	Kind  string
-	Saved bool
 }
 
 type pixelMemoryItem struct {
@@ -367,65 +359,6 @@ func renderPixelBooksList(spec pixelDisplaySpec, books []pixelBook, page int, th
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelGamesList(spec pixelDisplaySpec, games []pixelGame, page int, th pixelTheme) *image.RGBA {
-	if th.border.A == 0 {
-		th = defaultPixelTheme()
-	}
-	c := newPixelCanvas(spec.logicalW, spec.logicalH)
-	darkenBackground(c, th.bg)
-	s := spec.artScale
-	var texts []pixelTextOp
-
-	titleH := 12
-	titleRect := image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH)
-	texts = addCenteredText(texts, physicalRect(titleRect, s), "Games", dogica.Bold, spec.titleTextScale, th.accent)
-
-	perPage := 2
-	if !spec.round {
-		perPage = 3
-	}
-	navH := pixelNavHeight(spec)
-	totalPages := max(1, (len(games)+perPage-1)/perPage)
-	page = max(0, min(page, totalPages-1))
-
-	listTop := spec.safe.Min.Y + titleH + 2
-	listBottom := spec.safe.Max.Y - navH - 3
-	gapY := 3
-	rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
-
-	start := page * perPage
-	for i := range perPage {
-		idx := start + i
-		if idx >= len(games) {
-			break
-		}
-		gm := games[idx]
-		ry := listTop + i*(rowH+gapY)
-		rx := spec.safe.Min.X
-		rw := spec.safe.Dx()
-		c.panel(rx, ry, rw, rowH, pxTileBG, th.border)
-
-		c.blitSprite(rx+4, ry+(rowH-12)/2, pxMenuSprites["games"], pxIconPalette, 1)
-
-		badgeW := 0
-		if gm.Saved {
-			badgeW = 8
-			bx, by := rx+rw-9, ry+(rowH-4)/2
-			c.rect(bx, by, 4, 4, th.accent2)
-		}
-		physText := physicalRect(image.Rect(rx+19, ry+2, rx+rw-4-badgeW, ry+rowH-2), s)
-		title := truncateEllipsisPx(gm.Title, dogica.Bold, spec.bodyTextScale, physText.Dx())
-		thPx := dogica.Bold.Ascent * spec.bodyTextScale
-		texts = append(texts, pixelTextOp{
-			x: physText.Min.X, y: physText.Min.Y + (physText.Dy()-thPx)/2,
-			text: title, font: dogica.Bold, scale: spec.bodyTextScale, color: pxInk,
-		})
-	}
-
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
-	return finishPixelScreen(c, spec, texts)
-}
-
 func wrapTitleLines(title string, f dogica.Font, scale, maxW, maxLines int) []string {
 	lines := wrapTextPx(title, f, scale, maxW)
 	if len(lines) <= maxLines {
@@ -483,7 +416,7 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 
 func humanizeKey(key string) string {
 	k := strings.TrimSpace(key)
-	for _, p := range []string{"story_", "book_", "reading:", "reading_", "game_", "app:"} {
+	for _, p := range []string{"story_", "book_", "reading:", "reading_"} {
 		if strings.HasPrefix(k, p) {
 			k = strings.TrimPrefix(k, p)
 			break
@@ -510,7 +443,7 @@ func formatMemoryTitle(section, key string, titles map[string]string) string {
 		if t := strings.TrimSpace(titles[key]); t != "" {
 			return t
 		}
-		trimmed := strings.TrimPrefix(strings.TrimPrefix(key, "reading:"), "app:")
+		trimmed := strings.TrimPrefix(key, "reading:")
 		if t := strings.TrimSpace(titles[trimmed]); t != "" {
 			return t
 		}

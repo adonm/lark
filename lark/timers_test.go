@@ -104,35 +104,6 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	}
 }
 
-func TestTimerLaunchesSavedApp(t *testing.T) {
-	b, base := wsHarness(t, func(b *larkServer, _ string) {
-		b.timers = newTimerManager(b)
-		t.Cleanup(b.timers.close)
-	})
-	const id, name = "cake", "stretch"
-	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, "vocat-0002", "Cake")
-	set := object{"op": "set", "companion_id": id, "in_seconds": 1, "app": name}
-	if out := patchTimerTest(t, base, set, true); !strings.Contains(str(out["error"]), "App not found") {
-		t.Fatal(out)
-	}
-	if err := b.saveApp(t.Context(), savedApp{Name: name, Title: "Stretch", Kind: "game",
-		Code: `function render(s,p,g){g.text(20,20,"Stretch now");}`}); err != nil {
-		t.Fatal(err)
-	}
-	if out := patchTimerTest(t, base, set, false); out["app"] != name {
-		t.Fatal(out)
-	}
-	dev.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
-	})
-	waitSVG(t, b.ws, "vocat-0002", "Stretch now")
-	if a := stateMe(t, base, id)["active_app"].(object); a["name"] != name {
-		t.Fatal(a)
-	}
-}
-
 func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lark.db")
 	db := testDB(t, path)

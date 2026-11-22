@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var stateSlices = []string{"companions", "terminals", "apps", "timers", "memory", "messages", "diagnostics"}
+var stateSlices = []string{"companions", "terminals", "timers", "memory", "messages", "diagnostics"}
 
 func stringList(raw any, key string) ([]string, error) {
 	items, ok := raw.([]any)
@@ -31,26 +31,9 @@ func (b *larkServer) mcpState(ctx context.Context, args object) (object, error) 
 	loc := b.location()
 	now := time.Now().In(loc)
 	id := strings.ToLower(str(args["companion_id"]))
-	include := stateSlices[:4]
+	include := stateSlices[:3]
 	var err error
 	out := object{"now": object{"local": formatLocalTimeIn(now, loc), "rfc3339": now.Format(time.RFC3339), "unix_ms": now.UnixMilli()}}
-	if raw, exists := args["app_name"]; exists {
-		name, ok := raw.(string)
-		if !ok {
-			return nil, fieldError("app_name", "expected a string")
-		}
-		if name != "" {
-			name, err = normalizeAppName(name, "app_name")
-			if err != nil {
-				return nil, err
-			}
-			out["app"], err = b.savedAppState(ctx, name)
-			if err != nil {
-				return nil, err
-			}
-			include = nil
-		}
-	}
 	if raw, ok := args["include"]; ok {
 		include, err = stringList(raw, "include")
 		if err != nil {
@@ -72,12 +55,6 @@ func (b *larkServer) mcpState(ctx context.Context, args object) (object, error) 
 			continue
 		}
 		switch key {
-		case "apps":
-			code, flagErr := companionBool(args, "include_code", false)
-			if flagErr != nil {
-				return nil, flagErr
-			}
-			out[key], err = b.appState(ctx, code)
 		case "timers":
 			out[key], err = b.timerState(ctx, id, now)
 		case "memory":
@@ -162,33 +139,18 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 				"online":         entry["online"],
 				"dormant":        entry["dormant"],
 			}
-			var activeApp any
 			termList := []object{}
 			if b.ws != nil {
 				b.ws.mu.Lock()
 				compTerminals := b.ws.terminalsFor(c.ID)
 				best := b.ws.voiceOwner(c.ID)
-				var lastAppErr object
-				var activeAppState any
 				mode, sleeping := "offline", false
 				for _, t := range compTerminals {
-					if t.lastAppError != nil && lastAppErr == nil {
-						lastAppErr = t.lastAppError
-					}
-					if t.app != nil && activeApp == nil {
-						activeApp = b.ws.activeAppState(t.app)
-						activeAppState = t.app.snapshot
-					}
 					if t == best {
 						mode, sleeping = t.pose.mood, t.asleep
 					}
 				}
 				b.ws.mu.Unlock()
-				compObj["last_app_error"] = lastAppErr
-				compObj["active_app"] = activeApp
-				if activeAppState != nil {
-					compObj["active_app_state"] = activeAppState
-				}
 				compObj["mode"] = mode
 				compObj["sleeping"] = sleeping
 			}
@@ -252,10 +214,9 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 				}
 			}
 			out["me"] = object{
-				"companion":  compObj,
-				"terminals":  termList,
-				"active_app": activeApp,
-				"contacts":   contacts,
+				"companion": compObj,
+				"terminals": termList,
+				"contacts":  contacts,
 			}
 		}
 	}
@@ -283,7 +244,7 @@ func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) 
 	id := strings.ToLower(str(args["companion_id"]))
 	out := object{"ok": true}
 	// Apply appearance before changing sleep, and leave sleep alone on appearance-only edits.
-	for _, key := range []string{"companion", "terminal", "memory", "timer", "apps"} {
+	for _, key := range []string{"companion", "terminal", "memory", "timer"} {
 		raw, ok := args[key]
 		if !ok {
 			continue
@@ -303,8 +264,6 @@ func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) 
 				out[key], err = b.patchTerminal(ctx, id, edit)
 			case "timer":
 				out[key], err = b.patchTimer(ctx, id, edit)
-			case "apps":
-				out[key], err = b.patchSavedApps(ctx, edit)
 			}
 		}
 		if err != nil {
@@ -312,7 +271,7 @@ func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) 
 		}
 	}
 	if len(out) == 1 {
-		return nil, problem(400, "Expected a terminal, companion, memory, timer, or saved app patch")
+		return nil, problem(400, "Expected a terminal, companion, memory, or timer patch")
 	}
 	return out, nil
 }

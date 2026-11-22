@@ -38,7 +38,10 @@ const portraitCenterY = 162
 var portraitPoses = [...]string{"idle", "blink", "talk", "think"}
 var portraitIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var portraitSchema = closedObject(object{
-	"prompt": uiString(600), "form": uiString(160), "recolor": uiString(200), "edit": object{"type": "boolean"},
+	"prompt":  object{"type": "string", "maxLength": 600},
+	"form":    object{"type": "string", "maxLength": 160},
+	"recolor": object{"type": "string", "maxLength": 200},
+	"edit":    object{"type": "boolean"},
 }, "prompt")
 
 type portraitSpec struct {
@@ -504,8 +507,28 @@ func (b *larkServer) preparePortrait(ctx context.Context, companionID string, ar
 	return b.portraits.prepare(ctx, current, raw)
 }
 
+func readPortraitSpec(raw any) (portraitSpec, error) {
+	var spec portraitSpec
+	obj, ok := raw.(object)
+	if !ok {
+		return spec, fieldError("companion.portrait", "expected an object")
+	}
+	for k := range obj {
+		switch k {
+		case "prompt", "form", "recolor", "edit":
+		default:
+			return spec, fieldError("companion.portrait."+k, "unsupported field")
+		}
+	}
+	data, err := json.Marshal(obj)
+	if err == nil {
+		err = json.Unmarshal(data, &spec)
+	}
+	return spec, err
+}
+
 func (p *portraitStore) prepare(ctx context.Context, current companionState, raw any) (*pendingPortrait, error) {
-	spec, err := readUIValue[portraitSpec](raw, portraitSchema, "companion.portrait")
+	spec, err := readPortraitSpec(raw)
 	if err != nil {
 		return nil, err
 	}

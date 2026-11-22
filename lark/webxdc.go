@@ -221,20 +221,24 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 	switch cmd.Op {
 	case "sync":
 		s.pushPanelState(ctx, accID, msgID, companionID, true)
-	case "open_book", "play_game":
+	case "open_book":
 		if strings.TrimSpace(cmd.App) == "" {
 			s.pushPanelAck(accID, msgID, cmd.Op, false, "Missing app name.")
 			return
 		}
-		if _, err := s.b.runSavedApp(ctx, companionID, cmd.App, nil); err != nil {
-			s.pushPanelAck(accID, msgID, cmd.Op, false, err.Error())
+		a, err := s.b.loadApp(ctx, cmd.App)
+		if err != nil || a.Kind != "book" {
+			s.pushPanelAck(accID, msgID, cmd.Op, false, "Book not found.")
 			return
 		}
-		label := "Opened on device."
-		if cmd.Op == "play_game" {
-			label = "Started on device."
+		s.b.ws.mu.Lock()
+		for _, d := range s.b.ws.terminalsFor(companionID) {
+			if s.b.ws.active(d) {
+				s.b.ws.openBook(d, a)
+			}
 		}
-		s.pushPanelAck(accID, msgID, cmd.Op, true, label)
+		s.b.ws.mu.Unlock()
+		s.pushPanelAck(accID, msgID, cmd.Op, true, "Opened on device.")
 		s.pushPanelState(ctx, accID, msgID, companionID, false)
 	case "set_voice":
 		if !s.b.voices.allowed(cmd.Voice) {

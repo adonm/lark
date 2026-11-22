@@ -51,7 +51,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	for _, tool := range catalog.Result.Tools {
 		names = append(names, tool.Name)
 	}
-	if !slices.Equal(names, []string{"state", "patch", "app", "emit"}) {
+	if !slices.Equal(names, []string{"state", "patch", "emit"}) {
 		t.Fatal("unexpected live MCP catalog", names)
 	}
 	t.Logf("MCP catalog: %v", names)
@@ -133,7 +133,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"state": "active_app", "app": "hit_ids", "emit": "played", "patch": "sleeping"}
+	want := map[string]string{"state": "terminals", "emit": "played", "patch": "sleeping"}
 	attempted := map[string]bool{}
 	var lastResult string
 	for _, msg := range msgs {

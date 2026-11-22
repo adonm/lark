@@ -20,6 +20,11 @@ import (
 	"time"
 )
 
+func (s *testWS) helloV2(t *testing.T, id, cat string) wsFrame {
+	t.Helper()
+	return s.helloHardware(t, id, cat, capBattery|capDrag)
+}
+
 var (
 	testTermMu    sync.Mutex
 	testTermAddrs = map[string]string{}

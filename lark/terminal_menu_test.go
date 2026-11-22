@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -80,14 +81,14 @@ func TestWSMainMenuPages(t *testing.T) {
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "cake")
 	bindMenu(c, b.ws, "vocat-0001")
-	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-books", "menu-games", "menu-next")
-	page2 := tapMenu(t, c, "menu-next", "menu-memories", "menu-prev", "menu-voice", "menu-more")
+	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-books", "menu-memories", "menu-next")
+	page2 := tapMenu(t, c, "menu-next", "menu-voice", "menu-more", "menu-prev")
 	for _, check := range []struct {
 		svg  string
 		omit []string
 	}{
-		{page1, []string{"menu-prev", "menu-memories", "menu-voice", "menu-more"}},
-		{page2, []string{"menu-next", "menu-intercom", "menu-books", "menu-games"}},
+		{page1, []string{"menu-prev", "menu-voice", "menu-more", "menu-games"}},
+		{page2, []string{"menu-next", "menu-intercom", "menu-books", "menu-memories", "menu-games"}},
 	} {
 		for _, id := range check.omit {
 			if strings.Contains(check.svg, id) {
@@ -97,49 +98,6 @@ func TestWSMainMenuPages(t *testing.T) {
 	}
 	tapMenu(t, c, "menu-prev", "menu-intercom", "menu-next")
 	tapMenu(t, c, "menu-back", `data-id="listen"`)
-}
-
-func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
-	b, base := wsHarness(t, nil)
-	const id = "lark-games"
-	board := testConnectWS(t, base, "unit", false)
-	board.hello(t, id, "Cake")
-	bindMenu(board, b.ws, id)
-	web := board
-	tapMenu(t, web, "menu", "menu-games")
-	tapMenu(t, web, "menu-games", "No saved games yet", "menu-back")
-	tapMenu(t, web, "menu-back", "menu-games")
-
-	save := func(i int) string {
-		t.Helper()
-		name := fmt.Sprintf("game-%d", i)
-		err := b.saveApp(t.Context(), savedApp{Name: name, Title: fmt.Sprintf("Arcade %d", i), Kind: "game", Code: `
-			function init() { return "Ready to play"; }
-			function render(state, p, g) {
-				g.text(20, 20, state);
-			}
-			function onTap() { return "Playing on board"; }`})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return name
-	}
-	for i := range 3 {
-		save(i)
-	}
-	tapMenu(t, web, "menu-games", "Arcade 0", "Arcade 1", "menu-next")
-	name := save(3) // Paging refreshes the library.
-	tapMenu(t, web, "menu-next", "menu-prev", "Arcade 2", "Arcade 3")
-	if deleted, err := b.deleteSavedApp(t.Context(), name); !deleted || err != nil {
-		t.Fatal("delete saved game:", err)
-	}
-	tapMenu(t, web, "game-3", "Game unavailable", "menu-prev")
-	save(3)
-	tapMenu(t, web, "menu-prev", "game-0", "menu-next")
-	tapMenu(t, web, "menu-next", "menu-prev", "Arcade 3")
-	tapMenu(t, web, "game-3", "Ready to play")
-	web.tap(t, 180, 180, 0)
-	waitSVG(t, b.ws, id, "Playing on board")
 }
 
 func TestWSMenuListDetails(t *testing.T) {
@@ -170,8 +128,7 @@ func TestWSMenuListDetails(t *testing.T) {
 			c := testConnectWS(t, base, "unit", false)
 			c.hello(t, "vocat-0001", id)
 			bindMenu(c, b.ws, "vocat-0001")
-			tapMenu(t, c, "menu", "menu-next")
-			tapMenu(t, c, "menu-next", "menu-memories")
+			tapMenu(t, c, "menu", "menu-memories")
 			open := "menu-" + tc.drawer
 			tapMenu(t, c, open, tc.empty, "menu-back")
 			tapMenu(t, c, "menu-back", open)
@@ -206,54 +163,33 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	web := testConnectWS(t, base, "unit", false)
 	web.hello(t, "vocat-0002", "Cake")
 	bindMenu(web, b.ws, "vocat-0002")
-	tapMenu(t, web, "menu", "menu-games")
-	if err := b.saveApp(t.Context(), savedApp{Name: "slow", Title: "Slow Game", Kind: "game",
-		Code: `function render(s,p,g){g.clear("#FF0000")}`}); err != nil {
+	tapMenu(t, web, "menu", "menu-books")
+	if err := b.saveApp(t.Context(), savedApp{Name: "slow", Title: "Slow Book", Kind: "book",
+		Data: json.RawMessage(`{"text":"Once upon a time."}`)}); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, control := range []string{"menu-games", "game-0"} {
-		b.db.readDB().SetMaxOpenConns(1)
-		conn, err := b.db.readDB().Conn(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-		wait := b.db.readDB().Stats().WaitCount
-		x, y, ok := hitCenter(lastMenuSVG[web], control)
-		if !ok {
-			t.Fatalf("control %q not found", control)
-		}
-		web.tap(t, x, y, 0)
-		waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
-		if control == "game-0" {
-			bx, by, _ := hitCenter(lastMenuSVG[web], "menu-back")
-			b.ws.mu.Lock()
-			d := b.ws.terminals["vocat-0002"]
-			b.ws.pointer(d, "tap", bx, by, 0, time.Now(), true) // Leave Games while the app is still loading.
-			b.ws.mu.Unlock()
-		} else {
-			var st [16]byte
-			board.sendProto(t, msgTelemetry, st[:])
-		}
-		board.barrier(t) // The device event must be handled before the connection is returned.
-		if err := conn.Close(); err != nil {
-			t.Fatal(err)
-		}
-		b.db.readDB().SetMaxOpenConns(8)
-		if control == "menu-games" {
-			menuFrame(t, web, "Slow Game")
-		} else {
-			menuFrame(t, web, "menu-games")
-			web.barrier(t)
-			b.ws.mu.Lock()
-			running := b.ws.terminals["vocat-0002"].app != nil
-			b.ws.mu.Unlock()
-			if running {
-				t.Fatal("leaving Games didn't cancel the stale launch")
-			}
-		}
+	b.db.readDB().SetMaxOpenConns(1)
+	conn, err := b.db.readDB().Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer conn.Close()
+	wait := b.db.readDB().Stats().WaitCount
+	x, y, ok := hitCenter(lastMenuSVG[web], "menu-books")
+	if !ok {
+		t.Fatalf("control %q not found", "menu-books")
+	}
+	web.tap(t, x, y, 0)
+	waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
+	var st [16]byte
+	board.sendProto(t, msgTelemetry, st[:])
+	board.barrier(t) // The device event must be handled before the connection is returned.
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b.db.readDB().SetMaxOpenConns(8)
+	menuFrame(t, web, "Slow Book")
 }
 
 func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {

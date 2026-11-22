@@ -73,7 +73,7 @@ func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
 	if !h.active(d) || d.companion.ListenSeconds <= 0 || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
 		return false
 	}
-	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck || d.app != nil || d.drawer != "" {
+	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck || d.drawer != "" {
 		return false
 	}
 	h.wake(d, now)
@@ -315,7 +315,7 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 			d.replyAudio = nil
 		}
 	}
-	if view != nil && d.app == nil && !d.agentSetScene {
+	if view != nil && !d.agentSetScene {
 		if d.stopAudio != nil || d.awaitAck {
 			d.pending = view
 		} else {
@@ -561,7 +561,7 @@ func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace,
 				if a.answer == nil && d.busy {
 					a.failed = true
 					d.replyAudio = a
-				} else if a.answer != nil && d.app == nil && !d.agentSetScene {
+				} else if a.answer != nil && !d.agentSetScene {
 					d.pending = a.answer
 				}
 			}
@@ -899,11 +899,7 @@ func (h *wsHub) deliverNoticeNowLocked(d *wsTerminal, now time.Time, q queuedNot
 	d.drawer, d.pending = "", nil
 	d.replyTo = q.replyTo
 	if q.view != nil {
-		if d.app != nil {
-			d.card = q.view
-		} else {
-			d.view, d.card = q.view, nil
-		}
+		d.view, d.card = q.view, nil
 	}
 	h.wake(d, now)
 	h.render(d, now, false)

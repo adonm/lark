@@ -29,13 +29,10 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 		t.Fatal("second hello did not persist terminal")
 	}
 
-	// 4. Companion with two terminals: both receive frames when companion changes or app runs.
+	// 4. Companion with two terminals: both receive frames when companion changes.
 	toolTest(t, base, "patch", object{"companion_id": cakeID, "companion": object{"name": "Cake Two"}}, false)
 	hw.until(t, isDisplay)
-
-	toolTest(t, base, "app", object{"companions": cakeID, "code": `function render(s,p,g){g.text(20,20,"SharedScreen")}`}, false)
-	hw.until(t, isDisplay)
-	waitSVG(t, b.ws, secondID, "SharedScreen")
+	second.until(t, isDisplay)
 
 	// Cannot delete a companion that still has attached terminals.
 	testRequest(t, http.MethodDelete, base+"/api/companions/"+cakeID, "unit", nil, 409)

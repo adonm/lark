@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -69,7 +68,7 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		if evName == "tap" {
 			h.pointer(d, evName, x, y, rev, now, native)
 		} else if d.caps.Drag && (native || c.kind == "web") && !d.asleep &&
-			(d.displayApp != nil && d.app == d.displayApp || d.drawer == "" && d.view == nil && d.card == nil) {
+			(d.drawer == "" && d.view == nil && d.card == nil) {
 			h.pointer(d, evName, x, y, rev, now, native)
 		}
 	case msgRecStart:
@@ -149,14 +148,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	if native && !d.acceptPointerRevision(a.kind, &rev) {
 		return
 	}
-	if d.displayApp != nil {
-		if d.app == d.displayApp {
-			if i := slices.Index(d.app.terminals, d); i >= 0 {
-				h.updateApp(d.app, appEvent{kind: evName, i: i, id: key, x: x, y: y, now: now})
-			}
-		}
-		return
-	}
 	if evName == "drag" || evName == "up" {
 		return
 	}
@@ -226,7 +217,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		}
 		if a.kind != "menu-back" {
 			switch d.drawer {
-			case drawerBooks, drawerGames, drawerMemories, drawerPair, drawerUnpair:
+			case drawerBooks, drawerMemories, drawerPair, drawerUnpair:
 				h.loadMenu(d)
 				return
 			}
@@ -254,10 +245,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 				h.chime(d, "tap")
 				h.render(d, now, false)
 			}
-		}
-	case "game-run":
-		if d.scene.menu == d.menuData {
-			h.launchMenuGame(d, a.value)
 		}
 	case "volume-auto":
 		if err := h.setVolume(d.client.ctx, d, false, 0, "vol-auto"); err != nil && h.active(d) {
@@ -389,8 +376,6 @@ func (h *wsHub) leaveScene(d *wsTerminal, now time.Time, reason string) {
 }
 
 func (h *wsHub) clearView(d *wsTerminal) {
-	d.appGen++
-	h.dropApp(d)
 	d.drawer, d.view, d.pending, d.card = "", nil, nil, nil
 }
 
@@ -398,7 +383,6 @@ type menuContent struct {
 	books        []pixelBook
 	bookApps     []savedApp
 	games        []tile
-	pixelGames   []pixelGame
 	memories     []pixelMemoryItem
 	memoryTitles map[string]string
 	memoryDetail *pixelMemoryItem
@@ -509,36 +493,6 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pix
 			acts[id] = sceneAction{"book-open", m.books[idx].Name}
 		}
 		return img, hits, acts, nil
-	case drawerGames:
-		if len(m.pixelGames) == 0 {
-			img, hits, acts := renderPixelListWithHits(spec, "Games", nil, m.notice, 0, th, th.accent)
-			return img, hits, acts, nil
-		}
-		img := renderPixelGamesList(spec, m.pixelGames, r.menuPage, th)
-		perPage := 2
-		if !spec.round {
-			perPage = 3
-		}
-		totalPages := max(1, (len(m.pixelGames)+perPage-1)/perPage)
-		page := max(0, min(r.menuPage, totalPages-1))
-		hits, acts := navBarHits(spec, page, totalPages)
-		listTop := spec.safe.Min.Y + 14
-		navH := pixelNavHeight(spec)
-		listBottom := spec.safe.Max.Y - navH - 3
-		gapY := 3
-		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
-		start := page * perPage
-		for i := range perPage {
-			idx := start + i
-			if idx >= len(m.pixelGames) {
-				break
-			}
-			ry := listTop + i*(rowH+gapY)
-			id := fmt.Sprintf("game-%d", idx)
-			hits = addLogicalHit(hits, spec, id, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
-			acts[id] = sceneAction{"game-run", m.pixelGames[idx].Name}
-		}
-		return img, hits, acts, nil
 	case drawerUnpair:
 		img, hits, acts := renderPixelListWithHits(spec, "Unpair", m.games, m.notice, r.menuPage, th, pxDanger)
 		return img, hits, acts, nil
@@ -604,8 +558,6 @@ func (h *wsHub) loadMenu(d *wsTerminal) {
 	switch drawer {
 	case drawerBooks:
 		count = len(menu.books)
-	case drawerGames:
-		count = len(menu.pixelGames)
 	case drawerMemories:
 		count = len(menu.memories)
 	case drawerUnpair:
@@ -654,29 +606,6 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 			})
 		}
 		if len(m.books) != 0 {
-			m.notice = ""
-		}
-		return m, err
-	case drawerGames:
-		apps, err := b.listApps(ctx, false)
-		m.notice = "No saved games yet"
-		for _, app := range apps {
-			if str(app["kind"]) != "game" {
-				continue
-			}
-			appName := str(app["name"])
-			saved := false
-			if entries, merr := b.memoryEntries(ctx, "app:"+appName); merr == nil && len(entries) > 0 {
-				saved = true
-			}
-			m.pixelGames = append(m.pixelGames, pixelGame{
-				Name:  appName,
-				Title: str(app["title"]),
-				Kind:  "game",
-				Saved: saved,
-			})
-		}
-		if len(m.pixelGames) != 0 {
 			m.notice = ""
 		}
 		return m, err
@@ -739,23 +668,4 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 func menuText(text string) string {
 	text = strings.Join(strings.Fields(text), " ")
 	return shortText(text, len(text), false)
-}
-
-func (d *wsTerminal) canLaunchMenuGame(menu *menuContent) bool {
-	return d.drawer == drawerGames && d.menuData == menu && d.pose.mood == "idle"
-}
-
-func (h *wsHub) launchMenuGame(d *wsTerminal, name string) {
-	menu := d.menuData
-	if menu == nil || !d.canLaunchMenuGame(menu) || d.companionID == "" {
-		return
-	}
-	h.chime(d, "tap")
-	h.mu.Unlock()
-	_, err := h.b.runSavedApp(d.client.ctx, d.companionID, name, menu)
-	h.mu.Lock()
-	if err != nil && h.active(d) && d.canLaunchMenuGame(menu) {
-		menu.notice = "Game unavailable"
-		h.render(d, time.Now(), false)
-	}
 }

@@ -21,7 +21,7 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact Lark companion IDs. Read keyed snapshots with state, change companions/terminals/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
+	mcpInstructions = "Use exact Lark companion IDs. Read keyed snapshots with state, change companions/terminals/memory/timers with patch, and send live audio with emit. Only final assistant prose is spoken."
 )
 
 type rpcRequest struct {
@@ -159,6 +159,34 @@ func mcpObject(raw []byte) (object, error) {
 	return decodeObject(raw)
 }
 
+func closedObject(props object, required ...string) object {
+	if required == nil {
+		required = []string{}
+	}
+	return object{"type": "object", "properties": props, "required": required, "additionalProperties": false}
+}
+
+func propertySchema(schema object, key string) (object, bool) {
+	if props, ok := schema["properties"].(object); ok {
+		if child, ok := props[key].(object); ok {
+			return child, true
+		}
+	}
+	return nil, false
+}
+
+func screenHitIDs(s svgScreen) []string {
+	ids := make([]string, 0, len(s.hits))
+	seen := map[string]bool{}
+	for _, h := range s.hits {
+		if h.id != "" && !seen[h.id] {
+			seen[h.id] = true
+			ids = append(ids, h.id)
+		}
+	}
+	return ids
+}
+
 var basicChimes = []string{"tap", "think", "intercom", "celebrate"}
 
 var mcpTools = func() []object {
@@ -178,32 +206,19 @@ var mcpTools = func() []object {
 	voice := enum(voices...)
 	memory := schema(object{"op": enum("set", "delete"), "scope": text, "key": text, "value": object{},
 		"expected_version": object{"type": "integer", "minimum": 0, "description": "Require this version; 0 means absent"}}, "scope", "key")
-	rename := schema(object{"from": text, "to": text, "title": text}, "from")
-	rename["anyOf"] = []object{{"required": []string{"to"}}, {"required": []string{"title"}}}
-	jsonObject := object{"type": "object", "additionalProperties": true}
-	update := schema(object{"name": text, "title": text, "kind": enum("book", "game", "tool"), "code": object{"type": "string", "maxLength": 16384},
-		"data": jsonObject, "tick_ms": number, "max_ticks": number,
-		"expected_version": object{"type": "integer", "minimum": 0}}, "name")
 	return []object{
-		tool("state", "Read live state by slice. companion_id adds me.companion, me.terminals and me.active_app; app_name adds full saved app source, settings and state.",
+		tool("state", "Read live state by slice. companion_id adds me.companion, me.terminals and me.contacts.",
 			schema(object{"companion_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
-				"app_name": text, "include_code": flag, "messages_limit": object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
+				"messages_limit": object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id")})),
-		tool("patch", "Change companions, terminals, timers, memory or saved apps. Companion looks always go through companion.portrait with form (Nano Banana pixel art + matching background). Memory and app batches are atomic. Stop running apps before changing slugs. Deletes run before renames and ignore missing slugs; renames update timers. Cancel timers before deleting their app. Companion defaults to update; create timers with in_seconds or at.",
+		tool("patch", "Change companions, terminals, timers, or memory. Companion looks always go through companion.portrait with form (Nano Banana pixel art + matching background). Memory batches are atomic. Companion defaults to update; create timers with in_seconds or at.",
 			schema(object{"companion_id": text,
 				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag}),
 				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "form": text,
 					"personality": text, "voice": voice, "portrait": portraitSchema, "configured": flag,
 					"listen_seconds": object{"type": "integer", "minimum": 0, "maximum": 300}}),
 				"memory": object{"anyOf": []object{memory, array(memory)}},
-				"apps":   schema(object{"delete": array(text), "rename": array(rename), "update": object{"anyOf": []object{update, array(update)}}}),
-				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag, "app": text})})),
-		tool("app", "Create a book (kind:'book' with title + text or pages + optional cover), launch a template, run/load/save a pixel canvas JS app (render(state, player, g) with g.clear, g.rect, g.sprite, g.text, g.image, g.button; respect g.safe on VoCat 120x120 and BOX-3 160x120), exit, or patch state. Design: focal flower -> hierarchy; greenery -> whitespace; odd numbers -> rhythm; turn the vase -> test every screen size.",
-			schema(object{"companions": object{"anyOf": []object{text, array(text)}}, "title": text, "kind": enum("book", "game", "tool"),
-				"text": object{"type": "string", "maxLength": 65536}, "pages": array(object{"anyOf": []object{text, object{"type": "object"}}}), "cover": text,
-				"code": object{"type": "string", "maxLength": 16384}, "template": enum(templateNames()...), "data": appTemplateSchema(""),
-				"save_current": schema(object{"name": text, "title": text}, "name"),
-				"load":         text, "save_as": text, "delete_saved": text, "initial_state": jsonObject, "state_patch": jsonObject, "tick_ms": number, "max_ticks": number, "exit": flag})),
+				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag})})),
 		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), speak aloud on a companion's terminals (say), or play notes/effects on terminals.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
@@ -278,7 +293,7 @@ func (h *wsHub) terminalStatus(entry object, id string, full bool) {
 			if title == "" {
 				title = "Companion"
 			}
-			entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev, "hit_ids": appHitIDs(d.svg)}
+			entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev, "hit_ids": screenHitIDs(d.svg)}
 			entry["width"], entry["height"] = d.screen.width, d.screen.height
 		}
 		h.mu.Unlock()
@@ -314,8 +329,6 @@ func (b *larkServer) callMCP(ctx context.Context, name string, args object) (obj
 		return b.mcpState(ctx, args)
 	case "patch":
 		return b.mcpPatch(ctx, args)
-	case "app":
-		return b.runApp(ctx, args)
 	case "emit":
 		return b.mcpEmit(ctx, args)
 	default:

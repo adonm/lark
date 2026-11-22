@@ -11,7 +11,7 @@ import (
 
 func TestMemoryCRUDAndAtomicCAS(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const scope = "game:tictactoe"
+	const scope = "companion:cake"
 	args := object{"scope": scope, "key": "round:1", "value": object{"move": 0}, "expected_version": 0}
 	patch := object{"memory": args}
 	if set := toolTest(t, base, "patch", patch, false)["memory"].(object)[scope].(object)["round:1"].(object); set["version"] != json.Number("1") {
@@ -55,7 +55,7 @@ func TestMemoryCRUDAndAtomicCAS(t *testing.T) {
 	if got := memoryScope(t, base, scope); len(got) != 0 {
 		t.Fatal(got)
 	}
-	args["scope"] = "game:Bad"
+	args["scope"] = "companion:Bad"
 	toolTest(t, base, "patch", patch, true)
 	args["scope"], args["value"] = "shared", strings.Repeat("x", 16384)
 	toolTest(t, base, "patch", patch, true)
@@ -89,8 +89,8 @@ func TestPatchMemoryBatchRollback(t *testing.T) {
 	batch := func(fail bool, ops ...object) object {
 		return toolTest(t, base, "patch", object{"memory": ops}, fail)
 	}
-	batch(false, edit("shared", "a", 0, nil), edit("game:batch", "b", 0, true))
-	remove := object{"op": "delete", "scope": "game:batch", "key": "b", "expected_version": 0}
+	batch(false, edit("shared", "a", 0, nil), edit("companion:cake", "b", 0, true))
+	remove := object{"op": "delete", "scope": "companion:cake", "key": "b", "expected_version": 0}
 	if conflict := batch(true, edit("shared", "a", 1, 3), remove); conflict["error"] != "version_conflict" || conflict["version"] != json.Number("1") {
 		t.Fatal(conflict)
 	}
@@ -102,7 +102,7 @@ func TestPatchMemoryBatchRollback(t *testing.T) {
 	if a := result["shared"].(object)["a"].(object); a["value"] != json.Number("3") || a["version"] != json.Number("2") {
 		t.Fatal(result)
 	}
-	if len(memoryScope(t, base, "game:batch")) != 0 {
+	if len(memoryScope(t, base, "companion:cake")) != 0 {
 		t.Fatal("batch delete did not commit")
 	}
 }

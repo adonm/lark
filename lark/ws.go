@@ -373,7 +373,6 @@ func (h *wsHub) teardownTerminal(d *wsTerminal) {
 			expiresAt:      now.Add(time.Duration(resumeWindowMS) * time.Millisecond),
 		}
 	}
-	h.dropApp(d)
 	delete(h.terminals, d.key)
 	d.recording.clear()
 	h.cancelTurn(d, "disconnect")
@@ -418,7 +417,6 @@ func (h *wsHub) attachTerminal(termID, compID string) {
 	}
 	oldComp := d.companionID
 	wasOwner := oldComp != "" && h.voiceOwners[oldComp] == d.id
-	h.dropApp(d)
 	d.recording.clear()
 	h.cancelTurn(d, "reassigned")
 	h.stopPlayback(d, true)
