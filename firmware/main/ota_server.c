@@ -197,7 +197,7 @@ static esp_err_t volume_post(httpd_req_t *request)
     }
     display_wake();
     media_chime(AUDIO_HAPPY_TONE);
-    char reply[32];
+    char reply[40];
     snprintf(reply, sizeof(reply), "{\"ok\":true,\"volume\":%d}", value);
     return json_response(request, reply);
 }
