@@ -193,7 +193,7 @@ func (s *e2eSuite) turnStages(t *testing.T, c *e2eCompanion, first time.Time) di
 		t.Fatal("cannot decode turn timings")
 	}
 	for _, r := range report.Turns {
-		if r.Device != c.id {
+		if r.Terminal != c.id {
 			continue
 		}
 		if r.FirstPCM == nil || r.Gate == nil || r.PromptPrep == nil || r.PromptSubmit == nil ||

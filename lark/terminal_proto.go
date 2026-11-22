@@ -170,9 +170,9 @@ func parseNativeHello(b []byte) (nativeHello, error) {
 	return h, nil
 }
 
-func helloCapsFromMask(mask uint32) deviceCaps {
+func helloCapsFromMask(mask uint32) terminalCaps {
 	call := mask&capCall != 0
-	return deviceCaps{
+	return terminalCaps{
 		Battery:        mask&capBattery != 0,
 		HeadPads:       mask&capHeadPads != 0,
 		Call:           call,

@@ -34,21 +34,21 @@ type compactResult struct {
 	Skipped   []string `json:"skipped"`
 }
 
-func (o *openCode) compactActiveSessions(ctx context.Context, device string) (compactResult, error) {
+func (o *openCode) compactActiveSessions(ctx context.Context, companionID string) (compactResult, error) {
 	result := compactResult{Compacted: []string{}, Skipped: []string{}}
 	var sessions map[string]string
-	if device == "" {
+	if companionID == "" {
 		all, err := o.store.allContext(ctx)
 		if err != nil {
 			return result, err
 		}
 		sessions = all
 	} else {
-		sid, _, err := o.store.getContext(ctx, device)
+		sid, _, err := o.store.getContext(ctx, companionID)
 		if err != nil {
 			return result, err
 		}
-		sessions = map[string]string{device: sid}
+		sessions = map[string]string{companionID: sid}
 	}
 	var failures []error
 	for _, id := range slices.Sorted(maps.Keys(sessions)) {

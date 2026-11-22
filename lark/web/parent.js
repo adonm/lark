@@ -66,15 +66,15 @@ auth.onsubmit = e => {
     catch (err) { access = null; $("parent-token").focus(); throw err; }
     auth.hidden = true;
     controls.hidden = false;
-    ($("parent-device").disabled ? $("parent-refresh") : $("parent-device")).focus();
+    ($("parent-companion").disabled ? $("parent-refresh") : $("parent-companion")).focus();
   }, "");
 };
 
 controls.onchange = e => {
-  if (e.target.id === "parent-device") work(() => overview(e.target.value), "");
+  if (e.target.id === "parent-companion") work(() => overview(e.target.value), "");
 };
 controls.onclick = e => {
-  if (e.target.id === "parent-refresh") work(() => overview($("parent-device").value), "Usage refreshed.");
+  if (e.target.id === "parent-refresh") work(() => overview($("parent-companion").value), "Usage refreshed.");
   if (e.target.id === "parent-signout" && !pending) {
     access = null;
     controls.hidden = true;
@@ -86,7 +86,7 @@ controls.onclick = e => {
 };
 controls.onsubmit = e => {
   e.preventDefault();
-  const id = $("parent-device").value;
+  const id = $("parent-companion").value;
   const action = e.target.id === "parent-settings" ? "settings" : e.submitter?.value;
   if (!id || !action) return;
   const fields = action === "end_override" ? {} : Object.fromEntries(new FormData(e.target));

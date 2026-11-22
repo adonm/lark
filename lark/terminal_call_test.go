@@ -480,12 +480,12 @@ func TestWSPagedVoiceMenu(t *testing.T) {
 func TestHelloCallCapabilities(t *testing.T) {
 	for _, tc := range []struct {
 		event wsEvent
-		want  deviceCaps
+		want  terminalCaps
 	}{
-		{wsEvent{Role: "device"}, deviceCaps{Drag: true}},
-		{wsEvent{Role: "web", Caps: wsCaps{Call: new(true), Drag: new(true)}}, deviceCaps{Call: true, Drag: true}},
+		{wsEvent{Role: "device"}, terminalCaps{Drag: true}},
+		{wsEvent{Role: "web", Caps: wsCaps{Call: new(true), Drag: new(true)}}, terminalCaps{Call: true, Drag: true}},
 		{wsEvent{Role: "device", Caps: wsCaps{Battery: new(true), HeadPads: new(true), Call: new(true), Drag: new(false)}},
-			deviceCaps{Battery: true, HeadPads: true, Call: true}},
+			terminalCaps{Battery: true, HeadPads: true, Call: true}},
 	} {
 		if got := helloCaps(tc.event); got != tc.want {
 			t.Errorf("%s: got %+v; want %+v", tc.event.Role, got, tc.want)

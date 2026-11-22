@@ -141,7 +141,7 @@ function renderDiagnostics(data) {
   }));
   const rows = turns.map(t => {
     const row = node("tr");
-    row.append(...[new Date(t.ts_ms).toLocaleTimeString(), `${t.character} / ${t.device}`, t.source, ...[
+    row.append(...[new Date(t.ts_ms).toLocaleTimeString(), `${t.character} / ${t.terminal}`, t.source, ...[
       t.stt_ms, t.llm_first_ms, t.llm_total_ms, t.tts_first_ms, t.e2e_ms,
     ].map(diagMS)].map(value => node("td", "", value)));
     return row;

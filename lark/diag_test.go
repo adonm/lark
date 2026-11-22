@@ -31,7 +31,7 @@ func TestDiagnosticsMetricWindowAndTurns(t *testing.T) {
 	}
 	if report.Latency["llm_first_ms"].Last != nil || len(report.Turns) != 20 ||
 		report.Turns[0].TS != t0.Add(40*time.Second).UnixMilli() || *report.Turns[19].STT != 21 ||
-		*report.Turns[0].E2E != 50 || report.Turns[0].Device != "board" || report.Turns[0].Character != "Cake" {
+		*report.Turns[0].E2E != 50 || report.Turns[0].Terminal != "board" || report.Turns[0].Character != "Cake" {
 		t.Fatalf("unexpected turn log: %+v", report.Turns)
 	}
 	var wg sync.WaitGroup

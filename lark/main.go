@@ -179,9 +179,9 @@ func run() error {
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
-	var devSrv *deviceServer
+	var termSrv *terminalServer
 	if devicePort != 0 {
-		devSrv, err = newDeviceServer(b.ws, host, devicePorts)
+		termSrv, err = newTerminalServer(b.ws, host, devicePorts)
 		if err != nil {
 			b.ws.shutdown()
 			finish()
@@ -189,7 +189,7 @@ func run() error {
 			<-worker.done
 			return err
 		}
-		log.Printf("Lark native device listener on %s", devSrv.tcpLn.Addr().String())
+		log.Printf("Lark native device listener on %s", termSrv.tcpLn.Addr().String())
 	}
 	b.builders = newBuildManager(b)
 	buildsDone := make(chan struct{})
@@ -241,7 +241,7 @@ func run() error {
 		b.timers.close()
 		b.tunnels.shutdown()
 		b.ws.shutdown()
-		devSrv.shutdown()
+		termSrv.shutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
@@ -254,7 +254,7 @@ func run() error {
 	b.timers.close()
 	b.tunnels.shutdown()
 	b.ws.shutdown()
-	devSrv.shutdown()
+	termSrv.shutdown()
 	<-worker.done
 	oc.client.CloseIdleConnections()
 	if errors.Is(err, http.ErrServerClosed) {

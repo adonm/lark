@@ -80,15 +80,15 @@ wide.addEventListener("change", e => {
 
 const rowParts = new WeakMap();
 function companionRow(c) {
-  const row = node("div", "device-row");
+  const row = node("div", "companion-row");
   row.dataset.id = c.id;
-  const button = node("button", "device");
+  const button = node("button", "companion-btn");
   button.type = "button";
   const call = node("button", "outline peer-call", "Call");
   call.type = "button";
   call.onclick = () => startPeerCall(row.dataset.id);
-  const name = node("span", "device-name"), status = node("span", "badge device-state");
-  const meta = node("span", "device-meta"), badge = node("span", "badge outline", "HTTPS Tunnel");
+  const name = node("span", "companion-name"), status = node("span", "badge companion-state");
+  const meta = node("span", "companion-meta"), badge = node("span", "badge outline", "HTTPS Tunnel");
   const dot = node("span", "companion-dot");
   dot.setAttribute("aria-hidden", "true");
   button.append(dot, name, status, meta, badge);
@@ -194,9 +194,9 @@ async function refreshDevices() {
       renderCurrent();
     }
     renderDevices();
-    if ($("device-note").textContent === "Could not load companions.") say("device-note", "");
+    if ($("companion-note").textContent === "Could not load companions.") say("companion-note", "");
   } catch {
-    if (state.app === current) say("device-note", "Could not load companions.");
+    if (state.app === current) say("companion-note", "Could not load companions.");
   } finally {
     current.companionRequest = false;
     if (state.app === current && current.companionsDirty) {
@@ -264,13 +264,13 @@ function safeShareURL(link) {
 $("create-companion").onclick = async e => {
   const current = state.app, button = e.currentTarget;
   button.disabled = true;
-  say("device-note", "Creating companion…");
+  say("companion-note", "Creating companion…");
   try {
     const created = await api(current, "/api/companions", {method:"POST", body:{}});
     if (state.app !== current) return;
     current.companionVersion++;
     current.companions.push(created);
-    say("device-note", "Say hi to meet your new companion!");
+    say("companion-note", "Say hi to meet your new companion!");
     unlockAudio();
     select(created, true);
     if (!wide.matches) {
@@ -280,7 +280,7 @@ $("create-companion").onclick = async e => {
     }
     refreshDevices();
   } catch {
-    if (state.app === current) say("device-note", "Could not create a companion.");
+    if (state.app === current) say("companion-note", "Could not create a companion.");
   } finally {
     button.disabled = false;
   }
@@ -319,7 +319,7 @@ async function changeTunnel(action) {
     if (action === "delete") {
       current.companions = current.companions.filter(item => item.id !== view.id);
       if (state.view === view) select(preferredCompanion(current.companions), false);
-      say("device-note", "Companion deleted.");
+      say("companion-note", "Companion deleted.");
     } else if (c) {
       c.tunnel = result;
       if (state.view === view) state.view.companion = c;

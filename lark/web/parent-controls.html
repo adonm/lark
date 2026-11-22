@@ -6,8 +6,8 @@
       <button type="button" id="parent-signout" class="ghost">Sign out</button>
     </div>
   </div>
-  <label data-field for="parent-device">Companion
-    <select id="parent-device" {{if not .Devices}}disabled{{end}}>
+  <label data-field for="parent-companion">Companion
+    <select id="parent-companion" {{if not .Devices}}disabled{{end}}>
       {{range .Devices}}<option value="{{.companion_id}}" {{if eq .companion_id $.Selected}}selected{{end}}>{{.name}} ({{.companion_id}})</option>{{end}}
     </select>
   </label>

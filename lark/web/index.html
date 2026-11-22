@@ -37,14 +37,14 @@
   <main aria-label="Lark workspace">
   <div id="workspace" class="workspace" data-sidebar="closed" hidden>
     <aside id="sidebar" class="sidebar card" aria-label="Manage Lark companions" hidden>
-      <section class="device-group" aria-labelledby="companions-heading">
+      <section class="companion-group" aria-labelledby="companions-heading">
         <p class="eyebrow">Companions</p>
         <h2 id="companions-heading">Companions</h2>
-        <nav id="companions" class="device-list" aria-label="Companions"></nav>
+        <nav id="companions" class="companion-list" aria-label="Companions"></nav>
         <button id="create-companion" class="companion-action" type="button">+ New Companion</button>
-        <p id="device-note" class="note" role="status"></p>
+        <p id="companion-note" class="note" role="status"></p>
       </section>
-      <details class="device-group tunnel">
+      <details class="companion-group tunnel">
         <summary>Share &amp; Manage · OpenTunnel</summary>
         <div>
         <p id="tunnel-status" class="small">Checking service…</p>
@@ -79,7 +79,7 @@
         <div id="pair-links"></div>
         <p id="pair-note" class="note" role="status"></p>
       </section>
-      <section class="device-group">
+      <section class="companion-group">
         <details id="move-terminal">
           <summary>Move Hardware Terminal</summary>
           <div class="reassign-controls">
@@ -214,7 +214,7 @@
       <h4 id="diag-turns-heading">Recent turns</h4>
       <div class="table diag-table" role="region" tabindex="0" aria-labelledby="diag-turns-heading">
         <table>
-          <thead><tr><th scope="col">Time</th><th scope="col">Companion / Device</th><th scope="col">Source</th><th scope="col">STT</th><th scope="col">TTFT</th><th scope="col">LLM</th><th scope="col">TTS</th><th scope="col">E2E</th></tr></thead>
+          <thead><tr><th scope="col">Time</th><th scope="col">Companion / Terminal</th><th scope="col">Source</th><th scope="col">STT</th><th scope="col">TTFT</th><th scope="col">LLM</th><th scope="col">TTS</th><th scope="col">E2E</th></tr></thead>
           <tbody id="diag-turns"><tr><td colspan="8">No turns yet.</td></tr></tbody>
         </table>
       </div>

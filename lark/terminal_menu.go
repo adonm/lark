@@ -252,7 +252,7 @@ func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
 	}
 	if d.displayApp != nil {
 		if d.app == d.displayApp {
-			if i := slices.Index(d.app.devices, d); i >= 0 {
+			if i := slices.Index(d.app.terminals, d); i >= 0 {
 				h.updateApp(d.app, appEvent{kind: ev.Event, i: i, id: key, x: ev.X, y: ev.Y, now: now})
 			}
 		}

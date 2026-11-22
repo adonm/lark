@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRedesignBAttachDetachMoveDormantAndTwoTerminals(t *testing.T) {
+func TestCompanionTerminalLifecycle(t *testing.T) {
 	b, base := wsHarness(t, nil)
 
 	// 1. Create two companions; both start dormant with zero terminals.
@@ -62,7 +62,7 @@ func TestRedesignBAttachDetachMoveDormantAndTwoTerminals(t *testing.T) {
 	testRequest(t, http.MethodDelete, base+"/api/companions/"+cakeID, "unit", nil, 204)
 }
 
-func TestRedesignBIntercomCallAndTunnelScopeByCompanion(t *testing.T) {
+func TestCompanionIntercomCallAndTunnelScope(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})

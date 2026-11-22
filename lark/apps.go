@@ -433,7 +433,7 @@ const appEffectLimit = 8
 type appInstance struct {
 	spec                                savedApp
 	players                             []appPlayer
-	devices                             []*wsTerminal
+	terminals []*wsTerminal
 	vm                                  *goja.Runtime
 	self, state                         goja.Value
 	render, parse, stringify, errorText goja.Callable
@@ -519,17 +519,17 @@ func (a *appInstance) player(i int) goja.Value {
 	return v
 }
 
-func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessage, devices []*wsTerminal, initial json.RawMessage, renderer func(string, bool, screenGeometry) (svgScreen, error)) (*appInstance, []svgScreen, error) {
-	a := &appInstance{spec: spec, players: players, memory: memory, devices: devices, scope: "app:" + spec.Name,
+func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessage, terminals []*wsTerminal, initial json.RawMessage, renderer func(string, bool, screenGeometry) (svgScreen, error)) (*appInstance, []svgScreen, error) {
+	a := &appInstance{spec: spec, players: players, memory: memory, terminals: terminals, scope: "app:" + spec.Name,
 		geometry: make([]screenGeometry, len(players)), gradeSources: make([]*atomic.Uint32, len(players)),
 		buildScreen: renderer, lastScreens: make([]svgScreen, len(players))}
 	for i := range players {
 		// Geometry and the client role do not change after hello.
-		if devices == nil {
+		if terminals == nil {
 			a.geometry[i] = roundScreen
-		} else if devices[i].client.role != "web" {
-			a.geometry[i] = devices[i].screen
-			a.gradeSources[i] = &devices[i].grade
+		} else if terminals[i].client.role != "web" {
+			a.geometry[i] = terminals[i].screen
+			a.gradeSources[i] = &terminals[i].grade
 		}
 	}
 	if spec.scripted() {
@@ -1167,7 +1167,7 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			continue
 		}
 		old := d.app
-		for _, other := range old.devices {
+		for _, other := range old.terminals {
 			if other != nil {
 				h.clearView(other)
 				if !slices.Contains(devices, other) {
@@ -1246,7 +1246,7 @@ func appFailure(spec savedApp, action string, err error, now time.Time) object {
 
 func (h *wsHub) activeAppState(a *appInstance) object {
 	ids := []string{}
-	for _, d := range a.devices {
+	for _, d := range a.terminals {
 		if d != nil && h.active(d) && !slices.Contains(ids, d.companionID) {
 			ids = append(ids, d.companionID)
 		}
@@ -1314,21 +1314,21 @@ func (b *larkServer) appsChanged() {
 
 func (h *wsHub) dropApp(d *wsTerminal) {
 	if a := d.app; a != nil {
-		for i, p := range a.devices {
+		for i, p := range a.terminals {
 			if p == d {
-				a.devices[i] = nil
+				a.terminals[i] = nil
 				break
 			}
 		}
 		d.app, d.appView = nil, svgScreen{}
-		if !slices.ContainsFunc(a.devices, func(d *wsTerminal) bool { return d != nil }) {
+		if !slices.ContainsFunc(a.terminals, func(d *wsTerminal) bool { return d != nil }) {
 			a.cancel()
 		}
 	}
 }
 
 func (h *wsHub) closeApp(a *appInstance, now time.Time) {
-	for _, d := range a.devices {
+	for _, d := range a.terminals {
 		if d != nil {
 			h.clearView(d)
 			h.render(d, now, false)
@@ -1402,16 +1402,16 @@ func (h *wsHub) runAppEvents(a *appInstance) {
 		ev := a.events[0]
 		a.events[0] = appEvent{}
 		a.events = a.events[1:]
-		if ev.i >= 0 && (a.devices[ev.i] == nil || !h.active(a.devices[ev.i])) {
+		if ev.i >= 0 && (a.terminals[ev.i] == nil || !h.active(a.terminals[ev.i])) {
 			continue
 		}
 		var connected [8]bool
-		for i, d := range a.devices {
+		for i, d := range a.terminals {
 			connected[i] = d != nil && h.active(d)
 		}
 		h.mu.Unlock()
 		if ev.kind == "patch" {
-			views, snapshot, err := a.applyStatePatch(ev.patch, connected[:len(a.devices)])
+			views, snapshot, err := a.applyStatePatch(ev.patch, connected[:len(a.terminals)])
 			h.mu.Lock()
 			if err != nil {
 				ev.done <- appPatchResult{err: problem(400, err.Error())}
@@ -1429,7 +1429,7 @@ func (h *wsHub) runAppEvents(a *appInstance) {
 			}
 			continue
 		}
-		views, err := a.update(ev, connected[:len(a.devices)])
+		views, err := a.update(ev, connected[:len(a.terminals)])
 		var snapshot json.RawMessage
 		if err == nil && views != nil {
 			snapshot, err = a.stateJSON()
@@ -1496,7 +1496,7 @@ func (h *wsHub) storeAppEffects(a *appInstance) error {
 func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, err error) {
 	now := ev.now
 	if err != nil {
-		for _, d := range a.devices {
+		for _, d := range a.terminals {
 			if d != nil && h.active(d) {
 				d.lastAppError = appFailure(a.spec, ev.kind, err, now)
 				h.pushWS(d, object{"op": "error", "status": 400, "error": err.Error()}, true)
@@ -1530,7 +1530,7 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 			}
 			a.timeOfSpeech = now
 		}
-		for j, d := range a.devices {
+		for j, d := range a.terminals {
 			if d == nil || !h.active(d) || ev.i >= 0 && j != ev.i && !e.all || (d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) != "") {
 				continue
 			}
@@ -1552,7 +1552,7 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 
 func (h *wsHub) publishAppViews(a *appInstance, views []svgScreen) {
 	for j, screen := range views {
-		if d := a.devices[j]; d != nil && h.active(d) && screen.source != "" && d.appView.raw != screen.raw {
+		if d := a.terminals[j]; d != nil && h.active(d) && screen.source != "" && d.appView.raw != screen.raw {
 			d.appView = screen
 			h.render(d, time.Now(), false)
 		}

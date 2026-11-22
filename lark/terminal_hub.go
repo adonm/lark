@@ -29,7 +29,7 @@ type wsCaps struct {
 	Drag           *bool `json:"drag,omitempty"`
 }
 
-type deviceCaps struct {
+type terminalCaps struct {
 	WakeWord       bool `json:"wake_word,omitempty"`
 	PanelSleep     bool `json:"panel_sleep,omitempty"`
 	PointerRev     bool `json:"pointer_rev,omitempty"`
@@ -41,14 +41,14 @@ type deviceCaps struct {
 	Drag           bool `json:"drag"`
 }
 
-func helloCaps(ev wsEvent) deviceCaps {
+func helloCaps(ev wsEvent) terminalCaps {
 	value := func(flag *bool, fallback bool) bool {
 		if flag != nil {
 			return *flag
 		}
 		return fallback
 	}
-	return deviceCaps{
+	return terminalCaps{
 		WakeWord:       value(ev.Caps.WakeWord, false),
 		PanelSleep:     value(ev.Caps.PanelSleep, false),
 		PointerRev:     value(ev.Caps.PointerRev, false),
@@ -94,7 +94,7 @@ type wsTerminal struct {
 	firmware    string
 	screen      screenGeometry
 	board       string
-	caps        deviceCaps
+	caps        terminalCaps
 	voice       string
 	announcing  bool
 	companion   companionState
@@ -211,7 +211,7 @@ type peerDisplay struct {
 	auto        bool
 	online      bool
 	firmware    string
-	caps        deviceCaps
+	caps        terminalCaps
 }
 
 func (h *wsHub) onlineTerminals() map[string]peerDisplay {
@@ -256,7 +256,7 @@ func (h *wsHub) peerFrame(scoped bool) wsFrame {
 	slices.SortFunc(list, func(a, b peerDisplay) int { return strings.Compare(a.id, b.id) })
 	terminals := make([]object, 0, len(list))
 	compOnline := make(map[string]bool)
-	compCaps := make(map[string]deviceCaps)
+	compCaps := make(map[string]terminalCaps)
 	for _, p := range list {
 		if p.online && p.companionID != "" {
 			compOnline[p.companionID] = true

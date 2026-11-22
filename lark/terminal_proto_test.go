@@ -22,7 +22,7 @@ type testNativeClient struct {
 	rtpTS    uint32
 }
 
-func dialNativeDevice(t *testing.T, srv *deviceServer, id, token string, caps uint32) (*testNativeClient, []byte) {
+func dialNativeDevice(t *testing.T, srv *terminalServer, id, token string, caps uint32) (*testNativeClient, []byte) {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", srv.tcpLn.Addr().String(), 3*time.Second)
 	if err != nil {
@@ -133,7 +133,7 @@ func (nc *testNativeClient) readRTP(wantPT uint8) []byte {
 
 func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	srv, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 
 func TestNativeProtoControlAndMessages(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	srv, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 			return "", nil
 		}
 	})
-	srv, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 
 func TestNativeUDPEndpointCopyRace(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	ds, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	ds, err := newTerminalServer(b.ws, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 
 func TestNativeUDPZeroAlloc(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	ds, err := newDeviceServer(b.ws, "127.0.0.1", "0")
+	ds, err := newTerminalServer(b.ws, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 func BenchmarkNativeUDPHandle(b *testing.B) {
 	h := newWSHub(&larkServer{root: b.Context()}, false)
 	defer h.shutdown()
-	ds := &deviceServer{hub: h, peers: make(map[uint32]*nativeClient)}
+	ds := &terminalServer{hub: h, peers: make(map[uint32]*nativeClient)}
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
 	const ssrc = uint32(0x12345678)
 	nc := &nativeClient{

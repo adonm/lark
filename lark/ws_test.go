@@ -910,7 +910,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		t.Fatalf("one voice turn expected, got %+v", diag.Turns)
 	}
 	turn := diag.Turns[0]
-	if turn.Device != "cake" || turn.Source != "voice" || turn.STT == nil || turn.First == nil ||
+	if turn.Terminal != "cake" || turn.Source != "voice" || turn.STT == nil || turn.First == nil ||
 		turn.Total == nil || turn.TTS == nil || turn.E2E == nil || *turn.First > *turn.Total {
 		t.Fatalf("voice milestones missing or out of order: %+v", turn)
 	}

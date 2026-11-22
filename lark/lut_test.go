@@ -105,7 +105,7 @@ func TestAtmosphereCache(t *testing.T) {
 	if err != nil || views[0].grade != gradeNight {
 		t.Fatal("app did not use board grade", err)
 	}
-	app.devices[0] = nil // A player can disconnect while its render is in flight.
+	app.terminals[0] = nil // A player can disconnect while its render is in flight.
 	dev.grade.Store(uint32(gradeDay))
 	redrawn, err := app.screens(nil)
 	if err != nil || redrawn[0].grade != gradeDay || redrawn[0].raw != views[0].raw || slices.Equal(redrawn[0].fb, views[0].fb) {

@@ -342,7 +342,7 @@ func (h *wsHub) runVoice(ctx context.Context, d *wsTerminal, id uint64, target s
 				h.caption(receipts, sender, transcript)
 				ids := make([]string, 0, len(receipts))
 				for _, r := range receipts {
-					ids = append(ids, r.device.companionID)
+					ids = append(ids, r.terminal.companionID)
 				}
 				h.b.recordIntercom(sender, ids, transcript)
 			}()
@@ -697,7 +697,7 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time) {
 }
 
 type wsReceipt struct {
-	device *wsTerminal
+	terminal *wsTerminal
 	view   *sceneView
 }
 
@@ -815,7 +815,7 @@ func (h *wsHub) caption(receipts []wsReceipt, sender companionState, text string
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, r := range receipts {
-		if d := r.device; h.active(d) {
+		if d := r.terminal; h.active(d) {
 			switch {
 			case d.card == r.view:
 				d.card = &view
@@ -833,7 +833,7 @@ func (b *larkServer) deliver(ctx context.Context, sender companionState, recipie
 	sent := make(map[string]bool, len(recipients))
 	if b.ws != nil {
 		for _, r := range b.ws.deliverOnline(ctx, sender, recipients, b.voiceFor(sender.ID), text, raw) {
-			sent[r.device.companionID] = true
+			sent[r.terminal.companionID] = true
 		}
 	}
 	out := delivery{sent: []string{}, delivered: []string{}, failed: []string{}}

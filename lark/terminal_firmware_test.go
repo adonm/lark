@@ -32,7 +32,7 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 }
 
 func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
-	d := wsTerminal{caps: deviceCaps{PointerRev: true}}
+	d := wsTerminal{caps: terminalCaps{PointerRev: true}}
 	for _, action := range []string{"stop", "rec-cancel", "rec-send", "listen", "reply", "call-peer",
 		"call-answer", "call-decline", "call-hangup", "call-mute"} {
 		wrapped, old := uint16(0), uint16(65535)

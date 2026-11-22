@@ -7,24 +7,25 @@ Apply entries chronologically from the installation's starting state to latest. 
 ## 2026-11-22 — Companion / Terminal Identity Split (`0.11.0`)
 
 ### Affects
-- SQLite / Lark API & MCP / Web / Firmware
+- SQLite / API & MCP / Web / Firmware (`0.11.0`)
 
 ### Breaking Changes
-- **Companions vs Terminals**: `companions` is now keyed by lowercase slug `id` (with `voice` collapsed in; `saved_companions` and `voices` are removed). `devices` and `virtual_clients` are replaced by `terminals` (`vocat-<mac4>`, `box3-<mac4>`, `web-<8hex>`) with nullable `companion_id`. `device_prefs` is renamed to `terminal_prefs`.
-- **Companion-owned tables**: `sessions`, `messages`, `timers`, `build_jobs`, `parent_settings`, `parent_usage`, and `tunnels` are re-keyed from `device_id` to `companion_id`. Memory scopes for companions use `companion:<id>`.
-- **Routes & MCP**: `/api/devices*`, `/api/virtual-clients*`, and `/api/companions/reassign` are removed in favor of `/api/companions*` and `/api/terminals*` (`attach`/`detach`). MCP `state`/`patch`/`app`/`emit` address `companion_id` (`me.companion` + `me.terminals[]`).
-- **Firmware (`0.11.0`)**: `BOARD_ID_PREFIX` for `vocat` is changed from `lark-` to `vocat-`.
+- `companions` is keyed by slug `id` (with `voice` folded in; `saved_companions` and `voices` removed).
+- `devices` and `virtual_clients` are replaced by `terminals` (`vocat-<mac4>`, `box3-<mac4>`, `web-<8hex>`, nullable `companion_id`); `device_prefs` → `terminal_prefs`.
+- `sessions`, `messages`, `timers`, `build_jobs`, `parent_settings`, `parent_usage`, and `tunnels` are keyed by `companion_id`; memory scopes use `companion:<id>`.
+- `/api/devices*`, `/api/virtual-clients*`, `/api/companions/reassign` → `/api/companions*` and `/api/terminals*` (`attach`/`detach`); MCP addresses `companion_id`.
+- `vocat` `BOARD_ID_PREFIX` changed from `lark-` to `vocat-`.
 
 ### How to Detect
-- `sqlite3 ~/.local/share/lark/lark.db ".tables"` shows `devices`, `virtual_clients`, `saved_companions`, or `device_prefs`.
+- `sqlite3 ~/.local/share/lark/lark.db ".tables"` lists `devices`, `virtual_clients`, `saved_companions`, or `device_prefs`.
 
 ### Upgrade Steps
-1. Back up `~/.local/share/lark/lark.db` and stop `lark.service`:
+1. Stop `lark.service` and back up `lark.db`:
    ```sh
    systemctl --user stop lark.service
    cp -a ~/.local/share/lark/lark.db ~/.local/share/lark/backups/pre-redesign-b.db
    ```
-2. Run the following SQL in one transaction (adjust `id_map` for the installation's device-to-companion mappings; `virt-8458606f` migrates to `web-8458606f` attached to `george` so volume prefs and tunnel continuity are preserved):
+2. Run in one SQLite transaction (adjust `id_map` as needed; `virt-8458606f` → `web-8458606f` on `george`):
    ```sql
    PRAGMA foreign_keys = OFF;
    BEGIN IMMEDIATE;

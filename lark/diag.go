@@ -96,7 +96,7 @@ func summarize(r diagRing[float64]) diagSummary {
 
 type diagTurn struct {
 	TS            int64    `json:"ts_ms"`
-	Device        string   `json:"device"`
+	Terminal      string   `json:"terminal"`
 	Character     string   `json:"character"`
 	Source        string   `json:"source"`
 	STT           *float64 `json:"stt_ms"`
@@ -139,8 +139,8 @@ type turnTrace struct {
 
 type traceKey struct{}
 
-func (b *larkServer) traceTurn(ctx context.Context, device, character, source string, at time.Time) context.Context {
-	t := &turnTrace{d: &b.diag, start: at, record: &diagTurn{TS: at.UnixMilli(), Device: device, Character: character, Source: source}}
+func (b *larkServer) traceTurn(ctx context.Context, terminal, character, source string, at time.Time) context.Context {
+	t := &turnTrace{d: &b.diag, start: at, record: &diagTurn{TS: at.UnixMilli(), Terminal: terminal, Character: character, Source: source}}
 	b.diag.mu.Lock()
 	b.diag.turns.add(t.record, 20)
 	b.diag.mu.Unlock()

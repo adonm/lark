@@ -20,7 +20,7 @@ type nativeOutMsg struct {
 }
 
 type nativeClient struct {
-	server   *deviceServer
+	server   *terminalServer
 	hub      *wsHub
 	conn     net.Conn
 	remoteIP netip.Addr
@@ -38,7 +38,7 @@ type nativeClient struct {
 	rtpTS   uint32
 }
 
-type deviceServer struct {
+type terminalServer struct {
 	hub     *wsHub
 	tcpLn   net.Listener
 	udpConn *net.UDPConn
@@ -52,7 +52,7 @@ type deviceServer struct {
 	wg     sync.WaitGroup
 }
 
-func newDeviceServer(h *wsHub, host, port string) (*deviceServer, error) {
+func newTerminalServer(h *wsHub, host, port string) (*terminalServer, error) {
 	tcpLn, err := net.Listen("tcp", net.JoinHostPort(host, port))
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func newDeviceServer(h *wsHub, host, port string) (*deviceServer, error) {
 	_ = udpConn.SetReadBuffer(256 << 10)
 	_ = udpConn.SetWriteBuffer(256 << 10)
 
-	s := &deviceServer{
+	s := &terminalServer{
 		hub:     h,
 		tcpLn:   tcpLn,
 		udpConn: udpConn,
@@ -80,7 +80,7 @@ func newDeviceServer(h *wsHub, host, port string) (*deviceServer, error) {
 	return s, nil
 }
 
-func (s *deviceServer) shutdown() {
+func (s *terminalServer) shutdown() {
 	if s == nil || s.closed.Swap(true) {
 		return
 	}
@@ -95,7 +95,7 @@ func (s *deviceServer) shutdown() {
 	s.wg.Wait()
 }
 
-func (s *deviceServer) nextSSRC() uint32 {
+func (s *terminalServer) nextSSRC() uint32 {
 	var b [4]byte
 	for {
 		_, _ = rand.Read(b[:])
@@ -112,7 +112,7 @@ func (s *deviceServer) nextSSRC() uint32 {
 	}
 }
 
-func (s *deviceServer) acceptLoop() {
+func (s *terminalServer) acceptLoop() {
 	defer s.wg.Done()
 	for {
 		conn, err := s.tcpLn.Accept()
@@ -130,7 +130,7 @@ func (s *deviceServer) acceptLoop() {
 	}
 }
 
-func (s *deviceServer) serveConn(conn net.Conn) {
+func (s *terminalServer) serveConn(conn net.Conn) {
 	defer conn.Close()
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
@@ -222,7 +222,7 @@ func (s *deviceServer) serveConn(conn net.Conn) {
 	}
 }
 
-func (s *deviceServer) handleTCPMessage(nc *nativeClient, msgType uint8, payload []byte) {
+func (s *terminalServer) handleTCPMessage(nc *nativeClient, msgType uint8, payload []byte) {
 	c := nc.client
 	switch msgType {
 	case msgPing:
@@ -279,7 +279,7 @@ func (s *deviceServer) handleTCPMessage(nc *nativeClient, msgType uint8, payload
 	}
 }
 
-func (s *deviceServer) udpReadLoop() {
+func (s *terminalServer) udpReadLoop() {
 	defer s.wg.Done()
 	buf := make([]byte, 1500)
 	for {
@@ -294,7 +294,7 @@ func (s *deviceServer) udpReadLoop() {
 	}
 }
 
-func (s *deviceServer) handleUDP(pkt []byte, remote netip.AddrPort) {
+func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 	if len(pkt) < rtpHeaderSize+2 || (len(pkt)-rtpHeaderSize)%2 != 0 {
 		return
 	}
