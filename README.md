@@ -178,16 +178,15 @@ live screen and audio, and HTMX 4 swaps server-rendered Parent controls.
 
 Say hi to the starter cat, then ask it to become a fox, owl, dragon, robot, or
 anything you invent. Give it a name, colors, and a voice. Ask it to shift again
-anytime or settle into a favorite so you can return to it later. Shifting keeps
-the same conversation. Open **Reassign / Load Form** in the LAN sidebar to load
-from **Saved Forms**, or move or swap an active companion, voice, and conversation
-between devices. **New Chat** archives the current conversation and returns to
-the starter. Shared links can chat but cannot reset or reassign companions.
+anytime while keeping the same conversation. Open **Move Hardware Terminal**
+in the LAN sidebar to attach a hardware terminal to another companion, or click
+**Open companion here** to attach your browser as a web terminal (`web-<8hex>`).
+**New Chat** archives the current conversation and starts a fresh session.
+Shared links can chat with their companion but cannot reset or move terminals.
 Chat updates live over `/ws`; **Load older** fetches earlier messages across
-sessions. Use **Call** from a virtual companion in `/app` to call a compatible board
-or another virtual companion. Mirroring a physical device does not turn the browser into
-its microphone. Use **Photo** to show an image on the selected companion's
-screen and leave a card in its chat. Use **Voice** under the screen for one-click
+sessions. Use **Call** from a web terminal in `/app` to call a compatible board
+or another companion. Mirroring a hardware terminal does not turn the browser into
+its microphone. Use **Voice** under the screen for one-click
 Heart or Fable, or choose one of six warm, kid-friendly storyteller voices:
 Heart, Bella, and Puck (US English), or Fable, Emma, and George (UK English).
 The choice is saved per device in the Lark database. Mint defaults to Fable
@@ -206,18 +205,17 @@ phone, install the [OpenTunnel CLI](https://opentunnel.xyz) on the Lark host. If
 outside the Lark service's `PATH` and `~/.local/bin`, set
 `LARK_OPENTUNNEL_BIN` to its path in `lark.env`. Restart the server
 with `systemctl --user restart lark.service` so it finds the CLI.
-In the dashboard, select a virtual companion, choose **Create Tunnel** to start
+In the dashboard, select a companion, choose **Create Tunnel** to start
 its route, then **Copy Share Link**. The HTTPS link opens the same companion and
 conversation as the LAN dashboard, with mic, screen, voice notes, and calls to
-online devices. The scoped token does not open the LAN dashboard, admin routes, or
+online companions. The scoped token does not open the LAN dashboard, admin routes, or
 other chats. Treat the link as a password and use **Close Tunnel** to revoke it.
 
-### Install Phone Lark
+### Install Lark PWA
 
-Open the companion's HTTPS share link, or select a virtual companion in `/app` on a trusted
-HTTPS LAN origin (or localhost). In **Devices**, **Join on Phone** selects a
-browser-local companion instead; the shortcut opens that identity again. Ordinary LAN
-HTTP shows the same phone layout but can't install the app or use the mic.
+Open the companion's HTTPS share link, or select a companion in `/app` on a trusted
+HTTPS LAN origin (or localhost). Ordinary LAN
+HTTP shows the same layout but can't install the app or use the mic.
 
 - **Android (Chrome):** tap **Install companion**, or use the browser menu's
   **Install app** / **Add to Home screen**.
@@ -230,7 +228,7 @@ revoked. A LAN install may ask for your Lark token if the browser uses
 separate storage. The app shell can load offline; live chat, history, audio,
 and photos still need the server.
 
-On phones, the live face sits above chat and the composer. A virtual companion goes
+On mobile, the live face sits above chat and the composer. A web terminal goes
 offline after 45 seconds in the background or five minutes without interaction.
 Ringing, calls, recording, thinking, and playback finish first. Tap
 **Tap to reconnect** to unlock audio and resume; reconnecting won't take over
@@ -374,7 +372,7 @@ Code Mode exposes exactly four MCP tools under `tools.lark`:
 
 | Tool | Purpose |
 | --- | --- |
-| `state` | Read keyed devices, companion forms, saved apps, timers, and scoped JSON. Select slices with `include`; add `saved_companions`, `messages`, or `diagnostics` when needed. |
+| `state` | Read keyed companions, terminals, saved apps, timers, and scoped JSON. Select slices with `include`; add `messages` or `diagnostics` when needed. |
 | `patch` | Update device settings, companion form (`companion`), memory, or a timer. Use `companion.save_profile:true` to save under the current name or `false` to shift without replacing a favorite. Memory batches commit atomically; `expected_version:0` requires an absent key. |
 | `app` | Show a declarative screen or SVG, run a template or JS app, save/load/delete by slug, or exit to the face. |
 | `emit` | Send spoken intercom and a card, play notes, or play a named sound (`sfx` or `chime`). |
@@ -446,7 +444,7 @@ directory in one transaction and never modifies those backups.
 Lark also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
-Active and saved forms are stored in `companions` and `saved_companions`.
+Companions are stored in `companions` and attached terminals in `terminals`.
 Shift instantly with `patch({device_id, companion: {preset: {species: "owl",
 palette: "lavender", accessory: "scarf"}, save_profile: false}})`. Ten species
 share eight colorways: peach, mint, lavender, sage, berry, amber, sky and
@@ -500,26 +498,28 @@ synthesizing sentences while OpenCode streams its reply over SSE. Firmware
 | `GET /ws`, `GET /app` | WebSocket hub and embedded browser UI |
 | `GET /api/diagnostics` | LAN-only device telemetry, WebSocket RTT, pipeline timings, Kokoro readiness, server and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
 | `POST /api/diagnostics/stt` | Loopback only: synthesize and transcribe a fixed test phrase without a session or playback |
-| `GET /api/devices` | Remembered devices with `device_id`, `character`, `companion`, `voice`, and current `ws_connected`; hardware also includes `ip`, `port`, and `last_seen` |
+| `GET /api/companions` | List all companions (`id`, `name`, `voice`, `online`, `dormant`, `terminals[]`, optional `tunnel`) |
+| `POST /api/companions` | Create a companion (`{}` creates `"New Companion"`) |
+| `GET /api/companions/{id}`, `PATCH /api/companions/{id}`, `DELETE /api/companions/{id}` | Read, update, or delete a companion (delete requires zero attached terminals) |
+| `GET /api/companions/{id}/messages` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
+| `POST /api/companions/{id}/voice` | `{"voice":"af_heart"}` → saved `companion_id` and `voice`; scoped links can change only their own companion |
+| `POST /api/companions/{id}/reset` | Restore the starter and start a fresh session (pass `{"archive_history":false}` to keep chat history) |
+| `GET /api/terminals`, `POST /api/terminals` | List terminals or create a `web-<8hex>` terminal (`{"kind":"web","companion_id":"..."}`) |
+| `PATCH /api/terminals/{id}`, `DELETE /api/terminals/{id}` | Update terminal volume/attachment or delete a terminal |
+| `POST /api/terminals/{id}/attach`, `POST /api/terminals/{id}/detach` | Attach a terminal to `{"companion_id":"..."}` or detach it |
+| `POST /api/terminals/{id}/volume` | `{"auto":true}` or `{"auto":false,"volume":55}` |
 | `GET /api/scope` | Current scope and ordered `voices` catalog |
-| `POST /api/virtual-clients` | `{}` creates a starter companion; optional legacy `character` and `theme` seed a form |
-| `GET /api/companions`, `DELETE /api/companions/{slug}` | List or delete LAN-only saved forms |
-| `POST /api/companions/reassign` | LAN-only `from_device_id`, `to_device_id`, and `mode` (`swap` or `move`) → transfer companions, voices, and sessions |
-| `POST /api/devices/{id}/companion` | Update active form fields or send `{"slug":"cake"}` to load a form (LAN-only) |
-| `GET /api/devices/{id}/messages` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
-| `POST /api/devices/{id}/voice` | `{"voice":"af_heart"}` → saved `device_id` and `voice`; scoped links can change only their own companion |
-| `POST /api/chat` | `{"text":"Explain a circle","device_id":"my-lark"}` → accepted on a connected device; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
+| `POST /api/chat` | `{"text":"Explain a circle","companion_id":"cake"}` → accepted on an active companion; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
 | `GET /api/audio/<id>` | Reply PCM from `audio_url`; streams by sentence while synthesis runs |
-| `POST /api/tts` | `{"text":"Hello!"}`, optional `device_id` → complete PCM clip using that device's voice |
-| `POST /api/devices/{id}/reset` | Archive the active form if not already saved, restore the starter, and start a fresh session (pass `{"archive_history":false}` to keep chat history) |
-| `POST /api/opencode/compact` | LAN-only; optional `device_id` selects one session (default: all), optional `reconnect_mcp: true` refreshes MCP first → `ok`, `compacted`, and `skipped` device IDs |
-| `GET /api/memory?scope=…`, `GET /api/memory/scopes`, `DELETE /api/memory?scope=…&key=…` | LAN-only saved JSON and populated scopes |
+| `POST /api/tts` | `{"text":"Hello!"}`, optional `companion_id` → complete PCM clip using that companion's voice |
+| `POST /api/opencode/compact` | LAN-only; optional `companion_id` selects one session (default: all), optional `reconnect_mcp: true` refreshes MCP first → `ok`, `compacted`, and `skipped` companion IDs |
+| `GET /api/memory?scope=…`, `GET /api/memory/scopes`, `DELETE /api/memory?scope=…&key=…` | LAN-only saved JSON and populated scopes (`companion:<id>`, `shared`, `game:<name>`, `app:<name>`) |
 | `GET /api/apps`, `DELETE /api/apps/{name}`, `POST /api/apps/run` | List, delete, or run saved apps and drawings (LAN only) |
-| `GET /api/timers?device_id=…`, `DELETE /api/timers/{id}` | List/cancel active timers; scoped links can see and cancel only their own companion's timers |
+| `GET /api/timers?companion_id=…`, `DELETE /api/timers/{id}` | List/cancel active timers; scoped links can see and cancel only their own companion's timers |
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 
-Use the exact `device_id` in chat requests. To send an intercom without an
+Use the exact `companion_id` in chat requests. To send an intercom without an
 agent turn, say or type “Tell Mint dinner is ready,” substituting a nearby
 companion's name. Intercom requires a connected recipient.
 

@@ -4,6 +4,240 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Companion / Terminal Identity Split (`0.11.0`)
+
+### Affects
+- SQLite / Lark API & MCP / Web / Firmware
+
+### Breaking Changes
+- **Companions vs Terminals**: `companions` is now keyed by lowercase slug `id` (with `voice` collapsed in; `saved_companions` and `voices` are removed). `devices` and `virtual_clients` are replaced by `terminals` (`vocat-<mac4>`, `box3-<mac4>`, `web-<8hex>`) with nullable `companion_id`. `device_prefs` is renamed to `terminal_prefs`.
+- **Companion-owned tables**: `sessions`, `messages`, `timers`, `build_jobs`, `parent_settings`, `parent_usage`, and `tunnels` are re-keyed from `device_id` to `companion_id`. Memory scopes for companions use `companion:<id>`.
+- **Routes & MCP**: `/api/devices*`, `/api/virtual-clients*`, and `/api/companions/reassign` are removed in favor of `/api/companions*` and `/api/terminals*` (`attach`/`detach`). MCP `state`/`patch`/`app`/`emit` address `companion_id` (`me.companion` + `me.terminals[]`).
+- **Firmware (`0.11.0`)**: `BOARD_ID_PREFIX` for `vocat` is changed from `lark-` to `vocat-`.
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db ".tables"` shows `devices`, `virtual_clients`, `saved_companions`, or `device_prefs`.
+
+### Upgrade Steps
+1. Back up `~/.local/share/lark/lark.db` and stop `lark.service`:
+   ```sh
+   systemctl --user stop lark.service
+   cp -a ~/.local/share/lark/lark.db ~/.local/share/lark/backups/pre-redesign-b.db
+   ```
+2. Run the following SQL in one transaction (adjust `id_map` for the installation's device-to-companion mappings; `virt-8458606f` migrates to `web-8458606f` attached to `george` so volume prefs and tunnel continuity are preserved):
+   ```sql
+   PRAGMA foreign_keys = OFF;
+   BEGIN IMMEDIATE;
+
+   CREATE TEMP TABLE id_map (old_id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, terminal_id TEXT NOT NULL);
+   INSERT INTO id_map (old_id, companion_id, terminal_id) VALUES
+     ('lark-33d8', 'cake', 'vocat-33d8'),
+     ('lark-2cac', 'mint', 'vocat-2cac'),
+     ('box3-b324', 'greg', 'box3-b324'),
+     ('virt-8458606f', 'george', 'web-8458606f');
+
+   CREATE TABLE companions_new (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     configured INTEGER NOT NULL DEFAULT 0,
+     face_bg TEXT NOT NULL,
+     mark_color TEXT NOT NULL,
+     accent_color TEXT NOT NULL,
+     personality TEXT NOT NULL DEFAULT '',
+     voice TEXT NOT NULL DEFAULT '',
+     updated_at INTEGER NOT NULL,
+     face_svg TEXT NOT NULL DEFAULT ''
+   );
+
+   INSERT INTO companions_new (id, name, configured, face_bg, mark_color, accent_color, personality, voice, updated_at, face_svg)
+   SELECT
+     m.companion_id,
+     c.name,
+     c.configured,
+     c.face_bg,
+     c.mark_color,
+     c.accent_color,
+     c.personality,
+     COALESCE((SELECT v.voice FROM voices v WHERE v.device_id = c.device_id), ''),
+     c.updated_at,
+     c.face_svg
+   FROM companions c
+   JOIN id_map m ON m.old_id = c.device_id;
+
+   INSERT OR IGNORE INTO companions_new (id, name, configured, face_bg, mark_color, accent_color, personality, voice, updated_at, face_svg)
+   SELECT slug, name, 1, face_bg, mark_color, accent_color, personality, voice, updated_at, face_svg
+   FROM saved_companions;
+
+   DROP TABLE companions;
+   DROP TABLE saved_companions;
+   DROP TABLE voices;
+   ALTER TABLE companions_new RENAME TO companions;
+
+   CREATE TABLE terminals (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL,
+     companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL,
+     ip TEXT NOT NULL DEFAULT '',
+     port INTEGER NOT NULL DEFAULT 0,
+     last_seen INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL DEFAULT ''
+   );
+
+   INSERT INTO terminals (id, kind, companion_id, ip, port, last_seen, created_at)
+   SELECT m.terminal_id, 'hardware', m.companion_id, d.ip, d.port, d.last_seen, ''
+   FROM devices d
+   JOIN id_map m ON m.old_id = d.device_id;
+
+   INSERT INTO terminals (id, kind, companion_id, ip, port, last_seen, created_at)
+   SELECT m.terminal_id, 'web', m.companion_id, '', 0, 0, v.created_at
+   FROM virtual_clients v
+   JOIN id_map m ON m.old_id = v.id;
+
+   DROP TABLE devices;
+   DROP TABLE virtual_clients;
+
+   CREATE TABLE terminal_prefs (
+     terminal_id TEXT PRIMARY KEY,
+     auto_volume INTEGER NOT NULL DEFAULT 1,
+     manual_volume INTEGER NOT NULL DEFAULT 55
+   );
+   INSERT INTO terminal_prefs (terminal_id, auto_volume, manual_volume)
+   SELECT COALESCE((SELECT m.terminal_id FROM id_map m WHERE m.old_id = dp.device_id), dp.device_id),
+          dp.auto_volume, dp.manual_volume
+   FROM device_prefs dp;
+   DROP TABLE device_prefs;
+
+   DROP TABLE sessions;
+   CREATE TABLE sessions (
+     companion_id TEXT PRIMARY KEY,
+     session_id TEXT NOT NULL,
+     updated_at INTEGER NOT NULL,
+     contract_hash TEXT NOT NULL DEFAULT '',
+     context_after_ms INTEGER NOT NULL DEFAULT 0
+   );
+
+   CREATE TABLE messages_new (
+     id TEXT PRIMARY KEY,
+     companion_id TEXT NOT NULL,
+     role TEXT NOT NULL,
+     sender TEXT NOT NULL,
+     text TEXT NOT NULL,
+     source TEXT NOT NULL,
+     card_title TEXT NOT NULL DEFAULT '',
+     ts_ms INTEGER NOT NULL
+   );
+   INSERT INTO messages_new (id, companion_id, role, sender, text, source, card_title, ts_ms)
+   SELECT msg.id,
+          COALESCE((SELECT m.companion_id FROM id_map m WHERE m.old_id = msg.device_id), msg.device_id),
+          msg.role, msg.sender, msg.text, msg.source, msg.card_title, msg.ts_ms
+   FROM messages msg;
+   DROP TABLE messages;
+   ALTER TABLE messages_new RENAME TO messages;
+   CREATE INDEX messages_companion_ts_id ON messages (companion_id, ts_ms, id);
+
+   CREATE TABLE timers_new (
+     id TEXT PRIMARY KEY,
+     companion_id TEXT NOT NULL,
+     label TEXT NOT NULL,
+     say TEXT NOT NULL,
+     chime TEXT NOT NULL,
+     wake_agent INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL,
+     fire_at TEXT NOT NULL,
+     notes_json TEXT NOT NULL DEFAULT '[]',
+     app_name TEXT NOT NULL DEFAULT ''
+   );
+   INSERT INTO timers_new (id, companion_id, label, say, chime, wake_agent, created_at, fire_at, notes_json, app_name)
+   SELECT t.id,
+          COALESCE((SELECT m.companion_id FROM id_map m WHERE m.old_id = t.device_id), t.device_id),
+          t.label, t.say, t.chime, t.wake_agent, t.created_at, t.fire_at, t.notes_json, t.app_name
+   FROM timers t;
+   DROP TABLE timers;
+   ALTER TABLE timers_new RENAME TO timers;
+
+   CREATE TABLE build_jobs_new (
+     id TEXT PRIMARY KEY,
+     companion_id TEXT NOT NULL,
+     state TEXT NOT NULL,
+     spec TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     result TEXT NOT NULL DEFAULT '',
+     announced INTEGER NOT NULL DEFAULT 0,
+     cleanup INTEGER NOT NULL DEFAULT 0
+   );
+   INSERT INTO build_jobs_new (id, companion_id, state, spec, created_at, result, announced, cleanup)
+   SELECT b.id,
+          COALESCE((SELECT m.companion_id FROM id_map m WHERE m.old_id = b.device_id), b.device_id),
+          b.state, b.spec, b.created_at, b.result, b.announced, b.cleanup
+   FROM build_jobs b;
+   DROP TABLE build_jobs;
+   ALTER TABLE build_jobs_new RENAME TO build_jobs;
+   CREATE INDEX build_jobs_state ON build_jobs (state, companion_id);
+
+   CREATE TABLE parent_settings_new (
+     companion_id TEXT PRIMARY KEY,
+     timezone TEXT NOT NULL,
+     quiet_start TEXT NOT NULL,
+     quiet_end TEXT NOT NULL,
+     daily_minutes INTEGER NOT NULL,
+     pause_until_ms INTEGER NOT NULL,
+     override_until_ms INTEGER NOT NULL
+   );
+   INSERT INTO parent_settings_new (companion_id, timezone, quiet_start, quiet_end, daily_minutes, pause_until_ms, override_until_ms)
+   SELECT COALESCE((SELECT m.companion_id FROM id_map m WHERE m.old_id = ps.device_id), ps.device_id),
+          ps.timezone, ps.quiet_start, ps.quiet_end, ps.daily_minutes, ps.pause_until_ms, ps.override_until_ms
+   FROM parent_settings ps;
+   DROP TABLE parent_settings;
+   ALTER TABLE parent_settings_new RENAME TO parent_settings;
+
+   CREATE TABLE parent_usage_new (
+     companion_id TEXT NOT NULL,
+     day TEXT NOT NULL,
+     used_ms INTEGER NOT NULL,
+     PRIMARY KEY (companion_id, day)
+   );
+   INSERT INTO parent_usage_new (companion_id, day, used_ms)
+   SELECT COALESCE((SELECT m.companion_id FROM id_map m WHERE m.old_id = pu.device_id), pu.device_id),
+          pu.day, pu.used_ms
+   FROM parent_usage pu;
+   DROP TABLE parent_usage;
+   ALTER TABLE parent_usage_new RENAME TO parent_usage;
+
+   CREATE TABLE tunnels_new (
+     companion_id TEXT PRIMARY KEY,
+     route_name TEXT NOT NULL,
+     url TEXT NOT NULL,
+     local_port INTEGER NOT NULL,
+     scoped_token TEXT NOT NULL,
+     profile TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   INSERT INTO tunnels_new (companion_id, route_name, url, local_port, scoped_token, profile, created_at)
+   SELECT COALESCE((SELECT m.companion_id FROM id_map m WHERE m.old_id = tu.device_id), tu.device_id),
+          tu.route_name, tu.url, tu.local_port, tu.scoped_token, tu.profile, tu.created_at
+   FROM tunnels tu;
+   DROP TABLE tunnels;
+   ALTER TABLE tunnels_new RENAME TO tunnels;
+
+   UPDATE memory
+   SET scope = 'companion:' || (SELECT m.companion_id FROM id_map m WHERE m.old_id = memory.scope)
+   WHERE EXISTS (SELECT 1 FROM id_map m WHERE m.old_id = memory.scope);
+
+   DROP TABLE id_map;
+   COMMIT;
+   PRAGMA foreign_keys = ON;
+   PRAGMA integrity_check;
+   ```
+3. Run `./scripts/setup-host.sh --gpu-index 0`.
+4. Build firmware `0.11.0` for `vocat` and `box3` and OTA each board (`lark ota`).
+
+### Verification
+- `GET /health` reports `"ok": true`.
+- `GET /api/companions` lists 8 companions (4 with terminals, 4 dormant).
+- `GET /api/terminals` lists `vocat-33d8`, `vocat-2cac`, `box3-b324`, and `web-8458606f`.
+
+---
+
 ## 2026-11-22 — Unified `lark` Binary, `lark.service`, `lark.env`, and Env/Kconfig Rename
 
 ### Affects
