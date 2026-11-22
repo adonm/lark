@@ -310,16 +310,7 @@ idle. Saved builds appear in **Menu → Games**; they never replace the running
 app. Face changes apply only if the active form hasn't changed in the meantime. If
 the saved app changed while the builder worked, it keeps the newer version.
 Tap **Cancel build** on the progress card or say “Cancel the build.” Regular
-**Stop** only stops the foreground turn or speech. A companion can have one build at
-a time. After a server restart, queued work can continue; in-flight work is
-reported as interrupted.
-
-Setup links the tool-free `lark-builder` agent in the dedicated OpenCode
-configuration. The builder uses `agents.lark.model` by default. To use a
-different model, add `agents.lark-builder.model` in that same JSONC file,
-using the same `provider/model#variant` format. Lark explicitly selects
-both the agent and model for each disposable session and deletes it afterward.
-The fallback router retains its existing foreground configuration.
+**Stop** only stops the foreground turn or speech.
 
 ### Pairing
 

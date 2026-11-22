@@ -204,7 +204,6 @@ link_file() {
     ln -s -- "$source" "$destination"
 }
 link_file "$REPO_DIR/agents/lark.md" "$oc_root/config/opencode/agents/lark.md"
-link_file "$REPO_DIR/agents/lark-builder.md" "$oc_root/config/opencode/agents/lark-builder.md"
 python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$lark_bin"
 
 python3 - "$env_file" "$pin_gpu" <<'PY'

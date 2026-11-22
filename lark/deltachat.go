@@ -962,8 +962,6 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		senderKind: "contact",
 		private:    private,
 	}, time.Now().In(s.b.location()))
-	s.b.setDCBuildTarget(companionID, accID, msg.ChatId)
-	defer s.b.setDCBuildTarget(companionID, 0, 0)
 	raw, _, err := s.b.oc.askPrepared(turnCtx, companionID, func() (string, string) {
 		return who.Name, prompt
 	}, turnStream{}, "deltachat", nil, nil)

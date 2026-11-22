@@ -560,7 +560,6 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 		`DELETE FROM sessions WHERE companion_id=?`,
 		`DELETE FROM messages WHERE companion_id=?`,
 		`DELETE FROM timers WHERE companion_id=?`,
-		`DELETE FROM build_jobs WHERE companion_id=?`,
 		`DELETE FROM memory WHERE scope=?`,
 		`DELETE FROM companions WHERE id=?`,
 	} {

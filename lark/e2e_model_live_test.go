@@ -36,7 +36,6 @@ type e2eModel struct {
 	mcpCalls    atomic.Int32
 	templates   []string
 	mcpAudit    []string
-	build       chan struct{}
 	followUp    chan struct{}
 	events      chan ocEvent
 	cost        float64
@@ -54,7 +53,7 @@ type e2eSession struct {
 func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 	t.Helper()
 	m := &e2eModel{client: s.client, settings: openCodeSettings("lark"), sessions: map[string]*e2eSession{},
-		build: make(chan struct{}), followUp: make(chan struct{}),
+		followUp: make(chan struct{}),
 		events: make(chan ocEvent, 64), usage: map[ocModel]int{}, tools: map[string]int{}}
 	m.settings.Model = ocModel{Provider: "test", ID: "deterministic"}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.stub(w, r, s) })
@@ -237,21 +236,18 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		}
 		writeStubJSON(w, []object{})
 		return
-	case (path == "/api/agent/lark" || path == "/api/agent/"+builderAgent || path == "/api/event") && method == "GET":
+	case (path == "/api/agent/lark" || path == "/api/event") && method == "GET":
 		query.Set("location[directory]", s.workspace)
 	case create:
 		in := readInput()
 		location, _ := in["location"].(object)
 		title, agent, id := str(in["title"]), str(in["agent"]), str(in["id"])
 		foreground := agent == "lark" && strings.HasPrefix(title, "Lark: "+s.prefix+" ") && id == ""
-		builder := agent == builderAgent && title == builderTitle && strings.HasPrefix(id, builderSessionPrefix) && sessionIDRE.MatchString(id)
-		if location["directory"] != s.workspace || !foreground && !builder {
+		if location["directory"] != s.workspace || !foreground {
 			w.WriteHeader(403)
 			return
 		}
-		if foreground {
-			in["permissions"] = m.permission
-		}
+		in["permissions"] = m.permission
 		writeInput(in)
 	default:
 		match := e2eSessionRoute.FindStringSubmatch(path)
@@ -463,9 +459,6 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	case "GET /api/agent/lark":
 		writeStubJSON(w, object{"id": "lark", "model": m.settings.Model})
 		return
-	case "GET /api/agent/" + builderAgent:
-		writeStubJSON(w, object{"id": builderAgent})
-		return
 	case "POST /api/session":
 		var in object
 		if json.NewDecoder(r.Body).Decode(&in) != nil {
@@ -562,9 +555,6 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 func (m *e2eModel) finishStub(s *e2eSuite, session *e2eSession, id, key, text string, done chan struct{}) {
 	reply := e2eModelReply
 	switch {
-	case session.state["agent"] == builderAgent:
-		<-m.build
-		reply = quizProposal
 	case strings.Contains(text, "Virtual test hold"):
 		// The test cancels this through the actual WS gesture while /wait is blocked.
 		return
@@ -576,10 +566,8 @@ func (m *e2eModel) finishStub(s *e2eSuite, session *e2eSession, id, key, text st
 		"finish": "stop", "content": []object{{"type": "text", "text": reply}}})
 	m.mu.Unlock()
 	close(done)
-	if session.state["agent"] != builderAgent {
-		m.events <- ocEvent{Type: "session.text.delta", Data: ocEventData{
-			SessionID: id, AssistantMessageID: "assistant-" + key, Delta: reply + " ",
-		}}
-	}
+	m.events <- ocEvent{Type: "session.text.delta", Data: ocEventData{
+		SessionID: id, AssistantMessageID: "assistant-" + key, Delta: reply + " ",
+	}}
 	m.events <- ocEvent{Type: "session.execution.succeeded", Data: ocEventData{SessionID: id}}
 }

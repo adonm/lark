@@ -207,8 +207,6 @@ var mcpTools = func() []object {
 		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), speak aloud on a companion's terminals (say), or play notes/effects on terminals.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
-		tool("build", "Start or cancel a background build/edit job for a new app/book/game or a saved app. Write a complete, self-contained request.",
-			schema(object{"companion_id": text, "op": enum("start", "cancel"), "app": text, "request": text}, "companion_id")),
 	}
 }()
 
@@ -320,53 +318,9 @@ func (b *larkServer) callMCP(ctx context.Context, name string, args object) (obj
 		return b.runApp(ctx, args)
 	case "emit":
 		return b.mcpEmit(ctx, args)
-	case "build":
-		return b.mcpBuild(ctx, args)
 	default:
 		return nil, problem(400, "Unknown tool")
 	}
-}
-
-func (b *larkServer) mcpBuild(ctx context.Context, args object) (object, error) {
-	id := strings.ToLower(strings.TrimSpace(str(args["companion_id"])))
-	if !validCompanionID(id) {
-		return nil, problem(400, "Invalid companion_id")
-	}
-	var exists int
-	if err := b.db.readDB().QueryRowContext(ctx, `SELECT 1 FROM companions WHERE id=?`, id).Scan(&exists); err != nil {
-		return nil, problem(404, "Companion not found")
-	}
-	if b.builders == nil {
-		return nil, problem(503, "Builder is not available")
-	}
-	op := strings.TrimSpace(str(args["op"]))
-	if op == "" {
-		op = "start"
-	}
-	if op == "cancel" {
-		cancelled, err := b.builders.cancel(ctx, id, "")
-		if err != nil {
-			return nil, err
-		}
-		return object{"ok": true, "cancelled": cancelled}, nil
-	}
-	request := strings.TrimSpace(str(args["request"]))
-	if request == "" {
-		return nil, problem(400, "Expected a complete build request")
-	}
-	appName := strings.TrimSpace(str(args["app"]))
-	intent := buildIntent{kind: "new"}
-	if appName != "" {
-		intent = buildIntent{kind: "edit", target: appName}
-	}
-	jobID, err := b.builders.enqueue(ctx, id, intent, request)
-	if err != nil {
-		return nil, err
-	}
-	if jobID == "" {
-		return object{"ok": false, "status": "busy", "error": "A build is already running for this companion."}, nil
-	}
-	return object{"ok": true, "job_id": jobID, "status": "queued"}, nil
 }
 
 func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {

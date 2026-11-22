@@ -61,7 +61,6 @@ type sceneView struct {
 	intercom             *intercomCard
 	actions              map[string]sceneAction
 	duringTurn           bool
-	building             string
 	menu                 *menuContent
 }
 
@@ -194,9 +193,6 @@ func renderPixelSceneCard(spec pixelDisplaySpec, v sceneView, th pixelTheme) (*i
 	if titleStr == "" {
 		titleStr = "Lark"
 	}
-	if v.building != "" {
-		titleStr = "Building…"
-	}
 	titleBox := physicalRect(image.Rect(spec.safe.Min.X, spec.safe.Min.Y, spec.safe.Max.X, spec.safe.Min.Y+titleH), s)
 	texts = addCenteredText(texts, titleBox, truncateEllipsisPx(titleStr, dogica.Bold, spec.bodyTextScale, titleBox.Dx()), dogica.Bold, spec.bodyTextScale, th.accent)
 
@@ -208,9 +204,6 @@ func renderPixelSceneCard(spec pixelDisplaySpec, v sceneView, th pixelTheme) (*i
 	body := v.text
 	if v.heading != "" {
 		body = v.heading + "\n" + body
-	}
-	if v.building != "" && body == "" {
-		body = "Making something new…"
 	}
 	physPanel := physicalRect(panelRect, s)
 	lineH := dogica.Regular.LineHeight * spec.bodyTextScale
@@ -238,17 +231,6 @@ func renderPixelSceneCard(spec pixelDisplaySpec, v sceneView, th pixelTheme) (*i
 		texts = addCenteredText(texts, physicalRect(r2, s), "Reply", dogica.Bold, spec.bodyTextScale, th.accent)
 		hits = addLogicalHit(hits, spec, "close", r1)
 		hits = addLogicalHit(hits, spec, "reply", r2)
-	} else if v.building != "" {
-		gap := 4
-		bw := (btnRect.Dx() - gap) / 2
-		r1 := image.Rect(btnRect.Min.X, btnRect.Min.Y, btnRect.Min.X+bw, btnRect.Max.Y)
-		r2 := image.Rect(btnRect.Min.X+bw+gap, btnRect.Min.Y, btnRect.Max.X, btnRect.Max.Y)
-		c.panel(r1.Min.X, r1.Min.Y, r1.Dx(), r1.Dy(), pxTileBG, th.accent2)
-		c.panel(r2.Min.X, r2.Min.Y, r2.Dx(), r2.Dy(), pxTileBG, pxDanger)
-		texts = addCenteredText(texts, physicalRect(r1, s), "Talk", dogica.Bold, spec.bodyTextScale, th.accent2)
-		texts = addCenteredText(texts, physicalRect(r2, s), "Cancel build", dogica.Regular, spec.bodyTextScale, pxDanger)
-		hits = addLogicalHit(hits, spec, "listen", r1)
-		hits = addLogicalHit(hits, spec, "build-cancel", r2)
 	} else {
 		c.panel(btnRect.Min.X, btnRect.Min.Y, btnRect.Dx(), btnRect.Dy(), pxTileBG, th.border)
 		texts = addCenteredText(texts, physicalRect(btnRect, s), "OK", dogica.Bold, spec.bodyTextScale, pxInk)

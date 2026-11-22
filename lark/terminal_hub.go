@@ -858,7 +858,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			switch {
 			case r.drawer != "":
 				img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, th)
-			case r.view.title != "" || r.view.heading != "" || r.view.text != "" || r.view.building != "":
+			case r.view.title != "" || r.view.heading != "" || r.view.text != "":
 				img, hits = renderPixelSceneCard(spec, r.view, th)
 			default:
 				poseIdx := poseIndexForMood(r.pose)
@@ -949,8 +949,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 							srcParts = append(srcParts, row.title, row.text)
 						}
 					}
-				} else if r.view.building != "" {
-					srcParts = append(srcParts, "Cancel build")
 				} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
 					srcParts = append(srcParts, "home")
 				}

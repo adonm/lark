@@ -185,13 +185,6 @@ func run() error {
 		}
 		log.Printf("Lark native device listener on %s", termSrv.tcpLn.Addr().String())
 	}
-	b.builders = newBuildManager(b)
-	buildsDone := make(chan struct{})
-	go func() {
-		defer close(buildsDone)
-		b.builders.run(root)
-	}()
-	defer func() { finish(); <-buildsDone }()
 	stopDiagnostics := b.sampleDiagnostics(started, dbPath)
 	defer stopDiagnostics()
 	b.timers = newTimerManager(b)
