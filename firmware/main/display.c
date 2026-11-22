@@ -31,6 +31,8 @@ static esp_lcd_touch_handle_t touch;
 static SemaphoreHandle_t drawn, fb_lock;
 static TaskHandle_t painter;
 static uint16_t *fb, *strip[2];
+static uint8_t *pending_pkt, *work_pkt;
+static size_t pending_len;
 static bool linked;
 static bool first_frame;
 static frame_bounds_t dirty_bounds;
@@ -105,6 +107,36 @@ static void paint_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
         xSemaphoreTake(fb_lock, portMAX_DELAY);
+        size_t wlen = 0;
+        if (linked && pending_len > 0) {
+            uint8_t *tmp = work_pkt;
+            work_pkt = pending_pkt;
+            pending_pkt = tmp;
+            wlen = pending_len;
+            pending_len = 0;
+        }
+        xSemaphoreGive(fb_lock);
+        if (wlen > 0) {
+            frame_decoded_t decoded;
+            if (frame_decode(work_pkt, wlen, &decoded)) {
+                taskYIELD();
+                xSemaphoreTake(fb_lock, portMAX_DELAY);
+                if (linked) {
+                    frame_commit(fb, &decoded);
+                    frame_union(&dirty_bounds, decoded.rect);
+                    atomic_store_explicit(&telemetry_io.last_frame_rev, decoded.rect.rev_lo, memory_order_relaxed);
+                    if (first_frame) {
+                        first_frame = false;
+                        ESP_LOGI(TAG, "Applied bridge frame 0x03 %ux%u (codec %u)", decoded.rect.w, decoded.rect.h, work_pkt[9]);
+                    }
+                }
+                xSemaphoreGive(fb_lock);
+            } else {
+                ESP_LOGD(TAG, "Ignored invalid display frame");
+            }
+            taskYIELD();
+        }
+        xSemaphoreTake(fb_lock, portMAX_DELAY);
         if (!linked && now_ms() - atomic_load(&last_touch) >= 120000u) {
             atomic_store(&brightness, DIM);
         }
@@ -152,6 +184,7 @@ void display_set_link(bool connected)
     xSemaphoreTake(fb_lock, portMAX_DELAY);
     linked = connected;
     first_frame = connected;
+    pending_len = 0;
     atomic_store(&shown_rev, 0);
     if (!connected) {
         display_show_offline();
@@ -163,19 +196,14 @@ void display_set_link(bool connected)
 
 bool display_apply_frame(const uint8_t *data, size_t len)
 {
-    frame_decoded_t decoded;
-    if (!frame_decode(data, len, &decoded)) return false;
+    if (!data || len < FRAME_HEADER_SIZE || len > FRAME_PACKET_CAP || data[0] != 0x03) return false;
     xSemaphoreTake(fb_lock, portMAX_DELAY);
     bool applied = linked;
     if (applied) {
-        frame_commit(fb, &decoded);
-        frame_union(&dirty_bounds, decoded.rect);
-        atomic_store_explicit(&telemetry_io.last_frame_rev, decoded.rect.rev_lo, memory_order_relaxed);
+        memcpy(pending_pkt, data, len);
+        pending_len = len;
     }
-    bool first = applied && first_frame;
-    if (first) first_frame = false;
     xSemaphoreGive(fb_lock);
-    if (first) ESP_LOGI(TAG, "Applied bridge frame 0x03 %ux%u (codec %u)", decoded.rect.w, decoded.rect.h, data[9]);
     if (applied && !(BOARD_HAS_BATTERY && display_is_sleeping())) xTaskNotifyGive(painter);
     return applied;
 }
@@ -242,11 +270,13 @@ static void touch_task(void *arg)
 esp_err_t display_init(void)
 {
     fb = heap_caps_malloc(FRAME_PIXELS * sizeof(*fb), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    pending_pkt = heap_caps_malloc(FRAME_PACKET_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    work_pkt = heap_caps_malloc(FRAME_PACKET_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     strip[0] = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     strip[1] = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     drawn = xSemaphoreCreateBinary();
     fb_lock = xSemaphoreCreateMutex();
-    ESP_RETURN_ON_FALSE(fb && strip[0] && strip[1] && drawn && fb_lock, ESP_ERR_NO_MEM, TAG, "Display buffers");
+    ESP_RETURN_ON_FALSE(fb && pending_pkt && work_pkt && strip[0] && strip[1] && drawn && fb_lock, ESP_ERR_NO_MEM, TAG, "Display buffers");
     bsp_display_config_t config = { .max_transfer_sz = STRIP_BYTES };
     esp_lcd_panel_io_handle_t io;
     ESP_RETURN_ON_ERROR(bsp_display_new(&config, &panel, &io), TAG, "Init LCD");
@@ -261,7 +291,7 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_ERROR(bsp_display_brightness_set(BRIGHT), TAG, "Set initial brightness");
     atomic_store(&last_touch, now_ms());
     TaskHandle_t touch_reader;
-    ESP_RETURN_ON_FALSE(xTaskCreate(paint_task, "painter", 4096, NULL, 3, &painter) == pdPASS &&
+    ESP_RETURN_ON_FALSE(xTaskCreate(paint_task, "painter", 4096, NULL, 2, &painter) == pdPASS &&
                         xTaskCreate(touch_task, "touch", 3072, NULL, 4, &touch_reader) == pdPASS,
                         ESP_ERR_NO_MEM, TAG, "Display tasks");
 #if BOARD_HAS_BATTERY

@@ -834,7 +834,7 @@ esp_err_t net_client_init(void)
         hello_sem = NULL;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(service_task, "net_service", 6144, NULL, 4, &service) != pdPASS) {
+    if (xTaskCreate(service_task, "net_service", 6144, NULL, 5, &service) != pdPASS) {
         free(rx_buffer);
         rx_buffer = NULL;
         return ESP_ERR_NO_MEM;

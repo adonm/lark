@@ -339,6 +339,6 @@ esp_err_t media_init(bool audio_ready)
     tts = xStreamBufferCreateStatic(TTS_BYTES + 1, sizeof(int16_t), storage, &tts_control);
     lock = xSemaphoreCreateMutex();
     jobs = xQueueCreate(6, sizeof(job_t));
-    return tts && lock && jobs && xTaskCreate(worker, "media", 7168, NULL, 5, &media_task) == pdPASS
+    return tts && lock && jobs && xTaskCreatePinnedToCore(worker, "media", 7168, NULL, 6, &media_task, 1) == pdPASS
            ? ESP_OK : ESP_ERR_NO_MEM;
 }
