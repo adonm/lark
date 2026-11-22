@@ -378,7 +378,7 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 			return
 		}
 	}
-	if !d.ttsStarted && !d.awaitAck {
+	if !d.ttsStarted && !d.awaitAck && d.stopAudio == nil && d.replyAudio == nil {
 		if d.queuedVoice != nil {
 			h.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
 		} else if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {

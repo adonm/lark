@@ -610,3 +610,40 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 		t.Fatal("fenced prose triggered intercom", err, got)
 	}
 }
+
+func TestFinishTurnWaitsForPendingTTS(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	c := testConnectWS(t, base, "unit", false)
+	const id = "vocat-pending-tts"
+	c.hello(t, id, "Cake")
+
+	b.ws.mu.Lock()
+	d := b.ws.terminals[id]
+	d.busy = true
+	d.turn = 1
+	d.ttsStarted = false
+	d.awaitAck = false
+	d.stopAudio = func() {}
+	d.replyAudio = &turnAudio{turn: 1}
+	b.ws.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
+	b.ws.mu.Unlock()
+
+	b.ws.finishTurn(d, 1, nil, nil)
+
+	b.ws.mu.Lock()
+	st := b.ws.companionStatuses[d.companionID]
+	b.ws.mu.Unlock()
+	if st.state == statusDone {
+		t.Fatalf("finishTurn set statusDone while TTS playback was still pending")
+	}
+
+	b.ws.mu.Lock()
+	d.stopAudio = nil
+	d.replyAudio = nil
+	b.ws.playbackDone(d, time.Now(), false)
+	st = b.ws.companionStatuses[d.companionID]
+	b.ws.mu.Unlock()
+	if st.state != statusDone {
+		t.Fatalf("playbackDone status = %d, want statusDone (%d)", st.state, statusDone)
+	}
+}
