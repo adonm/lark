@@ -299,7 +299,8 @@ func (s *dcService) syncProfile(c companionState, accID uint32) {
 }
 
 func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
-	raw := companionSVG(c, companionPose{mood: "idle", battery: -1})
+	pose := companionPose{mood: "idle", battery: -1}
+	raw := companionChrome(c, pose).svg(companionArt(c, pose))
 	var screen svgScreen
 	var err error
 	if b != nil && b.portraits != nil {
