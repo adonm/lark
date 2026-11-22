@@ -395,6 +395,111 @@ func derivePixelTheme(bg *image.RGBA, poses []*image.RGBA) pixelTheme {
 	return th
 }
 
+func pixelPlaceholderPoses() [4]*image.RGBA {
+	// Cute 16x16 creature scaled 4x -> 64x64 for idle, blink, talk, think.
+	body := []string{
+		"....kkkkkkkk....",
+		"..kkmmmmmmmmkk..",
+		".kmmmmmmmmmmmmk.",
+		".kmmwwwwmmmmmmk.",
+		"kmmwmmmmmmmmmmmk",
+		"kmmmkmmmmmmkmmmk",
+		"kmmmkmmmmmmkmmmk",
+		"kmmmmmmmmmmmmmmk",
+		"kmmmmppmmppmmmmk",
+		"kmmmmmmkkmmmmmmk",
+		".kmmmmmmmmmmmmk.",
+		".kmmmmmmmmmmmmk.",
+		"..kkmmmmmmmmkk..",
+		"...kmmk..kmmk...",
+		"...kkk....kkk...",
+		"................",
+	}
+	blink := slices.Clone(body)
+	blink[5] = "kmmkkmmmmmmkkmmk"
+	blink[6] = "kmmmmmmmmmmmmmmk"
+	talk := slices.Clone(body)
+	talk[9] = "kmmmmmkkkkmmmmmk"
+	talk[10] = ".kmmmmkrrkmmmmk."
+	think := slices.Clone(body)
+	think[5] = "kmmmmkmmmmmmkmmk"
+	think[6] = "kmmmmkmmmmmmkmmk"
+	think[9] = "kmmmmmmkmmmmmmmk"
+
+	pal := map[string]imagecolor.RGBA{
+		".": {},
+		"k": {52, 40, 58, 255},
+		"m": {154, 229, 195, 255},
+		"w": {235, 252, 245, 255},
+		"p": {255, 193, 168, 255},
+		"r": {235, 130, 145, 255},
+	}
+	var poses [4]*image.RGBA
+	for i, rows := range [4][]string{body, blink, talk, think} {
+		c := newPixelCanvas(64, 64)
+		c.blitSprite(0, 0, rows, pal, 4)
+		poses[i] = c.img
+	}
+	return poses
+}
+
+func normalizeBackground(src image.Image, w, h int) (*image.RGBA, error) {
+	if src == nil {
+		return nil, errors.New("background image is nil")
+	}
+	if w <= 0 || h <= 0 {
+		w, h = 160, 120
+	}
+	sb := src.Bounds()
+	// Center-crop source to target aspect ratio before scaling.
+	srcAspect := float64(sb.Dx()) / float64(sb.Dy())
+	dstAspect := float64(w) / float64(h)
+	crop := sb
+	if srcAspect > dstAspect {
+		newW := max(1, int(math.Round(float64(sb.Dy())*dstAspect)))
+		dx := (sb.Dx() - newW) / 2
+		crop = image.Rect(sb.Min.X+dx, sb.Min.Y, sb.Min.X+dx+newW, sb.Max.Y)
+	} else if srcAspect < dstAspect {
+		newH := max(1, int(math.Round(float64(sb.Dx())/dstAspect)))
+		dy := (sb.Dy() - newH) / 2
+		crop = image.Rect(sb.Min.X, sb.Min.Y+dy, sb.Max.X, sb.Min.Y+dy+newH)
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, crop, draw.Src, nil)
+	for i := 3; i < len(dst.Pix); i += 4 {
+		dst.Pix[i] = 255
+	}
+	quantizePortraitPoses([]*image.RGBA{dst}, pixelMaxColors)
+	return dst, nil
+}
+
+func saveBackgroundPNG(dir string, bg *image.RGBA) error {
+	if bg == nil {
+		return nil
+	}
+	path := filepath.Join(dir, "bg.png")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	return errors.Join(png.Encode(f, bg), f.Close())
+}
+
+func loadBackgroundPNG(dir string) (*image.RGBA, error) {
+	f, err := os.Open(filepath.Join(dir, "bg.png"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		return nil, err
+	}
+	rgba := image.NewRGBA(image.Rect(0, 0, img.Bounds().Dx(), img.Bounds().Dy()))
+	draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
+	return rgba, nil
+}
+
 // darkenBackground scales a companion background to the canvas size (center-cropped)
 // and darkens it toward pxPanelBG in pixel space so UI chrome stays legible.
 func darkenBackground(c *pixelCanvas, bg *image.RGBA) {

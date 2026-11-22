@@ -357,6 +357,37 @@ func writePortraitPNG(dir, name string, img image.Image) error {
 	return errors.Join(png.Encode(f, img), f.Close())
 }
 
+func backgroundPrompt(form, vibe string) string {
+	scene := strings.TrimSpace(form)
+	if scene == "" {
+		scene = "a cozy sunlit window sill with potted plants"
+	}
+	p := `Create a cozy indie-game pixel art background scene (Stardew Valley or GBA style) that fits the habitat and vibe of: ` + scene + `.`
+	if v := strings.TrimSpace(vibe); v != "" {
+		p += ` Vibe: ` + v + `.`
+	}
+	return p + ` Use crisp pixel clusters, soft warm lighting, and a harmonious limited palette. No characters, no creatures, no text, no UI, no borders, no frames. Keep the center-top area slightly calmer so a foreground character stands out clearly.`
+}
+
+func (p *portraitStore) generateBackground(ctx context.Context, id, form, vibe string) error {
+	if p == nil || p.generate == nil || !portraitIDPattern.MatchString(id) {
+		return nil
+	}
+	raw, err := p.generate(ctx, backgroundPrompt(form, vibe), nil)
+	if err != nil {
+		return err
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	norm, err := normalizeBackground(img, pixelSpecBox3.logicalW, pixelSpecBox3.logicalH)
+	if err != nil {
+		return err
+	}
+	return saveBackgroundPNG(filepath.Join(p.dir, id), norm)
+}
+
 func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID string) (string, error) {
 	if p == nil || p.generate == nil {
 		return "", problem(503, "Portrait generation unavailable; configure a dedicated OpenCode service or OPENCODE_API_KEY, or use companion.preset")
@@ -406,10 +437,20 @@ func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID
 				return err
 			}
 		}
+		if normPoses, err := normalizePortraitSheet(sheet, pixelPortraitHeight); err == nil {
+			_ = saveNormalizedPoses(dir, normPoses)
+		}
 		return ctx.Err()
 	}(); err != nil {
 		p.discard(id)
 		return "", problem(502, "Cannot save portrait")
+	}
+	if spec.Form != "" && !spec.Edit {
+		_ = p.generateBackground(ctx, id, spec.Form, spec.Prompt)
+	} else if spec.Edit && currentID != "" {
+		if bg, err := loadBackgroundPNG(filepath.Join(p.dir, currentID)); err == nil {
+			_ = saveBackgroundPNG(dir, bg)
+		}
 	}
 	return id, nil
 }
@@ -421,7 +462,9 @@ func (p *portraitStore) discard(id string) {
 	dir := filepath.Join(p.dir, id)
 	for _, pose := range portraitPoses {
 		_ = os.Remove(filepath.Join(dir, pose+".png"))
+		_ = os.Remove(filepath.Join(dir, pixelPoseFilename(pose)))
 	}
+	_ = os.Remove(filepath.Join(dir, "bg.png"))
 	_ = os.Remove(filepath.Join(dir, "sheet.png"))
 	_ = os.Remove(dir)
 }

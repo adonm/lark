@@ -174,6 +174,8 @@ func run() error {
 	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
 	go b.dc.start(root)
 	defer b.dc.shutdown()
+	b.weather = newWeatherService(os.Getenv("LARK_LOCATION"), db)
+	go b.weather.run(root)
 	var termSrv *terminalServer
 	if devicePort != 0 {
 		termSrv, err = newTerminalServer(b.ws, host, devicePorts)

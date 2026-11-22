@@ -143,6 +143,10 @@ func blitCenteredBG(c *pixelCanvas, bg *image.RGBA) {
 }
 
 func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, bobY int, caption string, showMenuHint bool) *image.RGBA {
+	return renderPixelHomeWeather(spec, bg, poseImg, grade, weatherClear, 0, status, bobY, caption, showMenuHint)
+}
+
+func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, tick int, status string, bobY int, caption string, showMenuHint bool) *image.RGBA {
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
 	blitCenteredBG(c, bg)
 	if poseImg != nil {
@@ -155,7 +159,8 @@ func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade grade
 		c.blit(px, py, poseImg)
 	}
 
-	// Grade only the world + companion, never the UI panels or text.
+	// Grade and weather apply only to the world + companion, never the UI panels or text.
+	applyWeatherEffects(c, weather, tick)
 	c.applyLUT(grade)
 
 	var texts []pixelTextOp

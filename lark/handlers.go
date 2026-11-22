@@ -39,6 +39,7 @@ type larkServer struct {
 	timers          *timerManager
 	builders        *buildManager
 	portraits       *portraitStore
+	weather         *weatherService
 	diag            diagnostics
 	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.

@@ -223,6 +223,10 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		}
 		save(spec.name+"-home-caption",
 			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "Message from Mum: dinner's ready", false))
+		save(spec.name+"-home-cloudy",
+			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherCloudy, 5, "", 0, "", false))
+		save(spec.name+"-home-rain",
+			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherRain, 5, "", 0, "", false))
 		save(spec.name+"-menu-p1", renderPixelMenu(spec, 0, th))
 		save(spec.name+"-books-list", renderPixelBooksList(spec, books, 0, th))
 		save(spec.name+"-games-list", renderPixelGamesList(spec, games, 0, th))
