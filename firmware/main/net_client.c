@@ -96,6 +96,7 @@ static struct sockaddr_in bridge_udp_addr;
 static uint32_t active_ssrc;
 static uint16_t rtp_rec_seq;
 static uint32_t rtp_rec_ts;
+static _Alignas(4) uint8_t rtp_pkt[LARK_RTP_PACKET_BYTES];
 
 static uint8_t *rx_buffer;
 static bool tts_accepted;
@@ -289,12 +290,16 @@ void net_client_tts_ack(uint32_t session, uint32_t audio_id, bool aborted)
     enqueue_session((input_t){ .kind = TTS_ACK, .session = session, .audio_id = audio_id, .aborted = aborted });
 }
 
+int16_t *net_client_rec_buf(void)
+{
+    return (int16_t *)(rtp_pkt + LARK_RTP_HDR_SIZE);
+}
+
 static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, size_t samples)
 {
     if (!samples || samples > LARK_RTP_SAMPLES || !ready_socket_session() || session != net_client_session()) {
         return false;
     }
-    uint8_t pkt[LARK_RTP_PACKET_BYTES];
     int fd = -1;
     struct sockaddr_in dst;
     uint32_t ssrc = 0, ts = 0;
@@ -313,9 +318,11 @@ static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, siz
 
     if (fd < 0) return false;
     size_t bytes = samples * sizeof(int16_t);
-    lark_rtp_encode(pkt, pt, seq, ts, ssrc);
-    memcpy(pkt + LARK_RTP_HDR_SIZE, pcm, bytes);
-    int sent = lwip_sendto(fd, pkt, LARK_RTP_HDR_SIZE + bytes, 0, (const struct sockaddr *)&dst, sizeof(dst));
+    lark_rtp_encode(rtp_pkt, pt, seq, ts, ssrc);
+    if (pcm != (const int16_t *)(rtp_pkt + LARK_RTP_HDR_SIZE)) {
+        memcpy(rtp_pkt + LARK_RTP_HDR_SIZE, pcm, bytes);
+    }
+    int sent = lwip_sendto(fd, rtp_pkt, LARK_RTP_HDR_SIZE + bytes, 0, (const struct sockaddr *)&dst, sizeof(dst));
     if (sent == (int)(LARK_RTP_HDR_SIZE + bytes) &&
         atomic_exchange_explicit(&rec_first_rtp, false, memory_order_relaxed)) {
         uint64_t dt = (uint64_t)esp_timer_get_time() - atomic_load_explicit(&rec_ctrl_us, memory_order_relaxed);

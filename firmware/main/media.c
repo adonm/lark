@@ -215,7 +215,8 @@ static void record(job_t *job)
             audio_tone(AUDIO_START_TONE, capture_cancelled, NULL);
         }
         if (!capture_cancelled(NULL)) {
-            esp_err_t err = audio_record_stream(job->bridge_endpoint, job->listen, stop_capture, upload_pcm, job);
+            esp_err_t err = audio_record_stream(job->bridge_endpoint, job->listen, net_client_rec_buf(),
+                                                stop_capture, upload_pcm, job);
             cancelled = err != ESP_OK || capture_cancelled(NULL);
         }
     }
