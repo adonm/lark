@@ -474,3 +474,35 @@ UPDATE messages SET channel = CASE
   ELSE 'in_person'
 END WHERE channel = '';
 ```
+
+---
+
+## 2026-11-22 — Companion `form` Column and Greg Chameleon Restore
+
+Added `form TEXT NOT NULL DEFAULT ''` to `companions` and exposed `form` in `me.companion` and portrait prompts.
+
+### Affects
+- SQLite / Lark API & MCP
+
+### How to Detect
+```sh
+sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(companions);" | grep -q '|form|' || echo "missing form"
+sqlite3 ~/.local/share/lark/lark.db "SELECT id, form FROM companions WHERE id='greg';"
+```
+
+### Upgrade Steps
+1. Stop `lark.service` and back up `~/.local/share/lark/lark.db`.
+2. Add the `form` column, set `greg`'s form to `'an old chameleon'`, and relink `greg` to the existing portrait sheet at `~/.local/share/lark/portraits/72120f6660ef1a2151b318904197b15e/`:
+   ```sql
+   ALTER TABLE companions ADD COLUMN form TEXT NOT NULL DEFAULT '';
+   UPDATE companions
+   SET form = 'an old chameleon',
+       face_svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 360"><rect width="360" height="360" fill="#F3ECFA"/><g data-pose="idle"><image href="portrait:72120f6660ef1a2151b318904197b15e:idle" width="360" height="360"/></g><g data-pose="blink"><image href="portrait:72120f6660ef1a2151b318904197b15e:blink" width="360" height="360"/></g><g data-pose="talk"><image href="portrait:72120f6660ef1a2151b318904197b15e:talk" width="360" height="360"/></g><g data-pose="think"><image href="portrait:72120f6660ef1a2151b318904197b15e:think" width="360" height="360"/></g><g data-pose="listen"><image href="portrait:72120f6660ef1a2151b318904197b15e:idle" width="360" height="360"/></g><g data-pose="sleep"><image href="portrait:72120f6660ef1a2151b318904197b15e:blink" width="360" height="360"/></g></svg>'
+   WHERE id = 'greg';
+   ```
+3. Start `lark.service`.
+
+### Verification
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, form FROM companions WHERE id='greg';"` returns `greg|an old chameleon`.
+- `GET /api/companions/greg` includes `"form": "an old chameleon"` and references `72120f6660ef1a2151b318904197b15e`.
+

@@ -20,10 +20,10 @@ func TestCLIAdminCommands(t *testing.T) {
 		return out.String()
 	}
 
-	if got := run("companions", "add", "Cake"); !strings.Contains(got, "Added companion cake (Cake)") {
+	if got := run("companions", "add", "Cake", "a cream cat"); !strings.Contains(got, "Added companion cake (Cake)") {
 		t.Fatal(got)
 	}
-	if got := run("companions", "add", "Mint"); !strings.Contains(got, "Added companion mint (Mint)") {
+	if got := run("companions", "add", "Mint", "a mint frog"); !strings.Contains(got, "Added companion mint (Mint)") {
 		t.Fatal(got)
 	}
 	if got := run("companions"); !strings.Contains(got, "cake\tCake") || !strings.Contains(got, "mint\tMint") {

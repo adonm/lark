@@ -23,7 +23,7 @@ func TestDeviceResetHistory(t *testing.T) {
 			w.WriteHeader(404)
 		})
 	})
-	v := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Milo"}, 201))
+	v := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Milo", "form": "a cat"}, 201))
 	id := str(v["id"])
 	path := base + "/api/companions/" + id
 	const other = "other-companion"

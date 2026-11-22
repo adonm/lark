@@ -9,8 +9,8 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	b, base := wsHarness(t, nil)
 
 	// 1. Create two companions; both start dormant with zero terminals.
-	cake := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Cake"}, 201))
-	mint := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Mint"}, 201))
+	cake := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Cake", "form": "a cat"}, 201))
+	mint := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Mint", "form": "a cat"}, 201))
 	cakeID, mintID := str(cake["id"]), str(mint["id"])
 	if cake["dormant"] != true || mint["dormant"] != true {
 		t.Fatalf("new companions should be dormant: cake=%v mint=%v", cake, mint)
@@ -64,8 +64,8 @@ func TestCompanionIntercom(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
-	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
-	_, _ = b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"})
+	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
+	_, _ = b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"})
 	cake := testConnectWS(t, base, "unit", false)
 	cake.hello(t, "vocat-0001", "cake")
 	mint := testConnectWS(t, base, "unit", false)

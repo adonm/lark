@@ -20,6 +20,7 @@ type companionLook struct {
 	MarkColor   string `json:"mark_color"`
 	AccentColor string `json:"accent_color"`
 	Personality string `json:"personality"`
+	Form        string `json:"form"`
 }
 
 type companionState struct {
@@ -55,12 +56,12 @@ func validCompanionID(id string) bool {
 	return len(id) >= 1 && len(id) <= 64 && companionSlugRE.MatchString(id)
 }
 
-const companionColumns = `id,name,configured,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at,dc_account_id`
+const companionColumns = `id,name,configured,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at,dc_account_id,form`
 
 func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured int
-	err := row.Scan(&c.ID, &c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.Voice, &c.FaceSVG, &c.UpdatedAt, &c.DCAccountID)
+	err := row.Scan(&c.ID, &c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.Voice, &c.FaceSVG, &c.UpdatedAt, &c.DCAccountID, &c.Form)
 	c.Configured = configured != 0
 	c.Voice = storedVoice(c.Voice)
 	if err == nil && c.FaceSVG == "" {
@@ -71,12 +72,13 @@ func readCompanionRow(row rowScanner) (companionState, error) {
 
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
 	id = strings.ToLower(id)
-	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,face_bg=excluded.face_bg,
 		mark_color=excluded.mark_color,accent_color=excluded.accent_color,personality=excluded.personality,
 		voice=excluded.voice,face_svg=excluded.face_svg,updated_at=max(companions.updated_at+1,excluded.updated_at),
-		dc_account_id=CASE WHEN excluded.dc_account_id>0 THEN excluded.dc_account_id ELSE companions.dc_account_id END`,
-		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli(), c.DCAccountID)
+		dc_account_id=CASE WHEN excluded.dc_account_id>0 THEN excluded.dc_account_id ELSE companions.dc_account_id END,
+		form=excluded.form`,
+		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli(), c.DCAccountID, c.Form)
 	return err
 }
 
@@ -183,6 +185,7 @@ func (b *larkServer) companionEntry(c companionState, full bool) object {
 		"mark_color":   c.MarkColor,
 		"accent_color": c.AccentColor,
 		"personality":  c.Personality,
+		"form":         c.Form,
 		"voice":        voice,
 		"online":       online,
 		"dormant":      len(termEntries) == 0,
@@ -248,6 +251,12 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 				return c, problem(400, "Expected a single-line personality of at most 160 characters, without brackets")
 			}
 			c.Personality = strings.TrimSpace(vibe)
+		case "form":
+			form, ok := val.(string)
+			if !ok || runeLen(form) > 160 || strings.ContainsAny(form, "[]") || strings.ContainsFunc(form, func(r rune) bool { return !unicode.IsPrint(r) }) {
+				return c, problem(400, "Expected a single-line form of at most 160 characters, without brackets")
+			}
+			c.Form = strings.TrimSpace(form)
 		case "voice":
 			if !voices.allowed(str(val)) {
 				return c, problem(400, "Unsupported voice")
@@ -492,7 +501,7 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 		}
 	}
 	patch := object{}
-	for _, k := range []string{"face_bg", "mark_color", "accent_color", "personality", "voice", "face_svg", "preset", "configured"} {
+	for _, k := range []string{"face_bg", "mark_color", "accent_color", "personality", "form", "voice", "face_svg", "preset", "configured"} {
 		if v, exists := obj[k]; exists {
 			patch[k] = v
 		}
@@ -503,6 +512,9 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 		if err != nil {
 			return companionState{}, err
 		}
+	}
+	if c.Configured && strings.TrimSpace(c.Form) == "" {
+		return companionState{}, fieldError("form", "companion form is required (for example, \"an old chameleon\")")
 	}
 	if !b.voices.allowed(c.Voice) {
 		c.Voice = b.voices.defaultFor(companionTheme(c.Name))

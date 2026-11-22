@@ -71,7 +71,7 @@ func TestLocalTimeAcrossAgentSurfaces(t *testing.T) {
 	}
 
 	id := "greg"
-	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Greg"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Greg", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	// Timer `at` without offset must be interpreted in local time.
@@ -186,7 +186,7 @@ func TestStateAndDirectMessage(t *testing.T) {
 	path := filepath.Join(dir, "lark.db")
 	db := testDB(t, path)
 	b := &larkServer{db: db}
-	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	mint := companionTarget{ID: "mint", Name: "Mint"}

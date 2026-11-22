@@ -231,7 +231,7 @@ func dcTestHarness(t *testing.T) (*larkServer, string, *stubDCRPC) {
 
 func TestDeltaChatVerifiedTextAndNonContactIgnored(t *testing.T) {
 	b, _, stub := dcTestHarness(t)
-	cake, err := b.createCompanion(t.Context(), object{"name": "Cake"})
+	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestDeltaChatVerifiedTextAndNonContactIgnored(t *testing.T) {
 
 func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 	b, base, stub := dcTestHarness(t)
-	cake, err := b.createCompanion(t.Context(), object{"name": "Cake"})
+	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,11 +319,11 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 
 func TestDeltaChatIntercomBetweenCompanions(t *testing.T) {
 	b, base, stub := dcTestHarness(t)
-	cake, err := b.createCompanion(t.Context(), object{"name": "Cake"})
+	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mint, err := b.createCompanion(t.Context(), object{"name": "Mint"})
+	mint, err := b.createCompanion(t.Context(), object{"name": "Mint", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 		sttCalled = len(pcm) > 0
 		return "Hello from voice note", nil
 	}
-	cake, err := b.createCompanion(t.Context(), object{"name": "Cake"})
+	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
 		}
 	}()
 
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 		}
 	}()
 
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +548,7 @@ func TestEmitSaySpeaksOnTerminal(t *testing.T) {
 		}
 	}()
 
-	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	dev := testConnectWS(t, base, "unit", false)
@@ -583,7 +583,7 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 		}
 	}()
 
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,11 +614,11 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 
 func TestStateExposesContacts(t *testing.T) {
 	b, base, stub := dcTestHarness(t)
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cake, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
+	cake, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,7 +730,7 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 		}
 	}()
 
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +791,7 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 
 func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
 	b, _, _ := dcTestHarness(t)
-	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	baseTS := time.Now().Add(-time.Minute)

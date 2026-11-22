@@ -72,7 +72,7 @@ func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 
 func TestWSMainMenuPages(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
+	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "cake")
 	bindMenu(c, b.ws, "vocat-0001")
@@ -192,7 +192,7 @@ func TestWSMenuListDetails(t *testing.T) {
 	} {
 		t.Run(tc.drawer, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
-			_, _ = b.createCompanion(t.Context(), object{"id": id, "name": "Cake"})
+			_, _ = b.createCompanion(t.Context(), object{"id": id, "name": "Cake", "form": "a cat"})
 			c := testConnectWS(t, base, "unit", false)
 			c.hello(t, "vocat-0001", id)
 			bindMenu(c, b.ws, "vocat-0001")
@@ -240,7 +240,7 @@ func TestWSMenuListDetails(t *testing.T) {
 
 func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	board := testConnectWS(t, base, "unit", false)

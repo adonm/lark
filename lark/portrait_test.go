@@ -288,8 +288,8 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	sheet := portraitFixture(t)
 	dir := t.TempDir()
 	b, base := wsHarness(t, nil)
-	own := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Own"}, 201))
-	other := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Other"}, 201))
+	own := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Own", "form": "a cat"}, 201))
+	other := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Other", "form": "a cat"}, 201))
 	id := str(own["id"])
 	patch := func(spec object, failed bool) object {
 		t.Helper()

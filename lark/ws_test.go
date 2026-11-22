@@ -313,7 +313,7 @@ func TestWSRecordingLimits(t *testing.T) {
 				}
 			})
 			const id = "vocat-e001"
-			if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
 				t.Fatal(err)
 			}
 			dev := testConnectWS(t, base, "unit", false)
@@ -475,7 +475,7 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 			close(allowSTT)
 		}
 	}()
-	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	from, to := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", false)
@@ -603,7 +603,7 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "vocat-a123"
-	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	phone := testConnectWS(t, base, "unit", false)

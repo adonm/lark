@@ -120,7 +120,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 		}
 	})
 	const id = "vocat-e021"
-	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
@@ -230,7 +230,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 		}
 	})
 	const id = "vocat-e025"
-	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
@@ -336,7 +336,7 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "vocat-e023"
-	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
@@ -428,7 +428,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 			}
 		})
 	})
-	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)

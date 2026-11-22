@@ -180,7 +180,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	var speech atomic.Int32
 	stub := &buildStub{allow: make(chan struct{}), reply: quizProposal}
 	b, base := stubBuildBridge(t, stub, true, &speech)
-	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Cat"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Cat", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	s := testConnectWS(t, base, "unit", false)
@@ -258,7 +258,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 func TestBuildProposesStorybookCompanion(t *testing.T) {
 	stub := &buildStub{allow: make(chan struct{}), reply: `{"preset":{"species":"owl","palette":"mint","accessory":"scarf"}}`}
 	b, _ := stubBuildBridge(t, stub, true, nil)
-	if _, err := b.createCompanion(t.Context(), object{"id": "storybook-build", "name": "Bean"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "storybook-build", "name": "Bean", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := b.builders.enqueue(t.Context(), "storybook-build", buildIntent{kind: "face"}, "Make me a mint owl wearing a scarf")
@@ -285,7 +285,7 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 		}
 		return sheet, nil
 	}}
-	if _, err := b.createCompanion(t.Context(), object{"id": "portrait-build", "name": "Bean"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "portrait-build", "name": "Bean", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := b.builders.enqueue(t.Context(), "portrait-build", buildIntent{kind: "face"}, "Make your face a hedgehog in a space suit")
@@ -318,7 +318,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			}
 			stub := &buildStub{allow: make(chan struct{}), reply: edit}
 			b, _ := stubBuildBridge(t, stub, true, nil)
-			if _, err := b.createCompanion(t.Context(), object{"id": companion, "name": "Cat"}); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": companion, "name": "Cat", "form": "a cat"}); err != nil {
 				t.Fatal(err)
 			}
 			write := func(name string) {
@@ -369,7 +369,7 @@ func TestBuildCancelAndRestartNeverPublish(t *testing.T) {
 			b.builders = newBuildManager(b)
 			stop := runBuildManager(t, b)
 			const companion = "build-cancel"
-			if _, err := b.createCompanion(t.Context(), object{"id": companion, "name": "Cat"}); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": companion, "name": "Cat", "form": "a cat"}); err != nil {
 				t.Fatal(err)
 			}
 			job, err := b.builders.enqueue(t.Context(), companion, buildIntent{kind: "new"}, "Make me a quiz")

@@ -163,7 +163,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bridge.db")
 	db := testDB(t, path)
 	b := recoveryServer(t, db, api, current)
-	c, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "face_bg": "#654321"})
+	c, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "face_bg": "#654321", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			if err := db.setMeta(t.Context(), mcpSchemaMeta, b.oc.contract); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum"}); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "form": "a cat"}); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now().Add(-time.Minute)

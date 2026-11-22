@@ -132,7 +132,7 @@ func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
 			w.WriteHeader(404)
 		})
 	})
-	c := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Keepsake", "voice": fableVoice}, 201))
+	c := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Keepsake", "voice": fableVoice, "form": "a cat"}, 201))
 	id := str(c["id"])
 	if err := b.oc.save(id, "ses_reset"); err != nil {
 		t.Fatal(err)
@@ -261,5 +261,36 @@ func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 	if strings.Count(awake, "#123ABC") != 2 || strings.Contains(awake, `x="95" y="123"`) ||
 		strings.Contains(awake, "M95 142H129") || strings.Contains(awake, `<circle cx="107"`) {
 		t.Fatal("original awake eyes still render under the edit", awake)
+	}
+}
+
+func TestCompanionFormAndPortraitPrompt(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Greg"}, 400)
+	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
+		"name": "Greg",
+		"form": "an old chameleon",
+	}, 201))
+	if created["form"] != "an old chameleon" {
+		t.Fatalf("created form = %v", created["form"])
+	}
+	id := str(created["id"])
+	me := stateMe(t, base, id)
+	if me["companion"].(object)["form"] != "an old chameleon" {
+		t.Fatalf("state me.companion.form = %v", me["companion"].(object)["form"])
+	}
+	// Look change without form preserves existing form.
+	updated, err := updateCompanion(b.companionFor(id), object{"face_bg": "#112233"}, b.voices)
+	if err != nil || updated.Form != "an old chameleon" {
+		t.Fatalf("updateCompanion lost form: %+v err=%v", updated, err)
+	}
+	// Explicit form update changes it.
+	updated, err = updateCompanion(updated, object{"form": "a mossy gecko"}, b.voices)
+	if err != nil || updated.Form != "a mossy gecko" {
+		t.Fatalf("updateCompanion did not update form: %+v err=%v", updated, err)
+	}
+	prompt := portraitPrompt(portraitSpec{Prompt: "wearing spectacles", Form: "an old chameleon", BG: "#F3ECFA", Style: portraitPixelStyle})
+	if !strings.Contains(prompt, "an old chameleon") {
+		t.Fatalf("portraitPrompt missing form: %s", prompt)
 	}
 }

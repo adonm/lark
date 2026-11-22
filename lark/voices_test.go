@@ -44,7 +44,7 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 		b.voices = companionVoiceStore(b.db, "")
 	})
 	const id = "legacy"
-	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Legacy"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Legacy", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	for old, want := range map[string]string{
@@ -95,10 +95,10 @@ func TestCompanionVoiceDefaults(t *testing.T) {
 	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, "")
 	})
-	if _, err := b.createCompanion(t.Context(), object{"id": "green", "name": "Green Cat", "voice": fableVoice}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "green", "name": "Green Cat", "voice": fableVoice, "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -143,9 +143,9 @@ func TestCompanionVoiceAPI(t *testing.T) {
 	if d := apiObjects(t, base+"/api/companions", "companions")[0].(object); d["voice"] != fableVoice {
 		t.Fatal("LAN companion list omitted the override")
 	}
-	testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Green", "voice": "unknown"}, 400)
+	testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Green", "voice": "unknown", "form": "a cat"}, 400)
 	created := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{
-		"name": "Green", "voice": "bm_george",
+		"name": "Green", "form": "a green cat", "voice": "bm_george",
 	}, 201))
 	_ = str(created["id"])
 	if listed := apiObjects(t, base+"/api/companions", "companions"); len(listed) != 2 ||

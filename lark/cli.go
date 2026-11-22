@@ -160,23 +160,24 @@ func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []stri
 			}
 			return nil
 		case 2:
-			switch args[0] {
-			case "add":
-				res, err := c.do(ctx, http.MethodPost, "/api/companions", object{"name": args[1]})
-				if err != nil {
-					return err
-				}
-				fmt.Fprintf(out, "Added companion %s (%s)\n", str(res["id"]), str(res["name"]))
-				return nil
-			case "rm":
+			if args[0] == "rm" {
 				if _, err := c.do(ctx, http.MethodDelete, "/api/companions/"+args[1], nil); err != nil {
 					return err
 				}
 				fmt.Fprintf(out, "Removed companion %s\n", args[1])
 				return nil
 			}
+		case 3:
+			if args[0] == "add" {
+				res, err := c.do(ctx, http.MethodPost, "/api/companions", object{"name": args[1], "form": args[2]})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "Added companion %s (%s)\n", str(res["id"]), str(res["name"]))
+				return nil
+			}
 		}
-		fmt.Fprintln(errOut, "Usage: lark companions [add <name> | rm <id>]")
+		fmt.Fprintln(errOut, "Usage: lark companions [add <name> <form> | rm <id>]")
 		return errors.New("invalid companions arguments")
 
 	case "terminals":

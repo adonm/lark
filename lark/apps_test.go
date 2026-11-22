@@ -321,7 +321,7 @@ func TestNativeAppDragAndUp(t *testing.T) {
 func TestAppStatePatchAcrossPlayers(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const boardID, webID = "cake", "mint"
-	if _, err := b.createCompanion(t.Context(), object{"id": webID, "name": "Mint"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": webID, "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", false)

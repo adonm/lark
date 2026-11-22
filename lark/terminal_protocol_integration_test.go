@@ -12,7 +12,7 @@ import (
 
 func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	hw := testConnectWS(t, base, "unit", false)
@@ -96,7 +96,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 			return "", nil
 		}
 	})
-	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	hw := testConnectWS(t, base, "unit", false)

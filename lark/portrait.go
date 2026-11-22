@@ -38,13 +38,13 @@ const portraitCenterY = 162
 var portraitPoses = [...]string{"idle", "blink", "talk", "think"}
 var portraitIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var portraitSchema = closedObject(object{
-	"prompt": uiString(600), "bg": hexTintSchema, "edit": object{"type": "boolean"},
+	"prompt": uiString(600), "form": uiString(160), "recolor": uiString(200), "bg": hexTintSchema, "edit": object{"type": "boolean"},
 	"style": object{"type": "string", "enum": []string{portraitStorybookStyle, portraitPixelStyle}, "default": portraitStorybookStyle},
 }, "prompt")
 
 type portraitSpec struct {
-	Prompt, BG, Style string
-	Edit              bool
+	Prompt, Form, Recolor, BG, Style string
+	Edit                             bool
 }
 
 type pendingPortrait struct {
@@ -85,6 +85,12 @@ Draw the very same front-facing character, head and rounded shoulders, at the ex
 ` + art + ` No extra props except requested accessories, no scene, no cast shadow, no texture or gradient on the background. Use the same solid flat ` + spec.BG + ` background across the entire sheet.`
 	if spec.Edit {
 		prompt += "\nUse the attached sheet as a reference. Keep character identity, silhouette, colors, expression layout and placement unchanged except for the requested change."
+	}
+	if spec.Form != "" {
+		prompt += "\nCharacter form: " + spec.Form
+	}
+	if spec.Recolor != "" {
+		prompt += "\nRecolor instruction: " + spec.Recolor
 	}
 	return prompt + "\nCharacter art direction: " + spec.Prompt
 }
@@ -470,6 +476,9 @@ func (p *portraitStore) prepare(ctx context.Context, current companionState, raw
 	}
 	if spec.Prompt = strings.TrimSpace(spec.Prompt); spec.Prompt == "" {
 		return nil, fieldError("companion.portrait.prompt", "describe the character or edit")
+	}
+	if spec.Form = strings.TrimSpace(spec.Form); spec.Form == "" {
+		spec.Form = current.Form
 	}
 	spec.BG = colorStringOr(spec.BG, storybookPalettes["peach"].bg)
 	if spec.Edit && str(raw.(object)["bg"]) == "" {

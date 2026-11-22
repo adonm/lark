@@ -192,7 +192,7 @@ var mcpTools = func() []object {
 		tool("patch", "Change companions, terminals, timers, memory or saved apps. For a shift, use companion.preset for instant Storybook presets or companion.portrait for bespoke Nano Banana 2.1 art (style pixel for 64×64 retro art). Memory and app batches are atomic. Stop running apps before changing slugs. Deletes run before renames and ignore missing slugs; renames update timers. Cancel timers before deleting their app. Companion defaults to update; create timers with in_seconds or at.",
 			schema(object{"companion_id": text,
 				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag}),
-				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "face_bg": text, "mark_color": text, "accent_color": text,
+				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "form": text, "face_bg": text, "mark_color": text, "accent_color": text,
 					"personality": text, "voice": voice, "preset": companionSchema, "portrait": portraitSchema, "face_svg": object{"type": "string", "maxLength": maxSVG, "description": "Complete SVG face with idle, blink, talk, listen, think and sleep pose layers"},
 					"face_edits": array(schema(object{"part": enum(faceParts...), "pose": enum(faceEditPoses...),
 						"svg": object{"type": "string", "maxLength": 16384, "description": "Replacement SVG fragment. Omit pose for all matching parts."}}, "part", "svg")),

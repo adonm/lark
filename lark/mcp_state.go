@@ -158,6 +158,7 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 				"mark_color":   c.MarkColor,
 				"accent_color": c.AccentColor,
 				"personality":  c.Personality,
+				"form":         c.Form,
 				"voice":        entry["voice"],
 				"face_svg":     c.FaceSVG,
 				"online":       entry["online"],

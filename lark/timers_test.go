@@ -139,7 +139,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	now := time.Now().UTC()
 	const device = "greg"
 	b := &larkServer{db: db, root: t.Context()}
-	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Greg"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Greg", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	first := newTimerManager(b)
@@ -300,7 +300,7 @@ func TestScopedTimerIsolationAndCaps(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 		for _, id := range []string{owner, other} {
-			if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Greg"}); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Greg", "form": "a cat"}); err != nil {
 				t.Fatal(err)
 			}
 		}

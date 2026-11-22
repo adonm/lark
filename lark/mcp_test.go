@@ -423,7 +423,7 @@ func TestEmitIntercom(t *testing.T) {
 		b.worker = fakeTTS(b.root, nil)
 	})
 	const from, to, text = "cake", "mint", "Dinner is ready."
-	if _, err := b.createCompanion(t.Context(), object{"id": to, "name": "Mint"}); err != nil {
+	if _, err := b.createCompanion(t.Context(), object{"id": to, "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
 	sender, recipient := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", false)
