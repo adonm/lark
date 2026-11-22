@@ -53,6 +53,9 @@ func (o *openCode) replaceBinding(ctx context.Context, companion string, old ses
 }
 
 func (o *openCode) recentDialogue(ctx context.Context, companion string, after int64) (string, error) {
+	if o.flushHistory != nil {
+		o.flushHistory(companion)
+	}
 	if after <= 0 {
 		return "", nil
 	}

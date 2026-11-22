@@ -49,7 +49,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 				}
 			}
 		}()
-		b.history = &chatHistory{b.db}
+		b.history = &chatHistory{db: b.db}
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
@@ -162,7 +162,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	db = testDB(t, path)
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b = &larkServer{db: db, root: root, terminals: terminalStore(db), history: &chatHistory{db}}
+	b = &larkServer{db: db, root: root, terminals: terminalStore(db), history: &chatHistory{db: db}}
 	b.ws = newWSHub(b, false)
 	defer b.ws.shutdown()
 	m := newTimerManager(b)

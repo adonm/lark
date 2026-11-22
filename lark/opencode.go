@@ -95,12 +95,14 @@ type openCode struct {
 	store    *store[string]
 	turns    [64]chan struct{}
 
-	mu         sync.Mutex
-	sig        condSignal
-	active     map[string]context.CancelFunc
-	interrupts map[string]bool
-	resets     map[string]*ocReset
-	verified   map[string]string
+	mu           sync.Mutex
+	sig          condSignal
+	active       map[string]context.CancelFunc
+	activeSource map[string]string
+	interrupts   map[string]bool
+	resets       map[string]*ocReset
+	verified     map[string]string
+	flushHistory func(string)
 }
 
 type ocReset struct {
@@ -111,7 +113,8 @@ type ocReset struct {
 func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, settings ocSettings) *openCode {
 	o := &openCode{upstream: u, project: project, settings: settings, db: db,
 		store:  sessionStore(db),
-		active: make(map[string]context.CancelFunc), interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
+		active: make(map[string]context.CancelFunc), activeSource: make(map[string]string),
+		interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
 		verified: make(map[string]string),
 		feed:     eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
 	o.feed.onConfigChange = func() { o.invalidateVerified() }
@@ -819,6 +822,7 @@ func (o *openCode) lockPrompt(ctx context.Context, device string) (context.Conte
 				defer unlock()
 				o.mu.Lock()
 				delete(o.active, device)
+				delete(o.activeSource, device)
 				o.mu.Unlock()
 				cancel()
 				_ = o.flushInterrupt(context.WithoutCancel(turn), device)

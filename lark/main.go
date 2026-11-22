@@ -165,12 +165,13 @@ func run() error {
 	b := &larkServer{root: root, token: token, db: db, terminals: terminalStore(db),
 		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, worker: worker,
 		voices:  companionVoiceStore(db, fallbackVoice),
-		history: &chatHistory{db},
+		history: &chatHistory{db: db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
 			generate: configuredPortraitGenerator(ocAPI, ocURL != "", os.Getenv("OPENCODE_API_KEY"))},
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
+	oc.flushHistory = b.history.flush
 	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
 	go b.dc.start(root)
 	defer b.dc.shutdown()
@@ -235,7 +236,7 @@ func run() error {
 		defer close(schemaDone)
 		b.runSchemaUpgrade(root, 5*time.Second, 5*time.Minute)
 	}()
-	defer func() { finish(); <-schemaDone }()
+	defer func() { finish(); <-schemaDone; b.history.close() }()
 	select {
 	case <-signals.Done():
 		b.timers.close()

@@ -56,7 +56,7 @@ func TestLocalTimeAcrossAgentSurfaces(t *testing.T) {
 
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.loc = loc
-		b.history = &chatHistory{b.db}
+		b.history = &chatHistory{db: b.db}
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})

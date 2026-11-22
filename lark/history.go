@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -63,7 +64,92 @@ func newChat(role, sender, text, source string) chatEntry {
 		Source: source, Channel: channelForSource(source), Timestamp: time.Now().In(time.Local)}
 }
 
-type chatHistory struct{ db *larkDB }
+type chatWrite struct {
+	id    string
+	entry chatEntry
+	sync  chan struct{}
+}
+
+type chatQueue struct {
+	ch   chan chatWrite
+	done chan struct{}
+}
+
+type chatHistory struct {
+	db     *larkDB
+	mu     sync.Mutex
+	queues map[string]*chatQueue
+	closed bool
+}
+
+func (h *chatHistory) queueFor(id string) *chatQueue {
+	key := strings.ToLower(id)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	if h.queues == nil {
+		h.queues = make(map[string]*chatQueue)
+	}
+	q := h.queues[key]
+	if q == nil {
+		q = &chatQueue{ch: make(chan chatWrite, 64), done: make(chan struct{})}
+		h.queues[key] = q
+		go h.runQueue(q)
+	}
+	return q
+}
+
+func (h *chatHistory) runQueue(q *chatQueue) {
+	defer close(q.done)
+	for w := range q.ch {
+		if w.sync != nil {
+			close(w.sync)
+			continue
+		}
+		if _, err := h.db.Exec(insertMessage, messageValues(w.id, w.entry)...); err != nil {
+			log.Printf("Lark could not persist message: %v", err)
+		}
+	}
+}
+
+func (h *chatHistory) flush(id string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	q := h.queues[strings.ToLower(id)]
+	h.mu.Unlock()
+	if q == nil {
+		return
+	}
+	done := make(chan struct{})
+	q.ch <- chatWrite{sync: done}
+	<-done
+}
+
+func (h *chatHistory) close() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	queues := make([]*chatQueue, 0, len(h.queues))
+	for _, q := range h.queues {
+		queues = append(queues, q)
+	}
+	clear(h.queues)
+	h.mu.Unlock()
+	for _, q := range queues {
+		close(q.ch)
+		<-q.done
+	}
+}
 
 type historyCursor struct {
 	TS int64  `json:"before_ts"`
@@ -119,8 +205,8 @@ func messageValues(id string, e chatEntry) []any {
 
 func (h *chatHistory) add(id string, e chatEntry) {
 	if e, ok := canonicalMessage(e); ok {
-		if _, err := h.db.Exec(insertMessage, messageValues(id, e)...); err != nil {
-			log.Printf("Lark could not persist message: %v", err)
+		if q := h.queueFor(id); q != nil {
+			q.ch <- chatWrite{id: strings.ToLower(id), entry: e}
 		}
 	}
 }
@@ -134,6 +220,7 @@ func (h *chatHistory) read(ctx context.Context, id string, limit int) ([]chatEnt
 }
 
 func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, before *historyCursor) ([]chatEntry, error) {
+	h.flush(id)
 	query := `SELECT id,role,sender,text,source,channel,card_title,ts_ms FROM messages WHERE companion_id=?`
 	args := []any{strings.ToLower(id)}
 	if before != nil {
@@ -171,12 +258,7 @@ func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, befo
 }
 
 func (b *larkServer) chat(id string, entry chatEntry, persist bool) {
-	entry, ok := b.recordChat(id, entry, persist)
-	if ok && b.ws != nil {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		b.ws.broadcastChat(id, entry)
-	}
+	b.recordChat(id, entry, persist)
 }
 
 func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatEntry, bool) {

@@ -923,6 +923,7 @@ func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
 	addAt(3*time.Second, "user", "You", "Who texted?", "voice")
 	addAt(4*time.Second, "companion", "Greg", "Mum did.", "voice")
 
+	b.history.flush("greg")
 	excerpt, err := b.oc.recentDialogue(t.Context(), "greg", baseTS.UnixMilli())
 	if err != nil {
 		t.Fatal(err)

@@ -22,7 +22,7 @@ func recoveryServer(t *testing.T, db *larkDB, api *httptest.Server, hash string)
 	o := newOpenCode(ctx, upstream{"OpenCode", api.Client(), fixedEndpoint{base: api.URL}}, db, "/workspace", ocSettings{})
 	o.contract = hash
 	return &larkServer{db: db, root: ctx, oc: o, token: "unit", terminals: terminalStore(db),
-		history: &chatHistory{db}, voices: companionVoiceStore(db, heartVoice)}
+		history: &chatHistory{db: db}, voices: companionVoiceStore(db, heartVoice)}
 }
 
 func recoveryMCP(ctx context.Context, base, method string, params object) (object, error) {
