@@ -424,8 +424,8 @@ func TestMCPStdioForwards(t *testing.T) {
 
 func TestDeltaChatUsesPrimaryModelAndAllowsTaskSubagent(t *testing.T) {
 	settings := openCodeSettings("lark")
-	if !slices.Contains(settings.Permissions, ocPermission{"task", "*", "allow"}) {
-		t.Fatalf("lark permissions missing task allow: %+v", settings.Permissions)
+	if !slices.Contains(settings.Permissions, ocPermission{"subagent", "deep", "allow"}) {
+		t.Fatalf("lark permissions missing subagent deep allow: %+v", settings.Permissions)
 	}
 	stub := newStubDCRPC()
 	var models []ocModel

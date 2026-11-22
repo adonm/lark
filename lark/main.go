@@ -52,7 +52,7 @@ func openCodeSettings(agent string) ocSettings {
 	if agent == "lark" {
 		s.Permissions = append(s.Permissions, ocPermission{"websearch", "*", "allow"},
 			ocPermission{"lark_*", "*", "allow"}, ocPermission{"execute", "*", "allow"},
-			ocPermission{"task", "*", "allow"})
+			ocPermission{"subagent", "deep", "allow"})
 	}
 	return s
 }
