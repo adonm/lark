@@ -40,6 +40,7 @@ type sttTiming struct {
 }
 
 type sttTimingKey struct{}
+type sttProbeKey struct{}
 
 func withSTTTiming(ctx context.Context) (context.Context, *sttTiming) {
 	t := &sttTiming{}
@@ -49,6 +50,15 @@ func withSTTTiming(ctx context.Context) (context.Context, *sttTiming) {
 func sttTimingFrom(ctx context.Context) *sttTiming {
 	t, _ := ctx.Value(sttTimingKey{}).(*sttTiming)
 	return t
+}
+
+func withSTTProbe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sttProbeKey{}, true)
+}
+
+func isSTTProbe(ctx context.Context) bool {
+	v, _ := ctx.Value(sttProbeKey{}).(bool)
+	return v
 }
 
 func (b *larkServer) decodeClip(ctx context.Context, pcm []byte) (string, error) {
@@ -85,6 +95,10 @@ func (b *larkServer) probeSTT(r *http.Request) (object, error) {
 // Match Lark's WAV padding, then Hex's 1.5 s minimum and 400 ms
 // trailing silence for Unified EN. Already-16 kHz mono audio is not resampled.
 func parakeetSamples(pcm []byte) []float32 {
+	return parakeetSamplesInto(nil, pcm)
+}
+
+func parakeetSamplesInto(dst []float32, pcm []byte) []float32 {
 	const pad = sampleRate * 150 / 1000
 	start, tail := 0, 0
 	for _, b := range pcm {
@@ -93,11 +107,17 @@ func parakeetSamples(pcm []byte) []float32 {
 			break
 		}
 	}
-	samples := make([]float32, max(start+len(pcm)/2+tail, sampleRate*3/2)+sampleRate*400/1000)
-	for i := range len(pcm) / 2 {
-		samples[start+i] = float32(int16(le.Uint16(pcm[2*i:]))) / 32768
+	total := max(start+len(pcm)/2+tail, sampleRate*3/2) + sampleRate*400/1000
+	if cap(dst) < total {
+		dst = make([]float32, total)
+	} else {
+		dst = dst[:total]
+		clear(dst)
 	}
-	return samples
+	for i := range len(pcm) / 2 {
+		dst[start+i] = float32(int16(le.Uint16(pcm[2*i:]))) / 32768
+	}
+	return dst
 }
 
 // Hex strips these known subtitle hallucinations only at the very end.

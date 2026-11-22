@@ -170,7 +170,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			// The prefix is immutable; the capture worker only appends.
 			go func(pcm []byte, last time.Duration) {
 				start := time.Now()
-				sttCtx, timing := withSTTTiming(ctx)
+				sttCtx, timing := withSTTTiming(withSTTProbe(ctx))
 				text, err := h.b.decodeClip(sttCtx, pcm)
 				result <- pauseTranscript{last: last, text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run}
 			}(u.pcm, u.policy.last)
