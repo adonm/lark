@@ -355,3 +355,293 @@ func decodeRTPHeader(pkt []byte) (pt uint8, seq uint16, ts, ssrc uint32, ok bool
 		binary.BigEndian.Uint32(pkt[8:12]),
 		true
 }
+
+// Unified terminal protocol v1 constants and codecs.
+const (
+	protoVersion1 uint8  = 1
+	resumeTokenLen       = 16
+	resumeWindowMS       = 30000
+
+	// Terminal -> Lark v1 message types
+	tMsgHello       uint8 = 0x01
+	tMsgResume      uint8 = 0x02
+	tMsgTelemetry   uint8 = 0x03
+	tMsgPointer     uint8 = 0x04
+	tMsgWakeWord    uint8 = 0x05
+	tMsgRecStart    uint8 = 0x06
+	tMsgRecEnd      uint8 = 0x07
+	tMsgTTSAck      uint8 = 0x08
+	tMsgCallReq     uint8 = 0x09
+	tMsgMedia       uint8 = 0x0A
+	tMsgTextInput   uint8 = 0x0B
+	tMsgPromptReply uint8 = 0x0C
+	tMsgWatch       uint8 = 0x0D
+	tMsgSetVolume   uint8 = 0x0E
+	tMsgPing        uint8 = 0x0F
+	tMsgPong        uint8 = 0x10
+
+	// Lark -> Terminal v1 message types
+	tMsgWelcome      uint8 = 0x81
+	tMsgReject       uint8 = 0x82
+	tMsgFrame        uint8 = 0x83
+	tMsgFrameSVG     uint8 = 0x84
+	tMsgWakeWordCtrl uint8 = 0x85
+	tMsgRecCtrl      uint8 = 0x86
+	tMsgTTSCtrl      uint8 = 0x87
+	tMsgTTSPCM       uint8 = 0x88
+	tMsgCallCtrl     uint8 = 0x89
+	tMsgChime        uint8 = 0x8A
+	tMsgPower        uint8 = 0x8B
+	tMsgVolume       uint8 = 0x8C
+	tMsgStatus       uint8 = 0x8D
+	tMsgVoiceOwner   uint8 = 0x8E
+	tMsgPrompt       uint8 = 0x8F
+	tMsgPromptEnded  uint8 = 0x90
+	tMsgCompanion    uint8 = 0x91
+	tMsgPeers        uint8 = 0x92
+	tMsgEvent        uint8 = 0x93
+
+	termKindHardware uint8 = 0
+	termKindWeb      uint8 = 1
+
+	dispRGB565 uint8 = 1 << 0
+	dispSVG    uint8 = 1 << 1
+
+	codecBitRaw    uint8 = 1 << 0
+	codecBitRLE565 uint8 = 1 << 1
+	codecBitLZ4    uint8 = 1 << 2
+	codecBitJPEG   uint8 = 1 << 3
+
+	shapeRound uint8 = 0
+	shapeRect  uint8 = 1
+
+	helloFlagIfFree uint8 = 1 << 0
+
+	rejectBadToken        uint8 = 1
+	rejectBadVersion      uint8 = 2
+	rejectUnknownTerminal uint8 = 3
+	rejectFull            uint8 = 4
+	rejectOccupied        uint8 = 5
+	rejectBadCaps         uint8 = 6
+
+	statusIdle      uint8 = 0
+	statusListening uint8 = 1
+	statusThinking  uint8 = 2
+	statusSpeaking  uint8 = 3
+	statusBlocked   uint8 = 4
+	statusDone      uint8 = 5
+	statusError     uint8 = 6
+
+	promptNone       uint8 = 0
+	promptPermission uint8 = 1
+	promptQuestion   uint8 = 2
+
+	eventSavedApps       uint8 = 1
+	eventTimers          uint8 = 2
+	eventChat            uint8 = 3
+	eventHistoryArchived uint8 = 4
+	eventParentPolicy    uint8 = 5
+)
+
+type terminalHello struct {
+	protoVersion   uint8
+	kind           uint8
+	capsMask       uint32
+	displayFormats uint8
+	frameCodecs    uint8
+	width          uint16
+	height         uint16
+	shape          uint8
+	flags          uint8
+	udpPort        uint16
+	terminalID     string
+	companionID    string
+	board          string
+	firmware       string
+	token          string
+}
+
+type terminalResume struct {
+	protoVersion uint8
+	resumeToken  [resumeTokenLen]byte
+	lastSeq      uint32
+	terminalID   string
+}
+
+func appendStr8(dst []byte, s string) []byte {
+	n := min(len(s), 255)
+	dst = append(dst, byte(n))
+	return append(dst, s[:n]...)
+}
+
+func appendStr16(dst []byte, s string) []byte {
+	n := min(len(s), 65535)
+	dst = binary.LittleEndian.AppendUint16(dst, uint16(n))
+	return append(dst, s[:n]...)
+}
+
+func readStr8(b []byte, off *int) (string, bool) {
+	if *off >= len(b) {
+		return "", false
+	}
+	n := int(b[*off])
+	*off++
+	if *off+n > len(b) {
+		return "", false
+	}
+	s := string(b[*off : *off+n])
+	*off += n
+	return s, true
+}
+
+func readStr16(b []byte, off *int) (string, bool) {
+	if *off+2 > len(b) {
+		return "", false
+	}
+	n := int(binary.LittleEndian.Uint16(b[*off : *off+2]))
+	*off += 2
+	if *off+n > len(b) {
+		return "", false
+	}
+	s := string(b[*off : *off+n])
+	*off += n
+	return s, true
+}
+
+func parseTerminalHello(b []byte) (terminalHello, error) {
+	if len(b) < 21 {
+		return terminalHello{}, errProtoShort
+	}
+	h := terminalHello{
+		protoVersion:   b[0],
+		kind:           b[1],
+		capsMask:       binary.LittleEndian.Uint32(b[2:6]),
+		displayFormats: b[6],
+		frameCodecs:    b[7],
+		width:          binary.LittleEndian.Uint16(b[8:10]),
+		height:         binary.LittleEndian.Uint16(b[10:12]),
+		shape:          b[12],
+		flags:          b[13],
+		udpPort:        binary.LittleEndian.Uint16(b[14:16]),
+	}
+	idLen, compLen, boardLen, fwLen, tokLen := int(b[16]), int(b[17]), int(b[18]), int(b[19]), int(b[20])
+	if len(b) < 21+idLen+compLen+boardLen+fwLen+tokLen {
+		return terminalHello{}, errProtoShort
+	}
+	off := 21
+	h.terminalID = string(b[off : off+idLen])
+	off += idLen
+	h.companionID = string(b[off : off+compLen])
+	off += compLen
+	h.board = string(b[off : off+boardLen])
+	off += boardLen
+	h.firmware = string(b[off : off+fwLen])
+	off += fwLen
+	h.token = string(b[off : off+tokLen])
+	return h, nil
+}
+
+func parseTerminalResume(b []byte) (terminalResume, error) {
+	if len(b) < 22 {
+		return terminalResume{}, errProtoShort
+	}
+	var r terminalResume
+	r.protoVersion = b[0]
+	copy(r.resumeToken[:], b[1:17])
+	r.lastSeq = binary.LittleEndian.Uint32(b[17:21])
+	idLen := int(b[21])
+	if len(b) < 22+idLen {
+		return terminalResume{}, errProtoShort
+	}
+	r.terminalID = string(b[22 : 22+idLen])
+	return r, nil
+}
+
+func encodeWelcome(flags uint8, udpPort uint16, ssrc, maxMsgBytes, resumeWinMS, seq uint32, token [resumeTokenLen]byte, terminalID, companionID string) []byte {
+	b := make([]byte, 0, 38+len(terminalID)+len(companionID))
+	b = append(b, protoVersion1, flags)
+	b = binary.LittleEndian.AppendUint16(b, udpPort)
+	b = binary.LittleEndian.AppendUint32(b, ssrc)
+	b = binary.LittleEndian.AppendUint32(b, maxMsgBytes)
+	b = binary.LittleEndian.AppendUint32(b, resumeWinMS)
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = append(b, token[:]...)
+	tidLen := min(len(terminalID), 255)
+	cidLen := min(len(companionID), 255)
+	b = append(b, byte(tidLen), byte(cidLen))
+	b = append(b, terminalID[:tidLen]...)
+	b = append(b, companionID[:cidLen]...)
+	return b
+}
+
+func encodeReject(reason uint8, message string) []byte {
+	b := make([]byte, 0, 2+len(message))
+	b = append(b, reason)
+	return appendStr8(b, message)
+}
+
+func encodeFrameSVG(rev uint32, terminalID, companionID, svg string) []byte {
+	tidLen := min(len(terminalID), 255)
+	cidLen := min(len(companionID), 255)
+	b := make([]byte, 0, 10+tidLen+cidLen+len(svg))
+	b = binary.LittleEndian.AppendUint32(b, rev)
+	b = append(b, byte(tidLen), byte(cidLen))
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(svg)))
+	b = append(b, terminalID[:tidLen]...)
+	b = append(b, companionID[:cidLen]...)
+	return append(b, svg...)
+}
+
+func encodeStatus(seq uint32, state, progress, kind uint8, text string) []byte {
+	b := make([]byte, 0, 9+len(text))
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = append(b, state, progress, kind)
+	return appendStr16(b, text)
+}
+
+func encodeVoiceOwner(seq uint32, companionID, terminalID string) []byte {
+	b := make([]byte, 0, 6+len(companionID)+len(terminalID))
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = appendStr8(b, companionID)
+	return appendStr8(b, terminalID)
+}
+
+func encodePrompt(seq uint32, kind uint8, id, text string, options []string) []byte {
+	b := make([]byte, 0, 16+len(id)+len(text))
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = append(b, kind)
+	b = appendStr8(b, id)
+	b = appendStr16(b, text)
+	n := min(len(options), 255)
+	b = append(b, byte(n))
+	for i := range n {
+		b = appendStr8(b, options[i])
+	}
+	return b
+}
+
+func encodePromptEnded(seq uint32, id string) []byte {
+	b := make([]byte, 0, 5+len(id))
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	return appendStr8(b, id)
+}
+
+func encodeCompanionMsg(seq uint32, id, name, voice, faceBG, markColor, accentColor string) []byte {
+	b := make([]byte, 0, 16+len(id)+len(name)+len(voice)+24)
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = appendStr8(b, id)
+	b = appendStr8(b, name)
+	b = appendStr8(b, voice)
+	b = appendStr8(b, faceBG)
+	b = appendStr8(b, markColor)
+	return appendStr8(b, accentColor)
+}
+
+func encodeEventMsg(seq uint32, kind uint8, companionID, arg1, arg2 string) []byte {
+	b := make([]byte, 0, 9+len(companionID)+len(arg1)+len(arg2))
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = append(b, kind)
+	b = appendStr8(b, companionID)
+	b = appendStr8(b, arg1)
+	return appendStr16(b, arg2)
+}

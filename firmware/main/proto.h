@@ -8,41 +8,90 @@
 
 enum {
     LARK_PROTO_MAGIC = 0x4C, // 'L'
+    LARK_PROTO_VERSION = 1,
     LARK_PROTO_HDR_SIZE = 8,
     LARK_PROTO_MAX_PAYLOAD = 320 * 1024,
+    LARK_RESUME_TOKEN_LEN = 16,
+    LARK_RESUME_WINDOW_MS = 30000,
     LARK_DEFAULT_DEVICE_PORT = 8766,
     LARK_DEFAULT_HTTP_PORT = 8765,
 };
 
-// Device -> Bridge TCP message types
+// Terminal -> Lark message types
 enum {
     LARK_MSG_HELLO = 0x01,
-    LARK_MSG_STATUS = 0x02,
-    LARK_MSG_POINTER = 0x03,
-    LARK_MSG_WAKE_WORD = 0x04,
-    LARK_MSG_REC_START = 0x05,
-    LARK_MSG_REC_END = 0x06,
-    LARK_MSG_TTS_ACK = 0x07,
-    LARK_MSG_CALL_FAILED = 0x08,
-    LARK_MSG_PING = 0x09,
-    LARK_MSG_PONG = 0x0A,
+    LARK_MSG_RESUME = 0x02,
+    LARK_MSG_TELEMETRY = 0x03,
+    LARK_MSG_POINTER = 0x04,
+    LARK_MSG_WAKE_WORD = 0x05,
+    LARK_MSG_REC_START = 0x06,
+    LARK_MSG_REC_END = 0x07,
+    LARK_MSG_TTS_ACK = 0x08,
+    LARK_MSG_CALL_REQ = 0x09,
+    LARK_MSG_MEDIA = 0x0A,
+    LARK_MSG_TEXT_INPUT = 0x0B,
+    LARK_MSG_PROMPT_REPLY = 0x0C,
+    LARK_MSG_WATCH = 0x0D,
+    LARK_MSG_SET_VOLUME = 0x0E,
+    LARK_MSG_PING = 0x0F,
+    LARK_MSG_PONG = 0x10,
 };
 
-// Bridge -> Device TCP message types
+// Lark -> Terminal message types
 enum {
-    LARK_MSG_HELLO_OK = 0x81,
-    LARK_MSG_FRAME = 0x82,
-    LARK_MSG_WAKE_WORD_CTRL = 0x83,
-    LARK_MSG_REC_CTRL = 0x84,
-    LARK_MSG_TTS_CTRL = 0x85,
-    LARK_MSG_TTS_PCM = 0x86,
-    LARK_MSG_CALL_CTRL = 0x87,
-    LARK_MSG_CHIME = 0x88,
-    LARK_MSG_POWER = 0x89,
-    LARK_MSG_VOLUME = 0x8A,
+    LARK_MSG_WELCOME = 0x81,
+    LARK_MSG_REJECT = 0x82,
+    LARK_MSG_FRAME = 0x83,
+    LARK_MSG_FRAME_SVG = 0x84,
+    LARK_MSG_WAKE_WORD_CTRL = 0x85,
+    LARK_MSG_REC_CTRL = 0x86,
+    LARK_MSG_TTS_CTRL = 0x87,
+    LARK_MSG_TTS_PCM = 0x88,
+    LARK_MSG_CALL_CTRL = 0x89,
+    LARK_MSG_CHIME = 0x8A,
+    LARK_MSG_POWER = 0x8B,
+    LARK_MSG_VOLUME = 0x8C,
+    LARK_MSG_STATUS = 0x8D,
+    LARK_MSG_VOICE_OWNER = 0x8E,
+    LARK_MSG_PROMPT = 0x8F,
+    LARK_MSG_PROMPT_ENDED = 0x90,
+    LARK_MSG_COMPANION = 0x91,
+    LARK_MSG_PEERS = 0x92,
+    LARK_MSG_EVENT = 0x93,
 };
 
-// Capability bits in MSG_HELLO.caps_mask
+// Terminal kind
+enum {
+    LARK_KIND_HARDWARE = 0,
+    LARK_KIND_WEB = 1,
+};
+
+// Display format bits
+enum {
+    LARK_DISP_RGB565 = 1u << 0,
+    LARK_DISP_SVG = 1u << 1,
+};
+
+// Frame codec bits
+enum {
+    LARK_CODEC_RAW = 1u << 0,
+    LARK_CODEC_RLE565 = 1u << 1,
+    LARK_CODEC_LZ4 = 1u << 2,
+    LARK_CODEC_JPEG = 1u << 3,
+};
+
+// Screen shape
+enum {
+    LARK_SHAPE_ROUND = 0,
+    LARK_SHAPE_RECT = 1,
+};
+
+// Hello flags
+enum {
+    LARK_HELLO_FLAG_IF_FREE = 1u << 0,
+};
+
+// Capability bits in HELLO.caps_mask
 enum {
     LARK_CAP_BATTERY = 1u << 0,
     LARK_CAP_HEAD_PADS = 1u << 1,
@@ -53,6 +102,34 @@ enum {
     LARK_CAP_BRIDGE_ENDPOINT = 1u << 6,
     LARK_CAP_PANEL_SLEEP = 1u << 7,
     LARK_CAP_WAKE_WORD = 1u << 8,
+};
+
+// Reject reasons
+enum {
+    LARK_REJECT_BAD_TOKEN = 1,
+    LARK_REJECT_BAD_VERSION = 2,
+    LARK_REJECT_UNKNOWN_TERMINAL = 3,
+    LARK_REJECT_FULL = 4,
+    LARK_REJECT_OCCUPIED = 5,
+    LARK_REJECT_BAD_CAPS = 6,
+};
+
+// Status states
+enum {
+    LARK_STATE_IDLE = 0,
+    LARK_STATE_LISTENING = 1,
+    LARK_STATE_THINKING = 2,
+    LARK_STATE_SPEAKING = 3,
+    LARK_STATE_BLOCKED = 4,
+    LARK_STATE_DONE = 5,
+    LARK_STATE_ERROR = 6,
+};
+
+// Prompt / status kinds
+enum {
+    LARK_PROMPT_NONE = 0,
+    LARK_PROMPT_PERMISSION = 1,
+    LARK_PROMPT_QUESTION = 2,
 };
 
 // Pointer kinds
@@ -78,7 +155,7 @@ enum {
     LARK_TTS_END = 2,
 };
 
-// Call ctrl ops
+// Call req actions & ctrl ops
 enum {
     LARK_CALL_END = 0,
     LARK_CALL_START = 1,
@@ -95,14 +172,14 @@ enum {
     LARK_CHIME_RING = 4,
 };
 
-// Hello OK flags
+// Welcome flags
 enum {
-    LARK_HELLO_FLAG_BRIDGE_EP = 1u << 0,
+    LARK_WELCOME_FLAG_BRIDGE_EP = 1u << 0,
 };
 
-// Status flags
+// Telemetry flags
 enum {
-    LARK_STATUS_SLEEPING = 1u << 0,
+    LARK_TELEMETRY_SLEEPING = 1u << 0,
 };
 
 // RTP (RFC 3550) constants for 20 ms 16 kHz mono 16-bit PCM
@@ -126,22 +203,47 @@ typedef struct __attribute__((packed)) {
 } lark_hdr_t;
 
 typedef struct __attribute__((packed)) {
+    uint8_t proto_version;
+    uint8_t kind;
     uint32_t caps_mask;
+    uint8_t display_formats;
+    uint8_t frame_codecs;
     uint16_t width;
     uint16_t height;
+    uint8_t shape;
+    uint8_t flags;
     uint16_t udp_port;
     uint8_t id_len;
+    uint8_t comp_len;
     uint8_t board_len;
     uint8_t fw_len;
     uint8_t tok_len;
 } lark_hello_t;
 
 typedef struct __attribute__((packed)) {
+    uint8_t proto_version;
+    uint8_t resume_token[LARK_RESUME_TOKEN_LEN];
+    uint32_t last_seq;
+    uint8_t id_len;
+} lark_resume_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t proto_version;
+    uint8_t flags;
     uint16_t udp_port;
-    uint16_t flags;
     uint32_t ssrc;
-    uint32_t session_id;
-} lark_hello_ok_t;
+    uint32_t max_msg_bytes;
+    uint32_t resume_window_ms;
+    uint32_t seq;
+    uint8_t resume_token[LARK_RESUME_TOKEN_LEN];
+    uint8_t id_len;
+    uint8_t comp_len;
+} lark_welcome_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t reason;
+    uint8_t msg_len;
+} lark_reject_t;
 
 typedef struct __attribute__((packed)) {
     int16_t wifi_rssi;
@@ -152,7 +254,7 @@ typedef struct __attribute__((packed)) {
     uint8_t pad;
     uint32_t free_heap;
     uint32_t uptime_s;
-} lark_status_t;
+} lark_telemetry_t;
 
 typedef struct __attribute__((packed)) {
     uint8_t kind;
@@ -163,31 +265,41 @@ typedef struct __attribute__((packed)) {
 } lark_pointer_t;
 
 typedef struct __attribute__((packed)) {
+    uint8_t op;
+    uint8_t flags;
     uint16_t session;
-    uint8_t target;
-    uint8_t pad;
-} lark_rec_start_t;
-
-typedef struct __attribute__((packed)) {
-    uint16_t session;
-    uint8_t target;
-    uint8_t cancelled;
-} lark_rec_end_t;
+    uint8_t target_len;
+} lark_rec_ctrl_t;
 
 typedef struct __attribute__((packed)) {
     uint8_t op;
-    uint8_t target;
-    uint16_t session;
-} lark_rec_ctrl_t;
+    uint64_t audio_id;
+} lark_tts_ctrl_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t aborted;
+    uint64_t audio_id;
+} lark_tts_ack_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t seq;
+    uint8_t state;
+    uint8_t progress;
+    uint8_t kind;
+    uint16_t text_len;
+} lark_status_t;
 
 _Static_assert(sizeof(lark_hdr_t) == 8, "lark_hdr_t must be 8 bytes");
-_Static_assert(sizeof(lark_hello_t) == 14, "lark_hello_t must be 14 bytes");
-_Static_assert(sizeof(lark_hello_ok_t) == 12, "lark_hello_ok_t must be 12 bytes");
-_Static_assert(sizeof(lark_status_t) == 16, "lark_status_t must be 16 bytes");
+_Static_assert(sizeof(lark_hello_t) == 21, "lark_hello_t must be 21 bytes");
+_Static_assert(sizeof(lark_resume_t) == 22, "lark_resume_t must be 22 bytes");
+_Static_assert(sizeof(lark_welcome_t) == 38, "lark_welcome_t must be 38 bytes");
+_Static_assert(sizeof(lark_reject_t) == 2, "lark_reject_t must be 2 bytes");
+_Static_assert(sizeof(lark_telemetry_t) == 16, "lark_telemetry_t must be 16 bytes");
 _Static_assert(sizeof(lark_pointer_t) == 8, "lark_pointer_t must be 8 bytes");
-_Static_assert(sizeof(lark_rec_start_t) == 4, "lark_rec_start_t must be 4 bytes");
-_Static_assert(sizeof(lark_rec_end_t) == 4, "lark_rec_end_t must be 4 bytes");
-_Static_assert(sizeof(lark_rec_ctrl_t) == 4, "lark_rec_ctrl_t must be 4 bytes");
+_Static_assert(sizeof(lark_rec_ctrl_t) == 5, "lark_rec_ctrl_t must be 5 bytes");
+_Static_assert(sizeof(lark_tts_ctrl_t) == 9, "lark_tts_ctrl_t must be 9 bytes");
+_Static_assert(sizeof(lark_tts_ack_t) == 9, "lark_tts_ack_t must be 9 bytes");
+_Static_assert(sizeof(lark_status_t) == 9, "lark_status_t must be 9 bytes");
 
 static inline void lark_pack_hdr(uint8_t *dst, uint8_t type, uint16_t seq, uint32_t length)
 {
@@ -211,6 +323,66 @@ static inline bool lark_unpack_hdr(const uint8_t *src, lark_hdr_t *out)
     out->type = src[1];
     out->seq = (uint16_t)src[2] | ((uint16_t)src[3] << 8);
     out->length = length;
+    return true;
+}
+
+static inline size_t lark_encode_hello(uint8_t *dst, size_t cap, const lark_hello_t *h,
+                                       const char *term_id, const char *comp_id,
+                                       const char *board, const char *fw, const char *tok)
+{
+    if (!dst || !h) return 0;
+    size_t total = sizeof(lark_hello_t) + h->id_len + h->comp_len + h->board_len + h->fw_len + h->tok_len;
+    if (total > cap) return 0;
+    memcpy(dst, h, sizeof(*h));
+    size_t off = sizeof(*h);
+    if (h->id_len && term_id) memcpy(dst + off, term_id, h->id_len);
+    off += h->id_len;
+    if (h->comp_len && comp_id) memcpy(dst + off, comp_id, h->comp_len);
+    off += h->comp_len;
+    if (h->board_len && board) memcpy(dst + off, board, h->board_len);
+    off += h->board_len;
+    if (h->fw_len && fw) memcpy(dst + off, fw, h->fw_len);
+    off += h->fw_len;
+    if (h->tok_len && tok) memcpy(dst + off, tok, h->tok_len);
+    return total;
+}
+
+static inline bool lark_decode_welcome(const uint8_t *src, size_t len, lark_welcome_t *out,
+                                       char *term_id, size_t term_cap,
+                                       char *comp_id, size_t comp_cap)
+{
+    if (!src || !out || len < sizeof(lark_welcome_t)) return false;
+    memcpy(out, src, sizeof(*out));
+    size_t need = sizeof(*out) + out->id_len + out->comp_len;
+    if (len < need) return false;
+    size_t off = sizeof(*out);
+    if (term_id && term_cap) {
+        size_t n = out->id_len < term_cap - 1 ? out->id_len : term_cap - 1;
+        if (n) memcpy(term_id, src + off, n);
+        term_id[n] = '\0';
+    }
+    off += out->id_len;
+    if (comp_id && comp_cap) {
+        size_t n = out->comp_len < comp_cap - 1 ? out->comp_len : comp_cap - 1;
+        if (n) memcpy(comp_id, src + off, n);
+        comp_id[n] = '\0';
+    }
+    return true;
+}
+
+static inline bool lark_decode_reject(const uint8_t *src, size_t len, uint8_t *reason,
+                                      char *msg, size_t msg_cap)
+{
+    if (!src || len < sizeof(lark_reject_t)) return false;
+    lark_reject_t r;
+    memcpy(&r, src, sizeof(r));
+    if (len < sizeof(r) + r.msg_len) return false;
+    if (reason) *reason = r.reason;
+    if (msg && msg_cap) {
+        size_t n = r.msg_len < msg_cap - 1 ? r.msg_len : msg_cap - 1;
+        if (n) memcpy(msg, src + sizeof(r), n);
+        msg[n] = '\0';
+    }
     return true;
 }
 

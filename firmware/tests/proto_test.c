@@ -123,12 +123,81 @@ static void test_url_parsing(void)
     assert(!lark_parse_bridge_url("lark://10.0.0.5:99999", host, sizeof(host), &port));
 }
 
+static void test_hello_welcome_reject(void)
+{
+    lark_hello_t h = {
+        .proto_version = LARK_PROTO_VERSION,
+        .kind = LARK_KIND_HARDWARE,
+        .caps_mask = LARK_CAP_BATTERY | LARK_CAP_CALL | LARK_CAP_DRAG,
+        .display_formats = LARK_DISP_RGB565,
+        .frame_codecs = LARK_CODEC_RAW | LARK_CODEC_RLE565 | LARK_CODEC_LZ4 | LARK_CODEC_JPEG,
+        .width = 360,
+        .height = 360,
+        .shape = LARK_SHAPE_ROUND,
+        .flags = 0,
+        .udp_port = 40001,
+        .id_len = 10,
+        .comp_len = 0,
+        .board_len = 9,
+        .fw_len = 6,
+        .tok_len = 5,
+    };
+    uint8_t buf[128];
+    size_t n = lark_encode_hello(buf, sizeof(buf), &h, "vocat-33d8", "", "esp-vocat", "0.12.0", "token");
+    assert(n == sizeof(lark_hello_t) + 10 + 0 + 9 + 6 + 5);
+    assert(buf[0] == LARK_PROTO_VERSION);
+    assert(buf[1] == LARK_KIND_HARDWARE);
+    assert(memcmp(buf + sizeof(lark_hello_t), "vocat-33d8esp-vocat0.12.0token", 30) == 0);
+    assert(lark_encode_hello(buf, 10, &h, "vocat-33d8", "", "esp-vocat", "0.12.0", "token") == 0);
+
+    uint8_t wbuf[sizeof(lark_welcome_t) + 14];
+    lark_welcome_t w = {
+        .proto_version = LARK_PROTO_VERSION,
+        .flags = LARK_WELCOME_FLAG_BRIDGE_EP,
+        .udp_port = 8766,
+        .ssrc = 0x11223344u,
+        .max_msg_bytes = LARK_PROTO_MAX_PAYLOAD,
+        .resume_window_ms = LARK_RESUME_WINDOW_MS,
+        .seq = 42,
+        .id_len = 10,
+        .comp_len = 4,
+    };
+    for (int i = 0; i < LARK_RESUME_TOKEN_LEN; ++i) w.resume_token[i] = (uint8_t)(i + 1);
+    memcpy(wbuf, &w, sizeof(w));
+    memcpy(wbuf + sizeof(w), "vocat-33d8cake", 14);
+
+    lark_welcome_t wout = {0};
+    char tid[32], cid[32];
+    assert(lark_decode_welcome(wbuf, sizeof(wbuf), &wout, tid, sizeof(tid), cid, sizeof(cid)));
+    assert(wout.proto_version == LARK_PROTO_VERSION);
+    assert(wout.flags == LARK_WELCOME_FLAG_BRIDGE_EP);
+    assert(wout.udp_port == 8766);
+    assert(wout.ssrc == 0x11223344u);
+    assert(wout.seq == 42);
+    assert(wout.resume_token[0] == 1 && wout.resume_token[15] == 16);
+    assert(strcmp(tid, "vocat-33d8") == 0);
+    assert(strcmp(cid, "cake") == 0);
+    assert(!lark_decode_welcome(wbuf, sizeof(wbuf) - 1, &wout, tid, sizeof(tid), cid, sizeof(cid)));
+
+    uint8_t rbuf[sizeof(lark_reject_t) + 11];
+    lark_reject_t r = { .reason = LARK_REJECT_BAD_VERSION, .msg_len = 11 };
+    memcpy(rbuf, &r, sizeof(r));
+    memcpy(rbuf + sizeof(r), "bad version", 11);
+    uint8_t reason = 0;
+    char msg[32];
+    assert(lark_decode_reject(rbuf, sizeof(rbuf), &reason, msg, sizeof(msg)));
+    assert(reason == LARK_REJECT_BAD_VERSION);
+    assert(strcmp(msg, "bad version") == 0);
+    assert(!lark_decode_reject(rbuf, sizeof(rbuf) - 1, &reason, msg, sizeof(msg)));
+}
+
 int main(void)
 {
     test_tcp_header();
     test_rtp_header();
     test_jitter_buffer();
     test_url_parsing();
+    test_hello_welcome_reject();
     printf("PASS host proto tests\n");
     return 0;
 }
