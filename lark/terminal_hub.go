@@ -665,22 +665,25 @@ func (h *wsHub) openStory(d *wsTerminal, st savedStory) {
 		return
 	}
 	sess := &storySession{
-		id:       st.ID,
-		title:    cs.Title,
-		compiled: cs,
-		flags:    cs.flagsSlice(nil),
+		id:         st.ID,
+		title:      cs.Title,
+		compiled:   cs,
+		passageIdx: -1,
+		flags:      cs.flagsSlice(nil),
 	}
 	page := 0
+	entered := false
 	if h.b != nil && h.b.db != nil && d.companionID != "" {
 		if prog, ok, perr := h.b.getStoryProgress(d.client.ctx, d.companionID, st.ID); perr == nil && ok {
 			if idx, exists := cs.ByName[prog.Passage]; exists {
 				sess.flags = cs.flagsSlice(prog.Flags)
 				sess.enterPassage(idx, false)
 				page = prog.Page
+				entered = true
 			}
 		}
 	}
-	if sess.currentPassageName() == "" {
+	if !entered {
 		sess.enterPassage(cs.Start, true)
 	}
 	if sess.bg != "" && h.b != nil {

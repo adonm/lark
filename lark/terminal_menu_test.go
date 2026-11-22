@@ -287,3 +287,20 @@ func TestIntercomMenuPagingRoundScreen(t *testing.T) {
 		t.Fatalf("d.menuPage = %d, want 1", page)
 	}
 }
+
+func TestOpenStoryEntersStartPassage(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	dev := testConnectWS(t, base, "unit", false)
+	dev.helloV2(t, "vocat-story-open", "Cake")
+
+	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
+	b.ws.mu.Lock()
+	d := b.ws.terminals["vocat-story-open"]
+	b.ws.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee})
+	sess := d.story
+	b.ws.mu.Unlock()
+
+	if sess == nil || sess.text != "Once upon a time." || len(sess.choices) != 1 {
+		t.Fatalf("openStory did not enter start passage: %+v", sess)
+	}
+}
