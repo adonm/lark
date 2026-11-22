@@ -65,7 +65,10 @@ func synthesizePCM(ctx context.Context, engine speechEngine, id, text string) ([
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return synthPCM(samples, rate)
+	resampleStart := time.Now()
+	pcm, err := synthPCM(samples, rate)
+	traceFrom(ctx).measure(diagResample, time.Since(resampleStart))
+	return pcm, err
 }
 
 func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)) {

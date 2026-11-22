@@ -32,6 +32,10 @@ const (
 	diagEndpoint
 	diagPromptPrep
 	diagPromptSubmit
+	diagVADQueue
+	diagSTTQueue
+	diagSTTRun
+	diagResample
 	diagMetricCount
 )
 
@@ -41,6 +45,7 @@ var diagMetricNames = [diagMetricCount]string{
 	"gate_ms", "first_sentence_ms", "tts_queue_ms", "tts_infer_ms", "first_pcm_ms",
 	"speech_end_to_commit_ms",
 	"prompt_prep_ms", "prompt_submit_ms",
+	"vad_queue_ms", "stt_queue_ms", "stt_run_ms", "resample_ms",
 }
 
 const diagInterval = 2 * time.Second
@@ -113,6 +118,10 @@ type diagTurn struct {
 	Endpoint      *float64 `json:"speech_end_to_commit_ms"`
 	PromptPrep    *float64 `json:"prompt_prep_ms"`
 	PromptSubmit  *float64 `json:"prompt_submit_ms"`
+	VADQueue      *float64 `json:"vad_queue_ms"`
+	STTQueue      *float64 `json:"stt_queue_ms"`
+	STTRun        *float64 `json:"stt_run_ms"`
+	Resample      *float64 `json:"resample_ms"`
 }
 
 type diagFrame struct {
@@ -170,6 +179,8 @@ func (t *turnTrace) measure(metric diagMetric, elapsed time.Duration) {
 		diagTTSQueue: &t.record.TTSQueue, diagTTSInfer: &t.record.TTSInfer, diagFirstPCM: &t.record.FirstPCM,
 		diagEndpoint:   &t.record.Endpoint,
 		diagPromptPrep: &t.record.PromptPrep, diagPromptSubmit: &t.record.PromptSubmit,
+		diagVADQueue: &t.record.VADQueue, diagSTTQueue: &t.record.STTQueue,
+		diagSTTRun: &t.record.STTRun, diagResample: &t.record.Resample,
 	}[metric]
 	if field != nil && *field == nil {
 		*field = &value
@@ -198,8 +209,14 @@ func (t *turnTrace) firstPCM(at time.Time) {
 
 func (b *larkServer) transcribe(ctx context.Context, pcm []byte) (string, error) {
 	start := time.Now()
-	text, err := b.decodeClip(ctx, pcm)
-	traceFrom(ctx).measure(diagSTT, time.Since(start))
+	sttCtx, timing := withSTTTiming(ctx)
+	text, err := b.decodeClip(sttCtx, pcm)
+	trace := traceFrom(ctx)
+	trace.measure(diagSTT, time.Since(start))
+	if timing.run > 0 || timing.queue > 0 {
+		trace.measure(diagSTTQueue, timing.queue)
+		trace.measure(diagSTTRun, timing.run)
+	}
 	return text, err
 }
 

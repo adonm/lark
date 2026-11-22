@@ -31,16 +31,19 @@ type captureResult struct {
 	text             string
 	err              error
 	stt, endToCommit time.Duration
+	sttQueue, sttRun time.Duration
+	vadQueue         time.Duration
 	hasEnd           bool
 	listen           bool
 	replyTo          string
 }
 
 type pauseTranscript struct {
-	last time.Duration
-	text string
-	err  error
-	stt  time.Duration
+	last             time.Duration
+	text             string
+	err              error
+	stt              time.Duration
+	sttQueue, sttRun time.Duration
 }
 
 func (h *wsHub) startEndpoint(d *wsTerminal) {
@@ -74,6 +77,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	}
 	var u utterance
 	var end time.Time
+	var maxVADQueue time.Duration
 	var cached pauseTranscript
 	var probe <-chan pauseTranscript
 	var probeCancel context.CancelFunc
@@ -110,14 +114,16 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 				if probeCancel != nil {
 					probeCancel()
 				}
-				result := captureResult{pcm: u.clip(), hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt), listen: c.listen, replyTo: c.replyTo}
+				result := captureResult{pcm: u.clip(), vadQueue: maxVADQueue, hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt), listen: c.listen, replyTo: c.replyTo}
 				if len(result.pcm) != 0 && (!c.listen || u.policy.voiced) && c.ctx.Err() == nil {
 					if cached.text != "" {
-						result.text, result.stt = cached.text, cached.stt
+						result.text, result.stt, result.sttQueue, result.sttRun = cached.text, cached.stt, cached.sttQueue, cached.sttRun
 					} else {
 						start := time.Now()
-						result.text, result.err = h.b.decodeClip(c.ctx, result.pcm)
+						sttCtx, timing := withSTTTiming(c.ctx)
+						result.text, result.err = h.b.decodeClip(sttCtx, result.pcm)
 						result.stt = time.Since(start)
+						result.sttQueue, result.sttRun = timing.queue, timing.run
 					}
 					if result.hasEnd {
 						result.endToCommit = c.commitAt.Sub(end)
@@ -125,6 +131,9 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 				}
 				c.result <- result
 				return
+			}
+			if wait := time.Since(packet.at); wait > maxVADQueue {
+				maxVADQueue = wait
 			}
 			previous := u.policy.last
 			u.addFor(packet.pcm, vad, c.listen)
@@ -161,8 +170,9 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			// The prefix is immutable; the capture worker only appends.
 			go func(pcm []byte, last time.Duration) {
 				start := time.Now()
-				text, err := h.b.decodeClip(ctx, pcm)
-				result <- pauseTranscript{last: last, text: text, err: err, stt: time.Since(start)}
+				sttCtx, timing := withSTTTiming(ctx)
+				text, err := h.b.decodeClip(sttCtx, pcm)
+				result <- pauseTranscript{last: last, text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run}
 			}(u.pcm, u.policy.last)
 		}
 	}
@@ -216,6 +226,11 @@ func (h *wsHub) maybeStartVoice(d *wsTerminal, now time.Time) bool {
 		}
 		trace := traceFrom(ctx)
 		trace.measure(diagSTT, result.stt)
+		if result.sttRun > 0 || result.sttQueue > 0 {
+			trace.measure(diagSTTQueue, result.sttQueue)
+			trace.measure(diagSTTRun, result.sttRun)
+		}
+		trace.measure(diagVADQueue, result.vadQueue)
 		if result.hasEnd {
 			trace.measure(diagEndpoint, result.endToCommit)
 		}

@@ -34,6 +34,23 @@ func checkParakeetModel(path string) error {
 	return nil
 }
 
+type sttTiming struct {
+	queue time.Duration
+	run   time.Duration
+}
+
+type sttTimingKey struct{}
+
+func withSTTTiming(ctx context.Context) (context.Context, *sttTiming) {
+	t := &sttTiming{}
+	return context.WithValue(ctx, sttTimingKey{}, t), t
+}
+
+func sttTimingFrom(ctx context.Context) *sttTiming {
+	t, _ := ctx.Value(sttTimingKey{}).(*sttTiming)
+	return t
+}
+
 func (b *larkServer) decodeClip(ctx context.Context, pcm []byte) (string, error) {
 	if b.stt == nil {
 		return "", errors.New("STT unavailable")

@@ -1027,14 +1027,22 @@ func (h *wsHub) speakLocalAfter(d *wsTerminal, text string, prefix []byte) {
 	if voice == "" {
 		voice = h.b.voices.defaultFor(d.voiceTheme())
 	}
+	start := time.Now()
+	var trace *turnTrace
+	if h.b != nil {
+		trace = traceFrom(h.b.traceTurn(d.client.ctx, d.companionID, d.companion.Name, "tap", start))
+	}
 	stream := newAudioStream()
 	if len(prefix) != 0 {
 		stream.append(prefix)
 	}
-	playback := h.play(d, stream)
+	playback := h.playTraced(d, stream, trace, start)
 	go func() {
 		ctx, cancel := context.WithTimeout(playback, ttsWait)
 		defer cancel()
+		if trace != nil {
+			ctx = context.WithValue(ctx, traceKey{}, trace)
+		}
 		pcm := h.b.clips.peek(voice, text)
 		if pcm == nil {
 			pcm, _ = worker.synthesize(ctx, voice, text)

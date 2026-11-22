@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -55,12 +56,15 @@ func (p *parakeetSTT) transcribe(ctx context.Context, pcm []byte) (string, error
 	if len(pcm) == 0 {
 		return "", nil
 	}
+	waitStart := time.Now()
 	select {
 	case p.slot <- struct{}{}:
 		defer func() { <-p.slot }()
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+	runStart := time.Now()
+	queueDur := runStart.Sub(waitStart)
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -80,6 +84,10 @@ func (p *parakeetSTT) transcribe(ctx context.Context, pcm []byte) (string, error
 	C.transcribe_run_params_init(&run)
 	run.timestamps = C.TRANSCRIBE_TIMESTAMPS_SEGMENT
 	status := C.transcribe_run(session, (*C.float)(unsafe.Pointer(&samples[0])), C.int(len(samples)), &run)
+	if st := sttTimingFrom(ctx); st != nil {
+		st.queue = queueDur
+		st.run = time.Since(runStart)
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
