@@ -56,12 +56,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 
 	native := c.kind == "hardware"
 	switch msgType {
-	case msgWakeWord:
-		h.clearDoneOrErrorStatus(d)
-		h.takeVoiceOwnership(d)
-		if native && d.caps.WakeWord && d.wakeWord && !d.recording.active() && !d.busy && !d.ttsStarted && !d.awaitAck {
-			h.startRecording(d, "", now, true)
-		}
 	case msgTelemetry:
 		if st, ok := parseTelemetry(payload); ok {
 			d.status(st)

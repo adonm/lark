@@ -46,7 +46,6 @@ typedef enum {
     INPUT_UP,
     TTS_ACK,
     REJECT_RECORD,
-    WAKE_WORD,
 } input_kind_t;
 
 typedef struct {
@@ -256,11 +255,6 @@ void net_client_pointer(uint8_t kind, int x, int y, uint16_t rev_lo)
     });
 }
 
-bool net_client_wake_word(void)
-{
-    return enqueue_session((input_t){ .kind = WAKE_WORD, .session = ready_socket_session() });
-}
-
 bool net_client_rec_start(uint32_t session, uint16_t rec_session, uint8_t target)
 {
     if (!ctrl_queue || !session || ready_socket_session() != session) return false;
@@ -353,10 +347,6 @@ static void send_input(const input_t *input)
         net_client_rec_end(session, input->rec_session, input->target, true);
         return;
     }
-    if (input->kind == WAKE_WORD) {
-        send_tcp_frame(session, LARK_MSG_WAKE_WORD, NULL, 0, true);
-        return;
-    }
     lark_pointer_t ptr = {
         .kind = input->kind == INPUT_DRAG ? LARK_PTR_DRAG : input->kind == INPUT_UP ? LARK_PTR_UP : LARK_PTR_TAP,
         .pad = 0,
@@ -390,7 +380,7 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
     uint32_t caps = LARK_CAP_DRAG | LARK_CAP_POINTER_REV;
     if (BOARD_HAS_BATTERY) caps |= LARK_CAP_BATTERY | LARK_CAP_PANEL_SLEEP;
     if (media_audio_ready()) {
-        caps |= LARK_CAP_BRIDGE_ENDPOINT | LARK_CAP_WAKE_WORD;
+        caps |= LARK_CAP_BRIDGE_ENDPOINT;
     }
     const char *board = BOARD_NAME;
     const char *fw = esp_app_get_description()->version;
@@ -504,9 +494,6 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
     }
     case LARK_MSG_FRAME:
         if (!display_apply_frame(payload, len)) ESP_LOGD(TAG, "Ignored display frame");
-        break;
-    case LARK_MSG_WAKE_WORD_CTRL:
-        if (len >= 1 && net_client_connected()) media_set_wake_word(payload[0] != 0);
         break;
     case LARK_MSG_REC_CTRL: {
         if (len < sizeof(lark_rec_ctrl_t)) break;

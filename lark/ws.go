@@ -181,10 +181,6 @@ func (h *wsHub) pushProto(d *wsTerminal, msgType uint8, payload []byte, mirror b
 	d.client.enqueueProto(msgType, payload)
 }
 
-func (h *wsHub) pushWakeWord(d *wsTerminal, enabled bool) {
-	d.client.enqueueProto(msgWakeWordCtrl, encodeWakeWordCtrl(enabled, d.id, d.companionID))
-}
-
 func (h *wsHub) pushRecStart(d *wsTerminal, target string, bridgeEndpoint, listen bool) {
 	var flags uint8
 	if target != "" {

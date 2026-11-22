@@ -264,7 +264,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	name := s.prefix + " " + label
 	id := "lark-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
 	width, height, battery := 360, 360, variant == "esp-vocat"
-	var caps uint32 = capDrag | capPointerRev | capBridgeEndpoint | capWakeWord
+	var caps uint32 = capDrag | capPointerRev | capBridgeEndpoint
 	wireShape := shapeRound
 	if battery {
 		caps |= capBattery | capPanelSleep

@@ -20,7 +20,6 @@ import (
 const idleSleep = 120 * time.Second
 
 type terminalCaps struct {
-	WakeWord       bool `json:"wake_word,omitempty"`
 	PanelSleep     bool `json:"panel_sleep,omitempty"`
 	PointerRev     bool `json:"pointer_rev,omitempty"`
 	BridgeEndpoint bool `json:"bridge_endpoint,omitempty"`
@@ -110,7 +109,6 @@ type wsTerminal struct {
 	last      time.Time
 	meter     time.Time
 	asleep    bool
-	wakeWord  bool
 	replyTo   string
 
 	recording     deviceCapture

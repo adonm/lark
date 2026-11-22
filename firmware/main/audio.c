@@ -86,18 +86,6 @@ esp_err_t audio_read_10ms(int16_t pcm[AUDIO_10MS])
     return esp_codec_dev_read(mic, pcm, FRAMES * sizeof(*pcm));
 }
 
-esp_err_t audio_drain_input(void)
-{
-    int16_t pcm[FRAMES];
-    // Discard only stale frames already buffered in RX DMA without blocking for fresh ones.
-    for (int i = 0; i < DMA_TAIL / FRAMES; ++i) {
-        int64_t t0 = esp_timer_get_time();
-        ESP_RETURN_ON_ERROR(audio_read_10ms(pcm), TAG, "Drain mic DMA");
-        if (esp_timer_get_time() - t0 >= 3000) break;
-    }
-    return ESP_OK;
-}
-
 esp_err_t audio_write_10ms(const int16_t pcm[AUDIO_10MS])
 {
     return write_speaker(pcm, FRAMES);

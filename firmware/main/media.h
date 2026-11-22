@@ -6,7 +6,6 @@ enum { MEDIA_TARGET_CAP = 64 };
 
 esp_err_t media_init(bool audio_ready);
 bool media_audio_ready(void);
-void media_set_wake_word(bool enabled);
 bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoint, bool listen);
 void media_record_stop(bool cancelled);
 bool media_is_recording(void);

@@ -16,7 +16,7 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 		t.Fatal(err)
 	}
 	hw := testConnectWS(t, base, "unit", false)
-	hw.helloHardware(t, "vocat-33d8", "cake", capDrag|capWakeWord)
+	hw.helloHardware(t, "vocat-33d8", "cake", capDrag)
 
 	hw2 := testConnectWS(t, base, "unit", false)
 	hw2.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
@@ -100,7 +100,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 		t.Fatal(err)
 	}
 	hw := testConnectWS(t, base, "unit", false)
-	hw.helloHardware(t, "vocat-33d8", "cake", capDrag|capWakeWord)
+	hw.helloHardware(t, "vocat-33d8", "cake", capDrag)
 
 	hw2 := testConnectWS(t, base, "unit", false)
 	hw2.helloHardware(t, "vocat-2cac", "cake", capDrag)

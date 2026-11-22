@@ -23,7 +23,6 @@ enum {
     LARK_MSG_RESUME = 0x02,
     LARK_MSG_TELEMETRY = 0x03,
     LARK_MSG_POINTER = 0x04,
-    LARK_MSG_WAKE_WORD = 0x05,
     LARK_MSG_REC_START = 0x06,
     LARK_MSG_REC_END = 0x07,
     LARK_MSG_TTS_ACK = 0x08,
@@ -38,7 +37,6 @@ enum {
     LARK_MSG_WELCOME = 0x81,
     LARK_MSG_REJECT = 0x82,
     LARK_MSG_FRAME = 0x83,
-    LARK_MSG_WAKE_WORD_CTRL = 0x85,
     LARK_MSG_REC_CTRL = 0x86,
     LARK_MSG_TTS_CTRL = 0x87,
     LARK_MSG_TTS_PCM = 0x88,
@@ -85,7 +83,6 @@ enum {
     LARK_CAP_POINTER_REV = 1u << 5,
     LARK_CAP_BRIDGE_ENDPOINT = 1u << 6,
     LARK_CAP_PANEL_SLEEP = 1u << 7,
-    LARK_CAP_WAKE_WORD = 1u << 8,
 };
 
 // Reject reasons

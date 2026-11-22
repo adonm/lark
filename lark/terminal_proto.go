@@ -22,7 +22,6 @@ const (
 	msgResume      uint8 = 0x02
 	msgTelemetry   uint8 = 0x03
 	msgPointer     uint8 = 0x04
-	msgWakeWord    uint8 = 0x05
 	msgRecStart    uint8 = 0x06
 	msgRecEnd      uint8 = 0x07
 	msgTTSAck      uint8 = 0x08
@@ -35,7 +34,6 @@ const (
 	msgWelcome      uint8 = 0x81
 	msgReject       uint8 = 0x82
 	msgFrame        uint8 = 0x83
-	msgWakeWordCtrl uint8 = 0x85
 	msgRecCtrl      uint8 = 0x86
 	msgTTSCtrl      uint8 = 0x87
 	msgTTSPCM       uint8 = 0x88
@@ -74,7 +72,6 @@ const (
 	capPointerRev     uint32 = 1 << 5
 	capBridgeEndpoint uint32 = 1 << 6
 	capPanelSleep     uint32 = 1 << 7
-	capWakeWord       uint32 = 1 << 8
 
 	// Reject reasons
 	rejectBadToken        uint8 = 1
@@ -336,7 +333,6 @@ func helloCapsFromMask(mask uint32) terminalCaps {
 		PointerRev:     mask&capPointerRev != 0,
 		BridgeEndpoint: mask&capBridgeEndpoint != 0,
 		PanelSleep:     mask&capPanelSleep != 0,
-		WakeWord:       mask&capWakeWord != 0,
 	}
 }
 
@@ -356,9 +352,6 @@ func capsMaskFromCaps(c terminalCaps) uint32 {
 	}
 	if c.PanelSleep {
 		m |= capPanelSleep
-	}
-	if c.WakeWord {
-		m |= capWakeWord
 	}
 	return m
 }
@@ -478,17 +471,6 @@ func parseSetVolume(b []byte) (auto bool, level int, ok bool) {
 		return false, 0, false
 	}
 	return b[0] != 0, int(b[1]), true
-}
-
-func encodeWakeWordCtrl(enabled bool, terminalID, companionID string) []byte {
-	var en byte
-	if enabled {
-		en = 1
-	}
-	b := make([]byte, 0, 3+len(terminalID)+len(companionID))
-	b = append(b, en)
-	b = appendStr8(b, terminalID)
-	return appendStr8(b, companionID)
 }
 
 func encodeRecCtrl(op, flags uint8, session uint16, target string) []byte {

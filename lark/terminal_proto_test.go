@@ -147,7 +147,7 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 	}
 
 	// Valid handshake returns MSG_HELLO_OK and initial MSG_FRAME.
-	caps := capBattery | capDrag | capPointerRev | capBridgeEndpoint | capPanelSleep | capWakeWord
+	caps := capBattery | capDrag | capPointerRev | capBridgeEndpoint | capPanelSleep
 	nc, okPayload := dialNativeDevice(t, srv, "lark-nat1", "unit", caps)
 	if nc == nil || nc.ssrc == 0 || binary.LittleEndian.Uint16(okPayload[2:4]) != srv.udpPort {
 		t.Fatal("invalid WELCOME")
@@ -170,7 +170,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	}
 	defer srv.shutdown()
 
-	nc, _ := dialNativeDevice(t, srv, "lark-nat2", "unit", capDrag|capPointerRev|capBattery|capWakeWord)
+	nc, _ := dialNativeDevice(t, srv, "lark-nat2", "unit", capDrag|capPointerRev|capBattery)
 	frame := nc.readUntil(msgFrame)
 	_ = binary.LittleEndian.Uint16(frame[10:12])
 
