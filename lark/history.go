@@ -30,6 +30,9 @@ func stripLarkHeader(text string) string {
 	if i := strings.LastIndex(text, "\n[state: "); i >= 0 && strings.HasSuffix(strings.TrimSuffix(text, "\r"), "]") {
 		text = text[:i]
 	}
+	if i := strings.LastIndex(text, "\n[library: "); i >= 0 && strings.HasSuffix(strings.TrimSuffix(text, "\r"), "]") {
+		text = text[:i]
+	}
 	return text
 }
 

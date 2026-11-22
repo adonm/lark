@@ -313,6 +313,7 @@ type diagReport struct {
 	SVGCache    diagCache              `json:"svg_cache"`
 	Refresh     diagSchemaRefresh      `json:"mcp_contract_refresh"`
 	Speculation diagSpecReport         `json:"speculation"`
+	Library     object                 `json:"library"`
 	diagSystem
 }
 
@@ -351,6 +352,7 @@ func (b *larkServer) diagnosticReport() diagReport {
 		}
 	}
 	slices.Reverse(out.Turns)
+	out.Library = b.libraryReport()
 	if b.ws != nil {
 		out.Terminals = b.ws.diagTerminals()
 	}

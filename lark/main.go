@@ -178,6 +178,7 @@ func run() error {
 		history: &chatHistory{db: db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
 			generate: configuredPortraitGenerator(ocAPI, ocURL != "", os.Getenv("OPENCODE_API_KEY"))},
+		library: env("LARK_LIBRARY_DIR", filepath.Join(local, "library")),
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
@@ -279,7 +280,7 @@ func productionDB(path string) bool {
 
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: lark <command> [args]")
-	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, sim, device, ota, mcp")
+	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, sim, device, ota, mcp, library")
 }
 
 func main() {
@@ -317,6 +318,10 @@ func main() {
 			os.Exit(2)
 		}
 		err = runMCPStdio()
+	case "library":
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		err = runLibrary(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		cancel()
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return

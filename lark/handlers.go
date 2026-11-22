@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +41,10 @@ type larkServer struct {
 	history         *chatHistory
 	timers          *timerManager
 	portraits       *portraitStore
+	library         string
+	libraryStats    libraryStats
+	libraryMu       sync.Mutex
+	libraryDBs      map[string]*sql.DB
 	diag            diagnostics
 	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
@@ -631,7 +637,23 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 		stories = strings.Join(storyParts, ",")
 	}
 
-	return turnHeader(companionID, source, companion, ch, now) + "\n" + text + "\n" + turnStateLine(now, companion, terminals, timers, stories)
+	prompt := turnHeader(companionID, source, companion, ch, now) + "\n" + text
+	if b.libraryInstalled() {
+		prompt += "\n[library: search before facts]"
+	}
+	return prompt + "\n" + turnStateLine(now, companion, terminals, timers, stories)
+}
+
+func (b *larkServer) libraryInstalled() bool {
+	if b == nil || b.library == "" {
+		return false
+	}
+	for _, source := range librarySourceOrder {
+		if _, err := os.Stat(filepath.Join(b.libraryDir(), librarySources[source].db)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isSilentReply(s string) bool {

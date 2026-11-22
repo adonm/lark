@@ -21,7 +21,7 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, emit=Delta Chat/say/audio. Only final prose is spoken."
+	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, library=instant books/facts, emit=Delta Chat/say/audio. Only final prose is spoken."
 )
 
 type rpcRequest struct {
@@ -209,7 +209,7 @@ var mcpTools = func() []object {
 	return []object{
 		tool("state", "Read live state slice. companion_id adds me.companion, me.terminals, me.contacts.",
 			schema(object{"companion_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
-				"messages_limit": object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
+				"messages_limit":  object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id")})),
 		tool("patch", "Update companion, terminal, timer, or atomic memory. Portraits use companion.portrait with form.",
 			schema(object{"companion_id": text,
@@ -221,6 +221,11 @@ var mcpTools = func() []object {
 				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag})})),
 		tool("story", "Create, update, get, or delete a Twee 3 story (validates links, reachability, <=3 choices, <=600 chars).",
 			schema(object{"op": enum("create", "update", "delete", "get"), "id": text, "twee": object{"type": "string", "maxLength": 65536}, "author": text}, "op", "id")),
+		tool("library", "ALWAYS search first for a fact, story, or book question (Simple Wikipedia, Wikipedia, Gutenberg); instant, no page fetch. Then read or list; for a requested story, import it to open on the reader.",
+			schema(object{"op": enum("search", "read", "list", "import"), "query": text,
+				"source": enum("auto", "simple", "enwiki", "gutenberg"), "title": text, "ref": text,
+				"section": object{"type": "integer", "minimum": 0}, "companion_id": text, "open": flag,
+				"limit": object{"type": "integer", "minimum": 1, "maximum": 200}}, "op")),
 		tool("emit", "Send Delta Chat intercom, speak aloud on terminals (say), or play notes/sfx/chime.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
@@ -282,6 +287,9 @@ func (h *wsHub) terminalStatus(entry object, id string, full bool) {
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
 		entry["auto_volume"], entry["sleeping"] = d.autoVol, d.asleep
+		if d.story != nil {
+			entry["story"] = d.story.title
+		}
 		if d.board != "" {
 			entry["board"], entry["shape"], entry["width"], entry["height"] = d.board, d.screen.shape, d.screen.width, d.screen.height
 		}
@@ -311,11 +319,25 @@ func (h *wsHub) terminalStatus(entry object, id string, full bool) {
 
 func mcpUint(args object, key string) (*uint64, error) {
 	if v, ok := args[key]; ok {
-		n, valid := v.(json.Number)
-		if valid {
+		if n, valid := v.(json.Number); valid {
 			if num, err := strconv.ParseUint(string(n), 10, 64); err == nil {
 				return &num, nil
 			}
+		}
+		// Direct unit tests and internal callers may pass native integers.
+		switch n := v.(type) {
+		case int:
+			if n >= 0 {
+				num := uint64(n)
+				return &num, nil
+			}
+		case int64:
+			if n >= 0 {
+				num := uint64(n)
+				return &num, nil
+			}
+		case uint64:
+			return &n, nil
 		}
 		return nil, problem(400, "Invalid "+key)
 	}
@@ -333,6 +355,8 @@ func (b *larkServer) callMCP(ctx context.Context, name string, args object) (obj
 		return b.mcpPatch(ctx, args)
 	case "story":
 		return b.mcpStory(ctx, args)
+	case "library":
+		return b.mcpLibrary(ctx, args)
 	case "emit":
 		return b.mcpEmit(ctx, args)
 	default:
