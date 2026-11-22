@@ -305,32 +305,32 @@ func TestLive(t *testing.T) {
 	unauthorized.read(t, "/api/companions", nil, "", nil, 401)
 	unauthorized.read(t, "/ota/latest.bin", nil, "", nil, 401)
 
-	liveDevices := func(t *testing.T) map[string]string {
+	liveTerminals := func(t *testing.T) map[string]string {
 		t.Helper()
 		got := liveJSON[struct {
-			Devices []struct {
-				DeviceID string `json:"device_id"`
+			Terminals []struct {
+				ID       string `json:"id"`
 				IP       string `json:"ip"`
 				Kind     string `json:"kind"`
 				Port     int    `json:"port"`
 				LastSeen int64  `json:"last_seen"`
 			}
-		}](t, c, "/api/devices", nil, nil, "", nil)
-		devices := make(map[string]string, len(got.Devices))
-		for _, p := range got.Devices {
+		}](t, c, "/api/terminals", nil, nil, "", nil)
+		terminals := make(map[string]string, len(got.Terminals))
+		for _, p := range got.Terminals {
 			if p.Kind == "virtual" {
 				continue
 			}
-			if p.DeviceID == "" || net.ParseIP(p.IP) == nil || p.Port <= 0 || p.LastSeen <= 0 || devices[p.DeviceID] != "" {
+			if p.ID == "" || net.ParseIP(p.IP) == nil || p.Port <= 0 || p.LastSeen <= 0 || terminals[p.ID] != "" {
 				t.Fatal("invalid or duplicate peer in live registry")
 			}
-			devices[p.DeviceID] = p.IP
+			terminals[p.ID] = p.IP
 		}
-		return devices
+		return terminals
 	}
 	var before map[string]string
-	t.Run("Devices", func(t *testing.T) {
-		before = liveDevices(t)
+	t.Run("Terminals", func(t *testing.T) {
+		before = liveTerminals(t)
 		t.Logf("%d registered peer addresses", len(before))
 	})
 	t.Run("OTA", func(t *testing.T) {
@@ -351,7 +351,7 @@ func TestLive(t *testing.T) {
 		}
 	})
 	t.Run("DevicesAfter", func(t *testing.T) {
-		if !maps.Equal(before, liveDevices(t)) {
+		if !maps.Equal(before, liveTerminals(t)) {
 			t.Fatal("live tests changed the deployed peer registry")
 		}
 		t.Logf("%d registered peer addresses unchanged", len(before))
