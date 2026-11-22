@@ -4,6 +4,33 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Unified Binary Terminal Protocol `v1` (`0.12.0`)
+
+### Affects
+- Lark Server (`:8766` & `/ws`) / Web (`/app`) / Firmware (`0.12.0`)
+
+### Breaking Changes
+- **One binary protocol everywhere**: Hardware (`:8766` TCP) and browsers (`/ws` binary WebSocket frames) share the `v1` 8-byte header + typed binary catalogue (`proto_version = 1`). JSON text frames on `/ws` are removed.
+- **Handshake & Resume**: `HELLO` advertises `proto_version`, `kind` (`hardware`/`web`), display formats (`rgb565`/`svg`), frame codecs, and capabilities; server replies `WELCOME` (with `resume_token`, `resume_window_ms`, `seq`, `ssrc`) or `REJECT`. `RESUME` within 30 s preserves identity and voice ownership with a fresh snapshot.
+- **Voice ownership, STATUS, PROMPT, RTP-in-WS**: Explicit `VOICE_OWNER`, `STATUS` (`idle|listening|thinking|speaking|blocked|done|error`), `PROMPT`/`PROMPT_REPLY`/`PROMPT_ENDED`, and 20 ms 16 kHz RTP-in-`MEDIA` WS frames for browser mic/call audio.
+- **Firmware `0.12.0` required**: `0.11.0` devices cannot complete the `v1` handshake (`REJECT`), though their HTTP OTA endpoint remains reachable.
+
+### How to Detect
+- `GET /api/terminals` shows hardware firmware `< 0.12.0` or offline after server upgrade.
+
+### Upgrade Steps
+1. Back up `~/.local/share/lark/lark` and `~/.local/share/lark/lark.db`.
+2. Deploy the server first (`./scripts/setup-host.sh --gpu-index 0`).
+3. Build firmware `0.12.0` (`./scripts/build.sh vocat && ./scripts/build.sh box3`) and OTA each board (`lark ota --no-build [--board box3] <ip>`).
+4. Hard-refresh `/app` (or let the updated Service Worker activate) so browsers load the `v1` binary client.
+
+### Verification
+- `GET /health` reports `"ok": true`.
+- `GET /api/terminals` shows all hardware terminals online on `0.12.0`.
+- Opening `/app` completes `HELLO`/`WELCOME` over binary `/ws`.
+
+---
+
 ## 2026-11-22 — Companion / Terminal Identity Split (`0.11.0`)
 
 ### Affects
