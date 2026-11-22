@@ -113,8 +113,6 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    model and fallback, and disposable sessions; it can spend model quota.
    `--deployed` runs the older deployed-service and OTA probes (no upload or
    flash).
-   See [evals and real-model smoke](docs/evals.md)
-   for optional tests against the configured model.
 
 ## Controls, voice notes, and calls
 

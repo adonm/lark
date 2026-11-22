@@ -17,8 +17,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"lark/eval"
 )
 
 type condSignal struct {
@@ -276,7 +274,7 @@ func productionDB(path string) bool {
 
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: lark <command> [args]")
-	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, ota, eval, mcp")
+	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, ota, mcp")
 }
 
 func main() {
@@ -295,10 +293,6 @@ func main() {
 	case "status", "companions", "terminals":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		err = runCLI(ctx, os.Args[1], os.Args[2:], os.Stdout, os.Stderr)
-		cancel()
-	case "eval":
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		err = eval.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)
 		cancel()
 	case "ota":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
