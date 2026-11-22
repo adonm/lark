@@ -44,8 +44,11 @@ type dcRPC interface {
 	CreateChatByContactId(accID uint32, contactID uint32) (uint32, error)
 	DeleteChat(accID uint32, chatID uint32) error
 	GetBasicChatInfo(accID uint32, chatID uint32) (deltachat.BasicChat, error)
+	GetChatContacts(accID uint32, chatID uint32) ([]uint32, error)
 	GetMessage(accID uint32, msgID uint32) (deltachat.Message, error)
 	SendMsg(accID uint32, chatID uint32, data deltachat.MessageData) (uint32, error)
+	GetWebxdcStatusUpdates(accID uint32, instanceMsgID uint32, lastKnownSerial uint32) (string, error)
+	SendWebxdcStatusUpdate(accID uint32, instanceMsgID uint32, updateStr string, descr *string) error
 }
 
 type dcContact struct {
@@ -163,6 +166,13 @@ func (s *dcService) runOnce(ctx context.Context) error {
 			return
 		}
 		s.handleSecureJoinVerified(ctx, accID, p.ContactId)
+	})
+	bot.On(&deltachat.EventTypeWebxdcStatusUpdate{}, func(_ *deltachat.Bot, accID uint32, ev deltachat.EventType) {
+		u, ok := ev.(*deltachat.EventTypeWebxdcStatusUpdate)
+		if !ok {
+			return
+		}
+		s.handleWebxdcUpdate(ctx, accID, u.MsgId)
 	})
 
 	s.mu.Lock()
@@ -750,6 +760,7 @@ func (s *dcService) syncWelcomes(ctx context.Context) {
 		}
 		for _, ct := range contacts {
 			s.sendWelcomeIfNeeded(ctx, c, c.DCAccountID, ct)
+			s.sendPanelIfNeeded(ctx, c, c.DCAccountID, ct)
 		}
 	}
 }
@@ -767,7 +778,9 @@ func (s *dcService) handleSecureJoinVerified(ctx context.Context, accID, contact
 	if err != nil {
 		return
 	}
-	s.sendWelcomeIfNeeded(ctx, s.b.companionFor(companionID), accID, ct)
+	c := s.b.companionFor(companionID)
+	s.sendWelcomeIfNeeded(ctx, c, accID, ct)
+	s.sendPanelIfNeeded(ctx, c, accID, ct)
 }
 
 func (s *dcService) sendWelcomeIfNeeded(ctx context.Context, c companionState, accID uint32, ct deltachat.Contact) {
@@ -901,6 +914,11 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			help := welcomeText(who)
 			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &help}); err != nil {
 				log.Printf("Delta Chat SendMsg error: %v", err)
+			}
+			return
+		case "/panel":
+			if err := s.sendPanelXDC(ctx, who, accID, msg.ChatId, &contact); err != nil {
+				log.Printf("Delta Chat /panel error: %v", err)
 			}
 			return
 		default:

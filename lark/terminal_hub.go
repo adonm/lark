@@ -1120,6 +1120,43 @@ func (d *wsTerminal) volumeFrame(persist bool) object {
 	return object{"op": "volume", "terminal_id": d.id, "companion_id": d.companionID, "level": d.vol, "auto_volume": d.autoVol, "persist": persist}
 }
 
+func (h *wsHub) companionTerminals(companionID string) []object {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []object
+	for _, d := range h.terminalsFor(companionID) {
+		entry := object{
+			"id":     d.id,
+			"name":   d.id,
+			"online": true,
+			"volume": d.vol,
+		}
+		if d.caps.Battery && d.pct >= 0 {
+			entry["battery_pct"] = d.pct
+			entry["charging"] = d.charging
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func (b *larkServer) setCompanionTerminalVolume(ctx context.Context, companionID, terminalID string, level int) error {
+	if b.ws == nil {
+		return problem(503, "Terminal hub unavailable")
+	}
+	h := b.ws
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	d := h.terminals[strings.ToLower(terminalID)]
+	if d == nil || !h.active(d) || d.companionID != companionID {
+		return problem(404, "Terminal not attached or offline")
+	}
+	return h.setVolume(ctx, d, false, level, "")
+}
+
 func (h *wsHub) saveVoice(id, voice string) error {
 	h.b.companionMu.Lock()
 	defer h.b.companionMu.Unlock()

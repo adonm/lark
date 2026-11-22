@@ -11,7 +11,8 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ### Breaking Changes
 - **Welcome & `/help` versioning**: Added `dcWelcomeVersion` (`"1"`), tracked per companion and verified human contact in `meta` (`dc_welcome:<companion_id>:<contact_addr>`).
-- **Startup & SecureJoin delivery**: On startup (`syncWelcomes`) and on SecureJoin verification (`EventTypeSecurejoinInviterProgress`), companions send the welcome message once per version to verified human contacts (never to companions).
+- **Webxdc control panel**: Added `dcPanelVersion` (`"1"`), tracked in `meta` (`dc_panel:<companion_id>:<contact_addr>` and `dc_panel_serial:<acc_id>:<msg_id>`). Sent via `/panel` and automatically on startup/SecureJoin when the panel version changes.
+- **Startup & SecureJoin delivery**: On startup (`syncWelcomes`) and on SecureJoin verification (`EventTypeSecurejoinInviterProgress`), companions send the welcome message and control panel once per version to verified human contacts (never to companions).
 
 ### How to Detect
 - `sqlite3 ~/.local/share/lark/lark.db "SELECT key, value FROM meta WHERE key LIKE 'dc_welcome:%';"` is empty when no welcomes have been recorded.

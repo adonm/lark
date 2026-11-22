@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"archive/zip"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -29,21 +31,25 @@ type stubDCRPC struct {
 	nextChat uint32
 	configs  map[uint32]map[string]string
 	contacts map[uint32]map[uint32]deltachat.Contact
-	chats    map[uint32]map[uint32]deltachat.BasicChat
-	msgs     map[uint32]map[uint32]deltachat.Message
-	sent     []stubDCSent
-	qrJoined []string
-	deleted  []uint32
+	chats        map[uint32]map[uint32]deltachat.BasicChat
+	chatContacts map[uint32]map[uint32][]uint32
+	msgs         map[uint32]map[uint32]deltachat.Message
+	xdcUpdates   map[uint32]map[uint32][]json.RawMessage
+	sent         []stubDCSent
+	qrJoined     []string
+	deleted      []uint32
 }
 
 func newStubDCRPC() *stubDCRPC {
 	return &stubDCRPC{
-		nextAcc:  10,
-		nextChat: 100,
-		configs:  make(map[uint32]map[string]string),
-		contacts: make(map[uint32]map[uint32]deltachat.Contact),
-		chats:    make(map[uint32]map[uint32]deltachat.BasicChat),
-		msgs:     make(map[uint32]map[uint32]deltachat.Message),
+		nextAcc:      10,
+		nextChat:     100,
+		configs:      make(map[uint32]map[string]string),
+		contacts:     make(map[uint32]map[uint32]deltachat.Contact),
+		chats:        make(map[uint32]map[uint32]deltachat.BasicChat),
+		chatContacts: make(map[uint32]map[uint32][]uint32),
+		msgs:         make(map[uint32]map[uint32]deltachat.Message),
+		xdcUpdates:   make(map[uint32]map[uint32][]json.RawMessage),
 	}
 }
 
@@ -55,6 +61,7 @@ func (s *stubDCRPC) AddAccount() (uint32, error) {
 	s.configs[id] = make(map[string]string)
 	s.contacts[id] = make(map[uint32]deltachat.Contact)
 	s.chats[id] = make(map[uint32]deltachat.BasicChat)
+	s.chatContacts[id] = make(map[uint32][]uint32)
 	s.msgs[id] = make(map[uint32]deltachat.Message)
 	return id, nil
 }
@@ -165,6 +172,10 @@ func (s *stubDCRPC) CreateChatByContactId(accID uint32, contactID uint32) (uint3
 		s.chats[accID] = make(map[uint32]deltachat.BasicChat)
 	}
 	s.chats[accID][cid] = deltachat.BasicChat{Id: cid, ChatType: deltachat.ChatTypeSingle}
+	if s.chatContacts[accID] == nil {
+		s.chatContacts[accID] = make(map[uint32][]uint32)
+	}
+	s.chatContacts[accID][cid] = []uint32{deltachat.ContactSelf, contactID}
 	return cid, nil
 }
 
@@ -184,6 +195,19 @@ func (s *stubDCRPC) GetBasicChatInfo(accID uint32, chatID uint32) (deltachat.Bas
 	return deltachat.BasicChat{Id: chatID, ChatType: deltachat.ChatTypeSingle}, nil
 }
 
+func (s *stubDCRPC) GetChatContacts(accID uint32, chatID uint32) ([]uint32, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if list, ok := s.chatContacts[accID][chatID]; ok {
+		return slices.Clone(list), nil
+	}
+	var out []uint32
+	for cid := range s.contacts[accID] {
+		out = append(out, cid)
+	}
+	return out, nil
+}
+
 func (s *stubDCRPC) GetMessage(accID uint32, msgID uint32) (deltachat.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -195,6 +219,40 @@ func (s *stubDCRPC) SendMsg(accID uint32, chatID uint32, data deltachat.MessageD
 	defer s.mu.Unlock()
 	s.sent = append(s.sent, stubDCSent{accID: accID, chatID: chatID, data: data})
 	return uint32(len(s.sent)), nil
+}
+
+func (s *stubDCRPC) GetWebxdcStatusUpdates(accID uint32, instanceMsgID uint32, lastKnownSerial uint32) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list := s.xdcUpdates[accID][instanceMsgID]
+	var filtered []json.RawMessage
+	for _, raw := range list {
+		var env struct {
+			Serial uint32 `json:"serial"`
+		}
+		if json.Unmarshal(raw, &env) == nil && env.Serial > lastKnownSerial {
+			filtered = append(filtered, raw)
+		}
+	}
+	b, _ := json.Marshal(filtered)
+	return string(b), nil
+}
+
+func (s *stubDCRPC) SendWebxdcStatusUpdate(accID uint32, instanceMsgID uint32, updateStr string, _ *string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.xdcUpdates[accID] == nil {
+		s.xdcUpdates[accID] = make(map[uint32][]json.RawMessage)
+	}
+	serial := uint32(len(s.xdcUpdates[accID][instanceMsgID]) + 1)
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(updateStr), &obj); err != nil {
+		return err
+	}
+	obj["serial"] = serial
+	raw, _ := json.Marshal(obj)
+	s.xdcUpdates[accID][instanceMsgID] = append(s.xdcUpdates[accID][instanceMsgID], raw)
+	return nil
 }
 
 func dcTestHarness(t *testing.T) (*larkServer, string, *stubDCRPC) {
@@ -1010,16 +1068,19 @@ func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
 	stub.contacts[greg.DCAccountID][12] = deltachat.Contact{Id: 12, DisplayName: "Cake", Address: stub.configs[cake.DCAccountID]["addr"], IsVerified: true, IsBot: true}
 	stub.mu.Unlock()
 
-	// Startup sync sends welcome once to Mum, skips Stranger and Cake.
+	// Startup sync sends welcome + panel once to Mum, skips Stranger and Cake.
 	b.dc.syncWelcomes(t.Context())
 	b.dc.syncWelcomes(t.Context())
 
 	stub.mu.Lock()
-	if len(stub.sent) != 1 {
-		t.Fatalf("expected 1 welcome on startup sync, got %d: %+v", len(stub.sent), stub.sent)
+	if len(stub.sent) != 2 {
+		t.Fatalf("expected 2 messages (welcome + panel) on startup sync, got %d: %+v", len(stub.sent), stub.sent)
 	}
 	if !strings.Contains(*stub.sent[0].data.Text, "Hi! I'm Greg, an old chameleon.") {
 		t.Fatalf("unexpected welcome text: %q", *stub.sent[0].data.Text)
+	}
+	if stub.sent[1].data.Viewtype == nil || *stub.sent[1].data.Viewtype != deltachat.ViewtypeWebxdc {
+		t.Fatalf("expected panel webxdc message, got %+v", stub.sent[1].data)
 	}
 	// New human completes SecureJoin.
 	stub.contacts[greg.DCAccountID][13] = deltachat.Contact{Id: 13, DisplayName: "Dad", Address: "dad@example.org", IsVerified: true}
@@ -1029,8 +1090,117 @@ func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
 	b.dc.handleSecureJoinVerified(t.Context(), greg.DCAccountID, 13)
 
 	stub.mu.Lock()
-	if len(stub.sent) != 2 {
-		t.Fatalf("expected 2 total welcomes after SecureJoin, got %d: %+v", len(stub.sent), stub.sent)
+	if len(stub.sent) != 4 {
+		t.Fatalf("expected 4 total messages (2 welcomes + 2 panels) after SecureJoin, got %d: %+v", len(stub.sent), stub.sent)
 	}
 	stub.mu.Unlock()
+}
+
+func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
+	xdcBytes, err := buildPanelXDC()
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(xdcBytes), int64(len(xdcBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]bool{}
+	for _, f := range zr.File {
+		files[f.Name] = true
+	}
+	for _, want := range []string{"index.html", "manifest.toml", "icon.png", "oat.min.css", "oat.min.js", "codec.js", "app.js"} {
+		if !files[want] {
+			t.Fatalf("panel xdc missing %s (got %v)", want, files)
+		}
+	}
+	if files["codec.test.mjs"] {
+		t.Fatal("panel xdc should not include test files")
+	}
+
+	b, base, stub := dcTestHarness(t)
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-xdc", "greg")
+	if _, err := b.runApp(t.Context(), object{"companions": "greg", "kind": "book", "title": "Lost Island", "text": "Page one.\n\nPage two.", "save_as": "lost_island"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.runApp(t.Context(), object{"companions": "greg", "exit": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	stub.chatContacts[greg.DCAccountID][200] = []uint32{deltachat.ContactSelf, 10}
+	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "/panel", ViewType: deltachat.ViewtypeText}
+
+	// Unverified stranger chat.
+	stub.contacts[greg.DCAccountID][11] = deltachat.Contact{Id: 11, DisplayName: "Stranger", Address: "stranger@example.org", IsVerified: false}
+	stub.chats[greg.DCAccountID][201] = deltachat.BasicChat{Id: 201, ChatType: deltachat.ChatTypeSingle}
+	stub.chatContacts[greg.DCAccountID][201] = []uint32{deltachat.ContactSelf, 11}
+	stub.msgs[greg.DCAccountID][99] = deltachat.Message{Id: 99, ChatId: 201, FromId: 11, ViewType: deltachat.ViewtypeWebxdc}
+	stub.mu.Unlock()
+
+	// 1. /panel sends .xdc and initial state update (with portrait).
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
+	stub.mu.Lock()
+	if len(stub.sent) != 1 || stub.sent[0].data.Viewtype == nil || *stub.sent[0].data.Viewtype != deltachat.ViewtypeWebxdc {
+		t.Fatalf("expected webxdc message from /panel, got %+v", stub.sent)
+	}
+	// Map sent msgID 1 in stub.msgs so handleWebxdcUpdate can resolve its chat.
+	panelMsgID := uint32(1)
+	stub.msgs[greg.DCAccountID][panelMsgID] = deltachat.Message{Id: panelMsgID, ChatId: 200, FromId: deltachat.ContactSelf, ViewType: deltachat.ViewtypeWebxdc}
+	initialUpdates := len(stub.xdcUpdates[greg.DCAccountID][panelMsgID])
+	stub.mu.Unlock()
+	if initialUpdates != 1 || !strings.Contains(string(stub.xdcUpdates[greg.DCAccountID][panelMsgID][0]), "data:image/png;base64,") {
+		t.Fatalf("expected initial state update with portrait, got %d updates", initialUpdates)
+	}
+
+	// 2. Drive verified client updates: set_listen, set_voice, set_volume, open_book.
+	sendClientUpdate := func(msgID uint32, payload string) {
+		_ = stub.SendWebxdcStatusUpdate(greg.DCAccountID, msgID, payload, nil)
+		b.dc.handleWebxdcUpdate(t.Context(), greg.DCAccountID, msgID)
+	}
+	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_listen","seconds":120}}`)
+	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_voice","voice":"bf_lily"}}`)
+	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_volume","terminal":"box3-xdc","volume":45}}`)
+	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"open_book","app":"lost_island"}}`)
+
+	if got := b.companionFor("greg").ListenSeconds; got != 120 {
+		t.Fatalf("listen_seconds = %d, want 120", got)
+	}
+	if got := b.voiceFor("greg"); got != "bf_lily" {
+		t.Fatalf("voice = %q, want bf_lily", got)
+	}
+	b.ws.mu.Lock()
+	d := b.ws.terminals["box3-xdc"]
+	vol := d.vol
+	drawer := d.drawer
+	bookName := ""
+	if d.readingBook != nil {
+		bookName = d.readingBook.Name
+	}
+	b.ws.mu.Unlock()
+	if vol != 45 {
+		t.Fatalf("terminal volume = %d, want 45", vol)
+	}
+	if drawer != drawerBookReader || bookName != "lost_island" {
+		t.Fatalf("expected book reader with lost_island, got drawer=%q book=%q", drawer, bookName)
+	}
+
+	// 3. Unverified sender update is ignored.
+	sendClientUpdate(99, `{"payload":{"v":1,"op":"set_listen","seconds":300}}`)
+	if got := b.companionFor("greg").ListenSeconds; got != 120 {
+		t.Fatalf("unverified update mutated listen_seconds to %d", got)
+	}
+	stub.mu.Lock()
+	unverifiedReplies := len(stub.xdcUpdates[greg.DCAccountID][99])
+	stub.mu.Unlock()
+	if unverifiedReplies != 1 { // only the injected client update itself, no ack/state reply
+		t.Fatalf("expected no reply updates for unverified sender, got %d", unverifiedReplies)
+	}
 }

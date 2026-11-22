@@ -19,7 +19,7 @@ printf 'PASS shell checks\n'
 source scripts/go-bin.sh
 GO_BIN=$(resolve_go)
 export CGO_ENABLED=1
-node --test config/opencode/*.test.mjs
+node --test config/opencode/*.test.mjs lark/webxdc/panel/*.test.mjs
 (
     cd lark
     "$GO_BIN" mod verify
