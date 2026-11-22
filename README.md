@@ -1,9 +1,9 @@
 # Lark
 
-[Lark](https://github.com/adonm/lark) is a tap-to-talk companion with interactive diagrams, voice notes, live calls, and a browser mirror. It starts as a friendly cat, then can shift into any creature or character a child imagines.
+[Lark](https://github.com/adonm/lark) is a tap-to-talk companion with interactive diagrams, voice notes, and live calls. It starts as a friendly cat, then can shift into any creature or character a child imagines.
 
 ```text
-Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 <-- /ws, /app: SVG --> Browser
+Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 (HTTP admin, MCP, OTA)
                                               |-- Parakeet (in-process Vulkan speech to text)
                                               |-- OpenCode :49375 (loopback, reply deltas over SSE)
                                               `-- Kokoro   (FP32, embedded via sherpa-onnx)
@@ -11,7 +11,7 @@ Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 <
 
 **Targets:** ESP-VoCat v1.2 and ESP32-S3-BOX-3. Both use a 360×360 logical canvas,
 centered on the BOX-3’s rectangular display. Lark runs apps and renders
- RGB565 updates for hardware and SVG for `/app`. Boards draw a fallback face offline.
+RGB565 updates for hardware. Boards draw a fallback face offline.
 
 **New in 0.9.3:** Both boards use the touchscreen for all touch controls.
 VoCat’s capacitive head pads are disabled.
@@ -45,8 +45,8 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    agent prompt and OTA files (the systemd unit sets it). Choose the models in
     the [dedicated OpenCode config](#companion-models).
 
-     STT needs a Vulkan GPU, not Hex or an X display. Lark recognizes
-    English without custom vocabulary. On firmware 0.9.5 and `/app`,
+    STT needs a Vulkan GPU, not Hex or an X display. Lark recognizes
+    English without custom vocabulary. On firmware 0.9.5+,
     Lark listens through thinking pauses and uses local transcription
     to decide when to send a turn. Clients without the capability keep their
     local VAD. You can still Send or Cancel while the mic is open. See
@@ -113,48 +113,24 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    model and fallback, and disposable sessions; it can spend model quota.
    `--deployed` runs the older deployed-service and OTA probes (no upload or
    flash).
+   `--qa` runs the repeatable `lark sim` QA suite (`lark/qa/*.sim`); `--qa-hw`
+   adds the live hardware QA suite.
 
 ## Controls, voice notes, and calls
 
-### Parent controls
-
-Store a separate random token (at least 32 ASCII characters, no spaces) in
-`~/.config/lark/parent.token` (or under `$XDG_CONFIG_HOME`), mode `0600`.
-Lark reads it at startup. On the LAN, open **Parent controls** in `/app`
-and enter both tokens. Keep the parent token with the grown-ups; kids should
-use their device or a scoped share link, not the LAN dashboard. Scoped links
-cannot open the controls.
-
-- Set daily quiet hours in the device's IANA time zone (for example,
-  `America/New_York`). A window can cross midnight. A dim screen explains why
-  the companion is unavailable. Calls and intercom are declined; due timers are
-  skipped, not replayed.
-- Set an optional daily time budget. Recording, chat and playback, visible
-  apps, and connected calls share the budget. Concurrent activity counts once
-  and the total resets at local midnight. The companion announces when time is up.
-- Pause a device for a set time, or choose **Unlock and override** to allow use
-  temporarily. Tapping cannot unlock it. Kids can ask “Pause for five minutes”
-  to start a break (up to 30 minutes) after parent access is set up. Only a
-  parent can unlock it early.
-
-Rules follow the device, not the companion's form. The parent view shows
-today's usage and seven-day activity counts; chat contents stay in History.
-The agent can read its current policy but cannot edit it.
-
 ### Using a companion
 
-- Tap the companion's face and speak after the tone. Pause 1.5 seconds to send
-  automatically, or 3 seconds once you've spoken for 4 seconds. Tap **Send**
-  to finish early, **Cancel** to discard, or **Stop** to interrupt a reply.
+- Tap the companion's face and speak after the tone. Pause to send
+  automatically, or tap **Send** to finish early, **Cancel** to discard, or
+  **Stop** to interrupt a reply.
 - The display dims after 120 seconds idle. Tap the touchscreen to wake it.
-- The on-device **Menu** and `/app` live screen share the same touch controls.
+- The on-device **Menu** provides touch controls:
   **Games** launches saved apps, **Memories** shows the companion's saved memories,
   and **History** shows the last 20 messages, newest first. Tap a row for details.
   **Talk to…** opens intercom, **Volume** sets the level or enables **Auto**,
   **Voice** pages through six curated voices, and **Stats** opens the diagnostics HUD.
   Auto-volume estimates ambient noise from recordings and adjusts the DAC in RAM
-  without writing to flash. **Home** returns to the companion. Scoped tunnels don't
-  expose Games, Memories, or Stats.
+  without writing to flash. **Home** returns to the companion.
 - Say “Tell Mint dinner is ready,” “Intercom Cake, come play,” or “Tell everyone
   good morning.” Lark bypasses OpenCode and relays a chime, sender announcement, and normalized voice.
 - Tap **Reply to \<Sender\>** on a message card or choose a peer in
@@ -166,85 +142,22 @@ The agent can read its current policy but cannot edit it.
 - Ask for a composed message (“Send Mint a knock-knock joke”). The agent uses
   `emit` to deliver a card and synthesized speech to the recipient.
 
-## Browser dashboard
+### Voices and diagnostics
 
-Open `http://<host-lan-ip>:8765/app` on a trusted LAN and enter the Lark
-token. Select a physical device to mirror and control it, or use
-**+ New Companion** to meet a virtual companion. The no-build UI ships with
-the Go server: Oat supplies the controls and theme, native JavaScript handles
-live screen and audio, and HTMX 4 swaps server-rendered Parent controls.
-
-Say hi to the starter cat, then ask it to become a fox, owl, dragon, robot, or
-anything you invent. Give it a name, colors, and a voice. Ask it to shift again
-anytime while keeping the same conversation. Open **Move Hardware Terminal**
-in the LAN sidebar to attach a hardware terminal to another companion, or click
-**Open companion here** to attach your browser as a web terminal (`web-<8hex>`).
-**New Chat** archives the current conversation and starts a fresh session.
-Shared links can chat with their companion but cannot reset or move terminals.
-Chat updates live over `/ws`; **Load older** fetches earlier messages across
-sessions. Use **Call** from a web terminal in `/app` to call a compatible board
-or another companion. Mirroring a hardware terminal does not turn the browser into
-its microphone. Use **Voice** under the screen for one-click
-Heart or Fable, or choose one of six warm, kid-friendly storyteller voices:
+Companions choose from six warm, kid-friendly storyteller voices:
 Heart, Bella, and Puck (US English), or Fable, Emma, and George (UK English).
-The choice is saved per device in the Lark database. Mint defaults to Fable
+The choice is saved per companion in the Lark database. Mint defaults to Fable
 (`bm_fable`). Cake and other companions default to Heart (`af_heart`) unless
 `LARK_TTS_VOICE` sets a different fallback. Retired UK voices resolve to
 Emma or Fable without rewriting existing profiles.
-The conversation panel shows active timers for the selected companion with a
-countdown and a Cancel button. The LAN sidebar's **Saved Memory & Assets**
-section lets you inspect and delete saved keys and visuals.
 
-Plain LAN HTTP supports the SVG mirror, text chat, and audio playback.
-Browser calls and recording need microphone access (HTTPS or localhost).
-Voice notes use the same adaptive silence timing as the boards. On manual stop, the browser flushes any buffered
-audio before ending the recording, without a fixed recording tail. For a remote
-phone, install the [OpenTunnel CLI](https://opentunnel.xyz) on the Lark host. If it is
-outside the Lark service's `PATH` and `~/.local/bin`, set
-`LARK_OPENTUNNEL_BIN` to its path in `lark.env`. Restart the server
-with `systemctl --user restart lark.service` so it finds the CLI.
-In the dashboard, select a companion, choose **Create Tunnel** to start
-its route, then **Copy Share Link**. The HTTPS link opens the same companion and
-conversation as the LAN dashboard, with mic, screen, voice notes, and calls to
-online companions. The scoped token does not open the LAN dashboard, admin routes, or
-other chats. Treat the link as a password and use **Close Tunnel** to revoke it.
-
-### Install Lark PWA
-
-Open the companion's HTTPS share link, or select a companion in `/app` on a trusted
-HTTPS LAN origin (or localhost). Ordinary LAN
-HTTP shows the same layout but can't install the app or use the mic.
-
-- **Android (Chrome):** tap **Install companion**, or use the browser menu's
-  **Install app** / **Add to Home screen**.
-- **iPhone/iPad (Safari):** tap **Share → Add to Home Screen**, then **Add**.
-- **Desktop (Chrome/Edge):** click **Install companion** or the install icon in the address bar.
-
-The shortcut opens the companion in a standalone window and uses its face as
-the icon. A share-link install retains only its private access and stops working when the link is
-revoked. A LAN install may ask for your Lark token if the browser uses
-separate storage. The app shell can load offline; live chat, history, audio,
-and photos still need the server.
-
-On mobile, the live face sits above chat and the composer. A web terminal goes
-offline after 45 seconds in the background or five minutes without interaction.
-Ringing, calls, recording, thinking, and playback finish first. Tap
-**Tap to reconnect** to unlock audio and resume; reconnecting won't take over
-a companion already open elsewhere.
-
-### Geeky diagnostics
-
-Open **Menu → Stats** for a compact on-device HUD, or **Diagnostics** in the
-LAN `/app` dashboard for device status, pipeline timings, and CPU and memory
+Open **Menu → Stats** for a compact on-device HUD, or query `GET /api/diagnostics`
+(or `lark status`) for device status, pipeline timings, and CPU and memory
 usage for the server and host. The server totals include Kokoro. Firmware
 reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM, Wi-Fi RSSI,
-and uptime every five seconds over WebSocket. The dashboard also shows
-WebSocket round-trip time.
-Device status also reports the last frame revision and LCD flush duration,
-input overflows, and PCM starvation/drop counts. Turn diagnostics separate
+and uptime every five seconds. Turn diagnostics separate
 OpenCode gate wait and first sentence, TTS queue and inference time, first frame
-render, and elapsed time to the first queued PCM (or HTTP audio URL). The board's
-1.5–3 seconds of automatic-send silence happen before these server timings.
+render, and elapsed time to the first queued PCM.
 
 ## Dedicated OpenCode
 
@@ -312,18 +225,6 @@ the saved app changed while the builder worked, it keeps the newer version.
 Tap **Cancel build** on the progress card or say “Cancel the build.” Regular
 **Stop** only stops the foreground turn or speech.
 
-### Pairing
-
-Click **Pair OpenCode** in the LAN dashboard's Devices sidebar to create a
-short-lived, single-use link. The link opens the dedicated server via the
-`lark-opencode-lan.socket` TCP forwarder on port `49376`. It does not pair
-with your personal OpenCode or work through companion share links. Keep ports `8765`
-and `49376` on a trusted LAN; neither uses TLS. Pair only trusted clients: a
-paired client gets access to the dedicated OpenCode server, not just companion chat.
-To turn off LAN OpenCode access, stop both forwarder units, disable
-`lark-opencode-lan.socket`, remove `LARK_OPENCODE_PAIR_PORT` from `lark.env`,
-and restart `lark.service`.
-
 ### Lark MCP
 
 OpenCode runs the installed `lark mcp` stdio proxy, which forwards
@@ -336,9 +237,7 @@ verifies that OpenCode loaded its catalog. While that refresh is pending,
 model turns fail without dispatch; local history and device settings remain
 available. Diagnostics distinguish a verified catalog (`current`) from a
 failed attempt awaiting retry (`waiting`). Startup never compacts sessions or
-sends model prompts. `LARK_DEFER_MCP_COMPACTION` no longer has an effect.
-The authenticated LAN `/api/opencode/compact` still supports explicit
-compaction and MCP reconnects.
+sends model prompts.
 
 Each companion's next user turn that needs the model replaces a stale or
 unversioned binding lazily. A current binding also gets replaced if OpenCode's
@@ -459,58 +358,37 @@ not tool traces or prompt headers.
 
 ## API
 
-Authenticated HTTP requests require `X-Lark-Token` (and `X-Lark-Parent-Token`
-for parent controls).
-Hardware needs firmware `0.9.0` or newer for playback acknowledgments with an
-audio ID, and announces `proto: 2` in its authenticated `/ws` `hello`.
-Firmware `0.9.2` and newer report `caps` for battery, Call, and drag. Both
-current boards use touchscreens, not head pads. Lark remembers each
-board there, using the socket IP and port 80
-unless the hello specifies a port. The SVG renderer
-streams dirty rectangles as `0x03` RGB565 binary frames, using RLE565 when
-smaller. BOX-3 announces its native size; Lark centers the square
-artwork and maps raw touch coordinates back into SVG space. Browsers receive
-`op: "svg"` with `device_id`; controls share the boards’ hit targets and also
-work with Tab, Enter, and Space.
-
-`0x01` note upload and `0x02` playback carry 16 kHz signed 16-bit
-little-endian mono PCM. Clients with `caps.call_pcm` use `0x04` for 40 ms call
-uploads when `call.start` sets `mic_prefix: 4`; legacy clients use `0x01`.
-Voice capture and intercom use WebSocket. The bridge
-pads voiced whole-clip STT with 150 ms of silence on each side. Kokoro starts
-synthesizing sentences while OpenCode streams its reply over SSE. Firmware
-`0.9.0` removes the legacy `/speak` endpoint.
+Authenticated HTTP requests require `X-Lark-Token` (`/health` is unauthenticated;
+`/mcp` and `/debug/pprof/...` are loopback + token only).
+Devices connect over TCP and UDP on `LARK_DEVICE_PORT` (default `8766`) for
+binary RGB565/RLE565/LZ4/JPEG frames, touch events, and 16 kHz signed 16-bit
+mono PCM audio. The bridge pads voiced whole-clip STT with 150 ms of silence on
+each side. Kokoro starts synthesizing sentences while OpenCode streams its reply
+over SSE.
 
 | Lark · port 8765 | Request → response |
 | --- | --- |
-| `GET /health` | STT engine/readiness, OpenCode, and TTS readiness |
-| `GET /ws`, `GET /app` | WebSocket hub and embedded browser UI |
-| `GET /api/diagnostics` | LAN-only device telemetry, WebSocket RTT, pipeline timings, Kokoro readiness, server and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
-| `POST /api/diagnostics/stt` | Loopback only: synthesize and transcribe a fixed test phrase without a session or playback |
-| `GET /api/companions` | List all companions (`id`, `name`, `voice`, `online`, `dormant`, `terminals[]`, optional `tunnel`) |
+| `GET /health` | STT engine/readiness, OpenCode, TTS, and Delta Chat readiness |
+| `GET /api/diagnostics` | Device telemetry, pipeline timings, Kokoro readiness, server and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
+| `GET /api/companions` | List all companions (`id`, `name`, `voice`, `online`, `dormant`, `terminals[]`) |
 | `POST /api/companions` | Create a companion (`{}` creates `"New Companion"`) |
-| `GET /api/companions/{id}`, `PATCH /api/companions/{id}`, `DELETE /api/companions/{id}` | Read, update, or delete a companion (delete requires zero attached terminals) |
-| `GET /api/companions/{id}/messages` | Canonical chat, newest page first and chronological within each page. `limit` defaults to 100 (max 500). If `has_more`, pass `next_cursor.before_ts` and `next_cursor.before_id` as query parameters to load older messages. |
-| `POST /api/companions/{id}/voice` | `{"voice":"af_heart"}` → saved `companion_id` and `voice`; scoped links can change only their own companion |
+| `GET /api/companions/{id}`, `PATCH /api/companions/{id}`, `PUT /api/companions/{id}`, `DELETE /api/companions/{id}` | Read, update, or delete a companion (delete requires zero attached terminals) |
+| `POST /api/companions/{id}/voice` | `{"voice":"af_heart"}` → saved `companion_id` and `voice` |
 | `POST /api/companions/{id}/reset` | Restore the starter and start a fresh session (pass `{"archive_history":false}` to keep chat history) |
-| `GET /api/terminals`, `POST /api/terminals` | List terminals or create a `web-<8hex>` terminal (`{"kind":"web","companion_id":"..."}`) |
-| `PATCH /api/terminals/{id}`, `DELETE /api/terminals/{id}` | Update terminal volume/attachment or delete a terminal |
+| `GET /api/companions/{id}/dc` | Delta Chat account ID and verified peer companion IDs |
+| `GET /api/terminals` | List all terminals |
+| `GET /api/terminals/{id}`, `PATCH /api/terminals/{id}`, `DELETE /api/terminals/{id}` | Read, update terminal volume/attachment, or delete a terminal |
 | `POST /api/terminals/{id}/attach`, `POST /api/terminals/{id}/detach` | Attach a terminal to `{"companion_id":"..."}` or detach it |
 | `POST /api/terminals/{id}/volume` | `{"auto":true}` or `{"auto":false,"volume":55}` |
-| `GET /api/scope` | Current scope and ordered `voices` catalog |
-| `POST /api/chat` | `{"text":"Explain a circle","companion_id":"cake"}` → accepted on an active companion; otherwise returns `reply`, `session_id`, and `audio_url` (LAN only) |
-| `GET /api/audio/<id>` | Reply PCM from `audio_url`; streams by sentence while synthesis runs |
-| `POST /api/tts` | `{"text":"Hello!"}`, optional `companion_id` → complete PCM clip using that companion's voice |
-| `POST /api/opencode/compact` | LAN-only; optional `companion_id` selects one session (default: all), optional `reconnect_mcp: true` refreshes MCP first → `ok`, `compacted`, and `skipped` companion IDs |
-| `GET /api/memory?scope=…`, `GET /api/memory/scopes`, `DELETE /api/memory?scope=…&key=…` | LAN-only saved JSON and populated scopes (`companion:<id>`, `shared`, `game:<name>`, `app:<name>`) |
-| `GET /api/apps`, `DELETE /api/apps/{name}`, `POST /api/apps/run` | List, delete, or run saved apps and drawings (LAN only) |
-| `GET /api/timers?companion_id=…`, `DELETE /api/timers/{id}` | List/cancel active timers; scoped links can see and cancel only their own companion's timers |
+| `POST /api/terminals/{id}/pair` | Generate and push a Delta Chat QR pairing card (`image/png`) to an attached terminal |
+| `GET /api/terminals/{id}/hits` | Live screen state, revision, and touch hit targets for a connected terminal |
+| `POST /api/tts` | `{"text":"Hello!"}`, optional `voice` → WAV audio (`audio/wav`) |
+| `POST /mcp` | Loopback-only MCP JSON-RPC endpoint used by `lark mcp` |
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 
-Use the exact `companion_id` in chat requests. To send an intercom without an
-agent turn, say or type “Tell Mint dinner is ready,” substituting a nearby
-companion's name. Intercom requires a connected recipient.
+Use `lark status`, `lark companions`, `lark terminals`, `lark sim`, `lark device`,
+`lark ota`, and `lark mcp` from the CLI to inspect and control the server.
 
 | Device · port 80 | Request → response |
 | --- | --- |
@@ -521,10 +399,10 @@ companion's name. Intercom requires a connected recipient.
 
 ## Networking
 
-Devices need TCP and UDP **8766** (`LARK_DEVICE_PORT`) for the native device protocol and TCP **8765** for OTA pull; browsers need TCP **8765** to the server; direct OTA uses TCP
+Devices need TCP and UDP **8766** (`LARK_DEVICE_PORT`) for the native device protocol and TCP **8765** for OTA pull; direct OTA and `lark device` use TCP
 **80** to the device. Use Avahi (`avahi-resolve -n lark-XXXX.local`) for
-mDNS or the device IP if the container cannot resolve `.local`. HTTP and WS
-are unencrypted; use a trusted LAN and keep configs and firmware images private.
+mDNS or the device IP if the container cannot resolve `.local`. HTTP and device
+transport are unencrypted; use a trusted LAN and keep configs and firmware images private.
 
 ## License
 
