@@ -662,7 +662,9 @@ func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
 	}
 }
 
-func (h *wsHub) openStory(d *wsTerminal, st savedStory) {
+// openStory opens the reader at saved progress. Menu and panel entry points
+// are silent; narration belongs to conversational story turns.
+func (h *wsHub) openStory(d *wsTerminal, st savedStory, narrate bool) {
 	cs, err := parseTwee(st.Twee)
 	if err != nil {
 		return
@@ -701,13 +703,13 @@ func (h *wsHub) openStory(d *wsTerminal, st savedStory) {
 	d.storyPage = page
 	now := time.Now()
 	h.stopPlayback(d, true)
-	if sess.text != "" {
+	if narrate && sess.text != "" {
 		h.speakLocal(d, sess.text)
 	}
 	h.render(d, now, false)
 }
 
-func (h *wsHub) advanceStoryPassage(d *wsTerminal, targetIdx int) {
+func (h *wsHub) advanceStoryPassage(d *wsTerminal, targetIdx int, narrate bool) {
 	if d.story == nil || d.story.compiled == nil {
 		return
 	}
@@ -734,7 +736,7 @@ func (h *wsHub) advanceStoryPassage(d *wsTerminal, targetIdx int) {
 		}()
 	}
 	h.stopPlayback(d, true)
-	if sess.text != "" {
+	if narrate && sess.text != "" {
 		h.speakLocal(d, sess.text)
 	}
 	h.render(d, time.Now(), false)

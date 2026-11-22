@@ -476,7 +476,7 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 		s.b.ws.mu.Lock()
 		for _, d := range s.b.ws.terminalsFor(companionID) {
 			if s.b.ws.active(d) {
-				s.b.ws.openStory(d, st)
+				s.b.ws.openStory(d, st, false)
 			}
 		}
 		s.b.ws.mu.Unlock()
@@ -499,7 +499,7 @@ func (s *dcService) applyPanelCommand(ctx context.Context, accID, msgID uint32, 
 		s.b.ws.mu.Lock()
 		for _, d := range s.b.ws.terminalsFor(companionID) {
 			if s.b.ws.active(d) {
-				s.b.ws.openStory(d, st)
+				s.b.ws.openStory(d, st, false)
 			}
 		}
 		s.b.ws.mu.Unlock()

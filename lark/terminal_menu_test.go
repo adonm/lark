@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -298,12 +299,65 @@ func TestOpenStoryEntersStartPassage(t *testing.T) {
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
 	b.ws.mu.Lock()
 	d := b.ws.terminals["vocat-story-open"]
-	b.ws.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee})
+	b.ws.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, false)
 	sess := d.story
 	b.ws.mu.Unlock()
 
 	if sess == nil || sess.text != "Once upon a time." || len(sess.choices) != 1 {
 		t.Fatalf("openStory did not enter start passage: %+v", sess)
+	}
+}
+
+func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *wsTerminal, *larkServer) {
+	t.Helper()
+	b, base := wsHarness(t, nil)
+	requests := new(atomic.Int32)
+	b.worker = fakeTTS(b.root, requests)
+	const termID = "vocat-story-voice"
+	dev := testConnectWS(t, base, "unit", false)
+	dev.helloV2(t, termID, "Cake")
+	b.ws.mu.Lock()
+	d := b.ws.terminals[termID]
+	b.ws.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
+	b.ws.mu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for requests.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return requests, d, b
+}
+
+func TestOpenStoryFromMenuIsSilent(t *testing.T) {
+	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
+	requests, d, b := storyTTSHits(t, twee, false)
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("opening a story from the menu synthesized %d TTS clips, want silence", n)
+	}
+	b.ws.mu.Lock()
+	target := d.story.choices[0].Target
+	b.ws.advanceStoryPassage(d, target, false)
+	b.ws.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("tapping a story choice synthesized %d TTS clips, want silence", n)
+	}
+	b.ws.mu.Lock()
+	b.ws.advanceStoryPassage(d, target, true)
+	b.ws.mu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for requests.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if requests.Load() == 0 {
+		t.Fatal("a voice story choice did not narrate the next passage")
+	}
+}
+
+func TestConversationalStoryOpenStillNarrates(t *testing.T) {
+	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
+	requests, _, _ := storyTTSHits(t, twee, true)
+	if requests.Load() == 0 {
+		t.Fatal("a conversational story open did not narrate the passage")
 	}
 }
 

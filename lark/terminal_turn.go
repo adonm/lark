@@ -132,7 +132,7 @@ func (h *wsHub) tryStoryVoiceChoice(d *wsTerminal, turnID uint64, text string) b
 	d.busy = false
 	d.turn = 0
 	h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
-	h.advanceStoryPassage(d, target)
+	h.advanceStoryPassage(d, target, true)
 	h.mu.Unlock()
 	return true
 }

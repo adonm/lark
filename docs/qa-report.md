@@ -1,5 +1,9 @@
 # Lark QA Report
 
+## 2026-11-23 — Silent Story Opens
+
+- Menu, Memories → Reading, and panel story opens render the passage without TTS or queued narration; tapped choices stay silent too. `TestOpenStoryFromMenuIsSilent` covers open plus tapped choices with a fake TTS worker; `TestConversationalStoryOpenStillNarrates` covers the narrated path, and voice choices keep narrating the next passage.
+
 ## 2026-11-23 — OpenCode Zen Gateway
 
 - **Models**: `lark` = `opencode/deepseek-v4.1-flash#low`, `deep` = `opencode/glm-5.3#high`, fallback = `opencode/glm-5.3-flash#low`. The `opencode` provider auth was already imported in `~/.local/share/lark/opencode` (`state/imported-provider-opencode`); a direct generation on every id succeeded.

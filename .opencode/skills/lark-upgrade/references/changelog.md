@@ -4,6 +4,20 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-23 — Silent Story Opens
+
+### Affects
+- Lark Server / Agents
+
+### Changes
+- Opening a story from the device menu, Memories → Reading, or the panel's Open/Start over shows the passage silently — no TTS and nothing queued. Voice choices still narrate the next passage, and conversational story reads are unchanged.
+- `openStory`/`advanceStoryPassage` take an explicit narration flag; menu and panel entry points pass `false`.
+
+### Upgrade Steps
+1. Restart `lark.service`.
+
+---
+
 ## 2026-11-23 — OpenCode Zen Gateway
 
 ### Affects

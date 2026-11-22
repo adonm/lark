@@ -229,7 +229,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			for _, st := range d.menuData.storyList {
 				if st.ID == a.value {
 					h.chime(d, "tap")
-					h.openStory(d, st)
+					h.openStory(d, st, false)
 					return
 				}
 			}
@@ -239,7 +239,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			idx, err := strconv.Atoi(a.value)
 			if err == nil && idx >= 0 && idx < len(d.story.choices) {
 				h.chime(d, "tap")
-				h.advanceStoryPassage(d, d.story.choices[idx].Target)
+				h.advanceStoryPassage(d, d.story.choices[idx].Target, false)
 				return
 			}
 		}
