@@ -22,18 +22,19 @@ type wsFrame struct {
 }
 
 type wsClient struct {
-	native     *nativeClient
-	ctx        context.Context
-	cancel     context.CancelFunc
-	out        chan wsFrame
-	outMu      sync.Mutex
-	drained    chan struct{}
-	txSeq      atomic.Uint32
-	kind       string // "hardware"
-	terminal   *wsTerminal
-	pingMu     sync.Mutex
-	pingSentAt time.Time
-	rtt        *float64
+	native        *nativeClient
+	ctx           context.Context
+	cancel        context.CancelFunc
+	out           chan wsFrame
+	outMu         sync.Mutex
+	drained       chan struct{}
+	txSeq         atomic.Uint32
+	kind          string // "hardware"
+	terminal      *wsTerminal
+	activeCapture atomic.Pointer[endpointCapture]
+	pingMu        sync.Mutex
+	pingSentAt    time.Time
+	rtt           *float64
 }
 
 type companionStatusState struct {

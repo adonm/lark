@@ -9,21 +9,47 @@ type endpointSettings struct {
 	newVAD func() endpointVAD
 }
 
+const endpointRingSlots = 256
+
 type endpointCapture struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
+	owner     *wsClient
 	packets   chan micPacket
+	free      chan int
+	slots     *[endpointRingSlots][2 * pcmPacket]byte
+	stop      chan struct{}
 	result    chan captureResult
 	listening chan struct{}
 	deadline  *time.Timer // Hub owns and stops the wall-clock watchdog.
-	commitAt  time.Time   // Hub writes before closing packets.
+	commitAt  time.Time   // Hub writes before closing stop.
 	listen    bool
 	replyTo   string
 }
 
 type micPacket struct {
-	pcm []byte
-	at  time.Time
+	pcm  []byte
+	at   time.Time
+	slot int
+}
+
+func (c *endpointCapture) push(pcm []byte, at time.Time) bool {
+	if c.free == nil {
+		select {
+		case c.packets <- micPacket{pcm: append([]byte(nil), pcm...), at: at, slot: -1}:
+			return true
+		default:
+			return false
+		}
+	}
+	select {
+	case idx := <-c.free:
+		n := copy(c.slots[idx][:], pcm)
+		c.packets <- micPacket{pcm: c.slots[idx][:n], at: at, slot: idx}
+		return true
+	default:
+		return false
+	}
 }
 
 type captureResult struct {
@@ -57,8 +83,25 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 		replyTo = d.replyTo
 		d.replyTo = ""
 	}
-	c := &endpointCapture{ctx: ctx, cancel: cancel, packets: make(chan micPacket, 64), result: make(chan captureResult, 1), listening: make(chan struct{}), listen: d.recording.listen, replyTo: replyTo}
+	free := make(chan int, endpointRingSlots)
+	for i := range endpointRingSlots {
+		free <- i
+	}
+	c := &endpointCapture{
+		ctx:       ctx,
+		cancel:    cancel,
+		owner:     d.client,
+		packets:   make(chan micPacket, endpointRingSlots),
+		free:      free,
+		slots:     new([endpointRingSlots][2 * pcmPacket]byte),
+		stop:      make(chan struct{}),
+		result:    make(chan captureResult, 1),
+		listening: make(chan struct{}),
+		listen:    d.recording.listen,
+		replyTo:   replyTo,
+	}
 	d.recording.endpoint = c
+	d.client.activeCapture.Store(c)
 	c.deadline = time.AfterFunc(limit, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -76,6 +119,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 		defer vad.close()
 	}
 	var u utterance
+	u.pcm = make([]byte, 0, sampleRate*2*15)
 	var end time.Time
 	var maxVADQueue time.Duration
 	var cached pauseTranscript
@@ -96,14 +140,31 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			silence = tunedEndpoint.silence(u.policy, result.text)
 		}
 	}
-	for c.ctx.Err() == nil {
-		select {
-		case <-c.ctx.Done():
-			return
-		case result := <-probe:
-			accept(result)
-		case packet, more := <-c.packets:
-			if !more {
+	processPacket := func(packet micPacket) {
+		if wait := time.Since(packet.at); wait > maxVADQueue {
+			maxVADQueue = wait
+		}
+		previous := u.policy.last
+		u.addFor(packet.pcm, vad, c.listen)
+		if c.free != nil && packet.slot >= 0 {
+			c.free <- packet.slot
+		}
+		if u.policy.inVoice || previous != u.policy.last {
+			attempted, cached, silence = false, pauseTranscript{}, tunedEndpoint.patient
+			if probeCancel != nil {
+				probeCancel()
+			}
+		}
+		if u.policy.voiced && (previous != u.policy.last || end.IsZero()) {
+			end = packet.at.Add(u.policy.last - pcmDuration(len(u.pcm)))
+		}
+	}
+	commit := func() {
+		for {
+			select {
+			case packet := <-c.packets:
+				processPacket(packet)
+			default:
 				// Send may close the mic during a probe. Reuse a completed
 				// result only for the same silence, including any DMA tail.
 				select {
@@ -132,20 +193,23 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 				c.result <- result
 				return
 			}
-			if wait := time.Since(packet.at); wait > maxVADQueue {
-				maxVADQueue = wait
+		}
+	}
+	for c.ctx.Err() == nil {
+		select {
+		case <-c.ctx.Done():
+			return
+		case result := <-probe:
+			accept(result)
+		case <-c.stop:
+			commit()
+			return
+		case packet, more := <-c.packets:
+			if !more {
+				commit()
+				return
 			}
-			previous := u.policy.last
-			u.addFor(packet.pcm, vad, c.listen)
-			if u.policy.inVoice || previous != u.policy.last {
-				attempted, cached, silence = false, pauseTranscript{}, tunedEndpoint.patient
-				if probeCancel != nil {
-					probeCancel()
-				}
-			}
-			if u.policy.voiced && (previous != u.policy.last || end.IsZero()) {
-				end = packet.at.Add(u.policy.last - pcmDuration(len(u.pcm)))
-			}
+			processPacket(packet)
 		}
 		if len(c.packets) != 0 || c.ctx.Err() != nil {
 			continue
@@ -181,11 +245,18 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 func (h *wsHub) finishEndpoint(d *wsTerminal, now time.Time) {
 	c := d.recording.endpoint
 	d.recording.endpoint = nil
+	if d.client != nil {
+		d.client.activeCapture.CompareAndSwap(c, nil)
+	}
 	c.deadline.Stop()
 	if c.commitAt.IsZero() {
 		c.commitAt = now
 	}
-	close(c.packets)
+	if c.stop != nil {
+		close(c.stop)
+	} else {
+		close(c.packets)
+	}
 	close(c.listening)
 	d.recording.clear()
 	d.queuedVoice = c

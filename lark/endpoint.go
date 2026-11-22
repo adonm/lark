@@ -210,9 +210,15 @@ func (c endpointThresholds) silence(p endpointPolicy, text string) time.Duration
 // One capture worker owns this accumulator. Keep the original clip for the
 // same whole-clip STT path even if VAD is unavailable.
 type utterance struct {
-	pcm    []byte
-	scan   int
-	policy endpointPolicy
+	pcm     []byte
+	scan    int
+	policy  endpointPolicy
+	preRoll *[listenPreRollBytes]byte
+	preHead int
+	preLen  int
+	vadBuf  [endpointBytes]byte
+	vadLen  int
+	preScan int
 }
 
 func (u *utterance) add(pcm []byte, vad endpointVAD) {
@@ -227,18 +233,72 @@ func (u *utterance) add(pcm []byte, vad endpointVAD) {
 
 const listenPreRollBytes = sampleRate * 2 * 400 / 1000
 
+func (u *utterance) pushPreRoll(pcm []byte) {
+	if u.preRoll == nil {
+		u.preRoll = new([listenPreRollBytes]byte)
+	}
+	if len(pcm) >= listenPreRollBytes {
+		copy(u.preRoll[:], pcm[len(pcm)-listenPreRollBytes:])
+		u.preHead = 0
+		u.preLen = listenPreRollBytes
+		return
+	}
+	start := (u.preHead + u.preLen) % listenPreRollBytes
+	first := min(len(pcm), listenPreRollBytes-start)
+	copy(u.preRoll[start:], pcm[:first])
+	if first < len(pcm) {
+		copy(u.preRoll[:], pcm[first:])
+	}
+	if u.preLen+len(pcm) <= listenPreRollBytes {
+		u.preLen += len(pcm)
+	} else {
+		drop := u.preLen + len(pcm) - listenPreRollBytes
+		u.preHead = (u.preHead + drop) % listenPreRollBytes
+		u.preLen = listenPreRollBytes
+	}
+}
+
+func (u *utterance) flushPreRoll() {
+	if u.preRoll == nil || u.preLen == 0 {
+		return
+	}
+	u.pcm = u.pcm[:0]
+	first := min(u.preLen, listenPreRollBytes-u.preHead)
+	u.pcm = append(u.pcm, u.preRoll[u.preHead:u.preHead+first]...)
+	if first < u.preLen {
+		u.pcm = append(u.pcm, u.preRoll[:u.preLen-first]...)
+	}
+	u.preHead = 0
+	u.preLen = 0
+	u.scan = len(u.pcm)
+}
+
 func (u *utterance) addFor(pcm []byte, vad endpointVAD, listen bool) {
-	u.add(pcm, vad)
-	if listen && !u.policy.voiced && len(u.pcm) > listenPreRollBytes {
-		trim := len(u.pcm) - listenPreRollBytes
-		trim &^= 1
-		if trim > u.scan {
-			trim = u.scan
-		}
-		if trim > 0 {
-			copy(u.pcm, u.pcm[trim:])
-			u.pcm = u.pcm[:len(u.pcm)-trim]
-			u.scan -= trim
+	if !listen || u.policy.voiced {
+		u.add(pcm, vad)
+		return
+	}
+	u.pushPreRoll(pcm)
+	if vad == nil {
+		return
+	}
+	pos := 0
+	for pos < len(pcm) {
+		take := min(len(pcm)-pos, endpointBytes-u.vadLen)
+		copy(u.vadBuf[u.vadLen:], pcm[pos:pos+take])
+		u.vadLen += take
+		pos += take
+		if u.vadLen == endpointBytes {
+			u.preScan += endpointBytes
+			u.vadLen = 0
+			u.policy.observe(pcmDuration(u.preScan), vad.detect(u.vadBuf[:]))
+			if u.policy.voiced {
+				u.flushPreRoll()
+				if pos < len(pcm) {
+					u.add(pcm[pos:], vad)
+				}
+				return
+			}
 		}
 	}
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log"
@@ -152,7 +151,19 @@ func (h *wsHub) dispatchRTPPCM(c *wsClient, pt uint8, pcm []byte) {
 }
 
 func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
-	if len(pcm) < 2 || len(pcm)%2 != 0 {
+	if len(pcm) < 2 || len(pcm)%2 != 0 || prefix != micPrefix {
+		return
+	}
+	if ep := c.activeCapture.Load(); ep != nil {
+		if len(pcm) <= 2*pcmPacket && ep.push(pcm, time.Now()) {
+			return
+		}
+		h.mu.Lock()
+		d := c.terminal
+		if d != nil && h.active(d) && d.recording.endpoint == ep {
+			h.recordingControl(d, time.Now(), true)
+		}
+		h.mu.Unlock()
 		return
 	}
 	h.mu.Lock()
@@ -162,19 +173,11 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 		return
 	}
 	rec := &d.recording
-	if prefix != micPrefix || !rec.open() {
+	if !rec.open() {
 		return
 	}
 	if ep := rec.endpoint; ep != nil {
-		// Bound bytes as well as entries. The limit leaves headroom over DMA and
-		// worklet frames while preventing oversized frames from filling the queue.
-		if len(pcm) > 2*pcmPacket {
-			h.recordingControl(d, time.Now(), true)
-			return
-		}
-		select {
-		case ep.packets <- micPacket{bytes.Clone(pcm), time.Now()}:
-		default:
+		if len(pcm) > 2*pcmPacket || !ep.push(pcm, time.Now()) {
 			h.recordingControl(d, time.Now(), true)
 		}
 		return

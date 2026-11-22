@@ -70,9 +70,18 @@ func (c *deviceCapture) receivedEnd() { c.ignoreStart = false }
 func (c *deviceCapture) clear() {
 	if e := c.endpoint; e != nil {
 		c.endpoint = nil
-		e.deadline.Stop()
-		e.cancel()
-		close(e.listening)
+		if e.owner != nil {
+			e.owner.activeCapture.CompareAndSwap(e, nil)
+		}
+		if e.deadline != nil {
+			e.deadline.Stop()
+		}
+		if e.cancel != nil {
+			e.cancel()
+		}
+		if e.listening != nil {
+			close(e.listening)
+		}
 	}
 	if c.stopTimer != nil {
 		c.stopTimer.Stop()

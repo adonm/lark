@@ -365,6 +365,52 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 	}
 }
 
+func TestEndpointCaptureZeroAlloc(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	ds, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.shutdown()
+	nc, _ := dialNativeDevice(t, ds, "lark-epalloc", "unit", 0)
+	nc.readUntil(msgFrame)
+
+	free := make(chan int, endpointRingSlots)
+	for i := range endpointRingSlots {
+		free <- i
+	}
+	b.ws.mu.Lock()
+	d := b.ws.terminals["lark-epalloc"]
+	ep := &endpointCapture{
+		cancel:    func() {},
+		owner:     d.client,
+		packets:   make(chan micPacket, endpointRingSlots),
+		free:      free,
+		slots:     new([endpointRingSlots][2 * pcmPacket]byte),
+		listening: make(chan struct{}),
+		deadline:  time.NewTimer(time.Minute),
+	}
+	d.recording.phase = captureOpen
+	d.recording.endpoint = ep
+	d.client.activeCapture.Store(ep)
+	ssrc := d.client.native.ssrc
+	b.ws.mu.Unlock()
+	defer d.client.activeCapture.Store(nil)
+
+	remote := netip.MustParseAddrPort("127.0.0.1:40000")
+	pkt := make([]byte, rtpPacketBytes)
+	encodeRTPPacket(pkt, rtpPTRecPCM, 1, 0, ssrc, make([]byte, rtpPCMBytes))
+
+	allocs := testing.AllocsPerRun(50, func() {
+		ds.handleUDP(pkt, remote)
+		p := <-ep.packets
+		ep.free <- p.slot
+	})
+	if allocs > 0 {
+		t.Fatalf("endpoint handleUDP allocated %.2f times per packet, want 0", allocs)
+	}
+}
+
 func BenchmarkNativeUDPHandle(b *testing.B) {
 	h := newWSHub(&larkServer{root: b.Context()}, false)
 	defer h.shutdown()
