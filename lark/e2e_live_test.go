@@ -58,6 +58,9 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		workspace: filepath.Join(root, "workspace"), prefix: "E2E-" + randomHex(5), real: real}
 	config := filepath.Join(root, "config")
 	_ = config
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"stt-models", "tts-models"} {
 		if err := os.Symlink(filepath.Join(data, "lark", name), filepath.Join(local, name)); err != nil {
 			t.Fatal(err)
@@ -80,7 +83,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		"HOME=" + root, "PATH=" + filepath.Join(root, "bin") + ":/usr/bin:/bin",
 		"XDG_CONFIG_HOME=" + config, "XDG_DATA_HOME=" + filepath.Join(root, "data"),
 		"XDG_STATE_HOME=" + filepath.Join(root, "state"), "XDG_CACHE_HOME=" + filepath.Join(root, "cache"),
-		"LARK_HOST=127.0.0.1", "LARK_PORT=0", "LARK_TOKEN=" + s.token,
+		"LARK_HOST=127.0.0.1", "LARK_PORT=0", "LARK_DEVICE_PORT=18766", "LARK_TOKEN=" + s.token,
 		"LARK_DB_PATH=" + filepath.Join(root, "lark.db"), "LARK_REPO_DIR=" + repo,
 		"LARK_OTA_DIR=" + root, "LARK_BOX3_OTA_DIR=" + root,
 		"LARK_OPENCODE_URL=" + s.model.url, "LARK_OPENCODE_DIR=" + s.workspace,
@@ -125,6 +128,9 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 			t.Fatal("bridge did not bind to an isolated loopback port")
 		}
 		s.base = "http://" + a
+		testTermMu.Lock()
+		testTermAddrs[s.base] = "127.0.0.1:18766"
+		testTermMu.Unlock()
 	case err := <-done:
 		done <- err
 		t.Fatal("isolated bridge exited before listening; check local native model assets")
@@ -249,7 +255,7 @@ type e2eCompanion struct {
 	width, high int
 	revision    uint16
 	pixels      []uint16
-	codecs      [2]int
+	codecs      [4]int
 	svg         string
 }
 
@@ -293,7 +299,9 @@ func (c *e2eCompanion) apply(t *testing.T, f wsFrame) {
 		t.Fatal("dirty rectangle exceeds advertised geometry:", r)
 	}
 	c.revision = rev
-	c.codecs[f.data[9]]++
+	if _, _, p, ok := unpackProtoPacket(f.data); ok && len(p) > 9 && int(p[9]) < len(c.codecs) {
+		c.codecs[p[9]]++
+	}
 	for y := range r.Dy() {
 		at := (r.Min.Y+y)*c.width + r.Min.X
 		copy(c.pixels[at:at+r.Dx()], pixels[y*r.Dx():(y+1)*r.Dx()])
