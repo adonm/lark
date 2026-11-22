@@ -500,8 +500,6 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 
 	b.ws.mu.Lock()
 	term := b.ws.terminals["box3-0003"]
-	b.ws.mu.Unlock()
-
 	turnDone := make(chan struct{})
 	b.ws.startTurn(term, time.Now(), false, "voice", func(_ context.Context, id uint64) {
 		defer close(turnDone)
@@ -519,6 +517,7 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 		}
 		b.ws.finishTurn(term, id, nil, nil)
 	})
+	b.ws.mu.Unlock()
 	<-turnDone
 
 	select {
@@ -597,13 +596,12 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 
 	b.ws.mu.Lock()
 	term := b.ws.terminals["box3-0005"]
-	b.ws.mu.Unlock()
-
 	done := make(chan struct{})
 	b.ws.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
 		defer close(done)
 		b.ws.runTurn(ctx, term, id, "tell Mum OK", "voice", nil)
 	})
+	b.ws.mu.Unlock()
 	<-done
 
 	stub.mu.Lock()
@@ -612,4 +610,206 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 		t.Fatalf("tell Mum OK did not send DC message: %+v", stub.sent)
 	}
 	waitSVG(t, b.ws, "box3-0005", "Sent to Mum!")
+}
+
+func TestStateExposesContacts(t *testing.T) {
+	b, base, stub := dcTestHarness(t)
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cake, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.contacts[greg.DCAccountID][11] = deltachat.Contact{Id: 11, DisplayName: "Unverified Bob", Address: "bob@example.org", IsVerified: false}
+	stub.contacts[greg.DCAccountID][12] = deltachat.Contact{Id: 12, DisplayName: "Cake", Address: stub.configs[cake.DCAccountID]["addr"], IsVerified: true}
+	stub.mu.Unlock()
+
+	me := stateMe(t, base, "greg")
+	contacts, ok := me["contacts"].([]any)
+	if !ok || len(contacts) != 3 {
+		t.Fatalf("me.contacts = %#v", me["contacts"])
+	}
+	byName := map[string]object{}
+	for _, raw := range contacts {
+		c := raw.(object)
+		byName[str(c["name"])] = c
+	}
+	if byName["Mum"]["kind"] != "human" || byName["Mum"]["verified"] != true {
+		t.Fatalf("Mum contact = %+v", byName["Mum"])
+	}
+	if byName["Unverified Bob"]["kind"] != "human" || byName["Unverified Bob"]["verified"] != false {
+		t.Fatalf("Bob contact = %+v", byName["Unverified Bob"])
+	}
+	if byName["Cake"]["kind"] != "companion" || byName["Cake"]["verified"] != true {
+		t.Fatalf("Cake contact = %+v", byName["Cake"])
+	}
+}
+
+func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
+	stub := newStubDCRPC()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var mu sync.Mutex
+	var prompts []string
+	var msgID int
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
+		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
+				_, _ = w.Write([]byte(`{"data":{"id":"ses-overlap"}}`))
+			case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses-overlap":
+				_, _ = w.Write([]byte(`{"data":{"id":"ses-overlap","agent":"lark","model":{"providerID":"test","id":"model"}}}`))
+			case strings.HasPrefix(r.URL.Path, "/api/session/ses-overlap/"):
+				if r.URL.Path == "/api/session/ses-overlap/agent" || r.URL.Path == "/api/session/ses-overlap/model" {
+					w.WriteHeader(204)
+					return
+				}
+				switch r.URL.Path {
+				case "/api/session/ses-overlap/prompt":
+					var in struct{ Text string }
+					_ = json.NewDecoder(r.Body).Decode(&in)
+					mu.Lock()
+					prompts = append(prompts, in.Text)
+					n := len(prompts)
+					msgID++
+					id := msgID
+					mu.Unlock()
+					if n == 1 {
+						close(firstStarted)
+						<-releaseFirst
+					}
+					_, _ = w.Write([]byte(`{"data":{"id":"msg-` + string(rune('0'+id)) + `"}}`))
+				case "/api/session/ses-overlap/message":
+					mu.Lock()
+					n := len(prompts)
+					id := msgID
+					last := ""
+					if n > 0 {
+						last = prompts[n-1]
+					}
+					mu.Unlock()
+					reply := "Local reply"
+					if strings.Contains(last, "Delta Chat from Mum") {
+						reply = "Remote reply to Mum"
+					}
+					uid := "msg-" + string(rune('0'+id))
+					aid := "msg-a" + string(rune('0'+id))
+					_, _ = w.Write([]byte(`{"data":[{"id":"` + aid + `","type":"assistant","finish":"stop","content":[{"type":"text","text":"` + reply + `"}]},{"id":"` + uid + `","type":"user"}]}`))
+				default:
+					w.WriteHeader(404)
+				}
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/session/ses-overlap":
+				w.WriteHeader(204)
+			case r.Method == http.MethodPost && r.URL.Path == "/api/experimental/session/ses-overlap/wait":
+				w.WriteHeader(204)
+			default:
+				w.WriteHeader(404)
+			}
+		})
+		b.dc = newDCService(b, "", t.TempDir(), "nine.testrun.org")
+		b.dc.rpc = stub
+		b.dc.ready.Store(true)
+	})
+
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	localTTS := make(chan string, 8)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				localTTS <- req.text
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-0006", "greg")
+	b.ws.mu.Lock()
+	term := b.ws.terminals["box3-0006"]
+	b.ws.mu.Unlock()
+
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "Remote question", ViewType: deltachat.ViewtypeText}
+	stub.mu.Unlock()
+
+	dcDone := make(chan struct{})
+	go func() {
+		defer close(dcDone)
+		b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
+	}()
+	<-firstStarted
+
+	b.ws.mu.Lock()
+	localDone := make(chan struct{})
+	b.ws.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
+		defer close(localDone)
+		b.ws.runTurn(ctx, term, id, "Local question", "voice", nil)
+	})
+	b.ws.mu.Unlock()
+
+	// Release the serialized DC turn; local turn must run second and get its own reply.
+	close(releaseFirst)
+	<-dcDone
+	<-localDone
+
+	stub.mu.Lock()
+	if len(stub.sent) != 1 || *stub.sent[0].data.Text != "Remote reply to Mum" {
+		t.Fatalf("DC reply mixed up: %+v", stub.sent)
+	}
+	stub.mu.Unlock()
+
+	var gotLocal bool
+	deadline := time.After(3 * time.Second)
+	for !gotLocal {
+		select {
+		case s := <-localTTS:
+			if s == "Remote reply to Mum" {
+				t.Fatalf("remote reply leaked to local TTS")
+			}
+			if s == "Local reply" {
+				gotLocal = true
+			}
+		case <-deadline:
+			t.Fatal("local reply did not play on terminal")
+		}
+	}
+}
+
+func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
+	b, _, _ := dcTestHarness(t)
+	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"}); err != nil {
+		t.Fatal(err)
+	}
+	baseTS := time.Now().Add(-time.Minute)
+	addAt := func(offset time.Duration, role, sender, text, source string) {
+		e := newChat(role, sender, text, source)
+		e.Timestamp = baseTS.Add(offset)
+		b.history.add("greg", e)
+	}
+	addAt(1*time.Second, "user", "Mum", "Dinner at 6", "deltachat")
+	addAt(2*time.Second, "companion", "Greg", "Got it!", "deltachat")
+	addAt(3*time.Second, "user", "You", "Who texted?", "voice")
+	addAt(4*time.Second, "companion", "Greg", "Mum did.", "voice")
+
+	excerpt, err := b.oc.recentDialogue(t.Context(), "greg", baseTS.UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(excerpt, "[Delta Chat from Mum (contact)") || !strings.Contains(excerpt, "[In person at Greg's device") {
+		t.Fatalf("excerpt missing channel/sender format: %s", excerpt)
+	}
 }

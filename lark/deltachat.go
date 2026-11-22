@@ -493,6 +493,55 @@ func (s *dcService) listPairedContacts(companionID string) ([]dcContact, error) 
 	return out, nil
 }
 
+type dcContactInfo struct {
+	ID       string
+	Name     string
+	Kind     string // "human" or "companion"
+	Verified bool
+}
+
+func (s *dcService) listAllContacts(companionID string) ([]dcContactInfo, error) {
+	rpc := s.getRPC()
+	if rpc == nil {
+		return nil, errors.New("Delta Chat unavailable")
+	}
+	accID := s.accountForCompanion(companionID)
+	if accID == 0 {
+		return nil, errors.New("Companion has no Delta Chat account")
+	}
+	contacts, err := rpc.GetContacts(accID, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []dcContactInfo
+	for _, ct := range contacts {
+		if ct.Id == deltachat.ContactSelf || ct.IsBlocked {
+			continue
+		}
+		name := strings.TrimSpace(ct.DisplayName)
+		if name == "" {
+			name = strings.TrimSpace(ct.Name)
+		}
+		if name == "" {
+			name = ct.Address
+		}
+		kind := "human"
+		id := ""
+		if peerID, isPeer := s.companionByAddr(ct.Address); isPeer {
+			kind = "companion"
+			id = peerID
+			if peer := s.b.companionFor(peerID); peer.Name != "" {
+				name = peer.Name
+			}
+		}
+		out = append(out, dcContactInfo{ID: id, Name: name, Kind: kind, Verified: ct.IsVerified})
+	}
+	slices.SortFunc(out, func(a, b dcContactInfo) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return out, nil
+}
+
 func (s *dcService) unpairContact(companionID string, contactID uint32) error {
 	rpc := s.getRPC()
 	if rpc == nil {
@@ -702,7 +751,11 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		})
 	}
 
-	prompt := fmt.Sprintf("[%s (%s) · deltachat · from %s · now: %s]\n%s", who.Name, companionID, senderName, formatLocalTimeIn(time.Now(), s.b.location()), text)
+	prompt := turnPromptChannelAt(companionID, "deltachat", text, who, turnChannel{
+		channel:    "deltachat",
+		sender:     senderName,
+		senderKind: "contact",
+	}, time.Now().In(s.b.location()))
 	raw, _, err := s.b.oc.askPrepared(turnCtx, companionID, func() (string, string) {
 		return who.Name, prompt
 	}, turnStream{}, "deltachat", nil, nil)

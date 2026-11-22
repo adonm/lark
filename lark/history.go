@@ -15,7 +15,13 @@ import (
 func stripLarkHeader(text string) string {
 	first, rest, ok := strings.Cut(text, "\n")
 	if ok && strings.HasPrefix(first, "[") && strings.HasSuffix(strings.TrimSuffix(first, "\r"), "]") {
-		if strings.HasPrefix(first, "[Lark: ") || strings.Contains(first, ") · hardware · ") || strings.Contains(first, ") · web · ") {
+		if strings.HasPrefix(first, "[Lark: ") ||
+			strings.HasPrefix(first, "[In person at ") ||
+			strings.HasPrefix(first, "[Delta Chat from ") ||
+			strings.HasPrefix(first, "[Timer · ") ||
+			strings.Contains(first, ") · hardware · ") ||
+			strings.Contains(first, ") · web · ") ||
+			strings.Contains(first, " · now: ") {
 			return rest
 		}
 	}
@@ -29,13 +35,29 @@ type chatEntry struct {
 	Text        string    `json:"text"`
 	Timestamp   time.Time `json:"timestamp"`
 	Source      string    `json:"source"`
+	Channel     string    `json:"channel,omitempty"`
 	SceneTitle  string    `json:"card_title,omitempty"`
 	ToolSummary string    `json:"-"`
 }
 
+func channelForSource(source string) string {
+	switch source {
+	case "deltachat":
+		return "deltachat"
+	case "intercom":
+		return "intercom"
+	case "timer":
+		return "timer"
+	case "voice", "typed", "tap", "text":
+		return "in_person"
+	default:
+		return source
+	}
+}
+
 func newChat(role, sender, text, source string) chatEntry {
 	return chatEntry{ID: "bridge-" + randomHex(12), Role: role, Sender: sender, Text: text,
-		Source: source, Timestamp: time.Now().In(time.Local)}
+		Source: source, Channel: channelForSource(source), Timestamp: time.Now().In(time.Local)}
 }
 
 type chatHistory struct{ db *larkDB }
@@ -52,8 +74,8 @@ type historyPage struct {
 	Next        *historyCursor `json:"next_cursor,omitempty"`
 }
 
-const insertMessage = `INSERT INTO messages (id,companion_id,role,sender,text,source,card_title,ts_ms)
-	VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`
+const insertMessage = `INSERT INTO messages (id,companion_id,role,sender,text,source,channel,card_title,ts_ms)
+	VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`
 
 func canonicalMessage(e chatEntry) (chatEntry, bool) {
 	e.Text = strings.TrimSpace(stripLarkHeader(e.Text))
@@ -85,7 +107,11 @@ func canonicalMessage(e chatEntry) (chatEntry, bool) {
 }
 
 func messageValues(id string, e chatEntry) []any {
-	return []any{e.ID, strings.ToLower(id), e.Role, e.Sender, e.Text, e.Source, e.SceneTitle, e.Timestamp.UnixMilli()}
+	ch := e.Channel
+	if ch == "" {
+		ch = channelForSource(e.Source)
+	}
+	return []any{e.ID, strings.ToLower(id), e.Role, e.Sender, e.Text, e.Source, ch, e.SceneTitle, e.Timestamp.UnixMilli()}
 }
 
 func (h *chatHistory) add(id string, e chatEntry) {
@@ -105,7 +131,7 @@ func (h *chatHistory) read(ctx context.Context, id string, limit int) ([]chatEnt
 }
 
 func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, before *historyCursor) ([]chatEntry, error) {
-	query := `SELECT id,role,sender,text,source,card_title,ts_ms FROM messages WHERE companion_id=?`
+	query := `SELECT id,role,sender,text,source,channel,card_title,ts_ms FROM messages WHERE companion_id=?`
 	args := []any{strings.ToLower(id)}
 	if before != nil {
 		query += ` AND ts_ms<=? AND (ts_ms<? OR id<?)`
@@ -126,7 +152,7 @@ func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, befo
 	for rows.Next() {
 		var e chatEntry
 		var ts int64
-		if err := rows.Scan(&e.ID, &e.Role, &e.Sender, &e.Text, &e.Source, &e.SceneTitle, &ts); err != nil {
+		if err := rows.Scan(&e.ID, &e.Role, &e.Sender, &e.Text, &e.Source, &e.Channel, &e.SceneTitle, &ts); err != nil {
 			return nil, problem(502, "Cannot read chat events")
 		}
 		e.Timestamp = time.UnixMilli(ts).In(time.Local)

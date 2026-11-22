@@ -57,8 +57,13 @@ func (o *openCode) recentDialogue(ctx context.Context, companion string, after i
 	}
 	// Only canonical dialogue from this companion. Do not load archives, cards,
 	// intercom, tool data, timer wakes, attachments, or prompt headers.
-	rows, err := o.db.readDB().QueryContext(ctx, `SELECT role,text FROM messages WHERE companion_id=? AND ts_ms>?
-		AND role IN ('user','companion') AND source IN ('typed','voice','text')
+	var compName string
+	_ = o.db.readDB().QueryRowContext(ctx, `SELECT name FROM companions WHERE id=?`, strings.ToLower(companion)).Scan(&compName)
+	if compName == "" {
+		compName = companion
+	}
+	rows, err := o.db.readDB().QueryContext(ctx, `SELECT role,sender,source,channel,text,ts_ms FROM messages WHERE companion_id=? AND ts_ms>?
+		AND role IN ('user','companion') AND source IN ('typed','voice','text','deltachat')
 		ORDER BY ts_ms DESC,id DESC LIMIT 12`, strings.ToLower(companion), after)
 	if err != nil {
 		return "", problem(502, "Cannot read recent dialogue")
@@ -70,12 +75,24 @@ func (o *openCode) recentDialogue(ctx context.Context, companion string, after i
 	}
 	var recent []line
 	for rows.Next() {
-		var l line
-		if err := rows.Scan(&l.Role, &l.Text); err != nil {
+		var role, sender, source, channel, text string
+		var tsMS int64
+		if err := rows.Scan(&role, &sender, &source, &channel, &text, &tsMS); err != nil {
 			return "", problem(502, "Cannot read recent dialogue")
 		}
-		l.Text = shortText(strings.Join(strings.Fields(fenced.ReplaceAllString(l.Text, "")), " "), 320, false)
-		recent = append(recent, l)
+		clean := shortText(strings.Join(strings.Fields(fenced.ReplaceAllString(text, "")), " "), 320, false)
+		if role == "user" && clean != "" {
+			ts := time.UnixMilli(tsMS).In(time.Local)
+			if channel == "deltachat" || source == "deltachat" {
+				if sender == "" {
+					sender = "Friend"
+				}
+				clean = "[Delta Chat from " + sender + " (contact) · now: " + formatLocalTime(ts) + "] " + clean
+			} else {
+				clean = "[In person at " + compName + "'s device · now: " + formatLocalTime(ts) + "] " + clean
+			}
+		}
+		recent = append(recent, line{Role: role, Text: clean})
 	}
 	if rows.Err() != nil {
 		return "", problem(502, "Cannot read recent dialogue")

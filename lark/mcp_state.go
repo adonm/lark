@@ -222,10 +222,41 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 					},
 				})
 			}
+			contacts := []object{}
+			seenPeers := make(map[string]bool)
+			if b.dc != nil && b.dc.ready.Load() {
+				if list, err := b.dc.listAllContacts(c.ID); err == nil {
+					for _, ct := range list {
+						entry := object{
+							"name":     ct.Name,
+							"kind":     ct.Kind,
+							"verified": ct.Verified,
+						}
+						if ct.ID != "" {
+							entry["id"] = ct.ID
+							seenPeers[ct.ID] = true
+						}
+						contacts = append(contacts, entry)
+					}
+				}
+			}
+			if peers, err := b.peerSnapshot(c.ID); err == nil {
+				for _, p := range peers {
+					if !seenPeers[p.ID] {
+						contacts = append(contacts, object{
+							"id":       p.ID,
+							"name":     p.Name,
+							"kind":     "companion",
+							"verified": true,
+						})
+					}
+				}
+			}
 			out["me"] = object{
 				"companion":  compObj,
 				"terminals":  termList,
 				"active_app": activeApp,
+				"contacts":   contacts,
 			}
 		}
 	}

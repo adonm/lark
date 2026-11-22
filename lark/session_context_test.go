@@ -139,7 +139,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 				want = "And what fruit grows there?"
 			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || !seeded.Load() || !connected.Load() ||
-				!strings.HasPrefix(in.Text, "[Plum ("+id+") · hardware · voice · now: ") ||
+				!strings.HasPrefix(in.Text, "[In person at Plum's device · Plum ("+id+") · voice · now: ") ||
 				!strings.HasSuffix(in.Text, "]\n"+want) || in.Metadata["larkSource"] != "voice" {
 				t.Errorf("current turn changed after handoff: %+v", in)
 			}

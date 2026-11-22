@@ -458,3 +458,19 @@ rm -rf ~/.local/share/lark/photo_index.db* ~/.local/share/lark/blobs/photos ~/.l
        ~/.local/share/lark/bin/ente* ~/.local/share/lark/ente-cli ~/.local/share/lark/ente-export ~/.local/share/lark/ente-photos.*
 systemctl --user start lark-bridge.service
 ```
+
+---
+
+## 2026-11-22 — Message Channel Column
+
+Added `channel` column to `messages` (`'in_person'`, `'deltachat'`, `'intercom'`, `'timer'`).
+
+```sql
+ALTER TABLE messages ADD COLUMN channel TEXT NOT NULL DEFAULT '';
+UPDATE messages SET channel = CASE
+  WHEN source = 'deltachat' THEN 'deltachat'
+  WHEN source = 'intercom' THEN 'intercom'
+  WHEN source = 'timer' THEN 'timer'
+  ELSE 'in_person'
+END WHERE channel = '';
+```

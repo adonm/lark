@@ -607,7 +607,7 @@ type ocMessagePart struct {
 }
 
 func (m ocMessage) chat(source string) chatEntry {
-	entry := chatEntry{ID: m.ID, Role: m.Type, Source: source, Timestamp: time.UnixMilli(m.Time.Created).In(time.Local)}
+	entry := chatEntry{ID: m.ID, Role: m.Type, Source: source, Channel: channelForSource(source), Timestamp: time.UnixMilli(m.Time.Created).In(time.Local)}
 	switch m.Type {
 	case "user":
 		entry.Sender, entry.Text = "You", m.Text

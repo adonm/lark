@@ -259,8 +259,15 @@ type generatedReply struct {
 	ttsStart   time.Time
 }
 
+type turnChannel struct {
+	channel    string // "in_person", "deltachat", "timer"
+	sender     string
+	senderKind string // "contact", "companion"
+}
+
 type turnOptions struct {
 	source  string
+	channel turnChannel
 	publish func(*AudioStream, time.Time)
 }
 
@@ -275,12 +282,24 @@ func formatLocalTimeIn(t time.Time, loc *time.Location) string {
 	return t.In(loc).Format("2006-01-02 15:04 MST (-07:00)")
 }
 
-func turnPrompt(companionID string, source, text string, companion companionState) string {
-	return turnPromptAt(companionID, source, text, companion, time.Now())
-}
-
-func turnPromptAt(companionID string, source, text string, companion companionState, now time.Time) string {
-	kind := "hardware"
+func turnHeader(companionID, source string, companion companionState, ch turnChannel, now time.Time) string {
+	var prefix string
+	switch {
+	case ch.channel == "deltachat":
+		kind := ch.senderKind
+		if kind == "" {
+			kind = "contact"
+		}
+		sender := ch.sender
+		if sender == "" {
+			sender = "Friend"
+		}
+		prefix = fmt.Sprintf("Delta Chat from %s (%s) · %s (%s)", sender, kind, companion.Name, companionID)
+	case ch.channel == "timer" || source == "timer":
+		prefix = fmt.Sprintf("Timer · %s (%s)", companion.Name, companionID)
+	default:
+		prefix = fmt.Sprintf("In person at %s's device · %s (%s) · %s", companion.Name, companion.Name, companionID, source)
+	}
 	extra := " · now: " + formatLocalTimeIn(now, now.Location())
 	if !companion.Configured {
 		extra += " · setup"
@@ -288,7 +307,19 @@ func turnPromptAt(companionID string, source, text string, companion companionSt
 	if companion.Personality != "" {
 		extra += " · vibe: " + companion.Personality
 	}
-	return fmt.Sprintf("[%s (%s) · %s · %s%s]\n%s", companion.Name, companionID, kind, source, extra, text)
+	return "[" + prefix + extra + "]"
+}
+
+func turnPrompt(companionID string, source, text string, companion companionState) string {
+	return turnPromptAt(companionID, source, text, companion, time.Now())
+}
+
+func turnPromptAt(companionID string, source, text string, companion companionState, now time.Time) string {
+	return turnPromptChannelAt(companionID, source, text, companion, turnChannel{}, now)
+}
+
+func turnPromptChannelAt(companionID, source, text string, companion companionState, ch turnChannel, now time.Time) string {
+	return turnHeader(companionID, source, companion, ch, now) + "\n" + text
 }
 
 // Play plain prose as soon as the first PCM is ready; reconcile against the
@@ -348,7 +379,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	}}
 	prepare := func() (string, string) {
 		companion := b.companionFor(sender.ID)
-		return companion.Name, turnPromptAt(sender.ID, options.source, text, companion, time.Now().In(b.location()))
+		return companion.Name, turnPromptChannelAt(sender.ID, options.source, text, companion, options.channel, time.Now().In(b.location()))
 	}
 	raw, sid, err := b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source,
 		nil, func(entry chatEntry) {

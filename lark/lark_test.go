@@ -31,9 +31,19 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		{"box3-b324", "typed"},
 	} {
 		if got := turnPromptAt(tc.id, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}, fixed); got !=
-			"[Cake ("+tc.id+") · hardware · "+tc.source+" · now: 2026-11-22 18:04 AEDT (+11:00)]\nHi" {
+			"[In person at Cake's device · Cake ("+tc.id+") · "+tc.source+" · now: 2026-11-22 18:04 AEDT (+11:00)]\nHi" {
 			t.Fatal(got)
 		}
+	}
+	if got := turnPromptChannelAt("greg", "deltachat", "Dinner?", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
+		turnChannel{channel: "deltachat", sender: "Mum", senderKind: "contact"}, fixed); got !=
+		"[Delta Chat from Mum (contact) · Greg (greg) · now: 2026-11-22 18:04 AEDT (+11:00)]\nDinner?" {
+		t.Fatal(got)
+	}
+	if got := turnPromptChannelAt("greg", "deltachat", "Hey", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
+		turnChannel{channel: "deltachat", sender: "cake", senderKind: "companion"}, fixed); got !=
+		"[Delta Chat from cake (companion) · Greg (greg) · now: 2026-11-22 18:04 AEDT (+11:00)]\nHey" {
+		t.Fatal(got)
 	}
 }
 

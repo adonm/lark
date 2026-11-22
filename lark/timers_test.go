@@ -274,7 +274,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 	go func() { defer close(finished); b.timers.fire(str(timer["id"]), nil) }()
 	select {
 	case got := <-prompt:
-		if !strings.HasPrefix(got, "[Cake (cake) · hardware · timer · now: ") || !strings.HasSuffix(got, "]\nTimer fired: Timer") {
+		if !strings.HasPrefix(got, "[Timer · Cake (cake) · now: ") || !strings.HasSuffix(got, "]\nTimer fired: Timer") {
 			t.Fatal(got)
 		}
 	case <-time.After(5 * time.Second):
