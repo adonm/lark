@@ -202,6 +202,21 @@ An explicit rate-limit or supported upstream rejection before output or tools
 can retry once on the configured fallback. The next turn starts on the
 primary. Stalls, interruptions and permission failures do not switch models.
 
+## Local library
+
+`./scripts/setup-host.sh --library` downloads and indexes the local text
+library in the background: full English Wikipedia, Simple English Wikipedia,
+and a pinned Project Gutenberg set weighted toward children's and classic
+literature. It needs about 80 GB under `~/.local/share/lark/library/` and
+writes progress to `~/.local/share/lark/library/setup.log`. Check status with
+`~/.local/share/lark/lark library --status` after the build finishes.
+
+`tools.lark.library` searches it in milliseconds, so the agent checks it before
+web search for stories, books, and reference facts. Web search remains the path
+for current information and anything the library misses. `lark library
+--download --build` resumes interrupted downloads and rebuilds missing indexes;
+use `--source enwiki|simple|gutenberg` to limit a run.
+
 ## Upgrading
 
 Lark carries no runtime database migrations or backwards-compatibility shims.
@@ -258,12 +273,14 @@ unconfirmed prompt may not appear in history. This does not undo work already
 dispatched or guarantee exactly-once behavior inside OpenCode. Timer wakes
 do not repair stale or missing bindings.
 
-Code Mode exposes exactly four MCP tools under `tools.lark`:
+Code Mode exposes the `tools.lark` MCP tools:
 
 | Tool | Purpose |
 | --- | --- |
 | `state` | Read keyed companions, terminals, saved apps, timers, and scoped JSON. Select slices with `include`; add `messages` or `diagnostics` when needed. |
 | `patch` | Update device settings, companion form (`companion`), memory, or a timer. Use `companion.save_profile:true` to save under the current name or `false` to shift without replacing a favorite. Memory batches commit atomically; `expected_version:0` requires an absent key. |
+| `story` | Create, update, get, or delete a validated Twee 3 story. |
+| `library` | Search, read, list, or import from the local text library (`simple`, `enwiki`, `gutenberg`); answers in milliseconds with no page fetch. |
 | `app` | Show a declarative screen or SVG, run a template or JS app, save/load/delete by slug, or exit to the face. |
 | `emit` | Send spoken intercom and a card, play notes, or play a named sound (`sfx` or `chime`). |
 
@@ -271,7 +288,7 @@ With `device_id`, `state` always returns `me.device`, `me.companion`, and
 `me.active_app`. Read source from `me.companion.face_svg` or fetch saved app source
 with `include_code:true`. Read persistent values as `memory[scope][key].value`.
 
-The agent can also use OpenCode's `websearch`. There is no `wait_event` tool:
+The agent checks `library` first for stories, books, and reference facts, and uses OpenCode's `websearch` only when the library misses or for current information. There is no `wait_event` tool:
 pointer events and bounded ticks run in the server without keeping an OpenCode turn open.
 Lark uses the pure-Go `goja` sandbox to run JS that renders SVG. Apps can
 target one player or share state across multiple devices with a separate SVG

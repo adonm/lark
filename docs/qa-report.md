@@ -1,5 +1,46 @@
 # Lark QA Report
 
+## 2026-11-23 — Local Library: Fast Path for Text Questions
+
+The library is a latency feature, not an offline fallback: it answers reference, book, and story questions in milliseconds so the agent does not fetch and summarise a web page for every turn. The host stays online; `websearch` remains the path for current information and for misses.
+
+### Tool latency (same question, "why is the sky blue")
+
+| Path | p50 | p95 | Notes |
+| --- | --- | --- | --- |
+| `library.search` in-process | 2.7 ms | 3.8 ms | 60 warm runs, Simple English index (285,974 pages) |
+| `library.read` in-process | 0.02 ms | 0.02 ms | 10 runs, bounded 3.2 k characters |
+| `library.search` over MCP/JSON | 17.2 ms | 18.1 ms | 20 runs, includes HTTP, JSON, and server scheduling |
+| `websearch` fetch | 786–962 ms | — | 3 live questions; median 851 ms, excludes model summarisation |
+
+The library tool phase is **50× faster end-to-end** and **300× faster in-process** than a web-search round trip. Under simultaneous Wikipedia/Gutenberg downloading, the in-process search p50 rose to 7.9 ms and p95 to 14.6 ms; still far below a page fetch.
+
+### Behaviour (`TestQALocalLibraryBehaviour`, real OpenCode, fresh companions)
+
+| Turn | Tool trace | First TTS PCM |
+| --- | --- | --- |
+| Baseline: "Say hello" | no library, no websearch | 3,698 ms |
+| "Why is the sky blue?" | `library.search`/`read`; no websearch | 2,940 ms (−758 ms vs baseline) |
+| "Tell me the story of the three little pigs" | `library` import + silent reader open; no websearch | 3,996 ms |
+| "What is the current price of Bitcoin?" | `library.search` miss, then `websearch` | 4,441 ms |
+
+- Reference and story turns chose the library *because it is the fast path*; neither used web search.
+- The current-events turn tried the library once, missed, and fell back to websearch with a normal spoken answer. No dead end.
+- A requested story is imported as a validated Twee story and opened on the reader silently; the spoken retell happens because the user asked for it.
+- The static prompt grew from 3,928 to 4,234 bytes (about +76 tokens) and stays under the 4,250-byte regression budget. A short per-turn `[library: search before facts]` hint was added because the prompt alone did not reliably trigger the tool on a small fast model.
+
+### Content
+
+- Simple English Wikipedia: 285,974 pages, 538 MB SQLite FTS5 index.
+- Full English Wikipedia: download/index build continues in the background; record the final page count and index size when complete.
+- Project Gutenberg: 3,000 pinned titles including children's, fairy, myth, poetry, and classics; the text download and index are completing in the background.
+
+### Tests
+
+- `TestLibrarySearchReadImport` (ranking, read bounds, Twee import, attribution), `TestLibraryTweePassageBounds`, `TestDownloadResumeAndChecksum`, `TestLibraryPromptBudget`, and `TestLibraryLatencyInstalled`.
+- `TestQALocalLibraryBehaviour` (baseline, reference, story, current-event fallback) with `LARK_QA_LIBRARY=1`.
+- `go test -tags sqlite_fts5 -race ./...` and `go vet -tags 'sqlite_fts5'` pass.
+
 ## 2026-11-23 — Silent Story Opens
 
 - Menu, Memories → Reading, and panel story opens render the passage without TTS or queued narration; tapped choices stay silent too. `TestOpenStoryFromMenuIsSilent` covers open plus tapped choices with a fake TTS worker; `TestConversationalStoryOpenStillNarrates` covers the narrated path, and voice choices keep narrating the next passage.
