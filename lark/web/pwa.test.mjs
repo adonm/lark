@@ -5,13 +5,13 @@ import {test} from "node:test";
 import {installAssets} from "./pwa.js";
 
 test("LAN install assets use a companion ID, scoped assets use only the existing share grant", () => {
-  const app = {token:"fixture", scope:null}, view = {virtual:true, id:"phone-1234"};
-  assert.equal(installAssets({...view, virtual:false}, app), null);
+  const app = {token:"fixture", scope:null}, view = {id:"cake"};
+  assert.equal(installAssets({}, app), null);
   assert.deepEqual(installAssets(view, app), {
-    manifest:"/app/pwa/manifest.webmanifest?device_id=phone-1234",
-    icon:"/app/pwa/icon-192.png?device_id=phone-1234",
+    manifest:"/app/pwa/manifest.webmanifest?companion_id=cake",
+    icon:"/app/pwa/icon-192.png?companion_id=cake",
   });
-  assert.deepEqual(installAssets(view, {...app, scope:{device_id:"virt-12345678"}}), {
+  assert.deepEqual(installAssets(view, {...app, scope:{companion_id:"cake"}}), {
     manifest:"/app/pwa/manifest.webmanifest?token=fixture",
     icon:"/app/pwa/icon-192.png?token=fixture",
   });

@@ -42,7 +42,7 @@ async function request(path, fields) {
 }
 
 function overview(id = "") {
-  return request(`/api/parent${id ? `?device_id=${encodeURIComponent(id)}` : ""}`);
+  return request(`/api/parent${id ? `?companion_id=${encodeURIComponent(id)}` : ""}`);
 }
 
 async function work(action, success) {

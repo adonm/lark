@@ -44,14 +44,14 @@ async function authorize(token) {
       return;
     }
     const profile = res.ok ? await res.json() : null;
-    if (typeof profile?.scoped !== "boolean" || profile.scoped && !profile.device_id || !Array.isArray(profile.voices)) {
+    if (typeof profile?.scoped !== "boolean" || profile.scoped && !profile.companion_id || !Array.isArray(profile.voices)) {
       throw new Error("Unexpected scope response");
     }
     const scope = profile?.scoped ? profile : null;
     stop();
     setLocal("lark-token", token);
-    state.app = {token, scope, devices:[], deviceVersion:0, sidebar:!scope && wide.matches, tunnel:null};
-    if (!scope) state.app.historyDevice = new URL(location.href).searchParams.get("device_id");
+    state.app = {token, scope, companions:[], terminals:[], companionVersion:0, sidebar:!scope && wide.matches, tunnel:null};
+    if (!scope) state.app.historyCompanion = new URL(location.href).searchParams.get("companion_id");
     loadVoiceCatalog(profile.voices);
     state.timerTick = setInterval(tickTimers, 1000);
     $("workspace").dataset.app = scope ? "scoped" : "lan";
@@ -68,7 +68,7 @@ async function authorize(token) {
     if (scope) {
       $("share-url").value = "";
       $("open-link").removeAttribute("href");
-      select({...scope, kind:"virtual"});
+      select({...scope, id: scope.companion_id}, true);
     } else {
       say("link-state", "Looking for companions…");
       renderDevices();

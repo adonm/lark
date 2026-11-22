@@ -8,8 +8,8 @@
   <meta name="theme-color" content="#191620" media="(prefers-color-scheme: dark)">
   <title>Lark</title>
   <link rel="icon" href="/app/lark.svg" type="image/svg+xml">
-  <link id="phone-manifest" rel="manifest" crossorigin="use-credentials">
-  <link id="phone-icon" rel="apple-touch-icon">
+  <link id="companion-manifest" rel="manifest" crossorigin="use-credentials">
+  <link id="companion-icon" rel="apple-touch-icon">
   <link rel="stylesheet" href="https://unpkg.com/@knadh/oat@1.1.0/oat.min.css" integrity="sha384-W8Z3f/RFchsEaPcbktneR+q+yniOOmbyw/5T4SLu439RBvA92XMmMoZWdjkpDQhH" crossorigin="anonymous">
   <link rel="stylesheet" href="/app/style.css">
   <script src="https://unpkg.com/@knadh/oat@1.1.0/oat.min.js" integrity="sha384-VsJCNQuL4en6VCTEdp+V2Pn5YLddcJL5gHhToiWjiYB+Ozp8/YDchNaEzvQTvUHj" crossorigin="anonymous" async></script>
@@ -25,9 +25,9 @@
     </div>
     <div class="row header-actions">
       <span id="link-state" class="badge connection" data-variant="secondary" role="status">Not connected</span>
-      <button id="install-phone" class="outline" type="button" hidden>Install companion</button>
+      <button id="install-companion" class="outline" type="button" hidden>Install companion</button>
       <div id="lan-actions" class="row wrap" role="group" aria-label="LAN tools" hidden>
-        <button id="sidebar-toggle" class="ghost" type="button" aria-expanded="false" aria-controls="sidebar" hidden>Devices</button>
+        <button id="sidebar-toggle" class="ghost" type="button" aria-expanded="false" aria-controls="sidebar" hidden>Companions</button>
         <button id="diagnostics-toggle" class="ghost" type="button" aria-expanded="false" aria-controls="diagnostics" hidden>Diagnostics</button>
         <a id="parent-link" class="button ghost" href="/app/parent" hidden>Parent controls</a>
       </div>
@@ -36,28 +36,23 @@
   </header>
   <main aria-label="Lark workspace">
   <div id="workspace" class="workspace" data-sidebar="closed" hidden>
-    <aside id="sidebar" class="sidebar card" aria-label="Manage Lark devices" hidden>
-      <section class="device-group" aria-labelledby="physical-heading">
-        <p class="eyebrow">On your network</p>
-        <h2 id="physical-heading">Devices</h2>
-        <nav id="physical" class="device-list" aria-label="Physical devices"></nav>
-      </section>
-      <section class="device-group" aria-labelledby="virtual-heading">
-        <p class="eyebrow">In your browser</p>
-        <h2 id="virtual-heading">Virtual Companions</h2>
-        <nav id="virtual" class="device-list" aria-label="Virtual Companions"></nav>
+    <aside id="sidebar" class="sidebar card" aria-label="Manage Lark companions" hidden>
+      <section class="device-group" aria-labelledby="companions-heading">
+        <p class="eyebrow">Companions</p>
+        <h2 id="companions-heading">Companions</h2>
+        <nav id="companions" class="device-list" aria-label="Companions"></nav>
         <button id="create-companion" class="companion-action" type="button">+ New Companion</button>
-        <button id="join" class="outline companion-action" type="button">Join on Phone</button>
         <p id="device-note" class="note" role="status"></p>
       </section>
       <details class="device-group tunnel">
-        <summary>Share this companion · OpenTunnel</summary>
+        <summary>Share &amp; Manage · OpenTunnel</summary>
         <div>
         <p id="tunnel-status" class="small">Checking service…</p>
         <p id="install-note" class="small" hidden>Install the CLI from <a href="https://opentunnel.xyz" target="_blank" rel="noopener noreferrer">opentunnel.xyz</a> to share a companion over HTTPS.</p>
-        <p id="tunnel-hint" class="small">Select a virtual companion to manage its link.</p>
+        <p id="tunnel-hint" class="small">Select a companion to manage it.</p>
         <div id="tunnel-controls" hidden>
           <h3 id="tunnel-companion"></h3>
+          <button id="open-here" class="outline" type="button">Open companion here</button>
           <button id="tunnel-create" class="outline" type="button">Create Tunnel</button>
           <div id="share" hidden>
             <label for="share-url">Private share link</label>
@@ -69,7 +64,7 @@
           </div>
           <button id="tunnel-close" class="outline" type="button" hidden>Close Tunnel</button>
           <div class="row wrap delete-row">
-            <button id="delete-companion" class="outline" data-variant="danger" type="button">Delete</button>
+            <button id="delete-companion" class="outline" data-variant="danger" type="button">Delete companion</button>
             <button id="delete-cancel" class="outline" type="button" hidden>Keep companion</button>
           </div>
         </div>
@@ -85,24 +80,19 @@
         <p id="pair-note" class="note" role="status"></p>
       </section>
       <section class="device-group">
-        <details id="reassign-companion">
-          <summary>Reassign / Load Form</summary>
+        <details id="move-terminal">
+          <summary>Move Hardware Terminal</summary>
           <div class="reassign-controls">
-            <label for="reassign-target">Move or swap with another device</label>
-            <select id="reassign-target"></select>
-            <div class="row wrap">
-              <button id="swap-companion" class="outline compact-action" type="button" disabled>Swap</button>
-              <button id="move-companion" class="outline compact-action" type="button" disabled>Move</button>
-            </div>
+            <label for="move-terminal-select">Hardware terminal</label>
+            <select id="move-terminal-select"></select>
+            <label for="move-target">Attach to companion</label>
+            <select id="move-target"></select>
+            <button id="move-companion" class="outline compact-action" type="button" disabled>Move terminal</button>
             <p id="reassign-note" class="note" role="status"></p>
           </div>
-          <h3>Saved Forms</h3>
-          <p class="small">Load a saved form to change the companion’s look and voice without changing this device’s chat history. Use <strong>+ New Companion</strong> for a separate history.</p>
-          <p id="saved-companion-note" class="note" role="status"></p>
-          <ul id="saved-companion-items" class="compact-list" role="list"></ul>
         </details>
         <details id="saved-state">
-          <summary>Saved Memory &amp; Assets</summary>
+          <summary>Memory &amp; Apps</summary>
           <p id="saved-note" class="note" role="status"></p>
           <div id="saved-items"></div>
         </details>
@@ -154,7 +144,7 @@
           <p id="voice-note" class="note" role="status"></p>
         </div>
       </details>
-      <p id="phone-install-hint" class="install-hint" hidden>In Safari, tap <strong>Share → Add to Home Screen</strong>.</p>
+      <p id="companion-install-hint" class="install-hint" hidden>In Safari, tap <strong>Share → Add to Home Screen</strong>.</p>
     </section>
 
     <section id="chat" class="chat-panel card" aria-labelledby="chat-heading">
@@ -188,13 +178,13 @@
           <button id="send" type="submit" disabled>Send</button>
         </form>
         <div class="composer-tools" role="group" aria-label="Voice actions">
-          <div id="phone-controls" class="row wrap" hidden>
+          <div id="web-controls" class="row wrap" hidden>
             <button id="talk" type="button" class="outline" aria-pressed="false" aria-describedby="mic-help">Mic · Talk</button>
             <button id="mic-send" type="button" hidden>Send now</button>
             <button id="cancel" type="button" class="outline" data-variant="danger" hidden>Cancel</button>
             <button id="sound" type="button" class="outline">Enable speaker</button>
           </div>
-          <div class="phone-destination" id="phone-destination" hidden>
+          <div class="phone-destination" id="web-destination" hidden>
             <label id="target-label" class="sr-only" for="target">Talk destination</label>
             <select id="target"><option value="">Ask my companion</option></select>
             <button id="call-target" type="button" class="outline" disabled>Call</button>
@@ -230,7 +220,7 @@
       </div>
     </section>
     <section class="card" aria-labelledby="diag-devices-heading">
-      <h3 id="diag-devices-heading">Devices</h3>
+      <h3 id="diag-devices-heading">Terminals</h3>
       <div id="diag-devices" class="diag-grid"></div>
     </section>
   </section>

@@ -8,11 +8,8 @@ function colors(el, companion) {
   if (/^#[a-f\d]{6}$/i.test(companion?.accent_color || "")) el.style.setProperty("--companion-accent", companion.accent_color);
   else el.style.removeProperty("--companion-accent");
 }
-const isLive = d => !!(d?.ws_connected ?? d?.ws);
-const persisted = d => /^virt-[0-9a-f]{8}$/.test(d?.device_id || "");
-const companionName = d => d?.companion?.configured === false && d.character === "New Cat"
-  ? d.device_id.startsWith("phone-") ? "Phone Lark" : "New Companion"
-  : d?.character;
+const isLive = c => !!c?.online;
+const companionName = c => c?.name || c?.character || "New Companion";
 const node = (tag, cls, text) => {
   const element = document.createElement(tag);
   if (cls) element.className = cls;
@@ -24,4 +21,4 @@ const say = (id, text) => {
   if (element.textContent !== text) element.textContent = text;
 };
 
-export {$, colors, companionName, getLocal, isLive, node, nodes, persisted, say, screen, setLocal, svgNS, wide};
+export {$, colors, companionName, getLocal, isLive, node, nodes, say, screen, setLocal, svgNS, wide};

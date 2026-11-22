@@ -951,8 +951,8 @@ func TestEmbeddedApp(t *testing.T) {
 			w.Header().Get("Cache-Control") != "no-store") {
 			t.Fatalf("%s: wrong module headers: %v", path, w.Header())
 		} else if path == "/app" && (!strings.Contains(w.Body.String(), `viewBox="0 0 360 360"`) || !strings.Contains(w.Body.String(), "New Chat") ||
-			!strings.Contains(w.Body.String(), `Join on Phone`)) {
-			t.Fatal("app is missing its SVG or phone controls")
+			!strings.Contains(w.Body.String(), `id="web-controls"`)) {
+			t.Fatal("app is missing its SVG or web controls")
 		}
 	}
 	for _, path := range []string{"/app/mic.test.mjs", "/app/mic.test.js", "/app/missing.js", "/app/../client.js", "/app/%2e%2e/client.js", "/app/%2flive.js"} {

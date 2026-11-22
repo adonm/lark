@@ -16,7 +16,7 @@ function bubble(entry) {
   const role = ["user", "intercom"].includes(entry.role) ? entry.role : "companion";
   const item = node("li", `bubble ${role}`);
   item.dataset.entry = entry.id;
-  const name = state.view.device.character;
+  const name = state.view.companion?.name || "Companion";
   const sender = entry.sender || (role === "user" ? "You" : name);
   const recipient = entry.recipient || (sender !== name ? name : "");
   const label = role === "intercom" ? recipient ? `${sender} → ${recipient}` : `From ${sender}` : sender;
@@ -110,7 +110,7 @@ async function loadHistory({replace = true, older = false} = {}) {
   transcriptStatus();
   try {
     const query = older ? `?${new URLSearchParams(cat.cursor)}` : "";
-    const page = await api(current, `/api/devices/${encodeURIComponent(cat.id)}/messages${query}`, {signal:loading.signal});
+    const page = await api(current, `/api/companions/${encodeURIComponent(cat.id)}/messages${query}`, {signal:loading.signal});
     if (state.view !== cat || cat.loading !== loading) return;
     // A reconnect may have missed more than a page or a history archive.
     // If the last known message is gone, rebuild from the new page.
@@ -144,14 +144,14 @@ $("load-older").onclick = () => loadHistory({older:true});
 $("reset").onclick = async () => {
   const cat = state.view, current = state.app;
   if (!current || current.scope || !cat?.id) return;
-  if (!confirm("Start a fresh companion and chat session on this device? The previous chat will be archived, not deleted.")) return;
+  if (!confirm("Start a fresh companion and chat session? The previous chat will be archived, not deleted.")) return;
   cancelHistoryLoad(cat);
   cat.resetting = true;
   renderCurrent();
   transcriptStatus();
   say("chat-note", "Starting a new chat…");
   try {
-    await api(current, `/api/devices/${encodeURIComponent(cat.id)}/reset`, {method:"POST", body:{archive_history:true}});
+    await api(current, `/api/companions/${encodeURIComponent(cat.id)}/reset`, {method:"POST", body:{archive_history:true}});
     if (state.view !== cat) return;
     cat.resetting = false;
     say("chat-note", "New chat started. Previous chat archived.");
@@ -174,12 +174,12 @@ $("prompt").onsubmit = async e => {
   e.preventDefault();
   const cat = state.view, current = state.app, input = $("text"), text = input.value.trim();
   if (!text || !cat?.id || $("send").disabled) return;
-  if (cat.virtual) unlockAudio();
+  if (cat.web) unlockAudio();
   cat.sending = true;
   renderCurrent();
   say("chat-note", "Sending…");
   try {
-    const result = await api(current, "/api/chat", {method:"POST", body:{device_id:cat.id, text}});
+    const result = await api(current, "/api/chat", {method:"POST", body:{companion_id:cat.id, text}});
     if (state.view !== cat) return;
     if (input.value.trim() === text) input.value = "";
     say("chat-note", "");

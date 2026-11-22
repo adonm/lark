@@ -1,6 +1,5 @@
 import {api} from "./api.js";
-import {$, colors, node, say} from "./dom.js";
-import {updateCompanion} from "./live.js";
+import {$, node, say} from "./dom.js";
 import {state} from "./state.js";
 
 function tickTimers() {
@@ -26,7 +25,7 @@ async function loadTimers() {
   if (!current || !view?.id) return;
   const request = view.timerRequest = (view.timerRequest || 0) + 1;
   try {
-    const {timers} = await api(current, `/api/timers?device_id=${encodeURIComponent(view.id)}`);
+    const {timers} = await api(current, `/api/timers?companion_id=${encodeURIComponent(view.id)}`);
     if (state.app !== current || state.view !== view || view.timerRequest !== request) return;
     const items = timers.map(timer => {
       const item = node("li", "compact-item"), clock = node("time", "timer-clock");
@@ -93,7 +92,7 @@ async function loadSaved() {
       run.onclick = async () => {
         run.disabled = true;
         try {
-          await api(current, "/api/apps/run", {method:"POST", body:{device_id:view.id,name:saved.name}});
+          await api(current, "/api/apps/run", {method:"POST", body:{companion_id:view.id,name:saved.name}});
           if (active()) say("saved-note", `Running ${saved.title}.`);
         } catch (error) {
           if (active()) say("saved-note", error.message || "Could not run the saved app.");
@@ -113,48 +112,4 @@ async function loadSaved() {
 }
 $("saved-state").ontoggle = loadSaved;
 
-async function loadSavedCompanions() {
-  const current = state.app, selected = state.view;
-  if (!current || current.scope || !$("reassign-companion").open) return;
-  const request = current.companionRequest = (current.companionRequest || 0) + 1;
-  const active = () => state.app === current && state.view === selected && current.companionRequest === request;
-  try {
-    const {companions} = await api(current, "/api/companions");
-    if (!active()) return;
-    const items = companions.map(profile => {
-      const item = node("li", "saved-companion"), heading = node("div", "row"), actions = node("div", "row wrap");
-      colors(item, profile);
-      const dot = node("span", "companion-dot");
-      dot.setAttribute("aria-hidden", "true");
-      heading.append(dot, node("span", "compact-label", profile.name));
-      const load = removeButton("Load form", profile.name, async () => {
-        try {
-          const result = await api(current, `/api/devices/${encodeURIComponent(selected.id)}/companion`,
-            {method:"POST", body:{slug:profile.slug}});
-          if (state.app === current) updateCompanion({...result, character:result.companion.name, voice:result.companion.voice});
-          if (state.view === selected) say("saved-companion-note", `Loaded ${profile.name}. Chat history kept.`);
-        } catch {
-          if (state.view === selected) say("saved-companion-note", "Could not load that form.");
-        }
-      });
-      load.disabled = !selected?.id;
-      actions.append(load, removeButton("Delete", profile.name, async () => {
-        try {
-          await api(current, `/api/companions/${encodeURIComponent(profile.slug)}`, {method:"DELETE"});
-          if (state.app === current) loadSavedCompanions();
-        } catch {
-          if (state.app === current) say("saved-companion-note", "Could not delete that profile.");
-        }
-      }));
-      item.append(heading, actions);
-      return item;
-    });
-    $("saved-companion-items").replaceChildren(...items);
-    say("saved-companion-note", companions.length ? "" : "No saved forms yet.");
-  } catch {
-    if (active()) say("saved-companion-note", "Could not load saved forms.");
-  }
-}
-$("reassign-companion").ontoggle = loadSavedCompanions;
-
-export {loadSaved, loadSavedCompanions, loadTimers, tickTimers};
+export {loadSaved, loadTimers, tickTimers};

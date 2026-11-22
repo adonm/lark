@@ -51,7 +51,7 @@ test("renders the selected live device after the dashboard modules load", async 
       },
     },
     matchMedia: () => ({matches:true, addEventListener() {}}),
-    localStorage: {getItem: key => key === "lark-phone" ? "phone-1234" : null},
+    localStorage: {getItem: key => key === "lark-terminal" ? "web-12345678" : null},
     location: {href:"https://lark.test/app"},
     Option: class {},
     WebSocket: {OPEN:1},
@@ -71,18 +71,17 @@ test("renders the selected live device after the dashboard modules load", async 
   Object.defineProperty(globalThis, "navigator", {configurable:true, value:{mediaDevices:{getUserMedia() {}}}});
   const {renderDevices} = await import("./devices.js");
   const {state} = await import("./state.js");
-  const d = {device_id:"lark-cake", character:"Cake", ws_connected:true};
-  state.app = {devices:[d]};
-  state.view = {id:d.device_id, device:d};
+  const c = {id:"cake", name:"Cake", online:true, terminals:[{id:"vocat-33d8", kind:"hardware", online:true, caps:{call:true}}]};
+  state.app = {companions:[c], terminals:c.terminals};
+  state.view = {id:c.id, companion:c};
   renderDevices();
-  const row = els.get("physical").children[0].querySelector("button");
+  const row = els.get("companions").children[0].querySelector("button");
   assert.equal(row.attrs["aria-pressed"], "true");
   assert.equal(row.children[1].textContent, "Cake");
-  assert.equal(row.children[2].textContent, "Live WS");
+  assert.equal(row.children[2].textContent, "Live");
   assert.doesNotThrow(() => row.onclick());
-  d.caps = {call:true};
   const sent = [];
-  state.view = {id:"phone-1234", virtual:true, mode:"idle"};
+  state.view = {id:"mint", web:true, mode:"idle"};
   state.rev = 1;
   state.ws = {readyState:1, send:raw => {
     const event = JSON.parse(raw);
@@ -90,12 +89,12 @@ test("renders the selected live device after the dashboard modules load", async 
     sent.push(event);
   }};
   renderDevices();
-  const call = els.get("physical").children[0].children[1];
+  const call = els.get("companions").children[0].children[1];
   assert.equal(call.hidden, false);
   assert.equal(call.disabled, false);
   assert.equal(call.attrs["aria-label"], "Call Cake");
   call.onclick();
-  assert.deepEqual(sent, [{ev:"call", target:d.device_id}]);
+  assert.deepEqual(sent, [{ev:"call", target:c.id}]);
   assert.deepEqual(activation, ["resume", "call"]);
 
   const stage = els.get("stage").listeners;
@@ -115,7 +114,7 @@ test("renders the selected live device after the dashboard modules load", async 
     const originalFetch = globalThis.fetch;
     try {
       state.app.token = "fixture";
-      state.view.device = {character:"Cake"};
+      state.view.companion = {name:"Cake"};
       globalThis.fetch = async () => mockFetch([old]);
       await loadHistory();
       const bubbles = () => els.get("messages").children.filter(node => node.dataset.entry);
@@ -156,17 +155,17 @@ test("renders the selected live device after the dashboard modules load", async 
       } : {messages:[], has_more:false});
     };
     try {
-      state.view = {id:d.device_id, device:d};
+      state.view = {id:c.id, companion:c};
       await loadHistory();
       assert.equal(els.get("load-older").hidden, false);
       await els.get("reset").onclick();
       assert.equal(requests.length, 1, "cancel leaves history alone");
       accepted = true;
       await els.get("reset").onclick();
-      assert.equal(requests[1][0], `/api/devices/${d.device_id}/reset`);
+      assert.equal(requests[1][0], `/api/companions/${c.id}/reset`);
       assert.equal(requests[1][1].method, "POST");
       assert.deepEqual(JSON.parse(requests[1][1].body), {archive_history:true});
-      assert.equal(requests[2][0], `/api/devices/${d.device_id}/messages`);
+      assert.equal(requests[2][0], `/api/companions/${c.id}/messages`);
       assert.equal(els.get("load-older").hidden, true);
       assert.deepEqual(els.get("messages").children, []);
     } finally {

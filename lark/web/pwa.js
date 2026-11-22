@@ -1,13 +1,13 @@
 export function installAssets(view, app) {
-  if (!view?.virtual || !app) return null;
-  const query = new URLSearchParams(app.scope ? {token:app.token} : {device_id:view.id});
+  if (!view?.id || !app) return null;
+  const query = new URLSearchParams(app.scope ? {token:app.token} : {companion_id:view.id});
   const base = "/app/pwa/";
   return {manifest:`${base}manifest.webmanifest?${query}`, icon:`${base}icon-192.png?${query}`};
 }
 
 export function installer() {
-  const manifest = document.getElementById("phone-manifest"), icon = document.getElementById("phone-icon");
-  const install = document.getElementById("install-phone"), hint = document.getElementById("phone-install-hint");
+  const manifest = document.getElementById("companion-manifest"), icon = document.getElementById("companion-icon");
+  const install = document.getElementById("install-companion"), hint = document.getElementById("companion-install-hint");
   const themes = [...document.querySelectorAll("meta[name=theme-color]")].map(meta => [meta, meta.content]);
   const standalone = matchMedia("(display-mode: standalone)");
   const ios = /iPad|iPhone|iPod/i.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
@@ -38,7 +38,7 @@ export function installer() {
 
   return (view, app) => {
     const assets = window.isSecureContext && installAssets(view, app);
-    const mark = assets && /^#[a-f\d]{6}$/i.test(view.device?.companion?.mark_color) && view.device.companion.mark_color;
+    const mark = assets && /^#[a-f\d]{6}$/i.test(view.companion?.mark_color) && view.companion.mark_color;
     for (const [meta, fallback] of themes) meta.content = mark || fallback;
     if (assets?.manifest === (manifest.getAttribute("href") || undefined)) return;
     prompt = null;

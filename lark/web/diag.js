@@ -99,7 +99,7 @@ function diagSparkline(samples) {
 }
 
 function renderDiagnostics(data) {
-  const {bridge, tts, host, services, latency, recent_turns:turns, devices} = data;
+  const {bridge, tts, host, services, latency, recent_turns:turns, terminals} = data;
   const usage = Number.isFinite(host.mem_used_bytes) && host.mem_total_bytes > 0 ? host.mem_used_bytes / host.mem_total_bytes * 100 : null;
   const system = [
     diagTile("Lark server", [
@@ -153,13 +153,13 @@ function renderDiagnostics(data) {
     rows.push(row);
   }
   $("diag-turns").replaceChildren(...rows);
-  $("diag-devices").replaceChildren(...(devices.length ? devices.map(d => {
+  $("diag-devices").replaceChildren(...(terminals.length ? terminals.map(d => {
     const f = d.last_frame;
     const battery = d.has_battery === false ? "USB" : Number.isFinite(d.battery_pct) ?
       `${diagFormat(d.battery_pct, "%")} · ${diagFormat(d.battery_mv, " mV")}${d.charging ? " · charging" : ""}` : "—";
-    const card = diagTile(d.character, [
-      ["Device", d.device_id], ["Board / FW", `${d.board || d.kind} / ${d.firmware || "—"}`],
-      ["OTA", d.kind === "virtual" ? "—" : `${d.ota || "—"} · ${d.ota_bundle ? "image on server" : "no image"}`],
+    const card = diagTile(d.name || d.terminal_id, [
+      ["Terminal", d.terminal_id], ["Companion", d.companion_id || "—"], ["Board / FW", `${d.board || d.kind} / ${d.firmware || "—"}`],
+      ["OTA", d.kind === "web" ? "—" : `${d.ota || "—"} · ${d.ota_bundle ? "image on server" : "no image"}`],
       ["WS / RTT", `${d.ws_connected ? `Connected · ${d.mode}` : "Disconnected"} / ${diagMS(d.rtt_ms)}`],
       ["Wi-Fi", diagFormat(d.wifi_rssi, " dBm")], ["ESP32 CPU", diagPct(d.cpu_pct)],
       ["SRAM free / min", `${diagBytes(d.free_heap)} / ${diagBytes(d.min_free_heap)}`],
@@ -172,7 +172,7 @@ function renderDiagnostics(data) {
     ]);
     diagBar(card, "ESP32 CPU", d.cpu_pct);
     return card;
-  }) : [node("p", "small", "No devices have checked in.")]));
+  }) : [node("p", "small", "No terminals have checked in.")]));
 }
 
 export {setDiagnostics};
