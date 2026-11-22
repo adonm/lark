@@ -1,0 +1,55 @@
+package main
+
+import (
+	"bytes"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func TestCLIAdminCommands(t *testing.T) {
+	_, base := wsHarness(t, nil)
+	c := &cliClient{base: base, token: "unit", http: &http.Client{}}
+
+	run := func(cmd string, args ...string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if err := runCLIWithClient(t.Context(), c, cmd, args, &out, &errOut); err != nil {
+			t.Fatalf("%s %v: %v (%s)", cmd, args, err, errOut.String())
+		}
+		return out.String()
+	}
+
+	if got := run("companions", "add", "Cake"); !strings.Contains(got, "Added companion cake (Cake)") {
+		t.Fatal(got)
+	}
+	if got := run("companions", "add", "Mint"); !strings.Contains(got, "Added companion mint (Mint)") {
+		t.Fatal(got)
+	}
+	if got := run("companions"); !strings.Contains(got, "cake\tCake") || !strings.Contains(got, "mint\tMint") {
+		t.Fatal(got)
+	}
+
+	hw := testConnectWS(t, base, "unit", false)
+	hw.hello(t, "vocat-33d8", "cake")
+
+	if got := run("terminals"); !strings.Contains(got, "vocat-33d8\tcompanion=cake\tonline=true") {
+		t.Fatal(got)
+	}
+	if got := run("terminals", "attach", "vocat-33d8", "mint"); !strings.Contains(got, "Attached vocat-33d8 to mint") {
+		t.Fatal(got)
+	}
+	if got := run("status"); !strings.Contains(got, "Companions (2):") || !strings.Contains(got, "Terminals (1):") ||
+		!strings.Contains(got, "vocat-33d8\tcompanion=mint") {
+		t.Fatal(got)
+	}
+	if got := run("terminals", "detach", "vocat-33d8"); !strings.Contains(got, "Detached vocat-33d8") {
+		t.Fatal(got)
+	}
+	if got := run("companions", "rm", "cake"); !strings.Contains(got, "Removed companion cake") {
+		t.Fatal(got)
+	}
+	if got := run("companions"); strings.Contains(got, "cake\t") {
+		t.Fatal("cake still listed after rm:", got)
+	}
+}
