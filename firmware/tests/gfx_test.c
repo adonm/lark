@@ -12,23 +12,21 @@ static void expect_pixel(unsigned x, unsigned y, uint8_t hi, uint8_t lo)
     assert(bytes[0] == hi && bytes[1] == lo);
 }
 
-static void expect_art(unsigned x, unsigned y, uint8_t hi, uint8_t lo)
-{
-#ifdef LARK_BOX3
-    x = 40 + x * 2 / 3;
-    y = y * 2 / 3;
-#endif
-    expect_pixel(x, y, hi, lo);
-}
-
 int main(void)
 {
     gfx_offline_cat(fb);
-    expect_pixel(0, 0, 0xff, 0x9a);
-    expect_pixel(FRAME_WIDTH - 1, FRAME_HEIGHT - 1, 0xff, 0x9a);
-    expect_art(180, 77, 0xf4, 0xe1);
-    expect_art(112, 142, 0x18, 0xc4);
-    expect_art(162, 207, 0x18, 0xc4);
-    expect_art(248, 142, 0x18, 0xc4);
+    // Background #1E1A2B -> RGB565 0x18C5
+    expect_pixel(0, 0, 0x18, 0xc5);
+    expect_pixel(FRAME_WIDTH - 1, FRAME_HEIGHT - 1, 0x18, 0xc5);
+    // Center of icon should contain accent (#9AE5C3 -> 0x9F38) or outline (#705F7C -> 0x72EF)
+    int found_icon = 0;
+    for (int y = FRAME_HEIGHT / 4; y < FRAME_HEIGHT / 2; ++y) {
+        const uint8_t *bytes = (const uint8_t *)&fb[y * FRAME_WIDTH + FRAME_WIDTH / 2];
+        if (bytes[0] == 0x9f && bytes[1] == 0x38) {
+            found_icon = 1;
+            break;
+        }
+    }
+    assert(found_icon);
     puts("PASS offline cat fallback in LCD byte order");
 }

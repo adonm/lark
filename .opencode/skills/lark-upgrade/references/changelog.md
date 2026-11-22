@@ -4,6 +4,61 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Pixel Overhaul, Books as Data, Weather & Firmware (`0.14.0`)
+
+### Affects
+- Host / Config / SQLite / Lark Server & MCP / Agents / Firmware (`0.14.0`)
+
+### Breaking Changes
+- **Vector/SVG stack removed**: Deleted `storybook*`, `companion_art.go`, `companion_parts.go`, `screen_svg.go`, `scene.go`, `pixel.go`, `apps_ui.go`, `apps_screen.go`, `oksvg`/`rasterx`, and Go TTF fonts. All screens render on the logical pixel grid (VoCat `120×120 @3×`, BOX-3 `160×120 @2×`) with Dogica Pixel / Bold physical text.
+- **Companion schema & look path**: Removed `face_svg`, `face_bg`, `mark_color`, `accent_color`, `preset`, and `face_edits`. Added `companions.form` and `companions.portrait_id`. All looks go through `companion.portrait` with `form` and generate a per-companion pixel background (`bg.png`).
+- **Apps & Books as data**: `apps.kind` is `book`, `game`, or `tool`; removed `apps.svg` and the `reader` template. Books are rendered by the built-in pixel reader with per-companion reading progress in `companion:<id>` (`reading:<book>`). Custom JS apps use `render(state, player, g)` on the pixel canvas API (`clear`, `rect`, `sprite`, `text`, `image`, `button`).
+- **Weather**: Added `LARK_LOCATION` in `lark.env` (default `Perth, Australia`), Open-Meteo geocoding cached in `meta`, and 15-minute current weather polling.
+- **Firmware `0.14.0`**: Offline screen in `gfx.c` is a geometry-aware pixel icon + `"offline"` text without the 360-centric ring.
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(companions);"` still shows `face_svg`/`face_bg` or lacks `portrait_id`/`form`.
+- `sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(apps);"` still shows `svg`.
+- `grep -q LARK_LOCATION ~/.config/lark/lark.env` fails.
+
+### Upgrade Steps
+1. Stop `lark.service` and back up `lark.db` and `lark.env`:
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   cp ~/.config/lark/lark.env ~/.config/lark/lark.env.bak.$(date +%Y%m%d-%H%M%S)
+   ```
+2. Apply SQLite schema & data updates:
+   ```sql
+   ALTER TABLE companions ADD COLUMN form TEXT NOT NULL DEFAULT '';
+   ALTER TABLE companions ADD COLUMN portrait_id TEXT NOT NULL DEFAULT '';
+   UPDATE companions SET form='an old chameleon', portrait_id='72120f6660ef1a2151b318904197b15e' WHERE id='greg';
+   UPDATE companions SET form='a cheerful orange tabby cat' WHERE id='cake' AND form='';
+   UPDATE companions SET form='a fresh mint-green fox' WHERE id='mint' AND form='';
+   UPDATE companions SET form='a curious little hedgehog' WHERE id='george' AND form='';
+   ALTER TABLE companions DROP COLUMN face_bg;
+   ALTER TABLE companions DROP COLUMN mark_color;
+   ALTER TABLE companions DROP COLUMN accent_color;
+   ALTER TABLE companions DROP COLUMN face_svg;
+   ALTER TABLE apps DROP COLUMN svg;
+   ```
+   (Skip `ADD COLUMN form` if already present from pixel part 1.)
+3. Ensure `LARK_LOCATION=Perth, Australia` is in `~/.config/lark/lark.env` and run `./scripts/setup-host.sh --gpu-index 0`.
+4. Via live `lark_*` MCP (or server/OpenCode):
+   - Generate pixel portraits and backgrounds for attached companions (`cake`, `mint`, `greg`, `george`); dormant `*-classic` companions generate lazily on attach.
+   - Convert `clockwork_owl` and `lost_island_reader` into `kind='book'` apps, extracting their text.
+   - Convert memory stories `companion:cake/story_lost_island` and `companion:mint/user_story` into `kind='book'` apps, then delete those memory notes.
+   - Delete `book_reader`.
+   - Rebuild `fireworks`, `math_game`, `monsters`, `picture_math`, and `spot_the_difference` on the pixel canvas API as `kind='game'` or `'tool'`, keeping their `app:*` state.
+5. Build and OTA firmware `0.14.0` to all boards (`vocat-33d8` → `vocat-2cac` → `box3-b324`).
+
+### Verification
+- `lark status` shows `ok=true` and all terminals online on `0.14.0`.
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, form, portrait_id FROM companions;"` shows forms and portrait IDs for attached companions.
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT name, kind FROM apps ORDER BY name;"` shows `book` / `game` / `tool` and no `book_reader`.
+
+---
+
 ## 2026-11-22 — Delta Chat Messaging & Hardware-Only Protocol (`0.13.0`)
 
 ### Affects
