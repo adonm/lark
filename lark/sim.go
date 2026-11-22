@@ -179,11 +179,16 @@ func (s *simTerminal) readLoop() {
 				s.mu.Lock()
 				switch op {
 				case recOpStart:
+					sess := binary.LittleEndian.Uint16(payload[2:4])
 					s.recActive = true
+					s.recSess = sess
 					s.recBridgeEP = flags&recTargetBridgeE != 0
 					s.recListen = flags&recTargetListen != 0
 					s.recCtrlAt = now
 					s.timeline = append(s.timeline, object{"event": "rec_start", "t_ms": now.Sub(s.started).Milliseconds()})
+					ack := binary.LittleEndian.AppendUint16(nil, sess)
+					ack = appendStr8(ack, "")
+					go func() { _ = s.sendProto(msgRecStart, ack) }()
 				case recOpStop, recOpCancel:
 					s.recActive = false
 					s.timeline = append(s.timeline, object{"event": "rec_stop", "t_ms": now.Sub(s.started).Milliseconds()})
