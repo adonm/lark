@@ -108,6 +108,10 @@ static atomic_uint socket_session, ready_session;
 static uint32_t next_session;
 static uint16_t tx_seq;
 static int reconnect_ms = 1000;
+static bool has_resume_token;
+static uint8_t resume_token[LARK_RESUME_TOKEN_LEN];
+static int64_t resume_deadline_us;
+static uint32_t last_state_seq;
 
 uint32_t net_client_session(void)
 {
@@ -303,14 +307,11 @@ static void send_input(const input_t *input)
     if (session != atomic_load(&ready_session)) return;
 
     if (input->kind == TTS_ACK) {
-        uint8_t buf[2 + 16];
-        char id_str[16];
-        int id_len = snprintf(id_str, sizeof(id_str), "%" PRIu32, input->audio_id);
-        if (id_len <= 0 || (size_t)id_len >= sizeof(id_str)) return;
-        buf[0] = input->aborted ? 1 : 0;
-        buf[1] = (uint8_t)id_len;
-        memcpy(buf + 2, id_str, (size_t)id_len);
-        send_tcp_frame(session, LARK_MSG_TTS_ACK, buf, (uint32_t)(2 + id_len), true);
+        lark_tts_ack_t ack = {
+            .aborted = input->aborted ? 1 : 0,
+            .audio_id = (uint64_t)input->audio_id,
+        };
+        send_tcp_frame(session, LARK_MSG_TTS_ACK, &ack, sizeof(ack), true);
         return;
     }
     if (input->kind == REJECT_RECORD) {
@@ -318,13 +319,13 @@ static void send_input(const input_t *input)
         return;
     }
     if (input->kind == CALL_FAILED) {
-        uint8_t buf[1 + 16];
-        char id_str[16];
-        int id_len = snprintf(id_str, sizeof(id_str), "%" PRIu32, input->audio_id);
-        if (id_len <= 0 || (size_t)id_len >= sizeof(id_str)) return;
-        buf[0] = (uint8_t)id_len;
-        memcpy(buf + 1, id_str, (size_t)id_len);
-        send_tcp_frame(session, LARK_MSG_CALL_FAILED, buf, (uint32_t)(1 + id_len), true);
+        uint8_t buf[6] = { LARK_CALL_END, 0, 0, 0, 0, 0 };
+        uint32_t cid = input->audio_id;
+        buf[1] = (uint8_t)(cid & 0xFF);
+        buf[2] = (uint8_t)((cid >> 8) & 0xFF);
+        buf[3] = (uint8_t)((cid >> 16) & 0xFF);
+        buf[4] = (uint8_t)((cid >> 24) & 0xFF);
+        send_tcp_frame(session, LARK_MSG_CALL_REQ, buf, sizeof(buf), true);
         return;
     }
     if (input->kind == WAKE_WORD) {
@@ -343,6 +344,21 @@ static void send_input(const input_t *input)
 
 static bool send_hello(uint32_t session, uint16_t local_udp_port)
 {
+    size_t id_len = strlen(device_id);
+    if (has_resume_token && esp_timer_get_time() < resume_deadline_us && id_len <= 255) {
+        uint8_t rbuf[sizeof(lark_resume_t) + 64];
+        if (sizeof(lark_resume_t) + id_len <= sizeof(rbuf)) {
+            lark_resume_t r = {
+                .proto_version = LARK_PROTO_VERSION,
+                .last_seq = last_state_seq,
+                .id_len = (uint8_t)id_len,
+            };
+            memcpy(r.resume_token, resume_token, LARK_RESUME_TOKEN_LEN);
+            memcpy(rbuf, &r, sizeof(r));
+            memcpy(rbuf + sizeof(r), device_id, id_len);
+            return send_tcp_frame(session, LARK_MSG_RESUME, rbuf, (uint32_t)(sizeof(r) + id_len), false);
+        }
+    }
     uint32_t caps = LARK_CAP_DRAG | LARK_CAP_POINTER_REV;
     if (BOARD_HAS_BATTERY) caps |= LARK_CAP_BATTERY | LARK_CAP_PANEL_SLEEP;
     if (BOARD_HAS_HEAD_PADS) caps |= LARK_CAP_HEAD_PADS;
@@ -353,32 +369,35 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
     const char *board = BOARD_NAME;
     const char *fw = esp_app_get_description()->version;
     const char *tok = CONFIG_LARK_TOKEN;
-    size_t id_len = strlen(device_id);
     size_t board_len = strlen(board);
     size_t fw_len = strlen(fw);
     size_t tok_len = strlen(tok);
     if (id_len > 255 || board_len > 255 || fw_len > 255 || tok_len > 255) return false;
 
     uint8_t buf[sizeof(lark_hello_t) + 512];
-    size_t total = sizeof(lark_hello_t) + id_len + board_len + fw_len + tok_len;
-    if (total > sizeof(buf)) return false;
-
     lark_hello_t hello = {
+        .proto_version = LARK_PROTO_VERSION,
+        .kind = LARK_KIND_HARDWARE,
         .caps_mask = caps,
+        .display_formats = LARK_DISP_RGB565,
+        .frame_codecs = LARK_CODEC_RAW | LARK_CODEC_RLE565 | LARK_CODEC_LZ4 | LARK_CODEC_JPEG,
         .width = FRAME_WIDTH,
         .height = FRAME_HEIGHT,
+#ifdef LARK_BOX3
+        .shape = LARK_SHAPE_RECT,
+#else
+        .shape = LARK_SHAPE_ROUND,
+#endif
+        .flags = 0,
         .udp_port = local_udp_port,
         .id_len = (uint8_t)id_len,
+        .comp_len = 0,
         .board_len = (uint8_t)board_len,
         .fw_len = (uint8_t)fw_len,
         .tok_len = (uint8_t)tok_len,
     };
-    memcpy(buf, &hello, sizeof(hello));
-    size_t off = sizeof(hello);
-    memcpy(buf + off, device_id, id_len); off += id_len;
-    memcpy(buf + off, board, board_len); off += board_len;
-    memcpy(buf + off, fw, fw_len); off += fw_len;
-    memcpy(buf + off, tok, tok_len);
+    size_t total = lark_encode_hello(buf, sizeof(buf), &hello, device_id, "", board, fw, tok);
+    if (!total) return false;
     return send_tcp_frame(session, LARK_MSG_HELLO, buf, (uint32_t)total, false);
 }
 
@@ -387,17 +406,17 @@ static void send_status(uint32_t session)
     if (media_is_recording()) return;
     telemetry_t hw = telemetry_read();
     battery_status_t battery = battery_status();
-    lark_status_t st = {
+    lark_telemetry_t st = {
         .wifi_rssi = (int16_t)hw.wifi_rssi,
         .battery_pct = (int16_t)(BOARD_HAS_BATTERY ? battery.pct : -1),
         .charging = (uint8_t)(BOARD_HAS_BATTERY && battery.charging ? 1 : 0),
         .cpu_pct = (uint8_t)(hw.cpu_pct > 100 ? 100 : hw.cpu_pct),
-        .flags = (uint8_t)(display_is_sleeping() ? LARK_STATUS_SLEEPING : 0),
+        .flags = (uint8_t)(display_is_sleeping() ? LARK_TELEMETRY_SLEEPING : 0),
         .pad = 0,
         .free_heap = (uint32_t)hw.free_heap,
         .uptime_s = (uint32_t)hw.uptime_s,
     };
-    send_tcp_frame(session, LARK_MSG_STATUS, &st, sizeof(st), true);
+    send_tcp_frame(session, LARK_MSG_TELEMETRY, &st, sizeof(st), true);
 }
 
 static void receive_tts_pcm(const uint8_t *bytes, size_t len)
@@ -423,27 +442,20 @@ static void receive_tts_pcm(const uint8_t *bytes, size_t len)
     }
 }
 
-static uint32_t parse_u32_id(const uint8_t *buf, size_t len)
-{
-    if (!len || len > 15) return 0;
-    char tmp[16];
-    memcpy(tmp, buf, len);
-    tmp[len] = '\0';
-    char *end = NULL;
-    unsigned long v = strtoul(tmp, &end, 10);
-    return end == tmp + len ? (uint32_t)v : 0;
-}
-
 static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
 {
     switch (type) {
-    case LARK_MSG_HELLO_OK: {
-        if (len < sizeof(lark_hello_ok_t)) break;
-        lark_hello_ok_t ok;
-        memcpy(&ok, payload, sizeof(ok));
+    case LARK_MSG_WELCOME: {
+        lark_welcome_t w;
+        char tid[32], cid[32];
+        if (!lark_decode_welcome(payload, len, &w, tid, sizeof(tid), cid, sizeof(cid))) break;
+        memcpy(resume_token, w.resume_token, LARK_RESUME_TOKEN_LEN);
+        has_resume_token = true;
+        resume_deadline_us = esp_timer_get_time() + (int64_t)w.resume_window_ms * 1000LL;
+        last_state_seq = w.seq;
         portENTER_CRITICAL(&udp_lock);
-        bridge_udp_addr.sin_port = htons(ok.udp_port);
-        active_ssrc = ok.ssrc;
+        bridge_udp_addr.sin_port = htons(w.udp_port);
+        active_ssrc = w.ssrc;
         rtp_rec_seq = 0;
         rtp_call_seq = 0;
         rtp_rec_ts = 0;
@@ -452,7 +464,18 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         atomic_store(&ready_session, session);
         if (hello_sem) xSemaphoreGive(hello_sem);
         display_set_link(true);
-        ESP_LOGI(TAG, "Bridge accepted hello (udp=%u, ssrc=0x%08" PRIx32 ")", ok.udp_port, ok.ssrc);
+        ESP_LOGI(TAG, "Bridge welcome (id=%s comp=%s udp=%u ssrc=0x%08" PRIx32 " seq=%" PRIu32 ")",
+                 tid, cid, w.udp_port, w.ssrc, w.seq);
+        break;
+    }
+    case LARK_MSG_REJECT: {
+        uint8_t reason = 0;
+        char msg[128];
+        if (!lark_decode_reject(payload, len, &reason, msg, sizeof(msg))) break;
+        ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reason, msg);
+        if (reason == LARK_REJECT_UNKNOWN_TERMINAL) {
+            has_resume_token = false;
+        }
         break;
     }
     case LARK_MSG_FRAME:
@@ -468,8 +491,8 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         if (ctrl.op == LARK_REC_STOP || ctrl.op == LARK_REC_CANCEL) {
             media_record_stop(ctrl.op == LARK_REC_CANCEL);
         } else if (ctrl.op == LARK_REC_START) {
-            uint8_t target = ctrl.target & LARK_REC_TARGET_INTERCOM;
-            bool bridge_ep = (ctrl.target & LARK_REC_TARGET_BRIDGE_EP) != 0;
+            uint8_t target = ctrl.flags & LARK_REC_TARGET_INTERCOM;
+            bool bridge_ep = (ctrl.flags & LARK_REC_TARGET_BRIDGE_EP) != 0;
             if (!media_record_start(ctrl.session, target, bridge_ep)) {
                 enqueue_session((input_t){
                     .kind = REJECT_RECORD,
@@ -482,16 +505,15 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         break;
     }
     case LARK_MSG_TTS_CTRL: {
-        if (len < 2) break;
-        uint8_t op = payload[0];
-        uint8_t id_len = payload[1];
-        if ((uint32_t)2 + id_len > len) break;
-        uint32_t audio_id = parse_u32_id(payload + 2, id_len);
-        if (op == LARK_TTS_START) {
+        if (len < sizeof(lark_tts_ctrl_t)) break;
+        lark_tts_ctrl_t ctrl;
+        memcpy(&ctrl, payload, sizeof(ctrl));
+        uint32_t audio_id = (uint32_t)ctrl.audio_id;
+        if (ctrl.op == LARK_TTS_START) {
             tts_odd = false;
             tts_accepted = media_tts_start(audio_id);
             if (!tts_accepted) net_client_tts_ack(session, audio_id, true);
-        } else if (op == LARK_TTS_END) {
+        } else if (ctrl.op == LARK_TTS_END) {
             if (tts_accepted) {
                 if (tts_odd) {
                     media_interrupt();
@@ -512,11 +534,10 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         receive_tts_pcm(payload, len);
         break;
     case LARK_MSG_CALL_CTRL: {
-        if (len < 2) break;
+        if (len < 5) break;
         uint8_t op = payload[0];
-        uint8_t id_len = payload[1];
-        if ((uint32_t)2 + id_len > len) break;
-        uint32_t call_id = parse_u32_id(payload + 2, id_len);
+        uint32_t call_id = (uint32_t)payload[1] | ((uint32_t)payload[2] << 8) |
+                           ((uint32_t)payload[3] << 16) | ((uint32_t)payload[4] << 24);
         if (!call_id) break;
         if (op == LARK_CALL_START) {
             tts_accepted = false;
@@ -547,9 +568,7 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
     }
     case LARK_MSG_POWER:
         if (len >= 1) {
-            uint8_t v = payload[0];
-            int bright = v == 0 ? 85 : v == 1 ? 12 : v == 2 ? 20 : (int)v;
-            display_set_brightness(bright);
+            display_set_brightness((int)payload[0]);
         }
         break;
     case LARK_MSG_VOLUME:
@@ -562,6 +581,26 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
             }
         }
         break;
+    case LARK_MSG_STATUS: {
+        if (len < sizeof(lark_status_t)) break;
+        lark_status_t st;
+        memcpy(&st, payload, sizeof(st));
+        if (st.seq >= last_state_seq) {
+            last_state_seq = st.seq;
+            ESP_LOGD(TAG, "Status seq=%" PRIu32 " state=%u progress=%u kind=%u", st.seq, st.state, st.progress, st.kind);
+        }
+        break;
+    }
+    case LARK_MSG_VOICE_OWNER:
+    case LARK_MSG_PROMPT:
+    case LARK_MSG_PROMPT_ENDED: {
+        if (len >= 4) {
+            uint32_t seq = (uint32_t)payload[0] | ((uint32_t)payload[1] << 8) |
+                           ((uint32_t)payload[2] << 16) | ((uint32_t)payload[3] << 24);
+            if (seq >= last_state_seq) last_state_seq = seq;
+        }
+        break;
+    }
     case LARK_MSG_PING:
         if (len == 4) send_tcp_frame(session, LARK_MSG_PONG, payload, 4, false);
         break;
@@ -763,15 +802,20 @@ static void drain_ctrl(void)
     ctrl_msg_t msg;
     while (ctrl_queue && xQueueReceive(ctrl_queue, &msg, 0) == pdPASS) {
         if (msg.kind == CTRL_REC_START) {
-            lark_rec_start_t wire = { .session = msg.rec_session, .target = msg.target, .pad = 0 };
-            send_tcp_frame(msg.session, LARK_MSG_REC_START, &wire, sizeof(wire), true);
-        } else if (msg.kind == CTRL_REC_END) {
-            lark_rec_end_t wire = {
-                .session = msg.rec_session,
-                .target = msg.target,
-                .cancelled = msg.cancelled ? 1 : 0,
+            uint8_t wire[3] = {
+                (uint8_t)(msg.rec_session & 0xFF),
+                (uint8_t)(msg.rec_session >> 8),
+                0,
             };
-            send_tcp_frame(msg.session, LARK_MSG_REC_END, &wire, sizeof(wire), true);
+            send_tcp_frame(msg.session, LARK_MSG_REC_START, wire, sizeof(wire), true);
+        } else if (msg.kind == CTRL_REC_END) {
+            uint8_t wire[4] = {
+                (uint8_t)(msg.rec_session & 0xFF),
+                (uint8_t)(msg.rec_session >> 8),
+                msg.cancelled ? 1 : 0,
+                0,
+            };
+            send_tcp_frame(msg.session, LARK_MSG_REC_END, wire, sizeof(wire), true);
         }
     }
 }
