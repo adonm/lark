@@ -4,6 +4,36 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Listening Mode & Firmware (`0.15.0`)
+
+### Affects
+- SQLite / Lark Server & MCP / Agents / Firmware (`0.15.0`)
+
+### Breaking Changes
+- **Companion `listen_seconds`**: Added `companions.listen_seconds INTEGER NOT NULL DEFAULT 0` (0–300), exposed in `state` `me.companion` and `patch.companion.listen_seconds`.
+- **Listening mode**: With `listen_seconds > 0`, the voice-owner terminal opens a server-controlled listening window after playback ack or Delta Chat notice read-out, with a corner icon + bottom countdown bar, tap-to-end, filler-transcript filtering, `[silent]` no-reply support, and `replying to <Sender> (Delta Chat)` turn labelling.
+- **Firmware `0.15.0`**: Added `LARK_REC_TARGET_LISTEN` (`1 << 6`) on `REC_CTRL`, skipping the start tone, local VAD watchdog, and 60 s cap (305 s safety cap) for server-controlled listening windows.
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(companions);"` lacks `listen_seconds`.
+- Terminals report firmware `< 0.15.0`.
+
+### Upgrade Steps
+1. Stop `lark.service`, back up `lark.db`, and add `listen_seconds`:
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   sqlite3 ~/.local/share/lark/lark.db "ALTER TABLE companions ADD COLUMN listen_seconds INTEGER NOT NULL DEFAULT 0;"
+   ```
+2. Run `./scripts/setup-host.sh --gpu-index 0`.
+3. Build and OTA firmware `0.15.0` to all boards (`vocat-33d8` → `vocat-2cac` → `box3-b324`).
+
+### Verification
+- `lark status` shows `ok=true` and all terminals online on `0.15.0`.
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, listen_seconds FROM companions;"` shows `0` by default.
+
+---
+
 ## 2026-11-22 — Pixel Overhaul, Books as Data, Weather & Firmware (`0.14.0`)
 
 ### Affects
