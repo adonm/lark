@@ -12,19 +12,25 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 	const id = "vocat-0001"
 	_, rev, _ := decodeDisplay(t, d.helloHardware(t, id, "", capPointerRev|capDrag))
 
-	d.tap(t, 180, 150, rev-1)
+	d.recStart(t, "")
+	waitSVG(t, b.ws, id, "rec-send")
+	b.ws.mu.Lock()
+	rev = b.ws.terminals[id].nativeRev
+	b.ws.mu.Unlock()
+
+	d.tap(t, 247, 290, rev-1)
 	d.barrier(t)
 	b.ws.mu.Lock()
-	started := b.ws.terminals[id].recording.active()
-	rev = b.ws.terminals[id].nativeRev // An idle blink may have produced another revision.
+	stillActive := b.ws.terminals[id].recording.active()
+	rev = b.ws.terminals[id].nativeRev
 	b.ws.mu.Unlock()
-	if started {
-		t.Fatal("stale revision started recording")
+	if !stillActive {
+		t.Fatal("stale revision stopped recording")
 	}
-	d.tap(t, 180, 150, rev)
+	d.tap(t, 247, 290, rev)
 	d.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
 }
 
@@ -58,26 +64,22 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 			return false
 		}
 		r, _, _ := decodeDisplay(t, f)
-		return image.Pt(180, 265).In(r)
+		return image.Pt(180, 290).In(r)
 	})
 
-	d.tap(t, 180, 265, idleRev)
+	d.tap(t, 180, 290, idleRev)
 	d.barrier(t)
 	b.ws.mu.Lock()
-	started, thinkingRev := dev.recording.endpoint != nil, dev.nativeRev
+	taps, thinkingRev := dev.stopTaps, dev.nativeRev
 	b.ws.mu.Unlock()
-	if started {
-		t.Fatal("a stale Talk tap started a Say more capture")
+	if taps != 0 {
+		t.Fatal("a stale Stop tap incremented stopTaps")
 	}
-	d.tap(t, 180, 265, thinkingRev)
-	start := d.until(t, func(f wsFrame) bool {
+	d.tap(t, 180, 290, thinkingRev)
+	d.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
 	})
-	p := framePayload(start)
-	if p[1]&recTargetBridgeE == 0 || p[4] != 0 {
-		t.Fatalf("Say more did not start an untargeted bridge capture: %x", p)
-	}
 }
 
 func TestNativeWakeWordUsesTalkFlowOnlyWhenEnabled(t *testing.T) {

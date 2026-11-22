@@ -289,24 +289,24 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 	dev.hello(t, "vocat-33d8", cake.ID)
 	bindMenu(dev, b.ws, "vocat-33d8")
 
-	// Open Menu -> Next -> Pair.
+	// Open Menu -> Next -> Next -> Pair.
 	tapMenu(t, dev, "menu", "menu-next")
+	tapMenu(t, dev, "menu-next", "menu-voice")
 	tapMenu(t, dev, "menu-next", "menu-pair", "menu-unpair")
-	qrSVG := tapMenu(t, dev, "menu-pair", "Pair")
-	if !strings.Contains(qrSVG, "Pair") {
-		t.Fatalf("missing Pair title in SVG: %s", qrSVG)
+	pairSrc := tapMenu(t, dev, "menu-pair", "pair-close")
+	if !strings.Contains(pairSrc, "pair-close") {
+		t.Fatalf("expected pair drawer, got %q", pairSrc)
 	}
-	// Rasterize the Pair QR scene to confirm SVG->RGB565 renders black QR pixels.
-	scr, err := buildScreen(qrSVG, false, roundScreen)
-	if err != nil {
-		t.Fatalf("Pair QR SVG failed to rasterize: %v", err)
-	}
-	if !slices.Contains(scr.fb, uint16(0x0000)) {
-		t.Fatal("Pair QR SVG rendered without any black QR pixels")
+	b.ws.mu.Lock()
+	d := b.ws.terminals["vocat-33d8"]
+	hasBlack := d != nil && slices.Contains(d.svg.fb, uint16(0x0000))
+	b.ws.mu.Unlock()
+	if !hasBlack {
+		t.Fatal("Pair QR rendered without any black QR pixels")
 	}
 
 	// Back -> Unpair -> tap Alice -> removed.
-	tapMenu(t, dev, "menu-back", "menu-unpair")
+	tapMenu(t, dev, "pair-close", "menu-unpair")
 	tapMenu(t, dev, "menu-unpair", "Alice")
 	tapMenu(t, dev, "unpair-0", "No paired contacts")
 	stub.mu.Lock()
@@ -457,8 +457,8 @@ func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
 			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
 		})
 	}
-	waitSVG(t, b.ws, "box3-0001", "From Mum")
-	waitSVG(t, b.ws, "vocat-0002", "From Mum")
+	waitSVG(t, b.ws, "box3-0001", "Dinner's ready")
+	waitSVG(t, b.ws, "vocat-0002", "Dinner's ready")
 
 	spokenMu.Lock()
 	gotSpoken := slices.Clone(spoken)

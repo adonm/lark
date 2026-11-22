@@ -299,30 +299,32 @@ func (s *dcService) syncProfile(c companionState, accID uint32) {
 }
 
 func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
-	pose := companionPose{mood: "idle", battery: -1}
-	raw := companionChrome(c, pose).svg(companionArt(c, pose))
-	var screen svgScreen
-	var err error
-	if b != nil && b.portraits != nil {
-		if id := activePortrait(c.FaceSVG); id != "" && b.portraits.has(id) {
-			screen, err = b.portraits.frames.buildGradedWithAssets(raw, false, roundScreen, gradeDay, b.portraits.image)
+	var bg *image.RGBA
+	var poses [4]*image.RGBA
+	loaded := false
+	if b != nil && b.portraits != nil && c.PortraitID != "" {
+		dir := filepath.Join(b.portraits.dir, c.PortraitID)
+		if p, err := loadOrNormalizePoses(dir, pixelPortraitHeight); err == nil {
+			poses = p
+			loaded = true
+		}
+		if bgImg, err := loadBackgroundPNG(dir); err == nil {
+			bg = bgImg
 		}
 	}
-	if screen.fb == nil || err != nil {
-		screen, err = screens.buildGraded(raw, false, roundScreen, gradeDay)
-		if err != nil {
-			return nil, err
-		}
+	if !loaded {
+		poses = pixelPlaceholderPoses()
 	}
-	return fbToPNG(screen.fb, roundScreen)
+	img := renderPixelHome(pixelSpecVoCat, bg, poses[0], gradeDay, "", 0, "", false)
+	return imageToPNG(img)
 }
 
-func renderScenePNG(view sceneView, geom screenGeometry) ([]byte, error) {
-	screen, err := screens.buildGraded(view.svg(""), false, geom, gradeDay)
-	if err != nil {
+func imageToPNG(img image.Image) ([]byte, error) {
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
 		return nil, err
 	}
-	return fbToPNG(screen.fb, geom)
+	return out.Bytes(), nil
 }
 
 func fbToPNG(fb []uint16, geom screenGeometry) ([]byte, error) {

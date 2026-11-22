@@ -75,10 +75,12 @@ func (b *larkServer) deliverOfflineBuildReply(ctx context.Context, who companion
 
 func buildingScene(id string) sceneView {
 	view := messageScene("Building", "Building", "I'll tell you when it's ready.", blankCompanion())
-	view.build = id
+	view.building = id
 	view.duringTurn = true
-	view.control(bounds{63, 218, 98, 48}, actionTile("listen", "Talk", "", answerPalette))
-	view.control(bounds{169, 218, 128, 48}, tile{id: "build-cancel", label: "Cancel build", action: sceneAction{"build-cancel", id}, colors: dangerPalette})
+	view.actions = map[string]sceneAction{
+		"listen":       {"listen", ""},
+		"build-cancel": {"build-cancel", id},
+	}
 	return view
 }
 
@@ -109,7 +111,7 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	d := h.voiceOwner(job.device)
 	if d == nil || !h.active(d) ||
 		d.announcing || d.busy || d.queuedVoice != nil || d.recording.active() ||
-		d.stopAudio != nil || d.awaitAck || d.asleep || d.drawer != "" || d.card != nil && d.card.build != job.id {
+		d.stopAudio != nil || d.awaitAck || d.asleep || d.drawer != "" || d.card != nil && d.card.building != job.id {
 		h.mu.Unlock()
 		return
 	}
@@ -128,7 +130,7 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	}
 	view := messageScene(title, title, job.result, d.companion)
 	view.duringTurn = true
-	view.control(bounds{129, 218, 102, 48}, tile{id: "build-done", label: "Done", action: sceneAction{"dismiss", ""}, colors: answerPalette})
+	view.actions = map[string]sceneAction{"close": {"dismiss", ""}}
 	now := time.Now()
 	d.last = now
 	h.speakLocal(d, job.result)
@@ -143,7 +145,7 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 }
 
 func (h *wsHub) cancelBuildCard(d *wsTerminal, id string) {
-	if h.b.builders == nil || d.card == nil || d.card.build != id {
+	if h.b.builders == nil || d.card == nil || d.card.building != id {
 		return
 	}
 	card := d.card
@@ -153,7 +155,7 @@ func (h *wsHub) cancelBuildCard(d *wsTerminal, id string) {
 	if cancelled && h.active(d) && d.card == card {
 		view := messageScene("Build cancelled", "Build cancelled", "", d.companion)
 		view.duringTurn = true
-		view.control(bounds{129, 218, 102, 48}, tile{id: "build-done", label: "Done", action: sceneAction{"dismiss", ""}, colors: answerPalette})
+		view.actions = map[string]sceneAction{"close": {"dismiss", ""}}
 		for _, td := range h.terminalsFor(d.companionID) {
 			td.card = &view
 			h.render(td, time.Now(), false)

@@ -163,7 +163,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bridge.db")
 	db := testDB(t, path)
 	b := recoveryServer(t, db, api, current)
-	c, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "face_bg": "#654321", "form": "a cat"})
+	c, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 		t.Fatalf("wrong recovery: %+v %v", gen, err)
 	}
 	var saved int
-	if err := db.QueryRow(`SELECT count(*) FROM companions WHERE id=? AND name='Plum' AND face_bg='#654321'`, id).Scan(&saved); err != nil || saved != 1 {
+	if err := db.QueryRow(`SELECT count(*) FROM companions WHERE id=? AND name='Plum' AND form='a cat'`, id).Scan(&saved); err != nil || saved != 1 {
 		t.Fatalf("companion form changed: %d, %v", saved, err)
 	}
 	after, err := b.history.list(t.Context(), id)

@@ -38,8 +38,7 @@ const portraitCenterY = 162
 var portraitPoses = [...]string{"idle", "blink", "talk", "think"}
 var portraitIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var portraitSchema = closedObject(object{
-	"prompt": uiString(600), "form": uiString(160), "recolor": uiString(200), "bg": hexTintSchema, "edit": object{"type": "boolean"},
-	"style": object{"type": "string", "enum": []string{portraitStorybookStyle, portraitPixelStyle}, "default": portraitStorybookStyle},
+	"prompt": uiString(600), "form": uiString(160), "recolor": uiString(200), "edit": object{"type": "boolean"},
 }, "prompt")
 
 type portraitSpec struct {
@@ -48,8 +47,7 @@ type portraitSpec struct {
 }
 
 type pendingPortrait struct {
-	id, bg, base string
-	pixel        bool
+	id, base, form string
 }
 
 func parsePortraitRef(raw string) (id, pose string, ok bool) {
@@ -69,7 +67,6 @@ type portraitGenerator func(ctx context.Context, prompt string, source []byte) (
 type portraitStore struct {
 	dir      string
 	generate portraitGenerator
-	frames   screenCache
 }
 
 func portraitPrompt(spec portraitSpec) string {
@@ -408,7 +405,7 @@ func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID
 	if err != nil {
 		return "", problem(502, err.Error())
 	}
-	bg, _ := directPaint(spec.BG)
+	bg := imagecolor.RGBA{250, 240, 230, 255}
 	poses, err := slicePortrait(sheet, bg)
 	if err != nil {
 		return "", problem(502, err.Error())
@@ -497,11 +494,6 @@ func (p *portraitStore) has(id string) bool {
 }
 
 func (b *larkServer) preparePortrait(ctx context.Context, companionID string, args object, raw any) (*pendingPortrait, error) {
-	for _, field := range []string{"preset", "face_svg", "face_edits", "face_bg", "mark_color", "accent_color"} {
-		if _, exists := args[field]; exists {
-			return nil, fieldError("companion.portrait", "cannot combine with %s", field)
-		}
-	}
 	current, ok := b.companionByID(companionID)
 	if !ok {
 		return nil, problem(404, "Companion not found")
@@ -523,47 +515,13 @@ func (p *portraitStore) prepare(ctx context.Context, current companionState, raw
 	if spec.Form = strings.TrimSpace(spec.Form); spec.Form == "" {
 		spec.Form = current.Form
 	}
-	spec.BG = colorStringOr(spec.BG, storybookPalettes["peach"].bg)
-	if spec.Edit && str(raw.(object)["bg"]) == "" {
-		spec.BG = current.FaceBG
-	}
-	id, err := p.create(ctx, spec, activePortrait(current.FaceSVG))
+	spec.Style = portraitPixelStyle
+	spec.BG = "#FAF0E6"
+	id, err := p.create(ctx, spec, current.PortraitID)
 	if err != nil {
 		return nil, err
 	}
-	return &pendingPortrait{id: id, bg: spec.BG, base: current.FaceSVG, pixel: spec.Style == portraitPixelStyle}, nil
-}
-
-func colorStringOr(s, fallback string) string {
-	if pixelColor.MatchString(s) {
-		return strings.ToUpper(s)
-	}
-	return fallback
-}
-
-func (p *pendingPortrait) svg() string {
-	var out strings.Builder
-	out.WriteString(svgStart + `<rect width="360" height="360" fill="` + p.bg + `"/>`)
-	rendering := ""
-	if p.pixel {
-		rendering = ` image-rendering="pixelated"`
-	}
-	for i, pose := range []string{"idle", "blink", "talk", "think", "listen", "sleep"} {
-		bitmap := [...]string{"idle", "blink", "talk", "think", "idle", "blink"}[i]
-		fmt.Fprintf(&out, `<g data-pose="%s"><image href="portrait:%s:%s" width="360" height="360"%s/></g>`, pose, p.id, bitmap, rendering)
-	}
-	out.WriteString(`</svg>`)
-	return out.String()
-}
-
-func activePortrait(raw string) string {
-	start := strings.Index(raw, `href="portrait:`)
-	if start < 0 {
-		return ""
-	}
-	ref, _, _ := strings.Cut(raw[start+len(`href="`):], `"`)
-	id, _, _ := parsePortraitRef(ref)
-	return id
+	return &pendingPortrait{id: id, base: current.PortraitID, form: spec.Form}, nil
 }
 
 func (b *larkServer) servePortrait(w http.ResponseWriter, r *http.Request, path, scope string) error {
@@ -573,9 +531,9 @@ func (b *larkServer) servePortrait(w http.ResponseWriter, r *http.Request, path,
 		return problem(404, "Portrait not found")
 	}
 	if scope != "" {
-		var face string
-		if b.db == nil || b.db.readDB().QueryRowContext(r.Context(), `SELECT face_svg FROM companions WHERE id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
-			activePortrait(face) != id {
+		var portraitID string
+		if b.db == nil || b.db.readDB().QueryRowContext(r.Context(), `SELECT portrait_id FROM companions WHERE id=?`, strings.ToLower(scope)).Scan(&portraitID) != nil ||
+			portraitID != id {
 			return problem(404, "Portrait not found")
 		}
 	}

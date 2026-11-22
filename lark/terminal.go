@@ -140,11 +140,15 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		}
 		compID, compName, geom := d.companionID, d.companion.Name, d.screen
 		b.ws.mu.Unlock()
-		qrSVG, err := b.dc.pairQR(compID)
+		invite, err := b.dc.pairInvite(compID)
 		if err != nil {
 			return nil, problem(502, err.Error())
 		}
-		pngBytes, err := renderScenePNG(pairScene(compName, qrSVG), geom)
+		pairImg, err := renderPixelPair(pixelSpecForGeometry(geom), compName, invite)
+		if err != nil {
+			return nil, problem(502, err.Error())
+		}
+		pngBytes, err := imageToPNG(pairImg)
 		if err != nil {
 			return nil, problem(502, err.Error())
 		}
@@ -154,7 +158,8 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			b.ws.wake(d, now)
 			d.drawer = drawerPair
 			d.menuPage = 0
-			d.menuData = &menuContent{qrSVG: qrSVG}
+			d.menuData = &menuContent{invite: invite}
+			b.ws.pushPower(d, 100, true)
 			b.ws.render(d, now, false)
 		}
 		b.ws.mu.Unlock()

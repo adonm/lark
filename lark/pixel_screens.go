@@ -197,6 +197,28 @@ func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grad
 				text: line, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
 			})
 		}
+	} else if status == "listening" {
+		btnH := 14
+		if !spec.round {
+			btnH = 18
+		}
+		y := spec.safe.Max.Y - btnH
+		gap := 4
+		bw := (spec.safe.Dx() - gap) / 2
+		left := image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH)
+		right := image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH)
+		c.panel(left.Min.X, left.Min.Y, left.Dx(), left.Dy(), pxTileBG, pxDanger)
+		c.panel(right.Min.X, right.Min.Y, right.Dx(), right.Dy(), pxTileBG, pxMint)
+		texts = addCenteredText(texts, physicalRect(left, s), "Cancel", dogica.Regular, spec.bodyTextScale, pxDanger)
+		texts = addCenteredText(texts, physicalRect(right, s), "Send", dogica.Bold, spec.bodyTextScale, pxMint)
+	} else if status == "thinking" || status == "speaking" {
+		btnW, btnH := 38, 14
+		if !spec.round {
+			btnW, btnH = 44, 18
+		}
+		btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
+		c.panel(btn.Min.X, btn.Min.Y, btn.Dx(), btn.Dy(), pxPanelBG, pxDanger)
+		texts = addCenteredText(texts, physicalRect(btn, s), "Stop", dogica.Regular, spec.bodyTextScale, pxDanger)
 	} else if showMenuHint {
 		btnW, btnH := 36, 14
 		if !spec.round {

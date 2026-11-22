@@ -394,7 +394,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			dev.recStart(t, "")
 			waitSVG(t, b.ws, id, "rec-send")
 			dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, first)
-			dev.tap(t, 247, 310, 0)
+			dev.tap(t, 247, 290, 0)
 			dev.until(t, func(f wsFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
@@ -820,9 +820,9 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 			b.ws.mu.Lock()
 			defer b.ws.mu.Unlock()
 			d := b.ws.terminals["vocat-a000"]
-			return d != nil && strings.Contains(d.svg.source, `aria-label="Stop"`) && !strings.Contains(d.svg.source, "Thinking")
+			return d != nil && strings.Contains(d.svg.source, `data-id="stop"`)
 		})
-		dev.tap(t, 180, 315, 0)
+		dev.tap(t, 180, 290, 0)
 		abort := dev.until(t, func(f wsFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStop

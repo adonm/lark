@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	imagecolor "image/color"
 	"log"
 	"log/slog"
 	"maps"
@@ -20,25 +21,69 @@ import (
 )
 
 type savedApp struct {
-	Name, Title, Kind, SVG, Code, Author string
-	Template                             string
-	Data                                 json.RawMessage
-	TickMS, MaxTicks                     int
-	Version                              int64
+	Name, Title, Kind, Code, Author string
+	Template                        string
+	Data                            json.RawMessage
+	TickMS, MaxTicks                int
+	Version                         int64
 }
 
-const appColumns = "name,title,kind,svg,code,tick_ms,max_ticks,author,updated_at,template,data_json"
+const appColumns = "name,title,kind,code,tick_ms,max_ticks,author,updated_at,template,data_json"
 
 func scanApp(row rowScanner, extra ...any) (savedApp, error) {
 	var a savedApp
 	var data string
-	fields := []any{&a.Name, &a.Title, &a.Kind, &a.SVG, &a.Code, &a.TickMS, &a.MaxTicks, &a.Author, &a.Version, &a.Template, &data}
+	fields := []any{&a.Name, &a.Title, &a.Kind, &a.Code, &a.TickMS, &a.MaxTicks, &a.Author, &a.Version, &a.Template, &data}
 	err := row.Scan(append(fields, extra...)...)
 	a.Data = json.RawMessage(data)
 	return a, err
 }
 
 func (a savedApp) scripted() bool { return a.Code != "" || a.Template != "" }
+
+func bookTextAndCover(a savedApp, fallbackColor imagecolor.RGBA) (string, imagecolor.RGBA) {
+	cover := fallbackColor
+	if cover.A == 0 {
+		cover = pxMint
+	}
+	if len(a.Data) == 0 {
+		return "", cover
+	}
+	var obj map[string]any
+	if json.Unmarshal(a.Data, &obj) != nil {
+		return "", cover
+	}
+	if c, ok := obj["cover"].(string); ok && strings.HasPrefix(c, "#") {
+		cover = parseHexRGBA(c, cover)
+	}
+	if txt, ok := obj["text"].(string); ok && strings.TrimSpace(txt) != "" {
+		return strings.TrimSpace(txt), cover
+	}
+	if pages, ok := obj["pages"].([]any); ok {
+		var parts []string
+		for _, p := range pages {
+			switch v := p.(type) {
+			case string:
+				if s := strings.TrimSpace(v); s != "" {
+					parts = append(parts, s)
+				}
+			case map[string]any:
+				var seg []string
+				if t, ok := v["title"].(string); ok && strings.TrimSpace(t) != "" {
+					seg = append(seg, strings.TrimSpace(t))
+				}
+				if t, ok := v["text"].(string); ok && strings.TrimSpace(t) != "" {
+					seg = append(seg, strings.TrimSpace(t))
+				}
+				if len(seg) > 0 {
+					parts = append(parts, strings.Join(seg, "\n"))
+				}
+			}
+		}
+		return strings.Join(parts, "\n\n"), cover
+	}
+	return "", cover
+}
 
 func (a savedApp) summary() object {
 	out := object{"name": a.Name, "title": a.Title, "kind": a.Kind, "version": a.Version, "updated_at": a.Version,
@@ -71,8 +116,8 @@ func (b *larkServer) savedAppState(ctx context.Context, name string) (object, er
 		return nil, problem(502, "Cannot read saved app")
 	}
 	out := a.summary()
-	out["code"], out["svg"], out["state"] = a.Code, a.SVG, json.RawMessage(state)
-	if a.Template != "" {
+	out["code"], out["state"] = a.Code, json.RawMessage(state)
+	if a.Template != "" || a.Kind == "book" {
 		out["data"] = a.Data
 	}
 	return out, nil
@@ -103,12 +148,12 @@ func (b *larkServer) writeApp(ctx context.Context, a savedApp) (savedApp, error)
 		return a, problem(503, "Apps unavailable")
 	}
 	saved, err := scanApp(b.db.QueryRowContext(ctx, `INSERT INTO apps (`+appColumns+`)
-		SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM apps WHERE name=?) OR (SELECT count(*) FROM apps) < 128
-		ON CONFLICT(name) DO UPDATE SET title=excluded.title,kind=excluded.kind,svg=excluded.svg,code=excluded.code,
+		SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM apps WHERE name=?) OR (SELECT count(*) FROM apps) < 128
+		ON CONFLICT(name) DO UPDATE SET title=excluded.title,kind=excluded.kind,code=excluded.code,
 		tick_ms=excluded.tick_ms,max_ticks=excluded.max_ticks,author=excluded.author,template=excluded.template,
 		data_json=excluded.data_json,updated_at=max(apps.updated_at+1,excluded.updated_at)
 		RETURNING `+appColumns,
-		a.Name, a.Title, a.Kind, a.SVG, a.Code, a.TickMS, a.MaxTicks, a.Author, time.Now().UnixMilli(), a.Template, a.dataJSON(), a.Name))
+		a.Name, a.Title, a.Kind, a.Code, a.TickMS, a.MaxTicks, a.Author, time.Now().UnixMilli(), a.Template, a.dataJSON(), a.Name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, problem(409, "Saved app library is full")
 	}
@@ -116,7 +161,7 @@ func (b *larkServer) writeApp(ctx context.Context, a savedApp) (savedApp, error)
 }
 
 func (a savedApp) dataJSON() string {
-	if a.Template == "" || len(a.Data) == 0 {
+	if (a.Template == "" && a.Kind != "book") || len(a.Data) == 0 {
 		return "{}"
 	}
 	return string(a.Data)
@@ -129,7 +174,7 @@ func (b *larkServer) listApps(ctx context.Context, includeCode bool) ([]object, 
 	}
 	columns := "name,title,kind,author,updated_at,tick_ms,max_ticks,template"
 	if includeCode {
-		columns += ",svg,code,data_json"
+		columns += ",code,data_json"
 	}
 	rows, err := b.db.readDB().QueryContext(ctx, "SELECT "+columns+" FROM apps ORDER BY name")
 	if err != nil {
@@ -141,18 +186,15 @@ func (b *larkServer) listApps(ctx context.Context, includeCode bool) ([]object, 
 		var data string
 		fields := []any{&a.Name, &a.Title, &a.Kind, &a.Author, &a.Version, &a.TickMS, &a.MaxTicks, &a.Template}
 		if includeCode {
-			fields = append(fields, &a.SVG, &a.Code, &data)
+			fields = append(fields, &a.Code, &data)
 		}
 		if err := rows.Scan(fields...); err != nil {
 			return nil, err
 		}
 		entry := a.summary()
 		entry["author"] = a.Author
-		if a.Template != "" && includeCode {
+		if (a.Template != "" || a.Kind == "book") && includeCode {
 			entry["data"] = json.RawMessage(data)
-		}
-		if a.SVG != "" {
-			entry["svg"] = a.SVG
 		}
 		if a.Code != "" {
 			entry["code"] = a.Code
@@ -519,10 +561,10 @@ func (a *appInstance) player(i int) goja.Value {
 	return v
 }
 
-func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessage, terminals []*wsTerminal, initial json.RawMessage, renderer func(string, bool, screenGeometry) (svgScreen, error)) (*appInstance, []svgScreen, error) {
+func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessage, terminals []*wsTerminal, initial json.RawMessage, _ any) (*appInstance, []svgScreen, error) {
 	a := &appInstance{spec: spec, players: players, memory: memory, terminals: terminals, scope: "app:" + spec.Name,
 		geometry: make([]screenGeometry, len(players)), gradeSources: make([]*atomic.Uint32, len(players)),
-		buildScreen: renderer, lastScreens: make([]svgScreen, len(players))}
+		lastScreens: make([]svgScreen, len(players))}
 	for i := range players {
 		// Geometry and the client role do not change after hello.
 		if terminals == nil {
@@ -646,11 +688,6 @@ func (a *appInstance) initVM(initial json.RawMessage) error {
 			panic(vm.NewTypeError("Unknown chime kind"))
 		}
 		return addEffect(appEffect{kind: "chime", text: kind})
-	})
-	installAppUI(vm, func() {
-		if a.allowEffects && len(a.effects) < appEffectLimit {
-			addEffect(appEffect{kind: "chime", text: "tap"})
-		}
 	})
 	run("say", func(c goja.FunctionCall) goja.Value {
 		text, _ := asString(c.Argument(0))
@@ -811,36 +848,17 @@ func (a *appInstance) screens(connected []bool) ([]svgScreen, error) {
 		if connected != nil && !connected[i] {
 			continue
 		}
-		raw := a.spec.SVG
+		spec := pixelSpecForGeometry(a.geometry[i])
+		pxCtx := newPixelAppContext(spec, nil)
 		if a.vm != nil {
-			value, err := a.call(a.render, a.state, a.player(i))
-			if err != nil {
+			gObj := pxCtx.installJS(a.vm)
+			if _, err := a.call(a.render, a.state, a.player(i), gObj); err != nil {
 				return nil, err
 			}
-			s, ok := value.(goja.String)
-			if !ok {
-				return nil, fmt.Errorf("app.js render must return an SVG string")
-			}
-			if s.Length() > maxSVG {
-				return nil, fmt.Errorf("app.js render: SVG exceeds 64 KB")
-			}
-			raw = s.String()
 		}
-		grade := gradeDay
-		if src := a.gradeSources[i]; src != nil {
-			grade = gradeKey(src.Load())
-		}
-		if last := a.lastScreens[i]; last.source != "" && last.raw == raw && last.grade == grade {
-			out[i] = last
-			continue
-		}
-		var screen svgScreen
-		var err error
-		if grade == gradeDay {
-			screen, err = a.buildScreen(raw, true, a.geometry[i])
-		} else {
-			screen, err = screens.buildGraded(raw, true, a.geometry[i], grade)
-		}
+		img, hits := pxCtx.finish()
+		screen, err := rgbaToSVGScreenCompat(img, hits)
+		screen.source = pxCtx.summary()
 		if err != nil {
 			return nil, fmt.Errorf("render for player %d: %w", i, err)
 		}
@@ -971,27 +989,43 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		}
 		return object{"ok": true, "companions": ids, "title": "", "hit_ids": []string{}}, nil
 	}
-	a := savedApp{SVG: str(args["svg"]), Code: str(args["code"]), Title: shortText(args["title"], 60, false), Author: players[0].name}
-	if raw, present := args["screen"]; present {
-		for _, key := range []string{"load", "code", "svg", "template", "data"} {
-			if _, incompatible := args[key]; incompatible {
-				return nil, fieldError("screen", "cannot combine with %s", key)
-			}
-		}
-		spec, err := readUIValue[declarativeScreen](raw, declarativeScreenSchema, "screen")
-		if err != nil {
-			return nil, err
-		}
-		a.SVG, err = spec.svg()
-		if err != nil {
-			return nil, err
-		}
-		if a.Title == "" {
-			a.Title = shortText(spec.Title, 60, false)
-		}
+	a := savedApp{Code: str(args["code"]), Kind: str(args["kind"]), Title: shortText(args["title"], 60, false), Author: players[0].name}
+	if _, hasText := args["text"]; hasText && a.Kind == "" {
+		a.Kind = "book"
 	}
-	if _, present := args["template"]; present {
-		for _, key := range []string{"load", "code", "svg"} {
+	if _, hasPages := args["pages"]; hasPages && a.Kind == "" {
+		a.Kind = "book"
+	}
+	if a.Kind == "book" {
+		bookObj := object{}
+		if t := str(args["text"]); t != "" {
+			bookObj["text"] = t
+		}
+		if p, ok := args["pages"]; ok {
+			bookObj["pages"] = p
+		}
+		if c := str(args["cover"]); c != "" {
+			bookObj["cover"] = c
+		}
+		if len(bookObj) == 0 {
+			if rawData, ok := args["data"]; ok {
+				b, err := appJSONObject(rawData, "data")
+				if err != nil {
+					return nil, err
+				}
+				a.Data = b
+			} else {
+				return nil, fieldError("book", "expected text or pages for a book")
+			}
+		} else {
+			b, err := json.Marshal(bookObj)
+			if err != nil {
+				return nil, err
+			}
+			a.Data = b
+		}
+	} else if _, present := args["template"]; present {
+		for _, key := range []string{"load", "code"} {
 			if _, incompatible := args[key]; incompatible {
 				return nil, fieldError("template", "cannot combine with %s", key)
 			}
@@ -1004,12 +1038,12 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			return nil, err
 		}
 	} else if _, present := args["data"]; present {
-		return nil, fieldError("data", "requires a template")
+		return nil, fieldError("data", "requires a template or kind=book")
 	}
 	var loaded string
 	if name, provided := args["load"]; provided {
-		if a.SVG != "" || a.Code != "" {
-			return nil, problem(400, "Use load or svg/code, not both")
+		if a.Code != "" {
+			return nil, problem(400, "Use load or code, not both")
 		}
 		a, err = b.loadApp(ctx, str(name))
 		if err != nil {
@@ -1037,31 +1071,37 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		}
 	}
 	switch {
+	case a.Kind == "book":
+		if text, _ := bookTextAndCover(a, pxMint); text == "" {
+			return nil, fieldError("book", "book has no text or pages")
+		}
 	case a.scripted():
-		a.Kind = "app"
-	case a.SVG != "":
-		a.Kind = "drawing"
+		if a.Kind != "tool" {
+			a.Kind = "game"
+		}
 	default:
-		return nil, problem(400, "Expected screen, template, svg, code, or load")
+		return nil, problem(400, "Expected template, code, load, or book text/pages")
+	}
+	if a.Kind == "book" {
+		if save != "" || loaded == "" {
+			if err := b.saveApp(ctx, a); err != nil {
+				return nil, err
+			}
+			b.appsChanged()
+		}
+		for _, d := range devices {
+			if d != nil && !d.virtual() {
+				h.mu.Lock()
+				if h.active(d) {
+					h.openBook(d, a)
+				}
+				h.mu.Unlock()
+			}
+		}
+		return object{"ok": true, "saved": a.Name, "kind": "book", "title": a.Title, "companions": ids}, nil
 	}
 	if err := a.setTiming(args); err != nil {
 		return nil, err
-	}
-	if a.SVG != "" {
-		clean, err := parseSVG(a.SVG)
-		if err != nil {
-			return nil, problem(400, err.Error())
-		}
-		a.SVG = svgString(clean)
-		if a.scripted() {
-			var geometry screenGeometry
-			if slices.ContainsFunc(devices, func(d *wsTerminal) bool { return !d.virtual() }) {
-				geometry = roundScreen
-			}
-			if _, err := buildScreen(a.SVG, false, geometry); err != nil {
-				return nil, problem(400, err.Error())
-			}
-		}
 	}
 	memory := map[string]json.RawMessage{}
 	var initial json.RawMessage
@@ -1083,7 +1123,7 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			memory[str(value["key"])] = value["value"].(json.RawMessage)
 		}
 	}
-	inst, screens, err := initApp(a, players, memory, devices, initial, buildScreen)
+	inst, screens, err := initApp(a, players, memory, devices, initial, nil)
 	if err != nil {
 		h.mu.Lock()
 		for i, d := range devices {
@@ -1208,11 +1248,11 @@ func appHitIDs(screens ...svgScreen) []string {
 	return hits
 }
 
-func appLayoutWarnings(views []svgScreen, round bool) []string {
+func appLayoutWarnings(views []svgScreen, _ bool) []string {
 	seen := map[string]bool{}
 	var warnings []string
 	for _, screen := range views {
-		for _, warning := range slices.Concat(screen.hitWarnings, layoutWarnings(screen.hits, round)) {
+		for _, warning := range screen.hitWarnings {
 			if !seen[warning] {
 				seen[warning] = true
 				warnings = append(warnings, warning)
@@ -1323,7 +1363,7 @@ func (h *wsHub) tickApps(now time.Time) {
 }
 
 func (h *wsHub) updateApp(a *appInstance, ev appEvent) bool {
-	if ev.kind == "tap" && isExitNode(ev.id) {
+	if ev.kind == "tap" && ev.id == "exit" {
 		h.closeApp(a, ev.now)
 		return true
 	}
@@ -1523,7 +1563,8 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 
 func (h *wsHub) publishAppViews(a *appInstance, views []svgScreen) {
 	for j, screen := range views {
-		if d := a.terminals[j]; d != nil && h.active(d) && screen.source != "" && d.appView.raw != screen.raw {
+		if d := a.terminals[j]; d != nil && h.active(d) && screen.source != "" &&
+			(d.appView.source != screen.source || !slices.Equal(d.appView.fb, screen.fb)) {
 			d.appView = screen
 			h.render(d, time.Now(), false)
 		}

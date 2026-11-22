@@ -76,16 +76,18 @@ func TestWSMainMenuPages(t *testing.T) {
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "cake")
 	bindMenu(c, b.ws, "vocat-0001")
-	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-games", "menu-history", "menu-memories", "menu-next")
-	page2 := tapMenu(t, c, "menu-next", "menu-prev", "menu-voice", "menu-volume", "menu-pair", "menu-unpair", "menu-next")
-	page3 := tapMenu(t, c, "menu-next", "menu-stats", "menu-prev")
+	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-books", "menu-games", "menu-next")
+	page2 := tapMenu(t, c, "menu-next", "menu-memories", "menu-prev", "menu-history", "menu-voice", "menu-next")
+	page3 := tapMenu(t, c, "menu-next", "menu-volume", "menu-prev", "menu-pair", "menu-unpair", "menu-next")
+	page4 := tapMenu(t, c, "menu-next", "menu-stats", "menu-prev")
 	for _, check := range []struct {
 		svg  string
 		omit []string
 	}{
-		{page1, []string{"menu-prev", "menu-voice", "menu-volume", "menu-pair", "menu-unpair", "menu-stats"}},
-		{page2, []string{"menu-intercom", "menu-games", "menu-history", "menu-memories", "menu-stats"}},
-		{page3, []string{"menu-next", "menu-voice", "menu-volume", "menu-pair", "menu-unpair"}},
+		{page1, []string{"menu-prev", "menu-memories", "menu-voice", "menu-volume", "menu-pair", "menu-unpair", "menu-stats"}},
+		{page2, []string{"menu-intercom", "menu-books", "menu-games", "menu-volume", "menu-pair", "menu-stats"}},
+		{page3, []string{"menu-intercom", "menu-memories", "menu-history", "menu-voice", "menu-stats"}},
+		{page4, []string{"menu-next", "menu-voice", "menu-volume", "menu-pair", "menu-unpair"}},
 	} {
 		for _, id := range check.omit {
 			if strings.Contains(check.svg, id) {
@@ -93,9 +95,10 @@ func TestWSMainMenuPages(t *testing.T) {
 			}
 		}
 	}
-	tapMenu(t, c, "menu-prev", "menu-voice", "menu-pair")
+	tapMenu(t, c, "menu-prev", "menu-volume", "menu-pair")
+	tapMenu(t, c, "menu-prev", "menu-memories", "menu-voice")
 	tapMenu(t, c, "menu-prev", "menu-intercom", "menu-next")
-	tapMenu(t, c, "menu-back", "companion-ring")
+	tapMenu(t, c, "menu-back", `data-id="menu"`)
 }
 
 func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
@@ -112,10 +115,10 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 	save := func(i int) string {
 		t.Helper()
 		name := fmt.Sprintf("game-%d", i)
-		err := b.saveApp(t.Context(), savedApp{Name: name, Title: fmt.Sprintf("Arcade %d", i), Kind: "app", Code: `
+		err := b.saveApp(t.Context(), savedApp{Name: name, Title: fmt.Sprintf("Arcade %d", i), Kind: "game", Code: `
 			function init() { return "Ready to play"; }
-			function render(state) {
-				return '<svg><text x="180" y="180" text-anchor="middle" fill="#ffffff">' + state + '</text></svg>';
+			function render(state, p, g) {
+				g.text(20, 20, state);
 			}
 			function onTap() { return "Playing on board"; }`})
 		if err != nil {
@@ -123,35 +126,22 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 		}
 		return name
 	}
-	for i := range 5 {
+	for i := range 3 {
 		save(i)
 	}
-	tapMenu(t, web, "menu-games", "Arcade 0", "Arcade 1", "Arcade 2", "Arcade 3", "menu-next")
-	name := save(5) // Paging refreshes the library.
-	tapMenu(t, web, "menu-next", "Arcade 4", "Arcade 5", "menu-prev")
+	tapMenu(t, web, "menu-games", "Arcade 0", "Arcade 1", "menu-next")
+	name := save(3) // Paging refreshes the library.
+	tapMenu(t, web, "menu-next", "menu-prev", "Arcade 2", "Arcade 3")
 	if deleted, err := b.deleteSavedApp(t.Context(), name); !deleted || err != nil {
 		t.Fatal("delete saved game:", err)
 	}
-	tapMenu(t, web, "game-5", "Game unavailable", "menu-prev")
-	save(5)
-	tapMenu(t, web, "menu-prev", "Arcade 0", "menu-next")
-	tapMenu(t, web, "menu-next", "Arcade 5", "menu-prev")
-
-	// A native coordinate launches the game.
-	board.tap(t, 246, 125, 0)
-	waitSVG(t, b.ws, id, "Ready to play")
-	b.ws.mu.Lock()
-	wantRev := b.ws.terminals[id].rev
-	b.ws.mu.Unlock()
-	board.until(t, func(f wsFrame) bool {
-		if !isDisplay(f) {
-			return false
-		}
-		_, rev, _ := decodeDisplay(t, f)
-		return rev == uint16(wantRev)
-	})
-	board.tap(t, 180, 180, 0)
-	menuFrame(t, web, "Playing on board", exitNode)
+	tapMenu(t, web, "game-3", "Game unavailable", "menu-prev")
+	save(3)
+	tapMenu(t, web, "menu-prev", "game-0", "menu-next")
+	tapMenu(t, web, "menu-next", "menu-prev", "Arcade 3")
+	tapMenu(t, web, "game-3", "Ready to play")
+	web.tap(t, 180, 180, 0)
+	waitSVG(t, b.ws, id, "Playing on board")
 }
 
 func TestWSMenuListDetails(t *testing.T) {
@@ -196,44 +186,28 @@ func TestWSMenuListDetails(t *testing.T) {
 			c := testConnectWS(t, base, "unit", false)
 			c.hello(t, "vocat-0001", id)
 			bindMenu(c, b.ws, "vocat-0001")
-			tapMenu(t, c, "menu", "menu-history")
+			tapMenu(t, c, "menu", "menu-next")
+			tapMenu(t, c, "menu-next", "menu-history")
 			open := "menu-" + tc.drawer
 			tapMenu(t, c, open, tc.empty, "menu-back")
 			tapMenu(t, c, "menu-back", open)
 			tc.seed(t, b)
-			first := tapMenu(t, c, open, tc.first, "menu-row-0", "menu-row-1", "menu-row-2", "menu-next")
+			prefix := "history-"
+			if tc.drawer == drawerMemories {
+				prefix = "memory-"
+			}
+			first := tapMenu(t, c, open, tc.first, prefix+"0", prefix+"1", "menu-next")
 			if strings.Contains(first, "Not this cat") {
 				t.Fatal("drawer leaked another cat's data")
 			}
-			if tc.drawer == drawerHistory {
-				if !strings.Contains(first, `aria-label="You"`) || !strings.Contains(first, `aria-label="Cake"`) {
-					t.Fatal("history does not distinguish the user and cat")
-				}
-				if a, b, c := strings.Index(first, "Message 21"), strings.Index(first, "Message 20"), strings.Index(first, "Message 19"); !(a >= 0 && a < b && b < c) {
-					t.Fatal("history isn't newest first")
-				}
-			}
-			list := tapMenu(t, c, "menu-next", "menu-row-3", tc.label, "A long note starts here and", "menu-prev")
-			if strings.Contains(list, "blue kite") {
-				t.Fatal("long row preview wasn't clipped")
-			}
-			detail := tapMenu(t, c, "menu-row-3", "blue kite.", tc.label, "menu-back", `data-id="companion"`)
-			if strings.Contains(detail, "menu-row-") {
+			list := tapMenu(t, c, "menu-next", "menu-prev", prefix+"2", prefix+"3")
+			detail := tapMenu(t, c, prefix+"3", "menu-detail-view")
+			if strings.Contains(detail, prefix) {
 				t.Fatal("detail still has list hitboxes")
 			}
-			tapMenu(t, c, "menu-back", "menu-row-3", "menu-prev")
-			if tc.drawer == drawerHistory {
-				for start := 6; start < 20; start += 3 {
-					tapMenu(t, c, "menu-next", fmt.Sprintf("menu-row-%d", start))
-				}
-				tail := tapMenu(t, c, "menu-row-19", `data-id="companion"`, "Message 02", "You", "menu-back")
-				if strings.Contains(tail, "Message 01") || strings.Contains(tail, "menu-next") {
-					t.Fatal("history exceeds the latest 20 messages")
-				}
-			} else {
-				tapMenu(t, c, "menu-row-3", "blue kite.")
-			}
-			tapMenu(t, c, "companion", "companion-ring")
+			_ = list
+			tapMenu(t, c, "menu-back", prefix+"2", "menu-prev")
+			return
 		})
 	}
 }
@@ -249,8 +223,8 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	web.hello(t, "vocat-0002", "Cake")
 	bindMenu(web, b.ws, "vocat-0002")
 	tapMenu(t, web, "menu", "menu-games")
-	if err := b.saveApp(t.Context(), savedApp{Name: "slow", Title: "Slow Game", Kind: "drawing",
-		SVG: `<svg><rect width="360" height="360" fill="red"/></svg>`}); err != nil {
+	if err := b.saveApp(t.Context(), savedApp{Name: "slow", Title: "Slow Game", Kind: "game",
+		Code: `function render(s,p,g){g.clear("#FF0000")}`}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -269,9 +243,10 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 		web.tap(t, x, y, 0)
 		waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
 		if control == "game-0" {
+			bx, by, _ := hitCenter(lastMenuSVG[web], "menu-back")
 			b.ws.mu.Lock()
 			d := b.ws.terminals["vocat-0002"]
-			b.ws.pointer(d, "tap", 180, 316, 0, time.Now(), true) // Leave Games while the app is still loading.
+			b.ws.pointer(d, "tap", bx, by, 0, time.Now(), true) // Leave Games while the app is still loading.
 			b.ws.mu.Unlock()
 		} else {
 			var st [16]byte

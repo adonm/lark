@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -83,50 +82,4 @@ func TestMCPEmitReceipts(t *testing.T) {
 		t.Fatal(result)
 	}
 	_ = b
-}
-
-func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
-	b, base := wsHarness(t, nil)
-	const id = "cake"
-	c := blankCompanion()
-	c.Name, c.Configured = "Cake", true
-	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
-	tx, err := b.db.BeginTx(t.Context(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	if err = writeCompanion(t.Context(), tx, id, c); err == nil {
-		err = tx.Commit()
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, "vocat-0004", "Cake")
-	patch := func(edit object, fail bool) object {
-		return toolTest(t, base, "patch", object{"companion_id": id, "companion": edit}, fail)
-	}
-	replaced := []object{{"part": "eyes", "pose": "talk", "svg": `<circle cx="112" cy="141" r="11" fill="#ABCDEF"/>`}}
-	out := patch(object{"face_edits": replaced}, false)
-	raw := str(out["companion"].(object)["face_svg"])
-	layer := func(pose string) string {
-		t.Helper()
-		root, err := parseFaceSVG(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return svgString(faceLayer(root, pose))
-	}
-	talk, idle := layer("talk"), layer("idle")
-	if !strings.Contains(talk, "#ABCDEF") || strings.Contains(talk, "M93 149") || !strings.Contains(talk, "F47E92") ||
-		strings.Contains(idle, "#ABCDEF") || !strings.Contains(idle, `x="95"`) || !strings.Contains(raw, `data-part="forehead"`) {
-		t.Fatalf("face edit was not confined to talking eyes: idle=%s talk=%s", idle, talk)
-	}
-	patch(object{"face_edits": []object{{"part": "nose", "svg": "", "typo": true}}}, true)
-	patch(object{"face_svg": `<svg><rect width="360" height="360" fill="#224466"/></svg>`}, false)
-	errOut := patch(object{"face_edits": replaced}, true)
-	if !strings.Contains(str(errOut["error"]), "complete face_svg") {
-		t.Fatal(errOut)
-	}
 }

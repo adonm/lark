@@ -106,7 +106,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 	hw2.helloHardware(t, "vocat-2cac", "cake", capDrag)
 
 	// 1. Two terminals on one companion both receive display frames.
-	toolTest(t, base, "app", object{"companions": "cake", "svg": `<svg><text x="180" y="180">DualView</text></svg>`}, false)
+	toolTest(t, base, "app", object{"companions": "cake", "code": `function render(s,p,g){g.text(20,20,"DualView")}`}, false)
 	hw.until(t, isDisplay)
 	hw2.until(t, isDisplay)
 	waitSVG(t, b.ws, "vocat-2cac", "DualView")

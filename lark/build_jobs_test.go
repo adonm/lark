@@ -219,7 +219,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	h.stopCompanionTurn(d) // Same foreground cancellation primitive; not the job gate.
 	h.mu.Unlock()
 	_, err := b.runApp(t.Context(), object{"companions": device, "title": "Not the build",
-		"svg": `<svg viewBox="0 0 360 360"><circle cx="180" cy="180" r="30"/></svg>`})
+		"code": `function render(s,p,g){g.clear("#1E1A2B")}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	d.recording.clear()
 	h.mu.Unlock()
 	b.builders.signal()
-	cardAndSpeech("build-done")
+	cardAndSpeech("close")
 	h.mu.Lock()
 	if d.app != running || running == nil {
 		t.Error("completed build replaced the running app")
@@ -255,28 +255,8 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	}
 }
 
-func TestBuildProposesStorybookCompanion(t *testing.T) {
-	stub := &buildStub{allow: make(chan struct{}), reply: `{"preset":{"species":"owl","palette":"mint","accessory":"scarf"}}`}
-	b, _ := stubBuildBridge(t, stub, true, nil)
-	if _, err := b.createCompanion(t.Context(), object{"id": "storybook-build", "name": "Bean", "form": "a cat"}); err != nil {
-		t.Fatal(err)
-	}
-	job, err := b.builders.enqueue(t.Context(), "storybook-build", buildIntent{kind: "face"}, "Make me a mint owl wearing a scarf")
-	if err != nil || job == "" {
-		t.Fatal(job, err)
-	}
-	expectValue(t, stub.prompted, job)
-	close(stub.allow)
-	expectValue(t, stub.deleted, job)
-	waitBuildState(t, b, job, "ready")
-	companion := b.companionFor("storybook-build")
-	if !companion.Configured || companion.FaceBG != "#E8F7EE" || !strings.Contains(companion.FaceSVG, `data-part="eyes"`) {
-		t.Fatal("did not apply the proposed Storybook form")
-	}
-}
-
 func TestBuildProposesBespokePortrait(t *testing.T) {
-	stub := &buildStub{allow: make(chan struct{}), reply: `{"portrait":{"prompt":"a hedgehog in a space suit","style":"pixel"}}`}
+	stub := &buildStub{allow: make(chan struct{}), reply: `{"portrait":{"prompt":"a hedgehog in a space suit","form":"a hedgehog in a space suit"}}`}
 	b, _ := stubBuildBridge(t, stub, true, nil)
 	sheet := portraitFixture(t)
 	b.portraits = &portraitStore{dir: t.TempDir(), generate: func(_ context.Context, prompt string, _ []byte) ([]byte, error) {
@@ -297,7 +277,7 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 	expectValue(t, stub.deleted, job)
 	waitBuildState(t, b, job, "ready")
 	companion := b.companionFor("portrait-build")
-	if !companion.Configured || companion.Name != "Bean" || !b.portraits.has(activePortrait(companion.FaceSVG)) {
+	if !companion.Configured || companion.Name != "Bean" || !b.portraits.has(companion.PortraitID) {
 		t.Fatal("did not apply the proposed portrait")
 	}
 }
@@ -312,7 +292,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			case "edit":
 				intent.target = "dinosaur-quiz"
 			case "face":
-				edit = `{"face_edits":[{"part":"eyes","svg":"<circle cx=\"90\" cy=\"100\" r=\"2\"/>"}]}`
+				edit = `{"portrait":{"prompt":"a hedgehog","form":"a hedgehog"}}`
 			case "new":
 				edit = quizProposal
 			}
@@ -323,8 +303,8 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			}
 			write := func(name string) {
 				t.Helper()
-				_, err := b.writeApp(t.Context(), savedApp{Name: "dinosaur-quiz", Title: name, Kind: "drawing",
-					SVG: `<svg viewBox="0 0 360 360"><circle cx="180" cy="180" r="40"/></svg>`})
+				_, err := b.writeApp(t.Context(), savedApp{Name: "dinosaur-quiz", Title: name, Kind: "game",
+					Code: `function render(s,p,g){g.clear('#1E1A2B')}`})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -338,7 +318,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			}
 			expectValue(t, stub.prompted, job)
 			if kind == "face" {
-				_, err := b.changeCompanion(t.Context(), companion, "update", object{"face_bg": "#000000"})
+				_, err := b.changeCompanion(t.Context(), companion, "update", object{"form": "a fox"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -351,7 +331,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 				t.Fatal(message)
 			}
 			if kind == "face" {
-				if got := b.companionFor(companion); got.FaceBG != "#000000" || strings.Contains(got.FaceSVG, `cx="90"`) {
+				if got := b.companionFor(companion); got.Form != "a fox" || got.PortraitID != "" {
 					t.Fatal("late job overwrote the newer face")
 				}
 			} else if got, err := b.loadApp(t.Context(), "dinosaur-quiz"); err != nil || got.Title != "Newer title" {

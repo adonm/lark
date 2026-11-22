@@ -172,7 +172,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 
 	nc, _ := dialNativeDevice(t, srv, "lark-nat2", "unit", capDrag|capPointerRev|capBattery|capWakeWord)
 	frame := nc.readUntil(msgFrame)
-	revLo := binary.LittleEndian.Uint16(frame[10:12])
+	_ = binary.LittleEndian.Uint16(frame[10:12])
 
 	// Send MSG_STATUS
 	var st [16]byte
@@ -185,21 +185,9 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	binary.LittleEndian.PutUint32(st[12:16], 42)
 	nc.send(msgTelemetry, st[:])
 
-	// Send MSG_POINTER (tap) -> triggers MSG_REC_CTRL start
-	var ptr [8]byte
-	ptr[0] = ptrTap
-	binary.LittleEndian.PutUint16(ptr[2:4], 180)
-	binary.LittleEndian.PutUint16(ptr[4:6], 150)
-	binary.LittleEndian.PutUint16(ptr[6:8], revLo)
-	nc.send(msgPointer, ptr[:])
-	recCtrl := nc.readUntil(msgRecCtrl)
-	if len(recCtrl) < 5 || recCtrl[0] != recOpStart {
-		t.Fatalf("expected MSG_REC_CTRL start, got %v", recCtrl)
-	}
-
-	// Cancel recording cleanly
-	nc.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0})
-	nc.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 1, 0})
+	// Cancel recording cleanly via MSG_REC_START + MSG_REC_END
+	nc.send(msgRecStart, []byte{1, 0, 0})
+	nc.send(msgRecEnd, []byte{1, 0, 1, 0})
 	chime := nc.readUntil(msgChime)
 	if len(chime) != 1 || chime[0] != chimeCancel {
 		t.Fatalf("expected MSG_CHIME cancel, got %v", chime)
@@ -267,7 +255,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	// 1. Native device UDP 20 ms REC_PCM
 	nat, _ := dialNativeDevice(t, srv, "lark-natcall", "unit", capDrag|capPointerRev)
 	frame := nat.readUntil(msgFrame)
-	revLo := binary.LittleEndian.Uint16(frame[10:12])
+	_ = binary.LittleEndian.Uint16(frame[10:12])
 
 	udpDone := make(chan struct{}, 1)
 	srv.onUDP = func() {
@@ -277,14 +265,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 		}
 	}
 
-	var ptr [8]byte
-	ptr[0] = ptrTap
-	binary.LittleEndian.PutUint16(ptr[2:4], 180)
-	binary.LittleEndian.PutUint16(ptr[4:6], 150)
-	binary.LittleEndian.PutUint16(ptr[6:8], revLo)
-	nat.send(msgPointer, ptr[:])
-	recCtrl := nat.readUntil(msgRecCtrl)
-	nat.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0})
+	nat.send(msgRecStart, []byte{1, 0, 0})
 	nat.send(msgPing, []byte{1, 2, 3, 4})
 	nat.readUntil(msgPong)
 
@@ -295,7 +276,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for UDP REC_PCM")
 	}
-	nat.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 0, 0})
+	nat.send(msgRecEnd, []byte{1, 0, 0, 0})
 
 	select {
 	case pcm := <-gotPCM:

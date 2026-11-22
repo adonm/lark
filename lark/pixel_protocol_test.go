@@ -1,8 +1,6 @@
 package main
 
 import (
-	"slices"
-	"strings"
 	"testing"
 )
 
@@ -11,112 +9,41 @@ func TestMCPRejectsCompanionSprite(t *testing.T) {
 	const id = "new-companion"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, "vocat-0001", "")
-	raw := str(stateMe(t, base, id)["companion"].(object)["face_svg"])
+	before := str(stateMe(t, base, id)["companion"].(object)["name"])
 	rejected := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{
 		"sprite": object{"rows": []string{"kk", "k."}},
 	}}, true)
 	if got := str(rejected["error"]); got != "companion.sprite: unknown argument" {
 		t.Fatalf("expected strict MCP rejection; got %q", got)
 	}
-	if got := str(stateMe(t, base, id)["companion"].(object)["face_svg"]); got != raw {
-		t.Fatal("invalid patch changed the persisted face")
+	if got := str(stateMe(t, base, id)["companion"].(object)["name"]); got != before {
+		t.Fatal("invalid patch changed the persisted companion")
 	}
 }
 
-const screenTestSpec = `{
-  "title":"Rain & shine", "badge":"% < >",
-  "body":[
-    {"type":"sprite","id":"spark","rows":[".y.","yyy",".y."],"scale":9},
-    {"type":"text","text":"Try <this> & that, then try another word. This is a longer line to exercise Go's font wrapping.","muted":true},
-    {"type":"meter","label":"Energy","value":2.5,"max":3,"color":"l"},
-    {"type":"grid","cols":2,"items":[{"id":"a","label":"A","sprite":["kk","kk"],"sub":"Active","active":true},{"id":"b","label":"B"}]}
-  ],
-  "actions":[{"id":"start","label":"Start","variant":"primary"}]
-}`
-
-func TestMCPDeclarativeScreen(t *testing.T) {
-	_, base := wsHarness(t, nil)
-	round := testConnectWS(t, base, "unit", false)
-	box := testConnectWS(t, base, "unit", false)
-	round.helloV2(t, "vocat-0001", "Cake")
-	box.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
-		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
-		width: 320, height: 240, shape: shapeRect, terminalID: "box3-0001", companionID: "Mint", board: "esp-box-3", firmware: "0.12.0", token: "unit",
-	}))
-	box.until(t, hasProto(msgWelcome, ""))
-	box.until(t, isDisplay)
-	ids := []string{"cake", "mint"}
-	spec, err := decodeObject([]byte(screenTestSpec))
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := toolTest(t, base, "app", object{"companions": ids, "screen": spec, "save_as": "rain-shine"}, false)
-	if out["title"] != "Rain & shine" || out["saved"] == nil || out["layout_warnings"] != nil {
-		t.Fatal(out)
-	}
-	if r, _, _ := decodeDisplay(t, round.until(t, isDisplay)); r.Dx() > 360 || r.Dy() > 360 {
-		t.Fatal(r)
-	}
-	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); r.Max.X > 320 || r.Max.Y > 240 {
-		t.Fatal(r)
-	}
-	reloaded := toolTest(t, base, "app", object{"companions": ids, "load": "rain-shine"}, false)
-	for _, id := range []string{exitNode, "start", "a", "b", "spark"} {
-		if !slices.Contains(reloaded["hit_ids"].([]any), any(id)) {
-			t.Fatal("missing reloaded control", id, reloaded)
-		}
-	}
-	for _, bad := range []string{
-		`{"body":[{"type":"text","text":"ok","id":"typo"}]}`,
-		`{"body":[{"type":"grid","items":[{"id":"a","label":"A","typo":false}]}]}`,
-		`{"body":[{"type":"meter","label":"bad","value":2,"max":0}]}`,
-		`{"body":[],"actions":[{"id":"lark-exit","label":"Bad"}]}`,
-		`{"body":[{"type":"sprite","rows":["ww","ww"],"id":"a"}],"actions":[{"id":"a","label":"Dup"}]}`,
-		`{"body":[{"type":"sprite","rows":["ww","ww"],"palette":{"bad":"#112233"}}]}`,
-		`{"body":[{"type":"sprite","rows":["ww","wk"],"mirror":true}]}`,
-	} {
-		fields, err := decodeObject([]byte(bad))
-		if err != nil {
-			t.Fatal(err)
-		}
-		toolTest(t, base, "app", object{"devices": ids, "screen": fields}, true)
-	}
-}
-
-func TestJSDeclarativeScreen(t *testing.T) {
-	code := `function render() {
-		if (!Object.isFrozen(ui.palette) || Object.keys(ui.palette).length !== 16) throw Error("palette");
-		ui.palette.p = "lime";
-		if (ui.palette.p !== "#F5AD7E") throw Error("changed palette");
-		const sprite = ui.sprite(["XX",".X"], {x:3,y:6,scale:3,palette:{X:"#010203"}});
-		if (!sprite.includes('width="6"') || !sprite.includes('fill="#010203"')) throw Error("sprite");
-		const fullRows = ui.sprite(["k...","p..k"], {scale:3,id:"test"});
-		if (!fullRows.includes('data-hit="0,0,12,6"') || !fullRows.includes('x="9"')) throw Error("sprite width");
-		try { ui.sprite(["kk","k."], {mirror:true}); throw Error("accepted mirror"); }
-		catch (e) { if (!e.message.includes("sprite options.mirror: unknown argument")) throw e; }
-		for (const id of ["lark-exit"]) {
-			try { ui.choices({choices:[{id,label:"no"}]}); throw Error("accepted reserved id"); }
-			catch (e) { if (!e.message.includes("reserved")) throw e; }
-		}
-		return ui.screen(` + screenTestSpec + `);
+func TestJSPixelCanvasAPI(t *testing.T) {
+	code := `function render(s, p, g) {
+		g.clear("#1E1A2B");
+		g.rect(g.safe.x, g.safe.y, g.safe.w, 12, "#2A2338", "#705F7C");
+		g.text(g.safe.x + Math.floor(g.safe.w/2), g.safe.y + 2, "Hello", {color:"#FFC1A8", align:"center", bold:true});
+		g.sprite(g.safe.x + 4, g.safe.y + 20, "apple", null, 1);
+		g.button("start", g.safe.x, g.safe.y + 40, 40, 14, "Start");
+		g.button("exit", g.safe.x, g.safe.y + g.safe.h - 14, 34, 14, "Back");
 	}`
 	for _, g := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
 		d := &wsTerminal{kind: "hardware", screen: g, client: &wsClient{kind: "hardware"}}
 		spec := savedApp{Code: code}
-		_, views, err := initApp(spec, []appPlayer{{id: "pixel"}}, nil, []*wsTerminal{d}, nil, buildScreen)
+		_, views, err := initApp(spec, []appPlayer{{id: "pixel"}}, nil, []*wsTerminal{d}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		v := views[0]
-		if len(v.fb) != g.width*g.height || len(appLayoutWarnings(views, g.shape == "round")) != 0 ||
-			len(v.hits) != 5 || hitID(v.hits, 180, 320) != exitNode ||
-			!strings.Contains(v.raw, `&lt;this&gt; &amp;`) {
-			t.Fatalf("%v: %v, %v, %s", g, v.hits, appLayoutWarnings(views, g.shape == "round"), v.raw)
+		if len(v.fb) != g.width*g.height || len(v.hits) != 2 {
+			t.Fatalf("%v: fb=%d hits=%v", g, len(v.fb), v.hits)
 		}
-		for _, h := range v.hits {
-			if !isExitNode(h.id) && h.bounds.y2 > 290 {
-				t.Fatalf("control too low %+v", h)
-			}
+		start := v.hits[0]
+		if hitID(v.hits, (start.x1+start.x2)/2, (start.y1+start.y2)/2) != "start" {
+			t.Fatalf("start button hit mismatch: %v", start)
 		}
 	}
 }

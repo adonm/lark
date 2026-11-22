@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"image"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"lark/fonts/dogica"
 )
 
 func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
@@ -134,9 +138,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	if x < 0 || x >= width || y < 0 || y >= height {
 		return
 	}
-	if native {
-		x, y = d.screen.inverseTap(x, y)
-	}
 	wasAsleep := d.asleep
 	h.wake(d, now)
 	if wasAsleep {
@@ -163,49 +164,126 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	switch a.kind {
 	case "menu":
 		h.chime(d, "tap")
+		d.bootHint = true
 		d.drawer, d.card, d.pending = drawerMenu, nil, nil
 		d.menuPage = 0
 		d.view = nil
 		h.render(d, now, false)
 	case "menu-open", "menu-back", "menu-page":
-		if d.scene.menu != d.menuData {
+		if d.drawer != drawerMenu && d.drawer != drawerVolume && d.drawer != drawerVoice &&
+			d.drawer != drawerIntercom && d.drawer != drawerStats && d.drawer != drawerBookReader &&
+			d.scene.menu != d.menuData {
 			return
 		}
 		h.chime(d, "tap")
+		wasPair := d.drawer == drawerPair
 		switch a.kind {
 		case "menu-open":
 			d.homePage = d.menuPage
 			d.drawer, d.menuPage = a.value, 0
+			if d.drawer == drawerPair {
+				h.pushPower(d, 100, true)
+			}
 		case "menu-back":
-			if d.menuData != nil && d.menuData.detail != nil {
+			if d.drawer == drawerBookReader {
+				d.drawer, d.menuPage = drawerBooks, 0
+				d.readingBook = nil
+				h.loadMenu(d)
+				return
+			} else if d.menuData != nil && d.menuData.memoryDetail != nil {
+				d.menuData.memoryDetail = nil
+			} else if d.menuData != nil && d.menuData.detail != nil {
 				d.menuData.detail = nil
 			} else if d.drawer == drawerMenu {
 				d.drawer = ""
+				d.menuHintUntil = now.Add(3 * time.Second)
 			} else {
 				d.drawer, d.menuPage = drawerMenu, d.homePage
 			}
 		case "menu-page":
 			d.menuPage, _ = strconv.Atoi(a.value)
+			if d.drawer == drawerBookReader && d.readingBook != nil {
+				d.readingPage = d.menuPage
+				if h.b != nil && h.b.db != nil && d.companionID != "" {
+					bkName := d.readingBook.Name
+					compID := d.companionID
+					pageNum := d.readingPage + 1
+					go func() {
+						_, _ = h.b.patchMemory(context.Background(), object{
+							"scope": "companion:" + compID,
+							"key":   "reading:" + bkName,
+							"value": object{"page": pageNum},
+						})
+					}()
+				}
+			}
+		}
+		if wasPair && d.drawer != drawerPair {
+			h.pushPower(d, d.brightness(), true)
 		}
 		if a.kind != "menu-back" {
 			switch d.drawer {
-			case drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
+			case drawerBooks, drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
 				h.loadMenu(d)
 				return
 			}
 		}
 		h.render(d, now, false)
+	case "book-open":
+		if d.menuData != nil && d.scene.menu == d.menuData {
+			for _, bk := range d.menuData.bookApps {
+				if bk.Name == a.value {
+					h.chime(d, "tap")
+					h.openBook(d, bk)
+					return
+				}
+			}
+		}
 	case "menu-detail":
 		i, _ := strconv.Atoi(a.value)
-		if d.menuData != nil && d.scene.menu == d.menuData && i >= 0 && i < len(d.menuData.rows) {
-			d.menuData.detail = &d.menuData.rows[i]
-			h.chime(d, "tap")
-			h.render(d, now, false)
+		if d.menuData != nil && d.scene.menu == d.menuData {
+			if d.drawer == drawerMemories && i >= 0 && i < len(d.menuData.memories) {
+				d.menuData.memoryDetail = &d.menuData.memories[i]
+				h.chime(d, "tap")
+				h.render(d, now, false)
+			} else if i >= 0 && i < len(d.menuData.rows) {
+				d.menuData.detail = &d.menuData.rows[i]
+				h.chime(d, "tap")
+				h.render(d, now, false)
+			}
 		}
 	case "game-run":
 		if d.scene.menu == d.menuData {
 			h.launchMenuGame(d, a.value)
 		}
+	case "volume-auto":
+		if err := h.setVolume(d.client.ctx, d, false, 0, "vol-auto"); err != nil && h.active(d) {
+			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
+		}
+	case "volume-step":
+		op := "vol-plus"
+		if strings.HasPrefix(a.value, "-") {
+			op = "vol-minus"
+		}
+		if err := h.setVolume(d.client.ctx, d, false, 0, op); err != nil && h.active(d) {
+			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
+		}
+	case "voice-set":
+		h.mu.Unlock()
+		err := h.saveVoice(d.companionID, a.value)
+		h.mu.Lock()
+		if err == nil && h.active(d) {
+			h.chime(d, "tap")
+		}
+	case "intercom-to":
+		h.chime(d, "tap")
+		h.startRecording(d, a.value, now, true)
+	case "close-card":
+		h.chime(d, "tap")
+		d.card = nil
+		h.render(d, now, false)
+	case "close-view", "stop-turn":
+		h.leaveScene(d, now, "leave-scene")
 	case "unpair-contact":
 		cid, err := strconv.ParseUint(a.value, 10, 32)
 		if err == nil && cid > 0 && h.b.dc != nil && d.companionID != "" {
@@ -316,29 +394,215 @@ func (h *wsHub) clearView(d *wsTerminal) {
 }
 
 type menuContent struct {
-	games  []tile
-	rows   []menuRow
-	detail *menuRow
-	qrSVG  string
-	notice string
+	books        []pixelBook
+	bookApps     []savedApp
+	games        []tile
+	pixelGames   []pixelGame
+	memories     []pixelMemoryItem
+	memoryTitles map[string]string
+	memoryDetail *pixelMemoryItem
+	rows         []menuRow
+	detail       *menuRow
+	invite       string
+	notice       string
 }
 
-func (m *menuContent) scene(drawer string, page int) sceneView {
-	title := "History"
-	switch drawer {
-	case drawerGames:
-		return gamesScene(m.games, page, m.notice)
+func (h *wsHub) statsRows(d *wsTerminal) []menuRow {
+	var rows []menuRow
+	if d.companion.Name != "" {
+		rows = append(rows, menuRow{"Companion", d.companion.Name})
+	}
+	if d.pct >= 0 {
+		ch := ""
+		if d.charging {
+			ch = " (charging)"
+		}
+		rows = append(rows, menuRow{"Battery", fmt.Sprintf("%d%%%s", d.pct, ch)})
+	}
+	rows = append(rows, menuRow{"Voice", voiceName(d.voice)})
+	if h.b != nil && h.b.weather != nil {
+		rows = append(rows, menuRow{"Weather", h.b.weather.kind().String()})
+	}
+	return rows
+}
+
+func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, error) {
+	m := r.view.menu
+	if m == nil {
+		m = &menuContent{notice: "Loading…"}
+	}
+	switch r.drawer {
+	case drawerMenu:
+		img, hits, acts := renderPixelMenuWithHits(spec, r.menuPage, th)
+		return img, hits, acts, nil
+	case drawerVolume:
+		img, hits, acts := renderPixelVolumeWithHits(spec, r.autoVol, r.vol, r.menuPage, th)
+		return img, hits, acts, nil
+	case drawerVoice:
+		img, hits, acts := renderPixelVoiceWithHits(spec, r.voice, r.menuPage, th)
+		return img, hits, acts, nil
+	case drawerIntercom:
+		items := make([]tile, 0, len(r.peers))
+		for _, p := range r.peers {
+			items = append(items, tile{
+				id:     "peer-" + p.id,
+				label:  p.name,
+				icon:   "talk",
+				action: sceneAction{"intercom-to", p.id},
+			})
+		}
+		img, hits, acts := renderPixelListWithHits(spec, "Talk to…", items, "No peers", r.menuPage, th, th.accent)
+		return img, hits, acts, nil
+	case drawerStats:
+		img, hits, acts := renderPixelStatsWithHits(spec, r.statsRows, th)
+		return img, hits, acts, nil
 	case drawerPair:
-		return pairScene("", m.qrSVG)
+		if m.invite == "" {
+			img, hits, acts := renderPixelListWithHits(spec, "Pair", nil, m.notice, 0, th, th.accent)
+			return img, hits, acts, nil
+		}
+		compName := ""
+		if r.companion != nil {
+			compName = r.companion.Name
+		}
+		return renderPixelPairWithHits(spec, compName, m.invite)
+	case drawerBookReader:
+		if r.readingBook == nil {
+			img, hits, acts := renderPixelListWithHits(spec, "Reader", nil, "No book open", 0, th, th.accent2)
+			return img, hits, acts, nil
+		}
+		text, _ := bookTextAndCover(*r.readingBook, th.accent2)
+		img := renderPixelReader(spec, r.readingBook.Title, text, r.readingPage, 0, th)
+		hits, acts := navBarHits(spec, r.readingPage, r.readingPage+2)
+		if r.readingPage == 0 {
+			acts["menu-back"] = sceneAction{"menu-back", ""}
+		}
+		return img, hits, acts, nil
+	case drawerBooks:
+		if len(m.books) == 0 {
+			img, hits, acts := renderPixelListWithHits(spec, "Books", nil, m.notice, 0, th, th.accent2)
+			return img, hits, acts, nil
+		}
+		img := renderPixelBooksList(spec, m.books, r.menuPage, th)
+		perPage := 2
+		if !spec.round {
+			perPage = 3
+		}
+		totalPages := max(1, (len(m.books)+perPage-1)/perPage)
+		page := max(0, min(r.menuPage, totalPages-1))
+		hits, acts := navBarHits(spec, page, totalPages)
+		listTop := spec.safe.Min.Y + 14
+		navH := 14
+		if !spec.round {
+			navH = 20
+		}
+		listBottom := spec.safe.Max.Y - navH - 3
+		gapY := 3
+		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
+		start := page * perPage
+		for i := range perPage {
+			idx := start + i
+			if idx >= len(m.books) {
+				break
+			}
+			ry := listTop + i*(rowH+gapY)
+			id := fmt.Sprintf("book-%d", idx)
+			hits = addLogicalHit(hits, spec, id, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
+			acts[id] = sceneAction{"book-open", m.books[idx].Name}
+		}
+		return img, hits, acts, nil
+	case drawerGames:
+		if len(m.pixelGames) == 0 {
+			img, hits, acts := renderPixelListWithHits(spec, "Games", nil, m.notice, 0, th, th.accent)
+			return img, hits, acts, nil
+		}
+		img := renderPixelGamesList(spec, m.pixelGames, r.menuPage, th)
+		perPage := 2
+		if !spec.round {
+			perPage = 3
+		}
+		totalPages := max(1, (len(m.pixelGames)+perPage-1)/perPage)
+		page := max(0, min(r.menuPage, totalPages-1))
+		hits, acts := navBarHits(spec, page, totalPages)
+		listTop := spec.safe.Min.Y + 14
+		navH := 14
+		if !spec.round {
+			navH = 20
+		}
+		listBottom := spec.safe.Max.Y - navH - 3
+		gapY := 3
+		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
+		start := page * perPage
+		for i := range perPage {
+			idx := start + i
+			if idx >= len(m.pixelGames) {
+				break
+			}
+			ry := listTop + i*(rowH+gapY)
+			id := fmt.Sprintf("game-%d", idx)
+			hits = addLogicalHit(hits, spec, id, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
+			acts[id] = sceneAction{"game-run", m.pixelGames[idx].Name}
+		}
+		return img, hits, acts, nil
 	case drawerUnpair:
-		return unpairScene(m.games, page, m.notice)
+		img, hits, acts := renderPixelListWithHits(spec, "Unpair", m.games, m.notice, r.menuPage, th, pxDanger)
+		return img, hits, acts, nil
 	case drawerMemories:
-		title = "Memories"
+		if m.memoryDetail != nil {
+			img := renderPixelMemoryDetail(spec, *m.memoryDetail, m.memoryTitles, r.menuPage, 0, th)
+			hits, acts := navBarHits(spec, r.menuPage, r.menuPage+2)
+			return img, hits, acts, nil
+		}
+		if len(m.memories) == 0 {
+			img, hits, acts := renderPixelListWithHits(spec, "Memories", nil, m.notice, 0, th, th.accent)
+			return img, hits, acts, nil
+		}
+		img := renderPixelMemoriesList(spec, m.memories, m.memoryTitles, r.menuPage, th)
+		perPage := 2
+		if !spec.round {
+			perPage = 3
+		}
+		totalPages := max(1, (len(m.memories)+perPage-1)/perPage)
+		page := max(0, min(r.menuPage, totalPages-1))
+		hits, acts := navBarHits(spec, page, totalPages)
+		listTop := spec.safe.Min.Y + 14
+		navH := 14
+		if !spec.round {
+			navH = 20
+		}
+		listBottom := spec.safe.Max.Y - navH - 3
+		gapY := 3
+		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
+		start := page * perPage
+		for i := range perPage {
+			idx := start + i
+			if idx >= len(m.memories) {
+				break
+			}
+			ry := listTop + i*(rowH+gapY)
+			id := fmt.Sprintf("memory-%d", idx)
+			hits = addLogicalHit(hits, spec, id, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
+			acts[id] = sceneAction{"menu-detail", strconv.Itoa(idx)}
+		}
+		return img, hits, acts, nil
+	default: // drawerHistory
+		if m.detail != nil {
+			img := renderPixelReader(spec, m.detail.title, m.detail.text, r.menuPage, 0, th)
+			hits, acts := navBarHits(spec, r.menuPage, r.menuPage+2)
+			return img, hits, acts, nil
+		}
+		items := make([]tile, 0, len(m.rows))
+		for i, row := range m.rows {
+			items = append(items, tile{
+				id:     fmt.Sprintf("history-%d", i),
+				label:  row.title,
+				detail: row.text,
+				action: sceneAction{"menu-detail", strconv.Itoa(i)},
+			})
+		}
+		img, hits, acts := renderPixelListWithHits(spec, "History", items, m.notice, r.menuPage, th, th.accent)
+		return img, hits, acts, nil
 	}
-	if m.detail != nil {
-		return menuDetail(title, *m.detail)
-	}
-	return menuList(title, m.notice, m.rows, page)
 }
 
 // The placeholder identifies this request even if another client moves the menu while SQL runs.
@@ -355,9 +619,20 @@ func (h *wsHub) loadMenu(d *wsTerminal) {
 	if err != nil {
 		menu = menuContent{notice: "Menu unavailable"}
 	}
-	count, pageSize := len(menu.rows), menuRowsPerPage
-	if drawer == drawerGames || drawer == drawerUnpair {
-		count, pageSize = len(menu.games), tilesPerPage
+	perPage := 2
+	if d.screen.shape == "rect" {
+		perPage = 3
+	}
+	count, pageSize := len(menu.rows), perPage
+	switch drawer {
+	case drawerBooks:
+		count = len(menu.books)
+	case drawerGames:
+		count = len(menu.pixelGames)
+	case drawerMemories:
+		count = len(menu.memories)
+	case drawerUnpair:
+		count, pageSize = len(menu.games), perPage
 	}
 	d.menuData = &menu
 	d.menuPage = clampMenuPage(d.menuPage, count, pageSize)
@@ -367,18 +642,64 @@ func (h *wsHub) loadMenu(d *wsTerminal) {
 func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (menuContent, error) {
 	var m menuContent
 	switch drawer {
+	case drawerBooks:
+		apps, err := b.listApps(ctx, true)
+		m.notice = "No books yet"
+		progMap := map[string]int{}
+		if entries, merr := b.memoryEntries(ctx, "companion:"+id); merr == nil {
+			for _, e := range entries {
+				k := str(e["key"])
+				if strings.HasPrefix(k, "reading:") {
+					var p struct {
+						Page int `json:"page"`
+					}
+					if json.Unmarshal(e["value"].(json.RawMessage), &p) == nil && p.Page > 0 {
+						progMap[strings.TrimPrefix(k, "reading:")] = p.Page
+					}
+				}
+			}
+		}
+		for _, app := range apps {
+			if str(app["kind"]) != "book" {
+				continue
+			}
+			a, _ := b.loadApp(ctx, str(app["name"]))
+			text, cover := bookTextAndCover(a, pxMint)
+			lines := wrapTextPx(text, dogica.Regular, 2, 220)
+			total := max(1, (len(lines)+4)/5)
+			m.bookApps = append(m.bookApps, a)
+			m.books = append(m.books, pixelBook{
+				Name:  a.Name,
+				Title: a.Title,
+				Page:  max(1, progMap[a.Name]),
+				Total: total,
+				Color: cover,
+			})
+		}
+		if len(m.books) != 0 {
+			m.notice = ""
+		}
+		return m, err
 	case drawerGames:
 		apps, err := b.listApps(ctx, false)
 		m.notice = "No saved games yet"
-		for i, app := range apps {
-			detail := "Saved app"
-			if app["kind"] == "drawing" {
-				detail = "Drawing"
+		for _, app := range apps {
+			if str(app["kind"]) != "game" {
+				continue
 			}
-			m.games = append(m.games, tile{id: "game-" + strconv.Itoa(i), label: menuClip(str(app["title"]), 13),
-				detail: detail, icon: "games", action: sceneAction{"game-run", str(app["name"])}, colors: navPalette})
+			appName := str(app["name"])
+			saved := false
+			if entries, merr := b.memoryEntries(ctx, "app:"+appName); merr == nil && len(entries) > 0 {
+				saved = true
+			}
+			m.pixelGames = append(m.pixelGames, pixelGame{
+				Name:  appName,
+				Title: str(app["title"]),
+				Kind:  "game",
+				Saved: saved,
+			})
 		}
-		if len(m.games) != 0 {
+		if len(m.pixelGames) != 0 {
 			m.notice = ""
 		}
 		return m, err
@@ -386,8 +707,8 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 		if b.dc == nil {
 			return m, errors.New("Delta Chat unavailable")
 		}
-		qr, err := b.dc.pairQR(id)
-		m.qrSVG = qr
+		invite, err := b.dc.pairInvite(id)
+		m.invite = invite
 		return m, err
 	case drawerUnpair:
 		if b.dc == nil {
@@ -403,7 +724,6 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 				detail: "Remove",
 				icon:   "unpair",
 				action: sceneAction{"unpair-contact", strconv.FormatUint(uint64(ct.ID), 10)},
-				colors: dangerPalette,
 			})
 		}
 		if len(m.games) != 0 {
@@ -413,13 +733,25 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 	case drawerMemories:
 		entries, err := b.memoryEntries(ctx, "companion:"+id)
 		m.notice = "No memories yet"
-		for _, entry := range entries {
-			raw := entry["value"].(json.RawMessage)
-			var value string
-			if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &value) != nil {
-				value = string(raw)
+		m.memoryTitles = map[string]string{}
+		if apps, aerr := b.listApps(ctx, false); aerr == nil {
+			for _, app := range apps {
+				m.memoryTitles[str(app["name"])] = str(app["title"])
 			}
-			m.rows = append(m.rows, menuRow{str(entry["key"]), menuText(value)})
+		}
+		for _, entry := range entries {
+			k := str(entry["key"])
+			raw := string(entry["value"].(json.RawMessage))
+			sec := "Notes"
+			if strings.HasPrefix(k, "reading:") {
+				sec = "Reading"
+			}
+			m.memories = append(m.memories, pixelMemoryItem{
+				Section: sec,
+				Key:     k,
+				Value:   raw,
+			})
+			m.rows = append(m.rows, menuRow{formatMemoryTitle(sec, k, m.memoryTitles), menuText(strings.Join(formatMemoryLines(raw), " "))})
 		}
 		return m, err
 	default:

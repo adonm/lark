@@ -75,8 +75,8 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})
-	card := waitSVG(t, b.ws, "vocat-0001", "up!")
-	if !strings.Contains(card, "OK") || !strings.Contains(card, "Cake break") {
+	card := waitSVG(t, b.ws, "vocat-0001", "Cake break")
+	if !strings.Contains(card, "Timer") || !strings.Contains(card, "Cake break") {
 		t.Fatal(card)
 	}
 	dev.until(t, func(f wsFrame) bool { return isPlayback(f) && bytes.Equal(framePayload(f), []byte{1, 2, 3, 4}) })
@@ -85,7 +85,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 		t.Fatal("timer didn't synthesize and remove exactly once")
 	}
 	dev.tap(t, 180, 315, 0)
-	waitSVG(t, b.ws, "vocat-0001", "companion-ring")
+	waitSVG(t, b.ws, "vocat-0001", "home")
 	entries, err := b.history.list(t.Context(), id)
 	if err != nil || len(entries) != 2 || entries[0].Text != "Timer: Cake break" || entries[1].Source != "timer" {
 		t.Fatal(entries, err)
@@ -116,8 +116,8 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 	if out := patchTimerTest(t, base, set, true); !strings.Contains(str(out["error"]), "App not found") {
 		t.Fatal(out)
 	}
-	if err := b.saveApp(t.Context(), savedApp{Name: name, Title: "Stretch", Kind: "app",
-		Code: `function render(){return '<svg><text x="80" y="180">Stretch now</text></svg>';}`}); err != nil {
+	if err := b.saveApp(t.Context(), savedApp{Name: name, Title: "Stretch", Kind: "game",
+		Code: `function render(s,p,g){g.text(20,20,"Stretch now");}`}); err != nil {
 		t.Fatal(err)
 	}
 	if out := patchTimerTest(t, base, set, false); out["app"] != name {

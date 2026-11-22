@@ -39,7 +39,7 @@ func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	if err := os.WriteFile(unrelated, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`INSERT INTO apps (name,title,kind,svg,updated_at) VALUES ('sun','Sun','svg','<svg/>',100)`); err != nil {
+	if _, err := d.Exec(`INSERT INTO apps (name,title,kind,code,updated_at) VALUES ('sun','Sun','game','function render(){}',100)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.backup(t.Context(), dir, now); err != nil {

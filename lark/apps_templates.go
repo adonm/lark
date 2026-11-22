@@ -27,9 +27,9 @@ var templateCatalog = func() map[string]appTemplate {
 	text := object{"type": "string"}
 	num := object{"type": "integer"}
 	array := func(item object) object { return object{"type": "array", "items": item} }
-	shape := object{"type": "string", "enum": append(slices.Clone(stickerNameSchema["enum"].([]string)), "circle", "diamond", "square", "triangle")}
+	shapes := append(slices.Sorted(maps.Keys(pxAppSprites)), "circle", "diamond", "square", "triangle")
+	shape := object{"type": "string", "enum": shapes}
 	return map[string]appTemplate{
-		"reader":              {"Story", object{"text": text, "pages": array(object{"anyOf": []object{text, closedObject(object{"title": text, "text": text}, "text")}}), "fontSize": num}},
 		"quiz":                {"Quiz", object{"questions": array(closedObject(object{"prompt": text, "choices": array(text), "answer": num}, "prompt", "choices", "answer"))}},
 		"spot-the-difference": {"Spot the Difference", object{"tiles": array(closedObject(object{"left": shape, "right": shape}, "left", "right"))}},
 		"drawing":             {"Drawing", object{"colors": array(text)}},
@@ -74,19 +74,6 @@ func propertySchema(schema object, key string) (object, bool) {
 }
 
 func validateTemplateValue(v any, schema object, path string) error {
-	if branches, ok := schema["oneOf"].([]object); ok {
-		// Screen blocks are tagged; validate the selected branch so an error
-		// names the incorrect field rather than just reporting a failed union.
-		if body, ok := v.(object); ok {
-			for _, branch := range branches {
-				tag, _ := propertySchema(branch, "type")
-				if kinds, ok := tag["enum"].([]string); ok && slices.Contains(kinds, str(body["type"])) {
-					return validateTemplateValue(v, branch, path)
-				}
-			}
-		}
-		return fieldError(path, "expected a sticker, sprite, text, meter, or grid block")
-	}
 	if branches, ok := schema["anyOf"].([]object); ok {
 		for _, branch := range branches {
 			if validateTemplateValue(v, branch, path) == nil {
@@ -98,132 +85,116 @@ func validateTemplateValue(v any, schema object, path string) error {
 	switch schema["type"] {
 	case "object":
 		if o, ok := v.(object); ok {
-			for _, key := range slices.Sorted(maps.Keys(o)) {
-				child, ok := propertySchema(schema, key)
-				if !ok {
-					return fieldError(path+"."+key, "unknown argument")
-				}
-				if err := validateTemplateValue(o[key], child, path+"."+key); err != nil {
-					return err
-				}
-			}
-			required, _ := schema["required"].([]string)
-			for _, key := range required {
-				if _, ok := o[key]; !ok {
-					return fieldError(path+"."+key, "required")
-				}
-			}
-			return nil
+			return validateTemplateObject(o, schema, path)
 		}
+		return fieldError(path, "expected an object")
 	case "array":
-		if list, ok := v.([]any); ok {
-			if lo, ok := schema["minItems"].(int); ok && len(list) < lo {
-				return fieldError(path, "expected at least %d items", lo)
+		list, ok := v.([]any)
+		if !ok {
+			return fieldError(path, "expected an array")
+		}
+		item := schema["items"].(object)
+		for i, entry := range list {
+			if err := validateTemplateValue(entry, item, path); err != nil {
+				return err
 			}
-			if hi, ok := schema["maxItems"].(int); ok && len(list) > hi {
-				return fieldError(path, "expected at most %d items", hi)
-			}
-			for _, item := range list {
-				if err := validateTemplateValue(item, schema["items"].(object), path+"[]"); err != nil {
-					return err
-				}
-			}
-			return nil
+			_ = i
 		}
 	case "string":
-		if text, ok := v.(string); ok {
-			if values, ok := schema["enum"].([]string); ok && !slices.Contains(values, text) {
-				return fieldError(path, "expected one of %v", values)
+		s, ok := v.(string)
+		if !ok {
+			return fieldError(path, "expected a string")
+		}
+		if choices, ok := schema["enum"].([]string); ok && !slices.Contains(choices, s) {
+			return fieldError(path, "unsupported value %q", s)
+		}
+	case "integer":
+		switch n := v.(type) {
+		case int:
+		case float64:
+			if n != float64(int(n)) {
+				return fieldError(path, "expected an integer")
 			}
-			if hi, ok := schema["maxLength"].(int); ok && runeLen(text) > hi {
-				return fieldError(path, "expected at most %d characters", hi)
-			}
-			if pattern, ok := schema["pattern"].(string); ok {
-				if match, _ := regexp.MatchString(pattern, text); !match {
-					return fieldError(path, "invalid string")
-				}
-			}
-			return nil
+		default:
+			return fieldError(path, "expected an integer")
 		}
 	case "boolean":
-		if _, ok := v.(bool); ok {
-			return nil
-		}
-	case "integer", "number":
-		if n, ok := v.(json.Number); ok {
-			x, err := n.Float64()
-			if schema["type"] == "integer" {
-				_, err = n.Int64()
-			}
-			if err == nil {
-				if lo, ok := schema["minimum"].(int); ok && x < float64(lo) {
-					return fieldError(path, "expected at least %d", lo)
-				}
-				if hi, ok := schema["maximum"].(int); ok && x > float64(hi) {
-					return fieldError(path, "expected at most %d", hi)
-				}
-				return nil
-			}
+		if _, ok := v.(bool); !ok {
+			return fieldError(path, "expected a boolean")
 		}
 	}
-	return fieldError(path, "expected %s", schema["type"])
+	return nil
 }
 
-func (a *savedApp) setTemplate(name string, raw any) error {
-	t, ok := templateCatalog[name]
-	if !ok {
-		return fieldError("template", "expected one of %v", templateNames())
-	}
-	if raw == nil {
-		raw = object{}
-	}
-	if err := validateTemplateValue(raw, appTemplateSchema(name), "data"); err != nil {
-		return err
-	}
-	data, err := appJSONObject(raw, "data")
-	if err != nil {
-		return err
-	}
-	a.Template, a.Data = name, data
-	if a.Title == "" {
-		a.Title = shortText(raw.(object)["title"], 60, false)
-		if a.Title == "" {
-			a.Title = t.title
+func validateTemplateObject(o object, schema object, path string) error {
+	for _, req := range schema["required"].([]string) {
+		if _, ok := o[req]; !ok {
+			return fieldError(path+"."+req, "missing required field")
 		}
 	}
-	if name == "timer" {
-		a.TickMS, a.MaxTicks = 1000, 240
+	for key, val := range o {
+		child, ok := propertySchema(schema, key)
+		if !ok {
+			return fieldError(path+"."+key, "unsupported field")
+		}
+		if err := validateTemplateValue(val, child, path+"."+key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *savedApp) setTemplate(name string, data any) error {
+	if _, ok := templateCatalog[name]; !ok {
+		return fieldError("template", "unknown template %q", name)
+	}
+	var raw json.RawMessage
+	if data != nil {
+		b, err := json.Marshal(data)
+		if err != nil {
+			return fieldError("data", "expected a JSON object")
+		}
+		raw = b
+	}
+	if err := validateTemplateData(name, raw); err != nil {
+		return err
+	}
+	a.Template = name
+	a.Data = raw
+	a.Code = ""
+	if a.Title == "" {
+		a.Title = templateCatalog[name].title
+	}
+	if name == "timer" || name == "fireworks" {
+		a.TickMS = 1000
+		a.MaxTicks = 240
 	}
 	return nil
 }
 
 func (a *appInstance) installTemplate() (string, error) {
-	if _, ok := templateCatalog[a.spec.Template]; !ok {
-		return "", fieldError("template", "unknown template %q", a.spec.Template)
-	}
-	if raw := a.memory["content"]; len(raw) > 0 {
-		content, err := decodeObject(raw)
-		if err != nil {
-			return "", fieldError("app memory content", "expected an object")
-		}
-		if err := validateTemplateValue(content, appTemplateSchema(a.spec.Template), "app memory content"); err != nil {
+	var data any = map[string]any{}
+	if len(a.spec.Data) > 0 {
+		if err := json.Unmarshal(a.spec.Data, &data); err != nil {
 			return "", err
 		}
 	}
-	v, err := a.call(a.parse, a.vm.ToValue(a.spec.dataJSON()))
-	if err != nil {
-		return "", err
-	}
-	_ = a.vm.Set("templateData", v)
 	_ = a.vm.Set("templateName", a.spec.Template)
 	_ = a.vm.Set("templateTitle", a.spec.Title)
-	palettes := make(map[string][]string, 4)
-	for _, theme := range []string{"warm", "night", "mint", "sky"} {
-		p := uiColors(theme)
-		palettes[theme] = []string{p.bg, p.card, p.ink, p.accent, p.border}
-	}
-	_ = a.vm.Set("templatePalettes", palettes)
-	_ = a.vm.Set("templateRadii", []int{uiButtonRadius, uiCardRadius})
-	_ = a.vm.Set("templateStickerNames", stickerNameSchema["enum"])
+	_ = a.vm.Set("templateData", data)
 	return appTemplatesJS, nil
+}
+
+func validateTemplateData(name string, raw json.RawMessage) error {
+	if _, ok := templateCatalog[name]; !ok {
+		return fieldError("template", "unknown template %q", name)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	var data object
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return fieldError("data", "expected a JSON object")
+	}
+	return validateTemplateObject(data, appTemplateSchema(name), "data")
 }

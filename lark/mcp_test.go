@@ -231,7 +231,7 @@ func TestMCPStateSlices(t *testing.T) {
 	active, companion := me["active_app"].(object), s["companions"].(object)[id].(object)
 	if term["wifi_rssi"] != json.Number("-62") || term["cpu_pct"] != json.Number("24") || term["battery_pct"] != json.Number("73") ||
 		me["companion"].(object)["active_app_state"].(object)["n"] != json.Number("8") || active["state"].(object)["n"] != json.Number("8") ||
-		companion["name"] != "Slices" || !strings.Contains(str(me["companion"].(object)["face_svg"]), "data-pose") {
+		companion["name"] != "Slices" {
 		t.Fatal("missing live terminal, companion or app state", term)
 	}
 	if s["apps"].(object)["slices"].(object)["code"] != code || len(s["timers"].([]any)) != 1 {
@@ -258,9 +258,8 @@ func TestMCPStateSlices(t *testing.T) {
 
 func TestMCPSavedAppReadback(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const code = "function render(s) {\n  return '<svg><text>'+s.page+'</text></svg>';\n}"
-	const svg = `<svg viewBox="0 0 360 360"><text>My story</text></svg>`
-	if err := b.saveApp(t.Context(), savedApp{Name: "my-story", Title: "My Story", Kind: "app", Code: code, SVG: svg,
+	const code = "function render(s,p,g) {\n  g.text(20, 20, String(s.page));\n}"
+	if err := b.saveApp(t.Context(), savedApp{Name: "my-story", Title: "My Story", Kind: "game", Code: code,
 		TickMS: 500, MaxTicks: 20}); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +278,7 @@ func TestMCPSavedAppReadback(t *testing.T) {
 	wantState := object{"progress": progress, "bookmark": nil}
 	updatedAt, err := app["updated_at"].(json.Number).Int64()
 	if len(snapshot) != 2 || snapshot["now"] == nil || app["name"] != "my-story" ||
-		app["title"] != "My Story" || app["kind"] != "app" || app["code"] != code || app["svg"] != svg ||
+		app["title"] != "My Story" || app["kind"] != "game" || app["code"] != code ||
 		app["tick_ms"] != json.Number("500") || app["max_ticks"] != json.Number("20") ||
 		!reflect.DeepEqual(app["state"], wantState) || err != nil || updatedAt <= 0 {
 		t.Fatal(snapshot)
@@ -313,9 +312,8 @@ func TestMCPSavedAppEdits(t *testing.T) {
 		t.Helper()
 		return toolTest(t, base, "patch", object{"apps": args}, failed)
 	}
-	const svg = `<svg><text>Book</text></svg>`
 	for _, name := range []string{"book", "taken", "discard"} {
-		if err := b.saveApp(t.Context(), savedApp{Name: name, Title: "Original", Kind: "drawing", SVG: svg}); err != nil {
+		if err := b.saveApp(t.Context(), savedApp{Name: name, Title: "Original", Kind: "book", Data: json.RawMessage(`{"text":"Book"}`)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -375,8 +373,8 @@ func TestMCPSavedAppEdits(t *testing.T) {
 	}
 	toolTest(t, base, "state", object{"app_name": "book"}, true)
 	app := toolTest(t, base, "state", object{"app_name": "novel"}, false)["app"].(object)
-	if app["name"] != "novel" || app["title"] != "First Edition" || app["kind"] != "drawing" ||
-		app["svg"] != svg || app["updated_at"] == json.Number("1") ||
+	if app["name"] != "novel" || app["title"] != "First Edition" || app["kind"] != "book" ||
+		app["updated_at"] == json.Number("1") ||
 		app["tick_ms"] != json.Number("0") || app["max_ticks"] != json.Number("0") {
 		t.Fatal(app)
 	}

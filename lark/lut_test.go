@@ -3,7 +3,6 @@ package main
 import (
 	imagecolor "image/color"
 	"math"
-	"slices"
 	"testing"
 	"time"
 )
@@ -106,56 +105,30 @@ func TestAtmosphereGradesDifferInLuminanceAndHue(t *testing.T) {
 }
 
 func TestAtmosphereCache(t *testing.T) {
-	const raw = svgStart + `<rect width="360" height="360" fill="#FAF6F0"/></svg>`
-	var cache screenCache
-	shape := screenGeometry{320, 240, "rect"}
-	day, err := cache.build(raw, false, shape)
-	if err != nil {
-		t.Fatal(err)
+	day := renderPixelHome(pixelSpecBox3, nil, nil, gradeDay, "", 0, "", false)
+	night := renderPixelHome(pixelSpecBox3, nil, nil, gradeNight, "", 0, "", false)
+	if day.Bounds() != night.Bounds() {
+		t.Fatalf("bounds mismatch: %v vs %v", day.Bounds(), night.Bounds())
 	}
-	for i := range 2 {
-		night, err := cache.buildGraded(raw, false, shape, gradeNight)
-		if err != nil {
-			t.Fatal(err)
-		}
-		l := &atmosphereLUTs[gradeNight]
-		want := pack565(l[0][0xfa], l[1][0xf6], l[2][0xf0])
-		if night.fb[0] != want || night.fb[120*320+160] != want || night.source != day.source || night.fb[0] == day.fb[0] {
-			t.Fatal("grade did not affect native pixels and side bars only")
-		}
-		if h, m := cache.stats(); h != uint64(i) || m != 2 {
-			t.Fatalf("grade cache: %d hits, %d misses", h, m)
+	diff := 0
+	for i := 0; i < len(day.Pix); i += 4 {
+		if day.Pix[i] != night.Pix[i] || day.Pix[i+1] != night.Pix[i+1] || day.Pix[i+2] != night.Pix[i+2] {
+			diff++
 		}
 	}
-	dev := &wsTerminal{kind: "hardware", screen: shape, client: &wsClient{kind: "hardware"}}
-	dev.grade.Store(uint32(gradeNight))
-	app, views, err := initApp(savedApp{SVG: raw}, []appPlayer{{id: "board"}}, nil, []*wsTerminal{dev}, nil, buildScreen)
-	if err != nil || views[0].grade != gradeNight {
-		t.Fatal("app did not use board grade", err)
-	}
-	app.terminals[0] = nil // A player can disconnect while its render is in flight.
-	dev.grade.Store(uint32(gradeDay))
-	redrawn, err := app.screens(nil)
-	if err != nil || redrawn[0].grade != gradeDay || redrawn[0].raw != views[0].raw || slices.Equal(redrawn[0].fb, views[0].fb) {
-		t.Fatal("app reused pixels from the previous grade", err)
+	if diff == 0 {
+		t.Fatal("night grade did not alter home frame pixels")
 	}
 }
 
 func BenchmarkRenderAtmosphere(b *testing.B) {
-	scene, err := prepareScene(svgStart+`<rect width="360" height="360" fill="#FAF6F0"/>`+
-		`<rect x="60" y="105" width="240" height="150" fill="#F5B895"/></svg>`, false)
-	if err != nil {
-		b.Fatal(err)
-	}
 	for _, tc := range []struct {
 		name string
 		g    gradeKey
 	}{{"day", gradeDay}, {"night", gradeNight}} {
 		b.Run(tc.name, func(b *testing.B) {
 			for range b.N {
-				if _, err := scene.toRGB565(roundScreen, nil, tc.g); err != nil {
-					b.Fatal(err)
-				}
+				_ = renderPixelHome(pixelSpecVoCat, nil, nil, tc.g, "", 0, "", false)
 			}
 		})
 	}

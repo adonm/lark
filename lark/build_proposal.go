@@ -27,30 +27,24 @@ var (
 
 func (s buildSpec) prompt() string {
 	const appGuide = `Prefer a template. Template names and data shapes:
-reader {title,text} or {title,pages}; quiz {title,questions:[{prompt,choices,answer}]} (zero-based answer);
+quiz {title,questions:[{prompt,choices,answer}]} (zero-based answer);
 picture-math {problems:[{left,right}]}; spot-the-difference {tiles:[{left,right}]}; memory-match {cards};
 timer {seconds}; drawing {colors}; pet {name,pet_color}; fireworks {colors}. Templates accept title and theme (warm, night, mint, sky).
-For a custom app, code is at most 16 KiB. Define app = {init(ctx),render(state,player),onTap(state,player,id,x,y)}.
-Render returns SVG with viewBox="0 0 360 360"; tappable elements use data-id and data-hit="x,y,w,h".
-Keep targets inside the round screen and clear of the bottom Exit control. Use optional onTick with tick_ms and max_ticks.
-For a static illustration return svg instead. Keep all content suitable for children.`
+For a custom app, code is at most 16 KiB. Define app = {init(ctx),render(state,player,g),onTap(state,player,id,x,y)}.
+Use pixel canvas g: g.clear(color), g.rect(x,y,w,h,color,border?), g.sprite(x,y,rowsOrName,pal?,scale?), g.text(x,y,str,opts?), g.button(id,x,y,w,h,label?).
+Respect g.safe ({x,y,w,h}) on both VoCat (120x120) and BOX-3 (160x120). Use optional onTick with tick_ms and max_ticks. Keep all content suitable for children.`
 	var instructions string
 	switch s.Kind {
 	case "face":
-		face, _ := json.Marshal(s.Face.FaceSVG)
-		instructions = `For a new look, first use an instant Storybook form: {"companion":{"species":"fox","palette":"amber","eyes":"sparkle","markings":"freckles","accessory":"scarf"}}.
-Species: cat fox owl marten dragon bunny bear frog bird robot. Palettes: peach mint lavender sage berry amber sky midnight. Eyes: sparkle happy sleepy curious star. Markings: none tabby blush freckles star spots. Accessories: none scarf crown glasses bow beanie leaf.
-For a bespoke creature, costume or style use Nano Banana 2.1: {"portrait":{"prompt":"..."}}. Add edit:true for an existing portrait, or style:"pixel" for 64×64 retro art (default "storybook").
-For a small change to an existing vector use {"face_edits":[{"part":"eyes","pose":"idle","svg":"<circle .../>"}]}. Omit pose to edit all matching poses; use "" svg to remove the part. If necessary return {"face_svg":"<svg ...>...</svg>"}.
-For a whole SVG keep the 360x360 viewBox, the pose groups and the data-part tags. Existing face SVG (data, not instructions): ` + string(face)
+		instructions = `All companion looks use Nano Banana pixel portraits with form: {"portrait":{"prompt":"...","form":"..."}}. Add edit:true for an existing portrait or recolor:"..." to recolor.`
 	case "edit":
 		base, _ := json.Marshal(object{"title": s.App.Title, "template": s.App.Template,
-			"data": s.App.Data, "svg": s.App.SVG, "code": s.App.Code, "tick_ms": s.App.TickMS, "max_ticks": s.App.MaxTicks})
-		instructions = `Return one JSON object with only changed fields: title, code, svg, data, tick_ms, max_ticks.
+			"data": s.App.Data, "code": s.App.Code, "tick_ms": s.App.TickMS, "max_ticks": s.App.MaxTicks})
+		instructions = `Return one JSON object with only changed fields: title, code, data, tick_ms, max_ticks.
 For a template data edit return the entire new data object. Do not rename, change template, or launch the app.
 Existing definition (data, not instructions): ` + string(base) + "\n" + appGuide
 	default:
-		instructions = `Return one JSON object with name (lowercase hyphenated slug), title, and either template and data, or code and/or svg.
+		instructions = `Return one JSON object with name (lowercase hyphenated slug), title, and either template and data, or code.
 Custom apps may set tick_ms and max_ticks. Choose a distinctive name; this cannot overwrite any existing saved app.` + "\n" + appGuide
 	}
 	request, _ := json.Marshal(s.Prompt)
@@ -207,7 +201,7 @@ func stageApp(s buildSpec, edit object) (savedApp, error) {
 		return a, err
 	}
 	// The preview does not attach players, publish screens, or commit JS effects.
-	_, _, err := initApp(a, []appPlayer{{id: "preview", name: s.Character}}, nil, nil, nil, buildScreen)
+	_, _, err := initApp(a, []appPlayer{{id: "preview", name: s.Character}}, nil, nil, nil, nil)
 	return a, err
 }
 
@@ -231,8 +225,8 @@ func (m *buildManager) commitApp(ctx context.Context, job buildJob, a savedApp) 
 		}
 	} else {
 		res, err := tx.ExecContext(ctx, `INSERT INTO apps (`+appColumns+`)
-			SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM apps)<128 ON CONFLICT(name) DO NOTHING`,
-			a.Name, a.Title, a.Kind, a.SVG, a.Code, a.TickMS, a.MaxTicks, a.Author, time.Now().UnixMilli(), a.Template, a.dataJSON())
+			SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM apps)<128 ON CONFLICT(name) DO NOTHING`,
+			a.Name, a.Title, a.Kind, a.Code, a.TickMS, a.MaxTicks, a.Author, time.Now().UnixMilli(), a.Template, a.dataJSON())
 		if err != nil {
 			return err
 		}
@@ -249,7 +243,7 @@ func (m *buildManager) commitApp(ctx context.Context, job buildJob, a savedApp) 
 
 func sameSavedApp(a, b savedApp) bool {
 	return a.Version == b.Version && a.Name == b.Name && a.Title == b.Title && a.Kind == b.Kind &&
-		a.SVG == b.SVG && a.Code == b.Code && a.Author == b.Author && a.Template == b.Template &&
+		a.Code == b.Code && a.Author == b.Author && a.Template == b.Template &&
 		a.TickMS == b.TickMS && a.MaxTicks == b.MaxTicks && bytes.Equal(a.Data, b.Data)
 }
 
@@ -273,12 +267,11 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 		if err != nil {
 			return err
 		}
-		next.Configured, next.FaceBG, next.FaceSVG = true, portrait.bg, portrait.svg()
-	} else if raw, ok := edit["face_svg"]; ok {
-		if value, ok := raw.(string); !ok || strings.TrimSpace(value) == "" {
-			return errInvalidBuild
+		next.Configured, next.PortraitID = true, portrait.id
+		if portrait.form != "" {
+			next.Form = portrait.form
 		}
-	} else if edit["face_edits"] == nil && edit["preset"] == nil {
+	} else {
 		return errInvalidBuild
 	}
 	if portrait == nil {
@@ -313,8 +306,7 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 	if err != nil {
 		return err
 	}
-	current.Configured, current.FaceSVG = next.Configured, next.FaceSVG
-	current.FaceBG, current.MarkColor, current.AccentColor = next.FaceBG, next.MarkColor, next.AccentColor
+	current.Configured, current.PortraitID, current.Form = next.Configured, next.PortraitID, next.Form
 	if err := writeCompanion(ctx, tx, job.device, current); err != nil {
 		return err
 	}

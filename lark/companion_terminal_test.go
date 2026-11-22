@@ -30,11 +30,10 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	}
 
 	// 4. Companion with two terminals: both receive frames when companion changes or app runs.
-	toolTest(t, base, "patch", object{"companion_id": cakeID, "companion": object{"face_bg": "#112233"}}, false)
+	toolTest(t, base, "patch", object{"companion_id": cakeID, "companion": object{"name": "Cake Two"}}, false)
 	hw.until(t, isDisplay)
-	waitSVG(t, b.ws, secondID, "#112233")
 
-	toolTest(t, base, "app", object{"companions": cakeID, "svg": `<svg><text x="180" y="180">SharedScreen</text></svg>`}, false)
+	toolTest(t, base, "app", object{"companions": cakeID, "code": `function render(s,p,g){g.text(20,20,"SharedScreen")}`}, false)
 	hw.until(t, isDisplay)
 	waitSVG(t, b.ws, secondID, "SharedScreen")
 

@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"image"
 	"log"
 	"maps"
 	"math"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -92,11 +95,17 @@ type wsTerminal struct {
 	view      *sceneView
 	pending   *sceneView
 	card      *sceneView
-	drawer    string
-	menuPage  int
-	homePage  int
-	menuData  *menuContent
-	statsAt   time.Time
+	drawer        string
+	menuPage      int
+	homePage      int
+	menuData      *menuContent
+	menuHintUntil time.Time
+	bootHint      bool
+	readingBook   *savedApp
+	readingPage   int
+	statsAt       time.Time
+	weatherAt     time.Time
+	weatherTick   int
 	rev       uint64
 	nativeRev uint16
 	pose      companionPose
@@ -261,7 +270,6 @@ func (h *wsHub) registerHardwareTerminal(termID, hintName, ip string, port int, 
 	if hintName != "" && hintName != c.Name && !strings.EqualFold(hintName, termID) && characterRE.MatchString(hintName) {
 		c.Name = hintName
 		c.Configured = true
-		c.FaceSVG = c.defaultFace()
 	}
 	if !h.b.voices.allowed(c.Voice) {
 		c.Voice = h.b.voices.defaultFor(companionTheme(c.Name))
@@ -612,14 +620,26 @@ func (d *wsTerminal) voiceTheme() string {
 }
 
 type renderRequest struct {
-	view      sceneView
-	companion *companionState
-	pose      companionPose
-	app       *appInstance
-	screen    svgScreen
-	grade     gradeKey
-	full      bool
-	trace     *turnTrace
+	view        sceneView
+	companion   *companionState
+	pose        companionPose
+	app         *appInstance
+	screen      svgScreen
+	grade       gradeKey
+	weather     weatherKind
+	weatherTick int
+	menuHint    bool
+	drawer      string
+	menuPage    int
+	autoVol     bool
+	vol         int
+	voice       string
+	peers       []menuPeer
+	statsRows   []menuRow
+	readingBook *savedApp
+	readingPage int
+	full        bool
+	trace       *turnTrace
 }
 
 func (h *wsHub) companionPose(d *wsTerminal, now time.Time, mood string) companionPose {
@@ -642,9 +662,28 @@ func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
 	}
 }
 
+func (h *wsHub) openBook(d *wsTerminal, book savedApp) {
+	d.drawer = drawerBookReader
+	d.readingBook = &book
+	d.readingPage = 0
+	if h.b != nil && h.b.db != nil && d.companionID != "" {
+		var raw string
+		if h.b.db.readDB().QueryRowContext(d.client.ctx, `SELECT value_json FROM memory WHERE scope=? AND key=?`,
+			"companion:"+d.companionID, "reading:"+book.Name).Scan(&raw) == nil {
+			var prog struct {
+				Page int `json:"page"`
+			}
+			if json.Unmarshal([]byte(raw), &prog) == nil && prog.Page > 0 {
+				d.readingPage = prog.Page - 1
+			}
+		}
+	}
+	h.render(d, time.Now(), false)
+}
+
 func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	switch d.drawer {
-	case drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
+	case drawerBooks, drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
 	default:
 		d.menuData = nil
 	}
@@ -668,19 +707,34 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	}
 	pose := h.companionPose(d, now, mood)
 	d.pose = pose
-	r := renderRequest{full: full || d.renderNext != nil && d.renderNext.full, trace: d.trace, grade: h.frameGrade(d, now)}
+	wx := weatherClear
+	if h.b != nil && h.b.weather != nil {
+		wx = h.b.weather.kind()
+	}
+	r := renderRequest{
+		full:        full || d.renderNext != nil && d.renderNext.full,
+		trace:       d.trace,
+		grade:       h.frameGrade(d, now),
+		weather:     wx,
+		weatherTick: d.weatherTick,
+		menuHint:    !d.bootHint || now.Before(d.menuHintUntil),
+		companion:   new(d.companion),
+		pose:        pose,
+	}
 	d.grade.Store(uint32(r.grade))
 	switch {
 	case d.drawer != "" && mood == "idle":
+		r.drawer = d.drawer
+		r.menuPage = d.menuPage
+		r.autoVol = d.autoVol
+		r.vol = d.vol
+		r.voice = d.voice
+		r.readingBook = d.readingBook
+		r.readingPage = d.readingPage
 		switch d.drawer {
-		case drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
-			r.view = d.menuData.scene(d.drawer, d.menuPage)
+		case drawerBooks, drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
 			r.view.menu = d.menuData
-		case "volume":
-			r.view = volumeScene(d.autoVol, d.vol)
-		case "voice":
-			r.view = voiceScene(d.voice, d.menuPage)
-		case "intercom":
+		case drawerIntercom:
 			var choices []menuPeer
 			seen := make(map[string]bool)
 			for _, other := range h.terminals {
@@ -691,20 +745,19 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 					continue
 				}
 				seen[other.companionID] = true
-				choices = append(choices, menuPeer{other.companionID, other.companion.Name, other.companion.FaceBG, other.companion.AccentColor})
+				choices = append(choices, menuPeer{other.companionID, other.companion.Name})
 			}
 			slices.SortFunc(choices, func(a, b menuPeer) int { return strings.Compare(a.id, b.id) })
-			choices = append([]menuPeer{{"all", "Everyone", "#FFADAC", "#FFD68B"}}, choices...)
+			choices = append([]menuPeer{{"all", "Everyone"}}, choices...)
 			d.menuPage = clampMenuPage(d.menuPage, len(choices), tilesPerPage)
-			r.view = peerScene(choices, d.menuPage)
-		case "stats":
+			r.menuPage = d.menuPage
+			r.peers = choices
+		case drawerStats:
 			d.statsAt = now
-			r.view = h.statsScene(d)
-		default:
-			r.view = menuHome(d.voice, d.autoVol, d.vol, false, d.menuPage)
+			r.statsRows = h.statsRows(d)
 		}
 	case mood == "listening":
-		r.companion, r.pose = new(d.companion), pose
+		r.drawer = ""
 	case d.card != nil && (mood == "idle" || mood == "speaking" || mood != "sleepy" && d.card.duringTurn):
 		r.view = *d.card
 	case d.app != nil && mood != "sleepy":
@@ -713,12 +766,12 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	case d.view != nil && mood != "sleepy":
 		r.view = *d.view
 	default:
-		r.companion, r.pose = new(d.companion), pose
+		r.drawer = ""
 	}
 	if card := r.view.intercom; card != nil {
 		r.view = card.scene()
 	}
-	if r.companion == nil && r.app == nil && (mood == "thinking" || mood == "speaking") {
+	if r.drawer == "" && r.view.title == "" && r.app == nil && (mood == "thinking" || mood == "speaking") {
 		r.view.actions = maps.Clone(r.view.actions)
 		r.view.stopControl(pose.stopTaps)
 	}
@@ -732,6 +785,46 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 
 // A terminal has one frame builder and one replaceable pending request. A dirty
 // rectangle is always based on the last frame committed to that terminal's queue.
+func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
+	var bg *image.RGBA
+	var poses [4]*image.RGBA
+	loaded := false
+	if c != nil && c.PortraitID != "" && h != nil && h.b != nil && h.b.portraits != nil {
+		dir := filepath.Join(h.b.portraits.dir, c.PortraitID)
+		if p, err := loadOrNormalizePoses(dir, pixelPortraitHeight); err == nil {
+			poses = p
+			loaded = true
+		}
+		if b, err := loadBackgroundPNG(dir); err == nil {
+			bg = b
+		}
+	}
+	if !loaded {
+		poses = pixelPlaceholderPoses()
+	}
+	th := derivePixelTheme(bg, poses[:])
+	return bg, poses, th
+}
+
+func poseIndexForMood(pose companionPose) int {
+	switch pose.mood {
+	case "sleepy":
+		return 1
+	case "speaking":
+		if pose.talkFrame%2 == 1 {
+			return 2
+		}
+		return 0
+	case "thinking":
+		return 3
+	default:
+		if pose.blinking {
+			return 1
+		}
+		return 0
+	}
+}
+
 func (h *wsHub) renderFrames(d *wsTerminal) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -740,9 +833,9 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		wantRGB := d.displayFormats&dispRGB565 != 0
 		codecs := d.frameCodecs
 		oldScene, pointerRev := d.scene, d.caps.PointerRev
-		var geometry screenGeometry
-		if wantRGB {
-			geometry = d.screen
+		geometry := d.screen
+		if geometry.width == 0 || geometry.height == 0 {
+			geometry = roundScreen
 		}
 		d.renderNext = nil
 		h.mu.Unlock()
@@ -750,47 +843,131 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		screen := r.screen
 		var err error
 		if r.app == nil {
-			var face string
-			portrait := false
-			if r.companion != nil {
-				if id := activePortrait(r.companion.FaceSVG); id != "" {
-					portrait = h.b.portraits.has(id)
-					if !portrait {
-						r.companion.FaceSVG = r.companion.defaultFace()
+			spec := pixelSpecForGeometry(geometry)
+			bg, poses, th := h.companionAssets(r.companion)
+			var img *image.RGBA
+			var hits []hitBox
+			switch {
+			case r.drawer != "":
+				img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, th)
+			case r.view.title != "" || r.view.heading != "" || r.view.text != "" || r.view.building != "":
+				img, hits = renderPixelSceneCard(spec, r.view, th)
+			default:
+				poseIdx := poseIndexForMood(r.pose)
+				status := ""
+				switch r.pose.mood {
+				case "listening", "speaking", "thinking":
+					status = r.pose.mood
+				}
+				bobY := 0
+				if r.pose.mood == "idle" && r.pose.bobFrame%2 == 1 {
+					bobY = 1
+				}
+				img = renderPixelHomeWeather(spec, bg, poses[poseIdx], r.grade, r.weather, r.weatherTick, status, bobY, "", r.menuHint)
+				switch status {
+				case "listening":
+					btnH := 14
+					if !spec.round {
+						btnH = 18
 					}
+					y := spec.safe.Max.Y - btnH
+					gap := 4
+					bw := (spec.safe.Dx() - gap) / 2
+					hits = addLogicalHit(hits, spec, "rec-cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
+					hits = addLogicalHit(hits, spec, "rec-send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
+					r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
+				case "thinking", "speaking":
+					btnW, btnH := 38, 14
+					if !spec.round {
+						btnW, btnH = 44, 18
+					}
+					btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
+					hits = addLogicalHit(hits, spec, "stop", btn)
+					r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
+				default:
+					hits = []hitBox{{id: "menu", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+					r.view.actions = map[string]sceneAction{"menu": {"menu", ""}}
 				}
-				r.view = companionChrome(*r.companion, r.pose)
-				face = companionArt(*r.companion, r.pose)
 			}
-			raw := r.view.svg(face)
-			grade := r.grade
-			if !r.full && raw == prev.raw && grade == prev.grade {
-				screen = prev
-			} else if portrait {
-				p := h.b.portraits
-				screen, err = p.frames.buildGradedWithAssets(raw, false, geometry, grade, p.image)
-				if err != nil {
-					screen, err = screens.buildGraded(r.view.svg(companionArt(companionState{FaceSVG: r.companion.defaultFace()}, r.pose)), false, geometry, grade)
+			if err == nil && img != nil {
+				screen, err = rgbaToSVGScreenCompat(img, hits)
+				screen.grade = r.grade
+				var srcParts []string
+				if r.drawer != "" {
+					srcParts = append(srcParts, r.drawer)
+					if r.drawer == drawerMenu {
+						for _, it := range pixelHomeMenuItems {
+							srcParts = append(srcParts, it.label)
+						}
+					}
+					if r.drawer == drawerVoice {
+						for _, v := range voiceCatalog {
+							srcParts = append(srcParts, v.Name)
+						}
+					}
+					if r.drawer == drawerStats {
+						for _, row := range r.statsRows {
+							srcParts = append(srcParts, row.title, row.text)
+						}
+					}
+					if r.drawer == drawerVolume {
+						mode := "Manual"
+						if r.autoVol {
+							mode = "Auto"
+						}
+						srcParts = append(srcParts, fmt.Sprintf("%s · %d%%", mode, r.vol))
+					}
+					if r.view.menu != nil {
+						if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {
+							srcParts = append(srcParts, "menu-detail-view")
+						}
+						if r.view.menu.notice != "" {
+							srcParts = append(srcParts, r.view.menu.notice)
+						}
+						for _, g := range r.view.menu.games {
+							srcParts = append(srcParts, g.label)
+						}
+						for _, g := range r.view.menu.pixelGames {
+							srcParts = append(srcParts, g.Title)
+						}
+						for _, bk := range r.view.menu.books {
+							srcParts = append(srcParts, bk.Title)
+						}
+						for _, row := range r.view.menu.rows {
+							srcParts = append(srcParts, row.title, row.text)
+						}
+					}
+				} else if r.view.building != "" {
+					srcParts = append(srcParts, "Cancel build")
+				} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
+					srcParts = append(srcParts, "home")
 				}
-			} else {
-				screen, err = screens.buildGraded(raw, false, geometry, grade)
-			}
-		} else if r.grade != screen.grade && screen.fb != nil {
-			if !r.full && screen.raw == prev.raw && r.grade == prev.grade {
-				screen = prev
-			} else {
-				screen, err = screens.buildGraded(screen.raw, true, geometry, r.grade)
+				if r.view.title != "" {
+					srcParts = append(srcParts, r.view.title)
+				}
+				if r.view.heading != "" {
+					srcParts = append(srcParts, r.view.heading)
+				}
+				if r.view.text != "" {
+					srcParts = append(srcParts, r.view.text)
+				}
+				for _, hb := range hits {
+					srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.id, hb.x1, hb.y1, hb.x2, hb.y2))
+				}
+				screen.source = strings.Join(srcParts, " ")
 			}
 		}
+
 		var native wsFrame
 		var rawBytes int
+		fbChanged := !slices.Equal(prev.fb, screen.fb)
 		interactionChanged := pointerRev && wantRGB &&
 			(!maps.Equal(r.view.actions, oldScene.actions) || !slices.Equal(screen.hits, prev.hits))
-		if err == nil && (r.full && r.app == nil || screen.source != prev.source || screen.grade != prev.grade || interactionChanged) {
+		if err == nil && (r.full || fbChanged || screen.grade != prev.grade || interactionChanged) {
 			start := time.Now()
-			if screen.fb != nil {
+			if screen.fb != nil && wantRGB {
 				rect := dirtyRect(prev.fb, screen.fb, geometry)
-				if rect.Empty() && interactionChanged {
+				if rect.Empty() && (interactionChanged || r.full) {
 					rect = image.Rect(0, 0, 1, 1)
 				}
 				if !rect.Empty() {
@@ -847,6 +1024,9 @@ func (h *wsHub) setSleeping(d *wsTerminal, asleep bool) {
 }
 
 func (d *wsTerminal) brightness() int {
+	if d.drawer == drawerPair {
+		return 100
+	}
 	if d.asleep {
 		return 12
 	}
@@ -886,7 +1066,7 @@ func (h *wsHub) animate(ctx context.Context) {
 					h.stopRecordingAtLimit(d, now)
 				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(4*time.Second)):
 					h.playbackDone(d, now)
-				case !d.asleep && !d.busy && !d.recording.active() && !d.ttsStarted && !d.awaitAck && now.Sub(d.last) >= idleSleep:
+				case !d.asleep && d.drawer != drawerPair && !d.busy && !d.recording.active() && !d.ttsStarted && !d.awaitAck && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
 					h.render(d, now, false)
 				case d.asleep && d.caps.PanelSleep && !d.virtual():
@@ -896,7 +1076,11 @@ func (h *wsHub) animate(ctx context.Context) {
 				case d.stopTapsExpired(now):
 					h.render(d, now, false)
 				case (d.drawer == "" || d.asleep) && (d.app == nil && d.view == nil || d.asleep || d.recording.active()):
-					if h.companionPose(d, now, d.pose.mood) != d.pose {
+					if !d.asleep && d.drawer == "" && h.b != nil && h.b.weather != nil && h.b.weather.kind() != weatherClear && now.Sub(d.weatherAt) >= 400*time.Millisecond {
+						d.weatherAt = now
+						d.weatherTick++
+						h.render(d, now, false)
+					} else if h.companionPose(d, now, d.pose.mood) != d.pose {
 						h.render(d, now, false)
 					}
 				}

@@ -773,7 +773,7 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 	speakText := shortText(n.speakText, maxMessage, true)
 	var view *sceneView
 	if n.showCard {
-		v := (intercomCard{n.sender, text}).scene()
+		v := (intercomCard{companion: n.sender.Name, text: text}).scene()
 		view = &v
 	}
 	var pcmStream *AudioStream
@@ -915,7 +915,7 @@ func (h *wsHub) caption(receipts []wsReceipt, sender companionState, text string
 	if len(receipts) == 0 || text == "" {
 		return
 	}
-	view := (intercomCard{sender, shortText(text, maxMessage, true)}).scene()
+	view := (intercomCard{companion: sender.Name, text: shortText(text, maxMessage, true)}).scene()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, r := range receipts {

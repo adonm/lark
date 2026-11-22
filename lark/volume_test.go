@@ -98,36 +98,49 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 		}
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
-	tap(180, 300)
-	waitSVG(t, b.ws, id, "menu-next")
-	tap(248, 294)
-	waitSVG(t, b.ws, id, "Auto · 55%")
-	tap(245, 130)
-	drawer := waitSVG(t, b.ws, id, "vol-auto")
-	for _, control := range []string{"vol-minus", "vol-plus", "menu-back"} {
+	tap(180, 180)
+	svg := waitSVG(t, b.ws, id, "menu-next")
+	nx, ny, _ := hitCenter(svg, "menu-next")
+	tap(nx, ny)
+	svg = waitSVG(t, b.ws, id, "menu-voice")
+	nx, ny, _ = hitCenter(svg, "menu-next")
+	tap(nx, ny)
+	svg = waitSVG(t, b.ws, id, "menu-volume")
+	vx, vy, _ := hitCenter(svg, "menu-volume")
+	tap(vx, vy)
+	drawer := waitSVG(t, b.ws, id, "vol-mode")
+	for _, control := range []string{"vol-down", "menu-next", "menu-back"} {
 		if !strings.Contains(drawer, control) {
 			t.Fatal("missing volume submenu control", control)
 		}
 	}
-	tap(120, 200)
+	dx, dy, _ := hitCenter(drawer, "vol-down")
+	tap(dx, dy)
 	level(45, false, true)
-	tap(240, 200)
+	nx, ny, _ = hitCenter(drawer, "menu-next")
+	tap(nx, ny)
+	p1 := waitSVG(t, b.ws, id, "vol-up")
+	ux, uy, _ := hitCenter(p1, "vol-up")
+	tap(ux, uy)
 	level(55, false, true)
 	var st [16]byte
 	board.sendProto(t, msgTelemetry, st[:])
-	tap(180, 315)
+	bx, by, _ := hitCenter(p1, "menu-back")
+	tap(bx, by)
 	waitSVG(t, b.ws, id, "menu-volume")
 	entry := apiObjects(t, base+"/api/terminals", "terminals")[0].(object)
 	if auto, vol := b.volumePrefs(id); auto || vol != 55 || entry["auto_volume"] != false || entry["volume"] != json.Number("55") {
 		t.Fatalf("unintended head-touch volume change: persisted %t %d, device %v", auto, vol, entry)
 	}
-	tap(245, 130)
-	waitSVG(t, b.ws, id, "vol-auto")
-	tap(180, 262)
+	vx, vy, _ = hitCenter(waitSVG(t, b.ws, id, "menu-volume"), "menu-volume")
+	tap(vx, vy)
+	drawer = waitSVG(t, b.ws, id, "vol-mode")
+	mx, my, _ := hitCenter(drawer, "vol-mode")
+	tap(mx, my)
 	level(55, true, false)
-	tap(180, 262)
+	tap(mx, my)
 	level(55, false, true)
-	tap(180, 262)
+	tap(mx, my)
 	level(55, true, false)
 	if auto, _ := b.volumePrefs(id); !auto {
 		t.Fatal("Auto was not persisted")

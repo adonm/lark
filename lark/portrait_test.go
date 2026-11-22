@@ -20,9 +20,9 @@ import (
 
 func portraitFixture(t *testing.T) []byte {
 	t.Helper()
-	bg, _ := directPaint("#FBEFE6")
-	fur, _ := directPaint("#D4B5DE")
-	ink, _ := directPaint("#583E62")
+	bg := parseHexRGBA("#FBEFE6", imagecolor.RGBA{})
+	fur := parseHexRGBA("#D4B5DE", imagecolor.RGBA{})
+	ink := parseHexRGBA("#583E62", imagecolor.RGBA{})
 	img := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
 	draw.Draw(img, img.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
 	for i, offset := range []image.Point{{13, -21}, {-20, 15}, {8, 19}, {-15, -12}} {
@@ -54,7 +54,7 @@ func TestPortraitAlignsTranslatedSilhouettes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ := directPaint("#FFF2E7")
+	p := parseHexRGBA("#FFF2E7", imagecolor.RGBA{})
 	poses, err := slicePortrait(sheet, p)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestPortraitAlignsTranslatedSilhouettes(t *testing.T) {
 }
 
 func TestPortraitSilhouettesClearMenuAndBezel(t *testing.T) {
-	bg, _ := directPaint("#FFF2E7")
+	bg := parseHexRGBA("#FFF2E7", imagecolor.RGBA{})
 	for _, shape := range []image.Rectangle{image.Rect(100, 50, 410, 460), image.Rect(22, 106, 490, 406)} {
 		sheet := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
 		draw.Draw(sheet, sheet.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
@@ -117,7 +117,10 @@ func TestPortraitSilhouettesClearMenuAndBezel(t *testing.T) {
 func TestPixelPortraitGridAndAlignment(t *testing.T) {
 	fixture := portraitFixture(t)
 	store := &portraitStore{dir: t.TempDir(), generate: func(_ context.Context, prompt string, _ []byte) ([]byte, error) {
-		for _, text := range []string{"indie-game pixel art", "64×64", "hue-shifted colored outlines", "no text, labels, borders or gridlines", "solid flat #FFF2E7"} {
+		if strings.Contains(prompt, "background scene") {
+			return fixture, nil
+		}
+		for _, text := range []string{"indie-game pixel art", "64×64", "hue-shifted colored outlines", "no text, labels, borders or gridlines", "solid flat #FAF0E6"} {
 			if !strings.Contains(prompt, text) {
 				t.Errorf("missing %q in the pixel prompt", text)
 			}
@@ -125,11 +128,11 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 		return fixture, nil
 	}}
 	const side, grid = 360, 64
-	pending, err := store.prepare(t.Context(), companionState{}, object{"prompt": "a hedgehog", "bg": "#FFF2E7", "style": "pixel"})
+	pending, err := store.prepare(t.Context(), companionState{companionLook: companionLook{Form: "a hedgehog"}}, object{"prompt": "a hedgehog"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bg, _ := directPaint(pending.bg)
+	bg := parseHexRGBA("#FAF0E6", imagecolor.RGBA{})
 	var idle []byte
 	var bounds image.Rectangle
 	for i, pose := range portraitPoses {
@@ -141,7 +144,6 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 		if err != nil || im.Bounds().Size() != image.Pt(side, side) {
 			t.Fatalf("%s: expected 360×360 PNG: %v", pose, err)
 		}
-		// Nearest-neighbor picks the source block at each destination pixel center.
 		cell := func(x int) int { return (2*x + 1) * grid / (2 * side) }
 		cells := [grid][grid]imagecolor.RGBA{}
 		rgba := image.NewRGBA(im.Bounds())
@@ -163,27 +165,6 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 		b := portraitBounds(rgba, rgba.Bounds(), bg)
 		if i == 0 {
 			bounds, idle = b, rgba.Pix
-			scene, err := prepareScene(pending.svg(), false)
-			if err != nil || !strings.Contains(scene.svg, `image-rendering="pixelated"`) {
-				t.Fatalf("missing pixelated SVG hint: %v", err)
-			}
-			box, err := scene.raster(320, 240, 40, 0, 240, bg, func(string) (image.Image, error) { return rgba, nil })
-			if err != nil {
-				t.Fatal(err)
-			}
-			colors := map[imagecolor.RGBA]bool{}
-			for _, row := range cells {
-				for _, c := range row {
-					colors[c] = true
-				}
-			}
-			for y := range 240 {
-				for x := 40; x < 280; x++ {
-					if !colors[box.RGBAAt(x, y)] {
-						t.Fatalf("native renderer smoothed pixel at %d,%d", x, y)
-					}
-				}
-			}
 		} else if b != bounds || bytes.Equal(idle, rgba.Pix) {
 			t.Fatalf("%s: silhouette shifted or expression lost", pose)
 		}
@@ -311,16 +292,9 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	}}
 	patch(object{"prompt": " ", "edit": true}, true)
 	patch(object{"prompt": "invalid", "typo": true}, true)
-	badStyle := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{
-		"portrait": object{"prompt": "an owl", "style": "vector"},
-	}}, true)
-	if got := str(badStyle["error"]); got != "companion.portrait.style: expected one of [storybook pixel]" {
-		t.Fatalf("invalid MCP style: %q", got)
-	}
-	c := patch(object{"prompt": "draw an owl", "bg": "#eaf3fc"}, false)
-	raw := str(c["face_svg"])
-	asset := activePortrait(raw)
-	if !portraitIDPattern.MatchString(asset) || len(raw) > 1600 || c["face_bg"] != "#EAF3FC" {
+	c := patch(object{"prompt": "draw an owl", "form": "a snowy owl"}, false)
+	asset := str(c["portrait_id"])
+	if !portraitIDPattern.MatchString(asset) || c["form"] != "a snowy owl" {
 		t.Fatal(c)
 	}
 	for _, pose := range append(slices.Clone(portraitPoses[:]), "sheet") {
@@ -330,28 +304,17 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 		}
 	}
 	_ = other
-	for _, pair := range []struct {
-		mood, pose string
-		blink      bool
-	}{{"idle", "idle", false}, {"idle", "blink", true}, {"speaking", "talk", false}, {"thinking", "think", false},
-		{"listening", "idle", false}, {"sleepy", "blink", false}} {
-		scene := companionSVG(companionState{FaceSVG: raw, companionLook: companionLook{FaceBG: "#EAF3FC"}}, companionPose{mood: pair.mood, blink: pair.blink, battery: -1})
-		ref := `href="portrait:` + asset + ":" + pair.pose + `"`
-		if strings.Count(scene, `href="portrait:`) != 1 || !strings.Contains(scene, ref) {
-			t.Fatalf("wrong asset for %q", pair.mood)
-		}
-		day, err := b.portraits.frames.buildGradedWithAssets(scene, false, roundScreen, gradeDay, b.portraits.image)
-		if err != nil || day.fb[180*360+180] == day.fb[180*360+50] {
-			t.Fatalf("portrait did not render: %v", err)
-		}
-		night, err := b.portraits.frames.buildGradedWithAssets(scene, false, roundScreen, gradeNight, b.portraits.image)
-		if err != nil || night.grade != gradeNight || night.fb[180*360+180] == day.fb[180*360+180] {
-			t.Fatalf("portrait was not graded: %v", err)
-		}
+	poses, err := loadOrNormalizePoses(filepath.Join(dir, asset), pixelPortraitHeight)
+	if err != nil || poses[0] == nil {
+		t.Fatalf("loadOrNormalizePoses: %v", err)
+	}
+	day := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeDay, "", 0, "", false)
+	night := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeNight, "", 0, "", false)
+	if day.RGBAAt(180, 180) == night.RGBAAt(180, 180) {
+		t.Fatal("portrait home was not graded")
 	}
 	edited := patch(object{"prompt": "add a scarf", "edit": true}, false)
-	if newAsset := activePortrait(str(edited["face_svg"])); newAsset == "" || asset == newAsset || edited["face_bg"] != c["face_bg"] {
+	if newAsset := str(edited["portrait_id"]); newAsset == "" || asset == newAsset || edited["form"] != "a snowy owl" {
 		t.Fatal(edited)
 	}
-	toolTest(t, base, "patch", object{"device_id": str(other["id"]), "companion": object{"face_svg": raw}}, true)
 }

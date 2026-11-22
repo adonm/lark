@@ -16,9 +16,6 @@ import (
 type companionLook struct {
 	Name        string `json:"name"`
 	Configured  bool   `json:"configured"`
-	FaceBG      string `json:"face_bg"`
-	MarkColor   string `json:"mark_color"`
-	AccentColor string `json:"accent_color"`
 	Personality string `json:"personality"`
 	Form        string `json:"form"`
 }
@@ -27,20 +24,13 @@ type companionState struct {
 	ID string `json:"id,omitempty"`
 	companionLook
 	Voice       string `json:"voice"`
-	FaceSVG     string `json:"face_svg"`
+	PortraitID  string `json:"portrait_id,omitempty"`
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 	DCAccountID uint32 `json:"dc_account_id,omitempty"`
 }
 
 func blankCompanion() companionState {
-	p := storybookPalettes["peach"]
-	c := companionState{companionLook: companionLook{Name: "New Companion", FaceBG: p.bg, MarkColor: p.furShadow, AccentColor: p.blush}}
-	c.FaceSVG = c.defaultFace()
-	return c
-}
-
-func (c companionState) defaultFace() string {
-	return defaultFaceSVG(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured)
+	return companionState{companionLook: companionLook{Name: "New Companion"}}
 }
 
 var (
@@ -56,29 +46,26 @@ func validCompanionID(id string) bool {
 	return len(id) >= 1 && len(id) <= 64 && companionSlugRE.MatchString(id)
 }
 
-const companionColumns = `id,name,configured,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at,dc_account_id,form`
+const companionColumns = `id,name,configured,personality,voice,updated_at,dc_account_id,form,portrait_id`
 
 func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured int
-	err := row.Scan(&c.ID, &c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.Voice, &c.FaceSVG, &c.UpdatedAt, &c.DCAccountID, &c.Form)
+	err := row.Scan(&c.ID, &c.Name, &configured, &c.Personality, &c.Voice, &c.UpdatedAt, &c.DCAccountID, &c.Form, &c.PortraitID)
 	c.Configured = configured != 0
 	c.Voice = storedVoice(c.Voice)
-	if err == nil && c.FaceSVG == "" {
-		c.FaceSVG = c.defaultFace()
-	}
 	return c, err
 }
 
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
 	id = strings.ToLower(id)
-	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,face_bg=excluded.face_bg,
-		mark_color=excluded.mark_color,accent_color=excluded.accent_color,personality=excluded.personality,
-		voice=excluded.voice,face_svg=excluded.face_svg,updated_at=max(companions.updated_at+1,excluded.updated_at),
+	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,
+		personality=excluded.personality,voice=excluded.voice,
+		updated_at=max(companions.updated_at+1,excluded.updated_at),
 		dc_account_id=CASE WHEN excluded.dc_account_id>0 THEN excluded.dc_account_id ELSE companions.dc_account_id END,
-		form=excluded.form`,
-		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli(), c.DCAccountID, c.Form)
+		form=excluded.form,portrait_id=excluded.portrait_id`,
+		id, c.Name, c.Configured, c.Personality, c.Voice, time.Now().UnixMilli(), c.DCAccountID, c.Form, c.PortraitID)
 	return err
 }
 
@@ -178,22 +165,19 @@ func (b *larkServer) companionEntry(c companionState, full bool) object {
 		termEntries = append(termEntries, te)
 	}
 	entry := object{
-		"id":           c.ID,
-		"name":         c.Name,
-		"configured":   c.Configured,
-		"face_bg":      c.FaceBG,
-		"mark_color":   c.MarkColor,
-		"accent_color": c.AccentColor,
-		"personality":  c.Personality,
-		"form":         c.Form,
-		"voice":        voice,
-		"online":       online,
-		"dormant":      len(termEntries) == 0,
-		"terminals":    termEntries,
-		"updated_at":   c.UpdatedAt,
+		"id":          c.ID,
+		"name":        c.Name,
+		"configured":  c.Configured,
+		"personality": c.Personality,
+		"form":        c.Form,
+		"voice":       voice,
+		"online":      online,
+		"dormant":     len(termEntries) == 0,
+		"terminals":   termEntries,
+		"updated_at":  c.UpdatedAt,
 	}
-	if full {
-		entry["face_svg"] = c.FaceSVG
+	if c.PortraitID != "" {
+		entry["portrait_id"] = c.PortraitID
 	}
 	if c.DCAccountID != 0 {
 		entry["dc_account_id"] = c.DCAccountID
@@ -221,7 +205,6 @@ func (b *larkServer) companionList(ctx context.Context, full bool) ([]object, er
 }
 
 func updateCompanion(c companionState, args object, voices companionVoices) (companionState, error) {
-	before := c
 	editLook := false
 	for key, val := range args {
 		switch key {
@@ -231,20 +214,6 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 				return c, problem(400, "Invalid companion name (1–40 characters)")
 			}
 			c.Name, editLook = name, true
-		case "face_bg", "mark_color", "accent_color":
-			tint := color(val)
-			if tint == "" {
-				return c, problem(400, "Expected #RRGGBB for "+key)
-			}
-			switch key {
-			case "face_bg":
-				c.FaceBG = tint
-			case "mark_color":
-				c.MarkColor = tint
-			case "accent_color":
-				c.AccentColor = tint
-			}
-			editLook = true
 		case "personality":
 			vibe, ok := val.(string)
 			if !ok || runeLen(vibe) > 160 || strings.ContainsAny(vibe, "[]") || strings.ContainsFunc(vibe, func(r rune) bool { return !unicode.IsPrint(r) }) {
@@ -262,8 +231,6 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 				return c, problem(400, "Unsupported voice")
 			}
 			c.Voice = str(val)
-		case "face_svg", "face_edits", "preset":
-			editLook = true
 		case "configured", "companion_id", "op", "id":
 		default:
 			return c, problem(400, "Unknown companion field "+key)
@@ -271,46 +238,6 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 	}
 	var err error
 	c.Configured, err = companionBool(args, "configured", c.Configured || editLook)
-	if err != nil {
-		return c, err
-	}
-	oldPalette := [...]string{before.FaceBG, before.MarkColor, before.AccentColor}
-	newPalette := [...]string{c.FaceBG, c.MarkColor, c.AccentColor}
-	edits, editParts := args["face_edits"]
-	if raw, set := args["preset"]; set {
-		for _, field := range []string{"face_svg", "face_bg", "mark_color", "accent_color"} {
-			if _, exists := args[field]; exists {
-				return c, fieldError("companion.preset", "cannot combine with %s", field)
-			}
-		}
-		art, p, err := compileCompanion(raw)
-		if err != nil {
-			return c, err
-		}
-		c.FaceBG, c.MarkColor, c.AccentColor = p.bg, p.furShadow, p.blush
-		if editParts {
-			c.FaceSVG, err = editFaceParts(art, edits)
-		} else {
-			c.FaceSVG, err = sanitizeFaceSVG(art)
-		}
-		return c, err
-	} else if raw, set := args["face_svg"]; set {
-		if editParts {
-			return c, fieldError("companion", "use face_svg or face_edits, not both")
-		}
-		c.FaceSVG, err = sanitizeFaceSVG(str(raw))
-	} else if editParts || oldPalette != newPalette || c.Configured != before.Configured {
-		if c.FaceSVG == "" || c.FaceSVG == before.defaultFace() {
-			c.FaceSVG = c.defaultFace()
-		} else if c.FaceSVG == defaultFaceArtwork(before.FaceBG, before.MarkColor, before.AccentColor, before.Configured, true) {
-			c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
-		} else if oldPalette != newPalette {
-			c.FaceSVG, err = recolorFaceSVG(c.FaceSVG, oldPalette, newPalette)
-		}
-		if err == nil && editParts {
-			c.FaceSVG, err = editFaceParts(c.FaceSVG, edits)
-		}
-	}
 	return c, err
 }
 
@@ -357,15 +284,17 @@ func (b *larkServer) changeCompanionPrepared(ctx context.Context, id, op string,
 			return companionState{}, err
 		}
 		if portrait != nil {
-			if current.FaceSVG != portrait.base {
+			if current.PortraitID != portrait.base {
 				return companionState{}, problem(409, "Companion changed while the portrait was being drawn")
 			}
 			next.Configured, err = companionBool(args, "configured", true)
 			if err != nil {
 				return companionState{}, err
 			}
-			next.FaceBG = portrait.bg
-			next.FaceSVG = portrait.svg()
+			next.PortraitID = portrait.id
+			if portrait.form != "" {
+				next.Form = portrait.form
+			}
 		}
 	case "reset_blank", "new_session":
 		next = blankCompanion()
@@ -392,10 +321,8 @@ func (b *larkServer) patchCompanion(ctx context.Context, id string, args object)
 	if !supplied {
 		op = "update"
 	}
-	for _, field := range []string{"face_edits", "preset", "portrait"} {
-		if _, set := c[field]; set && op != "update" {
-			return nil, fieldError("companion."+field, "requires companion update")
-		}
+	if _, set := c["portrait"]; set && op != "update" {
+		return nil, fieldError("companion.portrait", "requires companion update")
 	}
 	switch op {
 	case "update", "reset_blank":
@@ -466,6 +393,15 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 	if op != "get" && b.dc != nil && b.dc.ready.Load() && c.DCAccountID != 0 {
 		go b.dc.syncProfile(c, c.DCAccountID)
 	}
+	if op != "get" && c.Form != "" && c.Form != before.Form && c.PortraitID != "" && portrait == nil && b.portraits != nil && b.portraits.generate != nil {
+		go func(pid, form, vibe string) {
+			ctxBG := b.root
+			if ctxBG == nil {
+				ctxBG = context.Background()
+			}
+			_ = b.portraits.generateBackground(ctxBG, pid, form, vibe)
+		}(c.PortraitID, c.Form, c.Personality)
+	}
 	return object{"ok": true, "companion_id": id, "companion": c}, nil
 }
 
@@ -497,11 +433,10 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 			}
 			c.Name = name
 			c.Configured = true
-			c.FaceSVG = c.defaultFace()
 		}
 	}
 	patch := object{}
-	for _, k := range []string{"face_bg", "mark_color", "accent_color", "personality", "form", "voice", "face_svg", "preset", "configured"} {
+	for _, k := range []string{"personality", "form", "voice", "configured"} {
 		if v, exists := obj[k]; exists {
 			patch[k] = v
 		}

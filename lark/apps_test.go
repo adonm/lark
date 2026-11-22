@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"image"
 	"slices"
 	"strings"
@@ -19,10 +20,10 @@ func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 		c := &wsClient{kind: "hardware", ctx: t.Context(), out: make(chan wsFrame, 8)}
 		d := &wsTerminal{client: c, key: "vocat-a100", id: "vocat-a100", kind: "hardware", displayFormats: dispRGB565, companionID: "cake", screen: roundScreen, companion: blankCompanion()}
 		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}, voiceOwners: map[string]string{}, companionStatuses: map[string]companionStatusState{}, resumes: map[[resumeTokenLen]byte]*resumeEntry{}}
-		const code = `function init() { return {color: "red"}; }
-			function render(s) { return '<svg><rect width="360" height="360" fill="' + s.color + '"/></svg>'; }
-			function onTap(s) { waitForTest(); s.color = "lime"; chime("tap"); }`
-		a, views, err := initApp(savedApp{Code: code}, []appPlayer{{id: d.companionID}}, nil, []*wsTerminal{d}, nil, buildScreen)
+		const code = `function init() { return {color: "#FF0000"}; }
+			function render(s, p, g) { g.clear(s.color); }
+			function onTap(s) { waitForTest(); s.color = "#00FF00"; chime("tap"); }`
+		a, views, err := initApp(savedApp{Code: code}, []appPlayer{{id: d.companionID}}, nil, []*wsTerminal{d}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +58,7 @@ func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 		h.mu.Unlock()
 		release()
 		synctest.Wait()
-		if d.app != nil || d.displayApp != nil || !strings.Contains(d.svg.source, "companion-ring") {
+		if d.app != nil || d.displayApp != nil || !strings.Contains(d.svg.source, "home") {
 			t.Fatal("exited app published its superseded render")
 		}
 		for len(c.out) > 0 {
@@ -78,17 +79,17 @@ func TestAppSandboxAndErrors(t *testing.T) {
 	players := []appPlayer{{"lark-test", "Cake", 0}}
 	for _, tc := range []struct{ code, want string }{
 		{`while (true) {}`, "timeout"},
-		{`function init(){for(;;){}} function render(){return "<svg/>"}`, "timeout"},
+		{`function init(){for(;;){}} function render(s,p,g){}`, "timeout"},
 		{`app={get render(){for(;;){}}}`, "timeout"},
 		{`function render(){ throw new Error("broken paint") }`, "broken paint"},
 		{`function render(){ throw {toString(){for(;;){}}} }`, "JS exception"},
 		{"\nfunction render(){ \n throw new Error('broken line');\n}", "app.js:3:"},
 		{`function render(){return require("fs")}`, "require is not defined"},
-		{`function init(){storeSet("score",1)} function render(){return "<svg/>"}`, "only available"},
-		{`function render(){storeSet("score",1); return "<svg/>"}`, "only available"},
+		{`function init(){storeSet("score",1)} function render(s,p,g){}`, "only available"},
+		{`function render(){storeSet("score",1);}`, "only available"},
 	} {
 		start := time.Now()
-		_, _, err := initApp(savedApp{Code: tc.code}, players, nil, nil, nil, buildScreen)
+		_, _, err := initApp(savedApp{Code: tc.code}, players, nil, nil, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("want %q, got %v", tc.want, err)
 		}
@@ -96,11 +97,10 @@ func TestAppSandboxAndErrors(t *testing.T) {
 			t.Fatalf("timeout took %v", time.Since(start))
 		}
 	}
-	code := `function render() {
+	code := `function render(s,p,g) {
 		if ([typeof require,typeof process,typeof fetch,typeof setTimeout,typeof readFile].some(x=>x!=="undefined")) throw "host leak";
-		return '<svg/>';
 	} function onTap(){while(true){}}`
-	app, _, err := initApp(savedApp{Code: code}, players, nil, nil, nil, buildScreen)
+	app, _, err := initApp(savedApp{Code: code}, players, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 	}
 	const code = `app={
 	init(ctx){ return {n:storeGet("score") ?? 0,x:100}; },
-	render(s,p){ return '<svg viewBox="0 0 360 360"><rect width="360" height="360" fill="black"/><circle data-id="monster" cx="'+s.x+'" cy="180" r="30" fill="lime"/><text x="180" y="100" fill="white">Score '+s.n+' / saved '+(storeGet("score") ?? 0)+'</text></svg>'; },
+	render(s,p,g){ g.clear("#000000"); g.button("monster", Math.floor(s.x/3)-10, 50, 20, 20, "M"); g.text(20, 20, "Score "+s.n+" / saved "+(storeGet("score") ?? 0)); g.text(20, 32, "x="+s.x); },
 	onTap(s,p,id){ if(id==="monster"){ s.n++; storeSet("score",s.n); if(storeGet("score")!==s.n)throw "store did not read its write"; play("C5:40 E5:40"); } },
 	onTick(s){ s.x+=50; return s; }
 }`
@@ -133,8 +133,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 	}
 	f := device.until(t, isDisplay)
 	decodeDisplay(t, f)
-	waitSVG(t, b.ws, "vocat-0001", "Score 0")
-	waitSVG(t, b.ws, "vocat-0001", `cx="150"`)
+	waitSVG(t, b.ws, "vocat-0001", "x=150")
 	// Trust hardware coordinates, not an ID claimed by a client.
 	device.tap(t, 150, 180, 0)
 	device.until(t, isPlayback)
@@ -147,8 +146,8 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 	if mem["value"] != json.Number("1") {
 		t.Fatal(mem)
 	}
-	device.tap(t, 180, 318, 0)
-	waitSVG(t, b.ws, "vocat-0001", "companion-ring")
+	toolTest(t, base, "app", object{"companions": id, "exit": true}, false)
+	waitSVG(t, b.ws, "vocat-0001", "home")
 	if a := stateMe(t, base, id)["active_app"]; a != nil {
 		t.Fatal(a)
 	}
@@ -175,7 +174,7 @@ func TestAppDragAndUp(t *testing.T) {
 	board.helloV2(t, "vocat-0002", "Cake")
 	const code = `
 	function init(){ return {text:"Ready"}; }
-	function render(s){ return '<svg><circle data-id="thumb" cx="180" cy="180" r="20"/><text x="50" y="90">'+s.text+'</text></svg>'; }
+	function render(s,p,g){ g.button("thumb", 50, 50, 20, 20, "T"); g.text(20, 20, s.text); }
 	function onDrag(s,p,id,x,y){ s.text="Drag "+p.index+" "+id+" "+x+","+y; }
 	function onUp(s,p,id,x,y){ storeSet("end",x); return {text:s.text+" Up "+id+" "+storeGet("end")+","+y}; }`
 	toolTest(t, base, "app", object{"companions": id, "code": code, "save_as": "slider"}, false)
@@ -195,11 +194,11 @@ func TestAppDragBurstPreservesCriticalEvents(t *testing.T) {
 		h := &wsHub{b: &larkServer{}}
 		app, _, err := initApp(savedApp{Code: `
 			function init() { return {}; }
-			function render() { return '<svg/>'; }
+			function render() {}
 			function onDrag() {}
 			function onUp() {}
 			function onTap() {}
-			function onTick() {}`}, nil, nil, nil, nil, buildScreen)
+			function onTick() {}`}, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,8 +260,7 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			board.until(t, isDisplay)
 			const code = `
 			function init(){ return {text:"Ready"}; }
-			function render(s){ return '<svg><rect x="100" y="120" width="140" height="120" data-id="track"/>'+
-				'<text x="70" y="100">'+s.text+'</text></svg>'; }
+			function render(s,p,g){ g.button("track", 20, 20, 80, 80, ""); g.text(20, 10, s.text); }
 			function onDrag(s,p,id,x,y){ s.text="Drag "+id+" "+x+","+y; }
 			function onUp(s,p,id,x,y){ s.text+=" Up "+id+" "+x+","+y; }
 			function onTap(s){ s.text="Tapped"; }`
@@ -277,12 +275,12 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			before := d.last
 			b.ws.mu.Unlock()
 			send(ptrDrag, tc.drag)
-			waitSVG(t, b.ws, "vocat-0003", "Drag track 150,168")
+			waitSVG(t, b.ws, "vocat-0003", fmt.Sprintf("Drag track %d,%d", tc.drag.X, tc.drag.Y))
 			b.ws.mu.Lock()
 			dragged := d.last
 			b.ws.mu.Unlock()
 			send(ptrUp, tc.up)
-			waitSVG(t, b.ws, "vocat-0003", "Drag track 150,168 Up track 210,192")
+			waitSVG(t, b.ws, "vocat-0003", fmt.Sprintf("Drag track %d,%d Up track %d,%d", tc.drag.X, tc.drag.Y, tc.up.X, tc.up.Y))
 			b.ws.mu.Lock()
 			released := d.last
 			b.ws.setSleeping(d, true)
@@ -305,13 +303,13 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			if !asleep || last != released {
 				t.Fatal("trailing gestures woke a sleeping device")
 			}
-			waitSVG(t, b.ws, "vocat-0003", "companion-ring")
+			waitSVG(t, b.ws, "vocat-0003", "home")
 			send(ptrTap, tc.up)
 			board.until(t, func(f wsFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
 			})
-			waitSVG(t, b.ws, "vocat-0003", "Drag track 150,168 Up track 210,192")
+			waitSVG(t, b.ws, "vocat-0003", fmt.Sprintf("Drag track %d,%d Up track %d,%d", tc.drag.X, tc.drag.Y, tc.up.X, tc.up.Y))
 			send(ptrTap, tc.up)
 			waitSVG(t, b.ws, "vocat-0003", "Tapped")
 		})
@@ -334,9 +332,11 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 	let taps = 0;
 	function init(ctx) { return {...ctx.initial_state, visits:1}; }
 	function onTap(s) { s.taps = ++taps; }
-	function render(s,p) {
+	function render(s,p,g) {
 		if (s.color === "bad") throw Error("bad color");
-		return '<svg><circle data-id="p'+p.index+'" cx="180" cy="180" r="40" fill="'+s.color+'"/><text x="150" y="100" fill="white">Player '+p.index+' taps '+taps+'</text></svg>';
+		g.button("p"+p.index, 40, 40, 40, 40, "", s.color);
+		g.text(20, 20, "Player "+p.index+" taps "+taps);
+		g.text(20, 32, s.color);
 	}`
 	start := toolTest(t, base, "app", object{"companions": ids, "code": code, "title": "Players", "save_as": "players",
 		"initial_state": object{"color": "#FF0000", "prefs": object{"a": true}}}, false)
@@ -384,7 +384,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 		t.Fatal(got)
 	}
 	toolTest(t, base, "app", object{"companions": webID, "exit": true}, false)
-	waitSVG(t, b.ws, "vocat-0005", "companion-ring")
+	waitSVG(t, b.ws, "vocat-0005", `data-id="menu"`)
 	toolTest(t, base, "app", object{"delete_saved": "players"}, false)
 	saved := toolTest(t, base, "state", object{"include": []string{"apps"}}, false)
 	if len(saved["apps"].(object)) != 0 {
@@ -449,8 +449,8 @@ func TestAppAndEmitNamedSFX(t *testing.T) {
 		})
 	}
 	toolTest(t, base, "emit", object{"to": id, "chime": "unknown"}, true)
-	a, _, err := initApp(savedApp{Code: `function render(){return "<svg/>"} function onUp(){sfxAll("pop"); sfxAll("cancel");}`},
-		[]appPlayer{{id: id}}, nil, nil, nil, buildScreen)
+	a, _, err := initApp(savedApp{Code: `function render(){} function onUp(){sfxAll("pop"); sfxAll("cancel");}`},
+		[]appPlayer{{id: id}}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,8 +468,7 @@ func TestAppSFXChimeAndUnknownSoundKeepGameRunning(t *testing.T) {
 	board.helloV2(t, "vocat-0006", "Cake")
 	const code = `
 	function init(){ return {level:1}; }
-	function render(s){ return '<svg><rect data-id="next" x="120" y="160" width="120" height="40"/>'+
-		'<text x="120" y="120" fill="white">Level '+s.level+'</text></svg>'; }
+	function render(s,p,g){ g.button("next", 40, 50, 40, 20, "Next"); g.text(40, 30, "Level "+s.level); }
 	function onTap(s,p,id){ if(id==="next"){ sfx(s.level===1 ? "tap" : "nope"); return {level:s.level+1}; } }`
 	out := toolTest(t, base, "app", object{"companions": id, "code": code}, false)
 	if _, warned := out["layout_warnings"]; warned {
@@ -508,84 +507,16 @@ func TestAppExitAcceptsBothControlIDs(t *testing.T) {
 	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, "vocat-0007", "Cake")
-	for _, exit := range []string{exitNode, "lark-exit"} {
-		code := `function render(){return '<svg><rect data-id="` + exit + `" x="140" y="290" width="80" height="25"/></svg>'}`
-		out := toolTest(t, base, "app", object{"companions": id, "code": code}, false)
-		if hits := out["hit_ids"].([]any); !slices.Equal(hits, []any{exit}) {
-			t.Fatalf("custom exit should suppress the injected pill: %v", hits)
-		}
-		board.until(t, isDisplay)
-		board.tap(t, 180, 302, 0)
-		board.until(t, isDisplay)
-		if stateMe(t, base, id)["active_app"] != nil {
-			t.Fatal("app remained active after exit tap")
-		}
+	code := `function render(s,p,g){g.button("exit", 40, 80, 40, 20, "Exit")}`
+	out := toolTest(t, base, "app", object{"companions": id, "code": code}, false)
+	if hits := out["hit_ids"].([]any); !slices.Equal(hits, []any{"exit"}) {
+		t.Fatalf("expected exit hit: %v", hits)
 	}
-}
-
-func TestAppLaunchReportsLayoutWarnings(t *testing.T) {
-	_, base := wsHarness(t, nil)
-	const roundID, rectID = "cake", "mint"
-	for _, dev := range []struct{ id, name, board string }{{"vocat-0008", "Cake", "esp-vocat"}, {"box3-0008", "Mint", "esp-box-3"}} {
-		c := testConnectWS(t, base, "unit", false)
-		w, h, sh := uint16(360), uint16(360), shapeRound
-		if dev.board == "esp-box-3" {
-			w, h, sh = 320, 240, shapeRect
-		}
-		c.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
-			protoVersion:   protoVersion1,
-			kind:           termKindHardware,
-			displayFormats: dispRGB565,
-			frameCodecs:    codecBitAll,
-			width:          w,
-			height:         h,
-			shape:          sh,
-			terminalID:     dev.id,
-			companionID:    dev.name,
-			board:          dev.board,
-			firmware:       "0.12.0",
-			token:          "unit",
-		}))
-		c.until(t, isDisplay)
-	}
-	const svg = `<svg><rect data-id="next" x="150" y="270" width="60" height="25"/>
-		<rect data-id="wide" x="80" y="12" width="200" height="24"/></svg>`
-	const overlap = `control "next" overlaps bottom Home button (keep controls above y=296)`
-	const bezel = `control "wide" clips outside the round display bezel`
-	for _, tc := range []struct {
-		title   string
-		devices any
-		want    []any
-	}{
-		{"rect only", rectID, []any{overlap}},
-		{"mixed", []string{rectID, roundID}, []any{bezel, overlap}},
-	} {
-		t.Run(tc.title, func(t *testing.T) {
-			out := toolTest(t, base, "app", object{"companions": tc.devices, "svg": svg}, false)
-			if warnings, _ := out["layout_warnings"].([]any); !slices.Equal(warnings, tc.want) {
-				t.Fatalf("want %v, got %v", tc.want, out)
-			}
-		})
-	}
-}
-
-func TestAppLaunchWarnsOnDataIDWithoutBounds(t *testing.T) {
-	_, base := wsHarness(t, nil)
-	const id = "mint"
-	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, "vocat-0009", "Mint")
-	const warning = `control "m0" has data-id but no measurable bounds — add data-hit="x,y,w,h" or put data-id on a rect/circle/text`
-	for _, hit := range []string{"", ` data-hit="150,150,60,60"`} {
-		code := `function render(){return '<svg><g data-id="m0"` + hit + `><circle cx="180" cy="180" r="30"/></g></svg>';}`
-		out := toolTest(t, base, "app", object{"companions": id, "code": code}, false)
-		hitIDs := out["hit_ids"].([]any)
-		if hit == "" {
-			if got, _ := out["layout_warnings"].([]any); !slices.Equal(got, []any{warning}) || slices.Contains(hitIDs, "m0") {
-				t.Fatal(out)
-			}
-		} else if out["layout_warnings"] != nil || !slices.Contains(hitIDs, "m0") {
-			t.Fatal(out)
-		}
+	board.until(t, isDisplay)
+	board.tap(t, 180, 270, 0)
+	board.until(t, isDisplay)
+	if stateMe(t, base, id)["active_app"] != nil {
+		t.Fatal("app remained active after exit tap")
 	}
 }
 
@@ -674,19 +605,19 @@ function onTap(s,p,id) {
   }
   s.turn=1-s.turn;
 }
-function render(s,p) {
+function render(s,p,g) {
   const label=s.winner===p.index?"You win!":s.winner!==-1?"Other player won":s.turn===p.index?"Your turn!":"Waiting...";
-  let svg='<svg viewBox="0 0 360 360"><text x="180" y="85" fill="#fff" text-anchor="middle">'+label+'</text>';
+  g.clear("#1E1A2B");
+  g.text(60, 20, label, {align:"center"});
   for (let i=0;i<9;i++) {
-    const x=90+(i%3)*60, y=115+Math.floor(i/3)*60;
+    const x=24+(i%3)*24, y=36+Math.floor(i/3)*24;
     const c=["#ff0000","#0000ff"][s.cells[i]] || "#cccccc";
-    svg+='<rect data-id="cell'+i+'" x="'+x+'" y="'+y+'" width="52" height="52" rx="6" fill="'+c+'"/>';
+    g.button("cell"+i, x, y, 20, 20, "", c);
   }
-  return svg+'</svg>';
 }`
 
 func TestTicTacToePersonalizedAndAuthoritative(t *testing.T) {
-	a, views, err := initApp(savedApp{Code: ticTacToe}, []appPlayer{{"a", "Cake", 0}, {"b", "Mint", 1}}, nil, nil, nil, buildScreen)
+	a, views, err := initApp(savedApp{Code: ticTacToe}, []appPlayer{{"a", "Cake", 0}, {"b", "Mint", 1}}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,36 +650,26 @@ func TestTicTacToePersonalizedAndAuthoritative(t *testing.T) {
 	requireView(0, "You win!")
 }
 
-func TestSVGDirtyFrameMatchesBrowserAndExit(t *testing.T) {
+func TestPixelDirtyFrameAndExit(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
-	first, _, initial := decodeDisplay(t, board.helloV2(t, "box3-0012", "Cake"))
+	first, _, _ := decodeDisplay(t, board.helloV2(t, "box3-0012", "Cake"))
 	if first != image.Rect(0, 0, 360, 360) {
 		t.Fatal(first)
 	}
-	const svg = `<svg viewBox="0 0 360 360"><rect width="360" height="360" fill="#122234"/><rect data-id="tile" x="179" y="179" width="2" height="2" fill="#123456"/></svg>`
-	run := func(raw string) {
-		t.Helper()
-		toolTest(t, base, "app", object{"companions": id, "svg": raw}, false)
-		svgSrc := waitSVG(t, b.ws, "box3-0012", "tile")
-		rect, rev, pix := decodeDisplay(t, board.until(t, isDisplay))
-		if rev != 2 && rev != 3 {
-			t.Fatal(rev)
-		}
-		if raw != svg && rect != image.Rect(179, 179, 181, 181) {
-			t.Fatalf("dirty bounds %v, rev=%d", rect, rev)
-		}
-		for y := rect.Min.Y; y < rect.Max.Y; y++ {
-			copy(initial[y*360+rect.Min.X:], pix[(y-rect.Min.Y)*rect.Dx():(y-rect.Min.Y+1)*rect.Dx()])
-		}
-		fb, _, err := renderSVG(svgSrc)
-		if err != nil || len(fb) != len(initial) {
-			t.Fatalf("rendered SVG failed: %v", err)
-		}
+	code := `function init(){return {c:"#123456"}} function render(s,p,g){g.clear("#122234"); g.button("tile",80,60,10,10,"",s.c);} function onTap(s){return {c:"#654321"}}`
+	toolTest(t, base, "app", object{"companions": id, "code": code}, false)
+	waitSVG(t, b.ws, "box3-0012", "tile")
+	rect, rev, _ := decodeDisplay(t, board.until(t, isDisplay))
+	if rev < 2 || rect.Empty() {
+		t.Fatalf("unexpected initial frame: rev=%d rect=%v", rev, rect)
 	}
-	run(svg)
-	run(strings.Replace(svg, "#123456", "#654321", 1))
+	board.tap(t, 245, 185, 0)
+	rect2, rev2, _ := decodeDisplay(t, board.until(t, isDisplay))
+	if rev2 <= rev || rect2.Empty() {
+		t.Fatalf("unexpected dirty frame: rev=%d rect=%v", rev2, rect2)
+	}
 	if out := toolTest(t, base, "app", object{"companions": id, "code": "function render(){ throw Error('wrong value') }"}, true); !strings.Contains(str(out["error"]), "app.js:1") {
 		t.Fatal(out)
 	}

@@ -126,12 +126,11 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
 	start := func() {
-		d.tap(t, 180, 180, 0)
-		d.until(t, func(f wsFrame) bool {
-			p := framePayload(f)
-			return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
-		})
+		b.ws.mu.Lock()
+		b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
+		b.ws.mu.Unlock()
 		d.recStart(t, "")
+		waitSVG(t, b.ws, id, "rec-send")
 	}
 	var seq uint16
 	appendPCM := func(p []byte) {
@@ -160,7 +159,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 		if !bytes.Equal(got, frame) {
 			t.Fatal("Send did not commit the original single frame exactly once")
 		}
-	default:
+	case <-time.After(2 * time.Second):
 		t.Fatal("Send did not transcribe")
 	}
 	start()
@@ -235,12 +234,11 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	d.tap(t, 180, 180, 0)
-	d.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
-	})
+	b.ws.mu.Lock()
+	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
+	b.ws.mu.Unlock()
 	d.recStart(t, "")
+	waitSVG(t, b.ws, id, "rec-send")
 	var seq uint16
 	appendPCM := func(p []byte) {
 		for len(p) > 0 {
@@ -291,7 +289,7 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 		{false, true, false}, {true, false, false}, {true, true, true},
 	} {
 		t.Run(fmt.Sprintf("model=%t cap=%t", tc.model, tc.cap), func(t *testing.T) {
-			_, base := wsHarness(t, func(b *larkServer, _ string) {
+			b, base := wsHarness(t, func(b *larkServer, _ string) {
 				if tc.model {
 					b.endpoint = testEndpointSettings()
 				}
@@ -302,7 +300,9 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 				caps |= capBridgeEndpoint
 			}
 			d.helloHardware(t, "vocat-ep00", "", caps)
-			d.tap(t, 180, 180, 0)
+			b.ws.mu.Lock()
+			b.ws.startRecording(b.ws.terminals["vocat-ep00"], "", time.Now(), true)
+			b.ws.mu.Unlock()
 			f := d.until(t, func(f wsFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
@@ -341,12 +341,11 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	d.tap(t, 180, 180, 0)
-	d.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
-	})
+	b.ws.mu.Lock()
+	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
+	b.ws.mu.Unlock()
 	d.recStart(t, "")
+	waitSVG(t, b.ws, id, "rec-send")
 	d.barrier(t)
 	stream := newAudioStream()
 	stream.append([]byte{8, 0, 9, 0})

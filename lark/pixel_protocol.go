@@ -2,8 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
+
+const maxSpriteSide = 64
+
+var pixelColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 func uiArray(item object, lo, hi int) object {
 	return object{"type": "array", "items": item, "minItems": lo, "maxItems": hi}

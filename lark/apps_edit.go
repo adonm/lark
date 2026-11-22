@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -59,8 +60,8 @@ func (b *larkServer) updateSavedApp(ctx context.Context, tx *sql.Tx, edit object
 	if err := applyAppEdit(&a, edit); err != nil {
 		return a, err
 	}
-	if _, ok := edit["data"]; ok {
-		if _, _, err := initApp(a, []appPlayer{{id: "preview"}}, nil, nil, nil, buildScreen); err != nil {
+	if _, ok := edit["data"]; ok && a.Kind != "book" {
+		if _, _, err := initApp(a, []appPlayer{{id: "preview"}}, nil, nil, nil, nil); err != nil {
 			return a, fieldError("apps.update.data", "%s", err)
 		}
 	}
@@ -74,6 +75,13 @@ func applyAppEdit(a *savedApp, edit object) error {
 			return fieldError("apps.update.title", "expected a non-empty title")
 		}
 	}
+	if raw, ok := edit["kind"]; ok {
+		k := str(raw)
+		if k != "book" && k != "game" && k != "tool" {
+			return fieldError("apps.update.kind", "expected book, game, or tool")
+		}
+		a.Kind = k
+	}
 	if raw, ok := edit["code"]; ok {
 		code, isString := raw.(string)
 		if !isString || len(code) > 16<<10 {
@@ -86,38 +94,39 @@ func applyAppEdit(a *savedApp, edit object) error {
 		}
 		a.Code, a.Template, a.Data = code, "", nil
 	}
-	if raw, ok := edit["svg"]; ok {
-		svg, isString := raw.(string)
-		if !isString || a.Template != "" {
-			return fieldError("apps.update.svg", "expected an SVG string for a custom app")
-		}
-		a.SVG = ""
-		if svg != "" {
-			root, err := parseSVG(svg)
-			if err != nil {
-				return fieldError("apps.update.svg", "%s", err)
-			}
-			a.SVG = svgString(root)
-		}
-	}
 	if raw, ok := edit["data"]; ok {
-		if a.Template == "" || raw == nil {
-			return fieldError("apps.update.data", "expected a data object for a template")
+		if raw == nil {
+			return fieldError("apps.update.data", "expected a data object")
 		}
-		if fields, ok := raw.(object); ok && edit["title"] == nil {
-			if title := shortText(fields["title"], 60, false); title != "" {
-				a.Title = title
+		if a.Kind == "book" {
+			b, err := json.Marshal(raw)
+			if err != nil {
+				return fieldError("apps.update.data", "expected a JSON object")
 			}
-		}
-		if err := a.setTemplate(a.Template, raw); err != nil {
-			return err
+			a.Data = b
+		} else {
+			if a.Template == "" {
+				return fieldError("apps.update.data", "expected a data object for a template")
+			}
+			if fields, ok := raw.(object); ok && edit["title"] == nil {
+				if title := shortText(fields["title"], 60, false); title != "" {
+					a.Title = title
+				}
+			}
+			if err := a.setTemplate(a.Template, raw); err != nil {
+				return err
+			}
 		}
 	}
 	switch {
+	case a.Kind == "book":
+		if text, _ := bookTextAndCover(*a, pxMint); text == "" {
+			return fieldError("apps.update", "book has no text or pages")
+		}
 	case a.scripted():
-		a.Kind = "app"
-	case a.SVG != "":
-		a.Kind = "drawing"
+		if a.Kind != "tool" {
+			a.Kind = "game"
+		}
 	default:
 		return fieldError("apps.update", "cannot remove the entire app definition")
 	}
@@ -125,9 +134,9 @@ func applyAppEdit(a *savedApp, edit object) error {
 }
 
 func storeAppEdit(ctx context.Context, tx *sql.Tx, a savedApp) (savedApp, error) {
-	a, err := scanApp(tx.QueryRowContext(ctx, `UPDATE apps SET title=?,kind=?,svg=?,code=?,tick_ms=?,max_ticks=?,template=?,
+	a, err := scanApp(tx.QueryRowContext(ctx, `UPDATE apps SET title=?,kind=?,code=?,tick_ms=?,max_ticks=?,template=?,
 		data_json=?,updated_at=max(updated_at+1,?) WHERE name=? RETURNING `+appColumns,
-		a.Title, a.Kind, a.SVG, a.Code, a.TickMS, a.MaxTicks, a.Template, a.dataJSON(), time.Now().UnixMilli(), a.Name))
+		a.Title, a.Kind, a.Code, a.TickMS, a.MaxTicks, a.Template, a.dataJSON(), time.Now().UnixMilli(), a.Name))
 	if err != nil {
 		return a, errSavedAppEdit
 	}

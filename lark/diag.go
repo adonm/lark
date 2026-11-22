@@ -275,7 +275,6 @@ type diagCache struct {
 
 func (b *larkServer) diagnosticReport() diagReport {
 	out := diagReport{Generated: time.Now().UTC(), Latency: make(map[string]diagSummary), Turns: []diagTurn{}, Terminals: []diagTerminal{}}
-	out.SVGCache.Hits, out.SVGCache.Misses = screens.stats()
 	b.diag.mu.Lock()
 	out.diagSystem = b.diag.system
 	out.Refresh = b.diag.refresh

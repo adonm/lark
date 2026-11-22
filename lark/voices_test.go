@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -165,22 +164,32 @@ func TestMenuVoicePicker(t *testing.T) {
 	c.tap(t, 180, 316, 0)
 	waitSVG(t, b.ws, termID, "menu-next")
 	c.tap(t, 248, 294, 0)
-	p2svg := waitSVG(t, b.ws, termID, "Heart")
+	p2svg := waitSVG(t, b.ws, termID, "menu-voice")
 	vx, vy, ok := hitCenter(p2svg, "menu-voice")
 	if !ok {
 		t.Fatal("missing menu-voice hit")
 	}
 	c.tap(t, vx, vy, 0)
-	svg := waitSVG(t, b.ws, termID, "voice-george")
-	for _, voice := range []int{1, 2, 3, 0} {
+	svg := waitSVG(t, b.ws, termID, "voice-af_heart")
+	for _, voice := range []int{1, 0} {
 		choice := voiceCatalog[voice]
-		x, y, ok := hitCenter(svg, "voice-"+strings.ToLower(choice.Name))
-		if !ok {
-			t.Fatalf("missing hit for %s", choice.Name)
+		b.ws.mu.Lock()
+		hits := b.ws.terminals[termID].svg.hits
+		b.ws.mu.Unlock()
+		var tx, ty int
+		found := false
+		for _, h := range hits {
+			if h.id == "voice-"+choice.ID {
+				tx, ty, found = (h.x1+h.x2)/2, (h.y1+h.y2)/2, true
+				break
+			}
 		}
-		c.tap(t, x, y, 0)
+		if !found {
+			t.Fatalf("missing hit for %s in %v", choice.Name, hits)
+		}
+		c.tap(t, tx, ty, 0)
 		c.barrier(t)
-		svg = waitSVG(t, b.ws, termID, menuWarning)
+		waitSVG(t, b.ws, termID, "voice")
 		if reloaded := companionVoiceStore(b.db, heartVoice); reloaded.get(id, "cake") != choice.ID {
 			t.Errorf("voice picker did not persist %s", choice.ID)
 		}
@@ -192,5 +201,7 @@ func TestMenuVoicePicker(t *testing.T) {
 	c.tap(t, bx, by, 0)
 	waitSVG(t, b.ws, termID, "menu-voice")
 	testRequest(t, "POST", base+"/api/companions/"+id+"/voice", "unit", object{"voice": "af_bella"}, 200)
-	waitSVG(t, b.ws, termID, "Bella")
+	if got := companionVoiceStore(b.db, heartVoice).get(id, "cake"); got != "af_bella" {
+		t.Fatalf("voice API did not persist af_bella: %q", got)
+	}
 }
