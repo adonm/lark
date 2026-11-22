@@ -41,6 +41,7 @@ static atomic_int brightness = BRIGHT;
 static atomic_uint last_touch;
 static atomic_uint shown_rev;
 static atomic_bool ps_dirty = true;
+static atomic_bool touch_irq_ok;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -241,7 +242,7 @@ bool display_is_sleeping(void)
     return atomic_load(&brightness) == DIM;
 }
 
-#if BOARD_HAS_BATTERY
+#if BOARD_HAS_TOUCH_IRQ
 static void touch_interrupt(esp_lcd_touch_handle_t controller)
 {
     BaseType_t awaken = pdFALSE;
@@ -255,10 +256,14 @@ static void touch_task(void *arg)
     touch_gesture_t gesture = { 0 };
     uint16_t press_rev = 0;
     for (;;) {
-#if BOARD_HAS_BATTERY
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(display_is_sleeping() && !gesture.down ? 120 : 30));
+#if BOARD_HAS_TOUCH_IRQ
+        if (atomic_load_explicit(&touch_irq_ok, memory_order_relaxed)) {
+            ulTaskNotifyTake(pdTRUE, gesture.down ? pdMS_TO_TICKS(12) : portMAX_DELAY);
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(gesture.down ? 12 : 30));
+        }
 #else
-        vTaskDelay(pdMS_TO_TICKS(30));
+        vTaskDelay(pdMS_TO_TICKS(gesture.down ? 12 : 30));
 #endif
         esp_lcd_touch_point_data_t p = { 0 };
         uint8_t count = 0;
@@ -303,8 +308,11 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_FALSE(xTaskCreate(paint_task, "painter", 4096, NULL, 2, &painter) == pdPASS &&
                         xTaskCreate(touch_task, "touch", 3072, NULL, 4, &touch_reader) == pdPASS,
                         ESP_ERR_NO_MEM, TAG, "Display tasks");
-#if BOARD_HAS_BATTERY
-    if (esp_lcd_touch_register_interrupt_callback_with_data(touch, touch_interrupt, touch_reader) != ESP_OK) {
+#if BOARD_HAS_TOUCH_IRQ
+    if (esp_lcd_touch_register_interrupt_callback_with_data(touch, touch_interrupt, touch_reader) == ESP_OK) {
+        atomic_store_explicit(&touch_irq_ok, true, memory_order_relaxed);
+        xTaskNotifyGive(touch_reader);
+    } else {
         ESP_LOGW(TAG, "Touch interrupt unavailable; using poll wake");
     }
 #endif
