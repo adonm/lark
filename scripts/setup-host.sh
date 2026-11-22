@@ -195,12 +195,11 @@ settings = {
     "LARK_OPENCODE_URL": "http://127.0.0.1:49375",
     "LARK_OPENCODE_PASSWORD": password,
     "OPENCODE_SERVER_PASSWORD": password,
-    "LARK_OPENCODE_PAIR_PORT": "49376",
 }
 if sys.argv[2] != "false":
     settings["GGML_VK_VISIBLE_DEVICES"] = sys.argv[2]
 kept = [line for line in old.splitlines(keepends=True)
-        if line.strip().partition("=")[0].rstrip() not in settings.keys() | {"LARK_STT", "LARK_SILERO_VAD_MODEL"}]
+        if line.strip().partition("=")[0].rstrip() not in settings.keys() | {"LARK_STT", "LARK_SILERO_VAD_MODEL", "LARK_OPENCODE_PAIR_PORT"}]
 text = "".join(kept)
 if text and not text.endswith("\n"):
     text += "\n"
@@ -229,8 +228,7 @@ repo, data, binary, directory, opencode, env_file, oc_root = sys.argv[1:]
 units = Path(directory)
 paths = {"REPO_DIR": repo, "DATA_HOME": data, "LARK_BIN": binary,
          "OPENCODE_BIN": opencode, "ENV_FILE": env_file}
-for name in ("lark.service", "lark-opencode.service",
-             "lark-opencode-lan.socket", "lark-opencode-lan.service"):
+for name in ("lark.service", "lark-opencode.service"):
     template = Path(repo, "lark", name).read_text()
     rendered = re.sub(r"@([A-Z_]+)@", lambda m: escape(paths[m[1]]), template)
     if name == "lark-opencode.service":
@@ -248,9 +246,8 @@ for name in ("lark.service", "lark-opencode.service",
 PY
 
 systemctl --user daemon-reload
-systemctl --user enable lark-opencode.service lark-opencode-lan.socket lark.service
+systemctl --user enable lark-opencode.service lark.service
 systemctl --user restart lark-opencode.service lark.service
-systemctl --user start lark-opencode-lan.socket
 
 python3 - "$env_file" "$oc_root" "$(type -P opencode)" <<'PY'
 import base64

@@ -511,7 +511,6 @@ func (b *larkServer) sampleDiagnostics(start time.Time, path string) func() {
 				report.TTS = diagTTS{kokoroEngine, b.worker.ready.Load()}
 				report.Services.TTS = report.TTS.Ready
 			}
-			report.Services.OpenTunnel = b.tunnels != nil && b.tunnels.runner != nil
 			if b.oc != nil && b.oc.config != nil {
 				report.Services.OpenCode = b.oc.reachable(ctx, "/api/info")
 			}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -10,21 +9,19 @@ import (
 	"time"
 )
 
-var lastMenuSVG = map[*testWS]string{}
+var (
+	lastMenuSVG = map[*testWS]string{}
+	menuTargets = map[*testWS]struct {
+		h      *wsHub
+		termID string
+	}{}
+)
 
-func decodeFrameSVG(f wsFrame) (uint32, string) {
-	p := framePayload(f)
-	if len(p) < 10 {
-		return 0, ""
-	}
-	rev := binary.LittleEndian.Uint32(p[0:4])
-	tidLen, cidLen := int(p[4]), int(p[5])
-	svgLen := int(binary.LittleEndian.Uint32(p[6:10]))
-	off := 10 + tidLen + cidLen
-	if off+svgLen > len(p) {
-		return 0, ""
-	}
-	return rev, string(p[off : off+svgLen])
+func bindMenu(c *testWS, h *wsHub, termID string) {
+	menuTargets[c] = struct {
+		h      *wsHub
+		termID string
+	}{h, termID}
 }
 
 func hitCenter(svg, id string) (int, int, bool) {
@@ -52,8 +49,8 @@ func hitCenter(svg, id string) (int, int, bool) {
 
 func menuFrame(t *testing.T, c *testWS, want ...string) string {
 	t.Helper()
-	frame := c.until(t, hasSVG(want[0]))
-	_, svg := decodeFrameSVG(frame)
+	tgt := menuTargets[c]
+	svg := waitSVG(t, tgt.h, tgt.termID, want[0])
 	lastMenuSVG[c] = svg
 	for _, text := range want {
 		if !strings.Contains(svg, text) {
@@ -76,8 +73,9 @@ func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 func TestWSMainMenuPages(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
-	c := testConnectWS(t, base, "unit", true)
-	c.helloWeb(t, "web-00000001", "cake", capDrag, false)
+	c := testConnectWS(t, base, "unit", false)
+	c.hello(t, "vocat-0001", "cake")
+	bindMenu(c, b.ws, "vocat-0001")
 	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-games", "menu-history", "menu-memories", "menu-next")
 	page2 := tapMenu(t, c, "menu-next", "menu-prev", "menu-voice", "menu-volume", "menu-stats")
 	for _, check := range []struct {
@@ -102,8 +100,8 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 	const id = "lark-games"
 	board := testConnectWS(t, base, "unit", false)
 	board.hello(t, id, "Cake")
-	web := testConnectWS(t, base, "unit", true)
-	web.watch(t, id)
+	bindMenu(board, b.ws, id)
+	web := board
 	tapMenu(t, web, "menu", "menu-games")
 	tapMenu(t, web, "menu-games", "No saved games yet", "menu-back")
 	tapMenu(t, web, "menu-back", "menu-games")
@@ -136,10 +134,12 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 	tapMenu(t, web, "menu-prev", "Arcade 0", "menu-next")
 	tapMenu(t, web, "menu-next", "Arcade 5", "menu-prev")
 
-	// A native coordinate, not a web control ID, launches the game.
+	// A native coordinate launches the game.
 	board.tap(t, 246, 125, 0)
-	ready := web.until(t, hasSVG("Ready to play"))
-	wantRev, _ := decodeFrameSVG(ready)
+	waitSVG(t, b.ws, id, "Ready to play")
+	b.ws.mu.Lock()
+	wantRev := b.ws.terminals[id].rev
+	b.ws.mu.Unlock()
 	board.until(t, func(f wsFrame) bool {
 		if !isDisplay(f) {
 			return false
@@ -190,8 +190,9 @@ func TestWSMenuListDetails(t *testing.T) {
 		t.Run(tc.drawer, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
 			_, _ = b.createCompanion(t.Context(), object{"id": id, "name": "Cake"})
-			c := testConnectWS(t, base, "unit", true)
-			c.helloWeb(t, "web-00000001", id, capDrag, false)
+			c := testConnectWS(t, base, "unit", false)
+			c.hello(t, "vocat-0001", id)
+			bindMenu(c, b.ws, "vocat-0001")
 			tapMenu(t, c, "menu", "menu-history")
 			open := "menu-" + tc.drawer
 			tapMenu(t, c, open, tc.empty, "menu-back")
@@ -222,7 +223,7 @@ func TestWSMenuListDetails(t *testing.T) {
 				for start := 6; start < 20; start += 3 {
 					tapMenu(t, c, "menu-next", fmt.Sprintf("menu-row-%d", start))
 				}
-				tail := tapMenu(t, c, "menu-row-19", "Message 02", "You", "menu-back")
+				tail := tapMenu(t, c, "menu-row-19", `data-id="companion"`, "Message 02", "You", "menu-back")
 				if strings.Contains(tail, "Message 01") || strings.Contains(tail, "menu-next") {
 					t.Fatal("history exceeds the latest 20 messages")
 				}
@@ -236,11 +237,14 @@ func TestWSMenuListDetails(t *testing.T) {
 
 func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "lark-game-sql"
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
+		t.Fatal(err)
+	}
 	board := testConnectWS(t, base, "unit", false)
-	board.hello(t, id, "Cake")
-	web := testConnectWS(t, base, "unit", true)
-	web.watch(t, id)
+	board.hello(t, "vocat-0001", "mint")
+	web := testConnectWS(t, base, "unit", false)
+	web.hello(t, "vocat-0002", "Cake")
+	bindMenu(web, b.ws, "vocat-0002")
 	tapMenu(t, web, "menu", "menu-games")
 	if err := b.saveApp(t.Context(), savedApp{Name: "slow", Title: "Slow Game", Kind: "drawing",
 		SVG: `<svg><rect width="360" height="360" fill="red"/></svg>`}); err != nil {
@@ -262,7 +266,10 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 		web.tap(t, x, y, 0)
 		waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
 		if control == "game-0" {
-			board.tap(t, 180, 316, 0) // Leave Games while the app is still loading.
+			b.ws.mu.Lock()
+			d := b.ws.terminals["vocat-0002"]
+			b.ws.pointer(d, "tap", 180, 316, 0, time.Now(), true) // Leave Games while the app is still loading.
+			b.ws.mu.Unlock()
 		} else {
 			var st [16]byte
 			board.sendProto(t, msgTelemetry, st[:])
@@ -278,7 +285,7 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 			menuFrame(t, web, "menu-games")
 			web.barrier(t)
 			b.ws.mu.Lock()
-			running := b.ws.terminals[id].app != nil
+			running := b.ws.terminals["vocat-0002"].app != nil
 			b.ws.mu.Unlock()
 			if running {
 				t.Fatal("leaving Games didn't cancel the stale launch")

@@ -45,11 +45,7 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 	if id != "new-companion" || created["name"] != "New Companion" || created["configured"] != false || created["dormant"] != true {
 		t.Fatal("companion did not start blank", created)
 	}
-	term := post("/api/terminals", object{"kind": "web", "companion_id": id}, 201)
-	termID := str(term["id"])
-	if !webTerminalID.MatchString(termID) || term["companion_id"] != id {
-		t.Fatal("web terminal did not attach", term)
-	}
+	const termID = "vocat-0001"
 	if err := b.oc.save(id, "ses_companion"); err != nil {
 		t.Fatal(err)
 	}
@@ -66,20 +62,15 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		blank["accent_color"] != "#ED8F87" || blank["voice"] != heartVoice || blank["face_svg"] != blankCompanion().FaceSVG {
 		t.Fatal("invalid blank starter", blank)
 	}
-	if got := turnPrompt(id, true, "voice", "Hi", blankCompanion()); got != "[New Companion ("+id+") · web · voice · setup]\nHi" {
+	if got := turnPrompt(id, "voice", "Hi", blankCompanion()); got != "[New Companion ("+id+") · hardware · voice · setup]\nHi" {
 		t.Fatal(got)
 	}
 	dev := testConnectWS(t, base, "unit", false)
-	dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG, terminalID: termID, companionID: id}))
-	f := dev.until(t, hasSVG("Say hi to meet me!"))
-	if strings.Contains(string(f.data), "#F59E0B") {
+	dev.hello(t, "vocat-0001", id)
+	svg := waitSVG(t, b.ws, "vocat-0001", "Say hi to meet me!")
+	if strings.Contains(svg, "#F59E0B") {
 		t.Fatal("starter face did not show its setup cue")
 	}
-	web := testConnectWS(t, base, "unit", true)
-	web.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
-	web.until(t, hasProto(msgPeers, id))
-	web.sendProto(t, msgWatch, appendStr8(nil, id))
-	web.until(t, hasSVG("Say hi to meet me!"))
 	for _, fields := range []object{
 		{"face_bg": "navy"}, {"voice": "unknown"}, {"name": strings.Repeat("x", 41)},
 		{"personality": strings.Repeat("x", 161)}, {"configured": "false"},
@@ -103,29 +94,23 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		t.Fatal("unexpected configured companion", cosmo)
 	}
 	expectValue(t, title, "Lark: Cosmo ("+id+")")
-	frame := dev.until(t, hasSVG("#172344"))
-	if !hasSVG("#C0FFEE")(frame) || !hasSVG("#1A1926")(frame) {
+	svg = waitSVG(t, b.ws, "vocat-0001", "#172344")
+	if !strings.Contains(svg, "#C0FFEE") || !strings.Contains(svg, "#1A1926") {
 		t.Fatal("live companion lost an extra or an animated eye")
 	}
-	faceSeen, companionSeen := false, false
-	web.until(t, func(f wsFrame) bool {
-		faceSeen = faceSeen || hasSVG("#172344")(f)
-		companionSeen = companionSeen || hasProto(msgCompanion, "Cosmo")(f)
-		return faceSeen && companionSeen
-	})
 	list := apiObjects(t, base+"/api/companions", "companions")
 	if len(list) != 1 || list[0].(object)["name"] != "Cosmo" || list[0].(object)["face_bg"] != "#172344" {
 		t.Fatal("companions API did not reflect companion design", list)
 	}
 	stored := b.companionFor(id)
-	if got := turnPrompt(id, true, "voice", "Hi", stored); got != "[Cosmo ("+id+") · web · voice · vibe: curious space explorer]\nHi" {
+	if got := turnPrompt(id, "voice", "Hi", stored); got != "[Cosmo ("+id+") · hardware · voice · vibe: curious space explorer]\nHi" {
 		t.Fatal(got)
 	}
 	if c := call(false, "reset_blank", object{})["companion"].(object); c["configured"] != false || c["personality"] != "" || c["face_svg"] != blankCompanion().FaceSVG {
 		t.Fatal("reset_blank left configured state", c)
 	}
 	expectValue(t, title, "Lark: New Companion ("+id+")")
-	dev.until(t, hasSVG("Say hi to meet me!"))
+	waitSVG(t, b.ws, "vocat-0001", "Say hi to meet me!")
 	testRequest(t, "DELETE", base+"/api/companions/"+id, "unit", nil, 409)
 	post("/api/terminals/"+termID+"/detach", object{}, 200)
 	testRequest(t, "DELETE", base+"/api/companions/"+id, "unit", nil, 204)
@@ -150,12 +135,11 @@ func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
 	if err := b.oc.save(id, "ses_reset"); err != nil {
 		t.Fatal(err)
 	}
-	term := testObject(t, testRequest(t, "POST", base+"/api/terminals", "unit", object{"kind": "web", "companion_id": id}, 201))
 	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, str(term["id"]), "")
+	dev.hello(t, "vocat-0001", id)
 	toolTest(t, base, "app", object{"companions": id, "svg": `<svg><text x="180" y="180">Party</text></svg>`}, false)
 	testRequest(t, "POST", base+"/api/companions/"+id+"/reset", "unit", object{}, 200)
-	dev.until(t, hasSVG("Say hi to meet me!"))
+	waitSVG(t, b.ws, "vocat-0001", "Say hi to meet me!")
 	s := stateMe(t, base, id)
 	if s["active_app"] != nil {
 		t.Fatal("reset did not close app", s)

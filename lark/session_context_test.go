@@ -139,7 +139,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 				want = "And what fruit grows there?"
 			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || !seeded.Load() || !connected.Load() ||
-				in.Text != "[Plum ("+id+") · hardware · typed]\n"+want || in.Metadata["larkSource"] != "typed" {
+				in.Text != "[Plum ("+id+") · hardware · voice]\n"+want || in.Metadata["larkSource"] != "voice" {
 				t.Errorf("current turn changed after handoff: %+v", in)
 			}
 			promptID = fmt.Sprintf("msg-user-%d", n)
@@ -197,19 +197,19 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 		entry.SceneTitle, entry.ToolSummary = "TOOLS-ONLY", "OLD-TOOL"
 		b.history.add(row.device, entry)
 	}
-	scope := httptest.NewServer(b.scoped(c, "scoped-token"))
-	defer scope.Close()
-	scopeURL := scope.URL + "/api/scope"
-	historyURL := scope.URL + "/api/companions/" + id + "/messages"
-	snapshot := testRequest(t, "GET", scopeURL, "scoped-token", nil, 200)
-	history := testRequest(t, "GET", historyURL, "scoped-token", nil, 200)
+	before, err := b.history.list(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := b.syncSchemaUpgrade(t.Context()); err == nil {
 		t.Fatal("a failed MCP handshake was treated as current")
 	}
 	if marker, _ := db.getMeta(t.Context(), mcpSchemaMeta); marker != previous {
 		t.Fatal("failed reconnect changed the catalog hash")
 	}
-	testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token", object{"companion_id": id, "text": turn}, 503)
+	if _, err := b.generateReply(t.Context(), b.root, c, turn, turnOptions{source: "voice"}); err == nil {
+		t.Fatal("turn succeeded while MCP schema upgrade was pending")
+	}
 	online.Store(true)
 	lanURL.Store(setup.URL)
 	refresh, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -221,50 +221,44 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	if sid, _ := b.oc.get(id); sid != oldSID {
 		t.Fatal("startup replaced the unversioned binding")
 	}
-	scope.Close()
 	setup.Close()
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// The failed/verified catalog attempts and still-stale binding survive a
-	// reopen. The old scoped credential still resolves the same companion.
+	// reopen.
 	db = testDB(t, path)
 	b = recoveryServer(t, db, api, current)
 	if err := b.syncSchemaUpgrade(t.Context()); err != nil || reconnects.Load() != 2 {
 		t.Fatalf("verified catalog was lost after restart: %v", err)
 	}
-	scope = httptest.NewServer(b.scoped(c, "scoped-token"))
-	defer scope.Close()
-	got := testObject(t, testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token", object{"companion_id": id, "text": turn}, 200))
-	if got["session_id"] != freshSID || got["reply"] != "Mango Island!" || got["companion_id"] != id || creates.Load() != 1 {
-		t.Fatalf("wrong scoped recovery: %v", got)
-	}
-	if got := testRequest(t, "GET", scope.URL+"/api/scope", "scoped-token", nil, 200); !bytes.Equal(got, snapshot) {
-		t.Fatal("scoped identity changed")
+	gen, err := b.generateReply(t.Context(), b.root, c, turn, turnOptions{source: "voice"})
+	if err != nil || gen.sid != freshSID || gen.reply != "Mango Island!" || creates.Load() != 1 {
+		t.Fatalf("wrong recovery: %+v %v", gen, err)
 	}
 	var saved int
 	if err := db.QueryRow(`SELECT count(*) FROM companions WHERE id=? AND name='Plum' AND face_bg='#654321'`, id).Scan(&saved); err != nil || saved != 1 {
 		t.Fatalf("companion form changed: %d, %v", saved, err)
 	}
-	raw := testRequest(t, "GET", scope.URL+"/api/companions/"+id+"/messages", "scoped-token", nil, 200)
-	var before, after historyPage
-	if json.Unmarshal(history, &before) != nil || json.Unmarshal(raw, &after) != nil ||
-		len(after.Messages) != len(before.Messages)+2 || !bytes.Contains(raw, []byte("BEFORE-RESET")) ||
+	after, err := b.history.list(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(after)
+	if len(after) != len(before)+2 || !bytes.Contains(raw, []byte("BEFORE-RESET")) ||
 		bytes.Count(raw, []byte(turn)) != 1 || bytes.Contains(raw, []byte("Lark conversation excerpt")) {
 		t.Fatalf("history changed or duplicated the recovery prompt: %s", raw)
 	}
-	scope.Close()
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	db = testDB(t, path)
 	b = recoveryServer(t, db, api, current)
-	scope = httptest.NewServer(b.scoped(c, "scoped-token"))
-	defer scope.Close()
-	testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token",
-		object{"companion_id": id, "text": "And what fruit grows there?"}, 200)
+	if _, err := b.generateReply(t.Context(), b.root, c, "And what fruit grows there?", turnOptions{source: "voice"}); err != nil {
+		t.Fatal(err)
+	}
 	if creates.Load() != 1 || calls.Load() != 2 {
 		t.Fatal("newly versioned binding did not survive restart")
 	}
@@ -363,18 +357,23 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			lan := httptest.NewServer(b)
 			defer lan.Close()
 			lanURL.Store(lan.URL)
-			send := func(text string, status int) []byte {
+			who := b.companionFor(id)
+			send := func(text string, wantErr bool) generatedReply {
 				t.Helper()
-				return testRequest(t, "POST", lan.URL+"/api/chat", "unit", object{"companion_id": id, "text": text}, status)
+				gen, err := b.generateReply(t.Context(), b.root, who, text, turnOptions{source: "voice"})
+				if (err != nil) != wantErr {
+					t.Fatalf("%q: err=%v wantErr=%t", text, err, wantErr)
+				}
+				return gen
 			}
-			send("First check", 502)
+			send("First check", true)
 			probe.Store(1)
-			send("Second check", 502)
+			send("Second check", true)
 			if creates.Load() != 0 || oldPrompts.Load() != 0 {
 				t.Fatal("non-definitive 404 triggered repair or dispatch")
 			}
 			probe.Store(2)
-			send(failedPrompt, 502)
+			send(failedPrompt, true)
 			if creates.Load() != 0 || oldPrompts.Load() != 1 || newPrompts.Load() != 0 {
 				t.Fatal("failed turn triggered a handoff or replay")
 			}
@@ -382,13 +381,13 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			if err != nil || (len(local) > 3 && local[len(local)-1].Text == failedPrompt) != accepted {
 				t.Fatalf("wrong durable history for the failed turn: %v, %v", local, err)
 			}
-			send(nextPrompt, 502)
+			send(nextPrompt, true)
 			if sid, _ := b.oc.get(id); sid != oldSID {
 				t.Fatal("failed creation discarded the old binding")
 			}
-			got := testObject(t, send(nextPrompt, 200))
-			if got["reply"] != "Mango Island." || got["session_id"] != freshSID {
-				t.Fatalf("next turn did not recover: %v", got)
+			got := send(nextPrompt, false)
+			if got.reply != "Mango Island." || got.sid != freshSID {
+				t.Fatalf("next turn did not recover: %+v", got)
 			}
 			var timers int
 			if err := db.QueryRow(`SELECT count(*) FROM timers WHERE companion_id=?`, id).Scan(&timers); err != nil ||

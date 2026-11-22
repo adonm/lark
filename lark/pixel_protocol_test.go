@@ -41,7 +41,7 @@ func TestMCPDeclarativeScreen(t *testing.T) {
 	round.helloV2(t, "vocat-0001", "Cake")
 	box.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
 		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
-		width: 320, height: 240, shape: shapeRect, terminalID: "box3-0001", companionID: "Mint", board: "esp-box-3", firmware: "0.12.0",
+		width: 320, height: 240, shape: shapeRect, terminalID: "box3-0001", companionID: "Mint", board: "esp-box-3", firmware: "0.12.0", token: "unit",
 	}))
 	box.until(t, hasProto(msgWelcome, ""))
 	box.until(t, isDisplay)

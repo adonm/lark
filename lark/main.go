@@ -97,10 +97,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	pairPort, err := strconv.Atoi(env("LARK_OPENCODE_PAIR_PORT", "0"))
-	if err != nil || pairPort < 0 || pairPort > 65535 || pairPort != 0 && (ocURL == "" || ocPassword == "") {
-		return errors.New("LARK_OPENCODE_PAIR_PORT requires a valid port and a dedicated OpenCode URL and password")
-	}
 	ocDir := env("LARK_OPENCODE_DIR", filepath.Join(local, "opencode/workspace"))
 	syscall.Umask(0o077)
 	if !filepath.IsAbs(ocDir) {
@@ -167,7 +163,7 @@ func run() error {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
 	})
 	b := &larkServer{root: root, token: token, db: db, terminals: terminalStore(db),
-		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, pairPort: pairPort, worker: worker,
+		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, worker: worker,
 		voices:  companionVoiceStore(db, fallbackVoice),
 		history: &chatHistory{db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
@@ -194,20 +190,11 @@ func run() error {
 		b.builders.run(root)
 	}()
 	defer func() { finish(); <-buildsDone }()
-	// Serialize shutdown cleanly.
-	bin := findTunnelCLI(home)
-	var runner tunnelRunner
-	if bin != "" {
-		runner = tunnelCLI(bin)
-	}
-	b.tunnels = newTunnelManager(b, bin, runner)
-	b.tunnels.restore()
 	stopDiagnostics := b.sampleDiagnostics(started, dbPath)
 	defer stopDiagnostics()
 	b.timers = newTimerManager(b)
 	if err := b.timers.restore(time.Now()); err != nil {
 		b.timers.close()
-		b.tunnels.shutdown()
 		b.ws.shutdown()
 		finish()
 		_ = listener.Close()
@@ -235,7 +222,6 @@ func run() error {
 	select {
 	case <-signals.Done():
 		b.timers.close()
-		b.tunnels.shutdown()
 		b.ws.shutdown()
 		termSrv.shutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -248,7 +234,6 @@ func run() error {
 	}
 	finish()
 	b.timers.close()
-	b.tunnels.shutdown()
 	b.ws.shutdown()
 	termSrv.shutdown()
 	<-worker.done

@@ -446,19 +446,7 @@ func (m *timerManager) cancelTimers(ctx context.Context, companion, id string) (
 	return ids, nil
 }
 
-func (b *larkServer) timerUpdate(id string) {
-	if h := b.ws; h != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		key := strings.ToLower(id)
-		pkt := encodeEventMsg(h.nextSeq(), eventTimers, id, "", "")
-		for c := range h.clients {
-			if c.watch == key || c.terminal != nil && c.terminal.companionID == key && c.terminal.virtual() {
-				c.enqueueProto(msgEvent, pkt)
-			}
-		}
-	}
-}
+func (b *larkServer) timerUpdate(id string) {}
 
 func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	who, ok := b.companionByID(t.CompanionID)

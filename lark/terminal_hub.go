@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"image"
 	"log"
 	"maps"
@@ -79,7 +77,6 @@ type wsTerminal struct {
 	frame       *diagFrame
 	svg         svgScreen
 	grade       atomic.Uint32 // App workers read the board's grade without the hub lock.
-	svgWire     []byte
 	displayApp  *appInstance
 	encoder     frameEncoder
 	renderGen   uint64
@@ -199,177 +196,10 @@ func (h *wsHub) onlineTerminals() map[string]peerDisplay {
 	return out
 }
 
-func (h *wsHub) peerPayload(scoped bool, seq uint32) []byte {
-	online := h.onlineTerminals()
-	list := make([]peerDisplay, 0, len(h.storedPeers)+len(online))
-	if !scoped {
-		for _, p := range h.storedPeers {
-			if _, ok := online[strings.ToLower(p.id)]; !ok {
-				list = append(list, p)
-			}
-		}
-	}
-	for _, p := range online {
-		list = append(list, p)
-	}
-	slices.SortFunc(list, func(a, b peerDisplay) int { return strings.Compare(a.id, b.id) })
-	compOnline := make(map[string]bool)
-	for _, p := range list {
-		if p.online && p.companionID != "" {
-			compOnline[p.companionID] = true
-		}
-	}
-	b := make([]byte, 0, 256)
-	b = binary.LittleEndian.AppendUint32(b, seq)
-	var sc byte
-	if scoped {
-		sc = 1
-	}
-	b = append(b, sc)
-	b = binary.LittleEndian.AppendUint16(b, uint16(len(h.storedCompanions)))
-	for _, c := range h.storedCompanions {
-		b = appendStr8(b, c.ID)
-		b = appendStr8(b, c.Name)
-		var cfg, on byte
-		if c.Configured {
-			cfg = 1
-		}
-		if compOnline[c.ID] {
-			on = 1
-		}
-		b = append(b, cfg)
-		b = appendStr8(b, c.FaceBG)
-		b = appendStr8(b, c.MarkColor)
-		b = appendStr8(b, c.AccentColor)
-		if scoped {
-			b = appendStr16(b, "")
-			b = appendStr8(b, "")
-		} else {
-			b = appendStr16(b, c.Personality)
-			b = appendStr8(b, h.b.voices.resolve(c.Voice, companionTheme(c.Name)))
-		}
-		b = append(b, on, 0)
-	}
-	if scoped {
-		b = binary.LittleEndian.AppendUint16(b, 0)
-		return b
-	}
-	b = binary.LittleEndian.AppendUint16(b, uint16(len(list)))
-	for _, p := range list {
-		b = appendStr8(b, p.id)
-		var kind, on, auto byte
-		if p.kind == "web" {
-			kind = 1
-		}
-		if p.online {
-			on = 1
-		}
-		if p.auto {
-			auto = 1
-		}
-		b = append(b, kind)
-		b = appendStr8(b, p.companionID)
-		b = append(b, on, auto)
-		if p.kind == "hardware" {
-			b = appendStr8(b, p.ip)
-			b = binary.LittleEndian.AppendUint16(b, uint16(p.port))
-			b = binary.LittleEndian.AppendUint64(b, uint64(p.lastSeen))
-		} else {
-			b = appendStr8(b, "")
-			b = binary.LittleEndian.AppendUint16(b, 0)
-			b = binary.LittleEndian.AppendUint64(b, 0)
-		}
-		if p.online {
-			b = appendStr8(b, p.firmware)
-			b = binary.LittleEndian.AppendUint32(b, capsMaskFromCaps(p.caps))
-		} else {
-			b = appendStr8(b, "")
-			b = binary.LittleEndian.AppendUint32(b, 0)
-		}
-	}
-	return b
-}
-
 func (h *wsHub) broadcastPeers() {
-	h.broadcastPeerFrames()
-	for c := range h.clients {
-		if (c.kind == "web" || c.kind == "watcher") && c.scope == nil {
-			h.refreshNeeded = true
-			if !h.refreshing {
-				h.refreshing = true
-				go h.refreshStoredPeers()
-			}
-			return
-		}
-	}
-}
-
-func (c *wsClient) pushPeers(pkt []byte) {
-	if !bytes.Equal(c.lastPeers, pkt) {
-		c.lastPeers = pkt
-		c.enqueueProto(msgPeers, pkt)
-	}
-}
-
-func (h *wsHub) refreshStoredPeers() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for h.refreshNeeded && !h.closed {
-		h.refreshNeeded = false
-		h.mu.Unlock()
-		terms, err := h.b.terminalSnapshot()
-		comps, compErr := h.b.allCompanions(context.Background())
-		stored := make([]peerDisplay, 0, len(terms))
-		for _, t := range terms {
-			auto, _ := h.b.volumePrefs(t.ID)
-			stored = append(stored, peerDisplay{
-				id:          t.ID,
-				kind:        t.Kind,
-				companionID: t.CompanionID,
-				ip:          t.IP,
-				port:        t.Port,
-				lastSeen:    t.LastSeen,
-				auto:        auto,
-			})
-		}
-		h.mu.Lock()
-		if err == nil && compErr == nil && !h.closed && !h.refreshNeeded {
-			h.storedPeers = stored
-			h.storedCompanions = comps
-			h.broadcastPeerFrames()
-		}
-	}
-	h.refreshing = false
-}
-
-func (h *wsHub) broadcastPeerFrames() {
-	if len(h.clients) == 0 {
-		h.peersKey = ""
-		return
-	}
-	f := h.peerPayload(false, 0)
-	// Compare ignoring the 4-byte seq prefix so we only bump seq on actual changes.
-	if string(f[4:]) != h.peersKey {
-		h.peersKey = string(f[4:])
-		seq := h.nextSeq()
-		binary.LittleEndian.PutUint32(f[0:4], seq)
-		var scoped []byte
-		for c := range h.clients {
-			switch {
-			case (c.kind != "web" && c.kind != "watcher") || c.terminal != nil && c.terminal.announcing:
-			case c.scope == nil:
-				c.pushPeers(f)
-			default:
-				if scoped == nil {
-					scoped = h.peerPayload(true, seq)
-				}
-				c.pushPeers(scoped)
-			}
-		}
-		for _, d := range h.terminals {
-			if d.drawer == "intercom" || d.card.hasIntercom() || d.view.hasIntercom() {
-				h.render(d, time.Now(), false)
-			}
+	for _, d := range h.terminals {
+		if d.drawer == "intercom" || d.card.hasIntercom() || d.view.hasIntercom() {
+			h.render(d, time.Now(), false)
 		}
 	}
 }
@@ -393,12 +223,6 @@ func (h *wsHub) publishCompanion(id string, companion companionState, clearView 
 			d.agentSetScene = d.busy
 		}
 		h.render(d, now, true)
-	}
-	pkt := encodeCompanionMsg(h.nextSeq(), id, companion.Name, companion.Voice, companion.FaceBG, companion.MarkColor, companion.AccentColor)
-	for c := range h.clients {
-		if (c.kind == "web" || c.kind == "watcher") && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
-			c.enqueueProto(msgCompanion, pkt)
-		}
 	}
 	h.broadcastPeers()
 }
@@ -476,54 +300,9 @@ func (h *wsHub) registerHardwareTerminal(termID, hintName, ip string, port int, 
 	return t, nil
 }
 
-func (h *wsHub) registerWebTerminal(termID, compID string, scope *companionState, now time.Time) (terminalRecord, error) {
-	termID = strings.ToLower(strings.TrimSpace(termID))
-	compID = strings.ToLower(strings.TrimSpace(compID))
-	if scope != nil {
-		compID = strings.ToLower(scope.ID)
-		if termID == "" {
-			termID = "web-" + randomHex(4)
-		}
-	}
-	if !webTerminalID.MatchString(termID) {
-		return terminalRecord{}, problem(400, "Invalid web terminal ID")
-	}
-	existing, exists := h.b.terminalByID(termID)
-	if compID != "" {
-		if !validCompanionID(compID) {
-			return terminalRecord{}, problem(400, "Invalid companion ID")
-		}
-		if _, ok := h.b.companionByID(compID); !ok {
-			return terminalRecord{}, problem(404, "Companion not found")
-		}
-	} else if exists {
-		compID = existing.CompanionID
-	}
-	createdAt := now.UTC().Format(time.RFC3339Nano)
-	if exists && existing.CreatedAt != "" {
-		createdAt = existing.CreatedAt
-	}
-	t := terminalRecord{
-		ID:          termID,
-		Kind:        "web",
-		CompanionID: compID,
-		LastSeen:    now.Unix(),
-		CreatedAt:   createdAt,
-	}
-	if h.b.terminals != nil {
-		if err := h.b.terminals.save(t.ID, t, false); err != nil {
-			return terminalRecord{}, err
-		}
-	}
-	return t, nil
-}
-
 func (h *wsHub) sendSnapshotState(d *wsTerminal) {
 	c := d.client
 	if d.companionID != "" {
-		if d.virtual() {
-			c.enqueueProto(msgCompanion, encodeCompanionMsg(h.nextSeq(), d.companionID, d.companion.Name, d.voice, d.companion.FaceBG, d.companion.MarkColor, d.companion.AccentColor))
-		}
 		if st, ok := h.companionStatuses[d.companionID]; ok {
 			c.enqueueProto(msgStatus, encodeStatus(st.seq, st.state, st.progress, st.kind, st.text))
 		} else {
@@ -531,9 +310,6 @@ func (h *wsHub) sendSnapshotState(d *wsTerminal) {
 		}
 		if owner := h.voiceOwner(d.companionID); owner != nil {
 			c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(h.nextSeq(), d.companionID, owner.id))
-		}
-		if p := h.prompts[d.companionID]; p != nil {
-			c.enqueueProto(msgPrompt, encodePrompt(p.seq, p.kind, p.id, p.text, p.options))
 		}
 	}
 	h.pushVolume(d, false, true)
@@ -545,88 +321,58 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "protocol version mismatch"))
 		return false
 	}
-	termID := strings.ToLower(strings.TrimSpace(ev.terminalID))
-	if ev.kind == termKindWeb && c.scope == nil && termID == "" {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if h.closed || c.ctx.Err() != nil {
-			return false
-		}
-		c.kind = "watcher"
-		seq := h.nextSeq()
-		tok := newResumeToken()
-		c.enqueueProto(msgWelcome, encodeWelcome(0, 0, 0, protoMaxPayload, resumeWindowMS, seq, tok, "", ""))
-		c.pushPeers(h.peerPayload(false, seq))
-		h.broadcastPeers()
-		return true
+	if ev.kind != termKindHardware {
+		c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "unknown terminal kind"))
+		return false
 	}
-
-	kindStr := "web"
-	clientKind := "web"
+	termID := strings.ToLower(strings.TrimSpace(ev.terminalID))
+	kindStr := "hardware"
+	clientKind := "hardware"
 	screen, board := roundScreen, ""
 	dispFmt := ev.displayFormats
 	if dispFmt == 0 {
-		if ev.kind == termKindHardware {
-			dispFmt = dispRGB565
-		} else {
-			dispFmt = dispSVG
-		}
+		dispFmt = dispRGB565
 	}
 	frameCodecs := ev.frameCodecs
 	if frameCodecs == 0 && dispFmt&dispRGB565 != 0 {
 		frameCodecs = codecBitAll
 	}
-	var ip string
-	var port int
-	if ev.kind == termKindHardware {
-		kindStr = "hardware"
-		clientKind = "hardware"
-		if !terminalIDRE.MatchString(termID) || webTerminalID.MatchString(termID) {
-			c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid hardware terminal ID"))
-			return false
-		}
-		board = "esp-vocat"
-		if ev.board != "" {
-			board = ev.board
-		}
-		if board == "esp-box-3" {
-			screen = screenGeometry{320, 240, "rect"}
-		}
-		if ev.width > 0 {
-			screen.width = int(ev.width)
-		}
-		if ev.height > 0 {
-			screen.height = int(ev.height)
-		}
-		if ev.shape == shapeRect {
-			screen.shape = "rect"
-		} else if ev.shape == shapeRound {
-			screen.shape = "round"
-		}
-		if screen.width < 1 || screen.width > screenSize || screen.height < 1 || screen.height > screenSize ||
-			screen.shape != "round" && screen.shape != "rect" || board != "esp-vocat" && board != "esp-box-3" ||
-			dispFmt&(dispRGB565|dispSVG) == 0 {
-			c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid display capabilities"))
-			return false
-		}
-		host, _, _ := net.SplitHostPort(c.remoteAddr().String())
-		if addr, err := netip.ParseAddr(host); err == nil {
-			host = addr.Unmap().String()
-		}
-		ip, port = host, 80
-	} else if ev.kind != termKindWeb {
-		c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "unknown terminal kind"))
+	if !terminalIDRE.MatchString(termID) || webTerminalID.MatchString(termID) {
+		c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid hardware terminal ID"))
 		return false
 	}
+	board = "esp-vocat"
+	if ev.board != "" {
+		board = ev.board
+	}
+	if board == "esp-box-3" {
+		screen = screenGeometry{320, 240, "rect"}
+	}
+	if ev.width > 0 {
+		screen.width = int(ev.width)
+	}
+	if ev.height > 0 {
+		screen.height = int(ev.height)
+	}
+	if ev.shape == shapeRect {
+		screen.shape = "rect"
+	} else if ev.shape == shapeRound {
+		screen.shape = "round"
+	}
+	if screen.width < 1 || screen.width > screenSize || screen.height < 1 || screen.height > screenSize ||
+		screen.shape != "round" && screen.shape != "rect" || board != "esp-vocat" && board != "esp-box-3" ||
+		dispFmt&dispRGB565 == 0 {
+		c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid display capabilities"))
+		return false
+	}
+	host, _, _ := net.SplitHostPort(c.remoteAddr().String())
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.Unmap().String()
+	}
+	ip, port := host, 80
 
 	h.b.companionMu.Lock()
-	var rec terminalRecord
-	var err error
-	if kindStr == "hardware" {
-		rec, err = h.registerHardwareTerminal(termID, strings.TrimSpace(ev.companionID), ip, port, now)
-	} else {
-		rec, err = h.registerWebTerminal(termID, ev.companionID, c.scope, now)
-	}
+	rec, err := h.registerHardwareTerminal(termID, strings.TrimSpace(ev.companionID), ip, port, now)
 	h.b.companionMu.Unlock()
 	if err != nil {
 		reason := rejectBadCaps
@@ -675,16 +421,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		return false
 	}
 	if old := h.terminals[d.key]; old != nil {
-		if ev.kind == termKindWeb && ev.flags&helloFlagIfFree != 0 && h.active(old) {
-			c.enqueueProto(msgReject, encodeReject(rejectOccupied, "terminal occupied"))
-			c.stop(wsCompanionOccupied)
-			return false
-		}
-		if old.virtual() {
-			old.client.stop(wsCompanionOccupied)
-		} else {
-			old.client.cancel()
-		}
+		old.client.cancel()
 		h.dropApp(old)
 		old.recording.clear()
 		h.cancelTurn(old, "reconnect")
@@ -772,11 +509,7 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 	d.telemetry.HasBattery = new(d.caps.Battery)
 
 	if old := h.terminals[d.key]; old != nil {
-		if old.virtual() {
-			old.client.stop(wsCompanionOccupied)
-		} else {
-			old.client.cancel()
-		}
+		old.client.cancel()
 		h.dropApp(old)
 		old.recording.clear()
 		h.cancelTurn(old, "reconnect")
@@ -809,12 +542,8 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 
 func (h *wsHub) announce(d *wsTerminal) {
 	d.announcing = false
-	c := d.client
 	h.sendSnapshotState(d)
 	h.broadcastPeers()
-	if c.kind == "web" {
-		c.pushPeers(h.peerPayload(c.scope != nil, h.nextSeq()))
-	}
 }
 
 func (d *wsTerminal) status(s wsStatus) {
@@ -968,14 +697,10 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 			d.menuPage = clampMenuPage(d.menuPage, len(choices), tilesPerPage)
 			r.view = peerScene(choices, d.menuPage)
 		case "stats":
-			if d.client.scope == nil {
-				d.statsAt = now
-				r.view = h.statsScene(d)
-				break
-			}
-			fallthrough
+			d.statsAt = now
+			r.view = h.statsScene(d)
 		default:
-			r.view = menuHome(d.voice, d.autoVol, d.vol, d.client.scope != nil, d.menuPage)
+			r.view = menuHome(d.voice, d.autoVol, d.vol, false, d.menuPage)
 		}
 	case mood == "listening":
 		r.companion, r.pose = new(d.companion), pose
@@ -1012,7 +737,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 	for d.renderNext != nil && h.active(d) {
 		r, gen, prev, rev := *d.renderNext, d.renderGen, d.svg, d.rev+1
 		wantRGB := d.displayFormats&dispRGB565 != 0
-		wantSVG := d.displayFormats&dispSVG != 0
 		codecs := d.frameCodecs
 		oldScene, pointerRev := d.scene, d.caps.PointerRev
 		var geometry screenGeometry
@@ -1057,7 +781,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				screen, err = screens.buildGraded(screen.raw, true, geometry, r.grade)
 			}
 		}
-		var svgWire []byte
 		var native wsFrame
 		var rawBytes int
 		interactionChanged := pointerRev && wantRGB &&
@@ -1067,7 +790,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			if screen.fb != nil {
 				rect := dirtyRect(prev.fb, screen.fb, geometry)
 				if rect.Empty() && interactionChanged {
-					// Identical pixels can still map to different call peers or targets.
 					rect = image.Rect(0, 0, 1, 1)
 				}
 				if !rect.Empty() {
@@ -1076,7 +798,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				}
 			}
 			screen.render += time.Since(start)
-			svgWire = encodeFrameSVG(uint32(rev), d.id, d.companionID, screen.source)
 		}
 
 		h.mu.Lock()
@@ -1089,16 +810,8 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		}
 		d.scene, d.displayApp, d.svg = r.view, r.app, screen
 		h.sig.notify()
-		if svgWire == nil {
-			continue
-		}
-		d.rev, d.svgWire = rev, svgWire
-		if wantSVG {
-			d.client.enqueueProto(msgFrameSVG, svgWire)
-			r.trace.measure(diagRender, screen.render)
-			h.trackFrame(d, screen.render, len(svgWire), len(screen.source), "svg")
-		}
-		if wantRGB && native.data != nil {
+		if native.data != nil {
+			d.rev = rev
 			d.client.enqueueProto(msgFrame, native.data)
 			d.nativeRev = uint16(rev)
 			r.trace.measure(diagRender, screen.render)
@@ -1112,11 +825,6 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				codec = "LZ4"
 			}
 			h.trackFrame(d, screen.render, len(native.data), rawBytes, codec)
-		}
-		for c := range h.clients {
-			if c.watch == d.companionID && d.companionID != "" || c.watch == d.key {
-				c.enqueueProto(msgFrameSVG, svgWire)
-			}
 		}
 		if d.announcing {
 			h.announce(d)

@@ -26,19 +26,15 @@ const (
 	msgRecStart    uint8 = 0x06
 	msgRecEnd      uint8 = 0x07
 	msgTTSAck      uint8 = 0x08
-	msgMedia       uint8 = 0x0A
-	msgTextInput   uint8 = 0x0B
-	msgPromptReply uint8 = 0x0C
-	msgWatch       uint8 = 0x0D
-	msgSetVolume   uint8 = 0x0E
-	msgPing        uint8 = 0x0F
-	msgPong        uint8 = 0x10
+	msgMedia     uint8 = 0x0A
+	msgSetVolume uint8 = 0x0E
+	msgPing      uint8 = 0x0F
+	msgPong      uint8 = 0x10
 
 	// Lark -> Terminal message types
 	msgWelcome      uint8 = 0x81
 	msgReject       uint8 = 0x82
 	msgFrame        uint8 = 0x83
-	msgFrameSVG     uint8 = 0x84
 	msgWakeWordCtrl uint8 = 0x85
 	msgRecCtrl      uint8 = 0x86
 	msgTTSCtrl      uint8 = 0x87
@@ -48,19 +44,12 @@ const (
 	msgVolume       uint8 = 0x8C
 	msgStatus       uint8 = 0x8D
 	msgVoiceOwner   uint8 = 0x8E
-	msgPrompt       uint8 = 0x8F
-	msgPromptEnded  uint8 = 0x90
-	msgCompanion    uint8 = 0x91
-	msgPeers        uint8 = 0x92
-	msgEvent        uint8 = 0x93
 
 	// Terminal kind
 	termKindHardware uint8 = 0
-	termKindWeb      uint8 = 1
 
 	// Display formats
 	dispRGB565 uint8 = 1 << 0
-	dispSVG    uint8 = 1 << 1
 
 	// Frame codecs
 	codecBitRaw    uint8 = 1 << 0
@@ -135,12 +124,6 @@ const (
 	chimeCancel   uint8 = 2
 	chimeIntercom uint8 = 3
 	chimeRing     uint8 = 4
-
-	// Event kinds
-	eventSavedApps       uint8 = 1
-	eventTimers          uint8 = 2
-	eventChat            uint8 = 3
-	eventHistoryArchived uint8 = 4
 
 	// RTP constants
 	rtpVersionByte uint8 = 0x80
@@ -494,43 +477,11 @@ func encodeTTSAck(aborted bool, audioID uint64) []byte {
 	return b[:]
 }
 
-func parseTextInput(b []byte) (string, bool) {
-	off := 0
-	return readStr16(b, &off)
-}
-
-func parsePromptReply(b []byte) (id, choice string, ok bool) {
-	off := 0
-	id, ok = readStr8(b, &off)
-	if !ok {
-		return "", "", false
-	}
-	choice, ok = readStr8(b, &off)
-	return id, choice, ok
-}
-
-func parseWatch(b []byte) (string, bool) {
-	off := 0
-	return readStr8(b, &off)
-}
-
 func parseSetVolume(b []byte) (auto bool, level int, ok bool) {
 	if len(b) < 2 {
 		return false, 0, false
 	}
 	return b[0] != 0, int(b[1]), true
-}
-
-func encodeFrameSVG(rev uint32, terminalID, companionID, svg string) []byte {
-	tidLen := min(len(terminalID), 255)
-	cidLen := min(len(companionID), 255)
-	b := make([]byte, 0, 10+tidLen+cidLen+len(svg))
-	b = binary.LittleEndian.AppendUint32(b, rev)
-	b = append(b, byte(tidLen), byte(cidLen))
-	b = binary.LittleEndian.AppendUint32(b, uint32(len(svg)))
-	b = append(b, terminalID[:tidLen]...)
-	b = append(b, companionID[:cidLen]...)
-	return append(b, svg...)
 }
 
 func encodeWakeWordCtrl(enabled bool, terminalID, companionID string) []byte {
@@ -601,46 +552,6 @@ func encodeVoiceOwner(seq uint32, companionID, terminalID string) []byte {
 	b = binary.LittleEndian.AppendUint32(b, seq)
 	b = appendStr8(b, companionID)
 	return appendStr8(b, terminalID)
-}
-
-func encodePrompt(seq uint32, kind uint8, id, text string, options []string) []byte {
-	b := make([]byte, 0, 16+len(id)+len(text))
-	b = binary.LittleEndian.AppendUint32(b, seq)
-	b = append(b, kind)
-	b = appendStr8(b, id)
-	b = appendStr16(b, text)
-	n := min(len(options), 255)
-	b = append(b, byte(n))
-	for i := range n {
-		b = appendStr8(b, options[i])
-	}
-	return b
-}
-
-func encodePromptEnded(seq uint32, id string) []byte {
-	b := make([]byte, 0, 5+len(id))
-	b = binary.LittleEndian.AppendUint32(b, seq)
-	return appendStr8(b, id)
-}
-
-func encodeCompanionMsg(seq uint32, id, name, voice, faceBG, markColor, accentColor string) []byte {
-	b := make([]byte, 0, 16+len(id)+len(name)+len(voice)+24)
-	b = binary.LittleEndian.AppendUint32(b, seq)
-	b = appendStr8(b, id)
-	b = appendStr8(b, name)
-	b = appendStr8(b, voice)
-	b = appendStr8(b, faceBG)
-	b = appendStr8(b, markColor)
-	return appendStr8(b, accentColor)
-}
-
-func encodeEventMsg(seq uint32, kind uint8, companionID, arg1, arg2 string) []byte {
-	b := make([]byte, 0, 9+len(companionID)+len(arg1)+len(arg2))
-	b = binary.LittleEndian.AppendUint32(b, seq)
-	b = append(b, kind)
-	b = appendStr8(b, companionID)
-	b = appendStr8(b, arg1)
-	return appendStr16(b, arg2)
 }
 
 func encodeRTPPacket(dst []byte, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) int {

@@ -1281,19 +1281,7 @@ func (h *wsHub) patchRunningApp(ctx context.Context, ids []string, patch json.Ra
 	}
 }
 
-func (b *larkServer) appsChanged() {
-	if b.ws == nil {
-		return
-	}
-	b.ws.mu.Lock()
-	defer b.ws.mu.Unlock()
-	pkt := encodeEventMsg(b.ws.nextSeq(), eventSavedApps, "", "", "")
-	for c := range b.ws.clients {
-		if (c.kind == "web" || c.kind == "watcher") && c.scope == nil {
-			c.enqueueProto(msgEvent, pkt)
-		}
-	}
-}
+func (b *larkServer) appsChanged() {}
 
 func (h *wsHub) dropApp(d *wsTerminal) {
 	if a := d.app; a != nil {

@@ -3,35 +3,33 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"net"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const wsConnections = 64
-const wsCompanionOccupied = 4001
+const (
+	wsBinary = 2
+	wsPing   = 9
+)
+
+type wsFrame struct {
+	op   byte
+	data []byte
+}
 
 type wsClient struct {
-	wire       *websocket
 	native     *nativeClient
 	ctx        context.Context
 	cancel     context.CancelFunc
-	closeOnce  sync.Once
-	closeCode  atomic.Uint32
 	out        chan wsFrame
 	outMu      sync.Mutex
 	drained    chan struct{}
 	txSeq      atomic.Uint32
-	kind       string // "hardware", "web", or "watcher"
-	watch      string
-	lastPeers  []byte
+	kind       string // "hardware"
 	terminal   *wsTerminal
-	scope      *companionState
 	pingMu     sync.Mutex
 	pingSentAt time.Time
 	rtt        *float64
@@ -43,17 +41,6 @@ type companionStatusState struct {
 	progress uint8
 	kind     uint8
 	text     string
-}
-
-type activePrompt struct {
-	seq         uint32
-	id          string
-	companionID string
-	kind        uint8
-	text        string
-	options     []string
-	reply       chan string
-	onReply     func(string)
 }
 
 type resumeEntry struct {
@@ -92,7 +79,6 @@ type wsHub struct {
 	stateSeq          uint32
 	voiceOwners       map[string]string
 	companionStatuses map[string]companionStatusState
-	prompts           map[string]*activePrompt
 	resumes           map[[resumeTokenLen]byte]*resumeEntry
 }
 
@@ -104,7 +90,6 @@ func newWSHub(b *larkServer, atmosphere bool) *wsHub {
 		terminals:         make(map[string]*wsTerminal),
 		voiceOwners:       make(map[string]string),
 		companionStatuses: make(map[string]companionStatusState),
-		prompts:           make(map[string]*activePrompt),
 		resumes:           make(map[[resumeTokenLen]byte]*resumeEntry),
 	}
 	go h.animate(b.root)
@@ -128,128 +113,7 @@ func (h *wsHub) shutdown() {
 	h.conns.Wait()
 }
 
-func (h *wsHub) serve(w http.ResponseWriter, r *http.Request) error {
-	if !tokenHeaderMatches(r.Header, "Token", h.b.token) && !tokenMatches(r.URL.Query()["token"], h.b.token) {
-		return problem(401, "Unauthorized")
-	}
-	return h.serveScope(w, r, nil)
-}
-
-func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *companionState) error {
-	if origin := r.Header.Get("Origin"); origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" ||
-			(u.Scheme != "http" && u.Scheme != "https") || !strings.EqualFold(u.Host, r.Host) {
-			return problem(403, "Unexpected WebSocket origin")
-		}
-	}
-	h.mu.Lock()
-	full := h.closed || len(h.clients)+h.pending >= wsConnections
-	if !full {
-		h.pending++
-	}
-	h.mu.Unlock()
-	if full {
-		return problem(503, "WebSocket hub unavailable")
-	}
-	wire, err := upgradeWebSocket(w, r)
-	if err != nil || wire == nil {
-		h.mu.Lock()
-		h.pending--
-		h.mu.Unlock()
-		return err
-	}
-	ctx, cancel := context.WithCancel(r.Context())
-	c := &wsClient{wire: wire, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 192), scope: scope}
-	wire.onPong = c.pong
-	h.mu.Lock()
-	h.pending--
-	if h.closed {
-		h.mu.Unlock()
-		cancel()
-		_ = wire.write(wsCloseFrame(1001))
-		c.close()
-		return nil
-	}
-	h.clients[c] = struct{}{}
-	h.conns.Add(1)
-	h.mu.Unlock()
-	go c.write()
-	defer h.conns.Done()
-	defer func() {
-		c.close()
-		cancel()
-		h.detach(c)
-	}()
-	for {
-		f, err := wire.read()
-		if err != nil || c.ctx.Err() != nil {
-			return nil
-		}
-		if f.op != wsBinary {
-			continue
-		}
-		msgType, _, payload, ok := unpackProtoPacket(f.data)
-		if !ok {
-			continue
-		}
-		if msgType == msgPing && len(payload) == 4 {
-			c.enqueueProto(msgPong, payload)
-			continue
-		}
-		if msgType == msgPong && len(payload) == 4 {
-			c.pingMu.Lock()
-			if !c.pingSentAt.IsZero() && binary.LittleEndian.Uint32(payload) == uint32(c.pingSentAt.UnixMilli()) {
-				c.rtt = new(milliseconds(time.Since(c.pingSentAt)))
-				c.pingSentAt = time.Time{}
-			}
-			c.pingMu.Unlock()
-			continue
-		}
-		h.handleProto(c, msgType, payload)
-	}
-}
-
-func (c *wsClient) close() {
-	if c.wire != nil {
-		c.closeOnce.Do(func() {
-			c.wire.conn.Close()
-		})
-	}
-}
-
-func (c *wsClient) write() {
-	defer c.close()
-	ping := time.NewTicker(12 * time.Second)
-	defer ping.Stop()
-	for c.ctx.Err() == nil {
-		select {
-		case <-c.ctx.Done():
-		case f := <-c.out:
-			c.outMu.Lock()
-			if c.drained != nil {
-				close(c.drained)
-				c.drained = nil
-			}
-			c.outMu.Unlock()
-			if c.wire.write(f) != nil {
-				return
-			}
-		case <-ping.C:
-			if c.wire.write(c.ping(time.Now())) != nil {
-				return
-			}
-		}
-	}
-	code := uint16(c.closeCode.Load())
-	if code == 0 {
-		code = 1001
-	}
-	_ = c.wire.write(wsCloseFrame(code))
-}
-
 func (c *wsClient) stop(code uint16) {
-	c.closeCode.Store(uint32(code))
 	c.cancel()
 }
 
@@ -257,34 +121,14 @@ func (c *wsClient) remoteAddr() net.Addr {
 	if c.native != nil {
 		return c.native.conn.RemoteAddr()
 	}
-	return c.wire.conn.RemoteAddr()
-}
-
-func (c *wsClient) enqueue(f wsFrame) bool {
-	if c.native != nil {
-		return true
-	}
-	c.outMu.Lock()
-	defer c.outMu.Unlock()
-	if c.ctx.Err() != nil {
-		return false
-	}
-	select {
-	case c.out <- f:
-		return true
-	default:
-		c.cancel()
-		c.close()
-		return false
-	}
+	return nil
 }
 
 func (c *wsClient) enqueueProto(msgType uint8, payload []byte) bool {
 	if c.native != nil {
 		return c.native.enqueue(msgType, payload)
 	}
-	seq := uint16(c.txSeq.Add(1) - 1)
-	return c.enqueue(wsFrame{wsBinary, packProtoPacket(msgType, seq, payload)})
+	return false
 }
 
 func enqueueWaitChan[T any](ctx, clientCtx context.Context, mu *sync.Mutex, out chan T, drained *chan struct{}, val T) bool {
@@ -320,24 +164,11 @@ func (c *wsClient) enqueueProtoWait(ctx context.Context, msgType uint8, payload 
 	if c.native != nil {
 		return c.native.enqueueWait(ctx, msgType, payload)
 	}
-	seq := uint16(c.txSeq.Add(1) - 1)
-	f := wsFrame{wsBinary, packProtoPacket(msgType, seq, payload)}
-	return enqueueWaitChan(ctx, c.ctx, &c.outMu, c.out, &c.drained, f)
-}
-
-func (h *wsHub) mirrorWatchers(d *wsTerminal, msgType uint8, payload []byte) {
-	for c := range h.clients {
-		if c.watch == d.companionID && d.companionID != "" || c.watch == d.key {
-			c.enqueueProto(msgType, payload)
-		}
-	}
+	return false
 }
 
 func (h *wsHub) pushProto(d *wsTerminal, msgType uint8, payload []byte, mirror bool) {
 	d.client.enqueueProto(msgType, payload)
-	if mirror {
-		h.mirrorWatchers(d, msgType, payload)
-	}
 }
 
 func (h *wsHub) pushWakeWord(d *wsTerminal, enabled bool) {
@@ -437,11 +268,6 @@ func (h *wsHub) broadcastVoiceOwner(companionID, terminalID string) {
 	for _, t := range h.terminalsFor(cid) {
 		t.client.enqueueProto(msgVoiceOwner, pkt)
 	}
-	for c := range h.clients {
-		if c.watch == cid {
-			c.enqueueProto(msgVoiceOwner, pkt)
-		}
-	}
 }
 
 func (h *wsHub) takeVoiceOwnership(d *wsTerminal) {
@@ -494,11 +320,6 @@ func (h *wsHub) setCompanionStatus(companionID string, state, progress, kind uin
 	for _, t := range h.terminalsFor(cid) {
 		t.client.enqueueProto(msgStatus, pkt)
 	}
-	for c := range h.clients {
-		if c.watch == cid {
-			c.enqueueProto(msgStatus, pkt)
-		}
-	}
 }
 
 func (h *wsHub) clearDoneOrErrorStatus(d *wsTerminal) {
@@ -508,63 +329,6 @@ func (h *wsHub) clearDoneOrErrorStatus(d *wsTerminal) {
 	if st, ok := h.companionStatuses[d.companionID]; ok && (st.state == statusDone || st.state == statusError) {
 		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
 	}
-}
-
-func (h *wsHub) openPrompt(companionID string, kind uint8, id, text string, options []string, onReply func(string)) *activePrompt {
-	cid := strings.ToLower(companionID)
-	if cid == "" {
-		return nil
-	}
-	seq := h.nextSeq()
-	p := &activePrompt{
-		seq:         seq,
-		id:          id,
-		companionID: cid,
-		kind:        kind,
-		text:        text,
-		options:     options,
-		reply:       make(chan string, 1),
-		onReply:     onReply,
-	}
-	h.prompts[cid] = p
-	pkt := encodePrompt(seq, kind, id, text, options)
-	for _, t := range h.terminalsFor(cid) {
-		t.client.enqueueProto(msgPrompt, pkt)
-	}
-	for c := range h.clients {
-		if c.watch == cid {
-			c.enqueueProto(msgPrompt, pkt)
-		}
-	}
-	h.setCompanionStatus(cid, statusBlocked, 0, kind, text)
-	return p
-}
-
-func (h *wsHub) resolvePrompt(companionID, id, choice string) bool {
-	cid := strings.ToLower(companionID)
-	p := h.prompts[cid]
-	if p == nil || p.id != id {
-		return false
-	}
-	delete(h.prompts, cid)
-	select {
-	case p.reply <- choice:
-	default:
-	}
-	if p.onReply != nil {
-		go p.onReply(choice)
-	}
-	pkt := encodePromptEnded(h.nextSeq(), id)
-	for _, t := range h.terminalsFor(cid) {
-		t.client.enqueueProto(msgPromptEnded, pkt)
-	}
-	for c := range h.clients {
-		if c.watch == cid {
-			c.enqueueProto(msgPromptEnded, pkt)
-		}
-	}
-	h.setCompanionStatus(cid, statusIdle, 0, promptNone, "")
-	return true
 }
 
 func newResumeToken() [resumeTokenLen]byte {

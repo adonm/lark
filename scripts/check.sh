@@ -19,11 +19,6 @@ printf 'PASS shell checks\n'
 source scripts/go-bin.sh
 GO_BIN=$(resolve_go)
 export CGO_ENABLED=1
-for module in lark/web/*.js; do
-    node --check "$module"
-done
-# mic.test.mjs imports the mic and playback CJS suites.
-node --test lark/web/*.test.mjs
 node --test config/opencode/*.test.mjs
 (
     cd lark

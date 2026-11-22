@@ -1,8 +1,6 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,26 +49,5 @@ func TestParakeetRejectsWrongModel(t *testing.T) {
 	}
 	if err := checkParakeetModel(path); err == nil {
 		t.Fatal("accepted unpinned model")
-	}
-}
-
-func TestSTTProbeRequiresLoopbackAndBridgeToken(t *testing.T) {
-	b := &larkServer{token: "unit"}
-	for _, tc := range []struct {
-		addr, token string
-		want        int
-	}{
-		{"127.0.0.1:1234", "", 401},
-		{"10.0.0.1:1234", "unit", 404},
-		{"[::1]:1234", "unit", 503}, // Authorized; no engines in this fixture.
-	} {
-		r := httptest.NewRequest(http.MethodPost, "/api/diagnostics/stt", nil)
-		r.RemoteAddr = tc.addr
-		r.Header.Set("X-Lark-Token", tc.token)
-		w := httptest.NewRecorder()
-		b.ServeHTTP(w, r)
-		if w.Code != tc.want {
-			t.Errorf("%s: HTTP %d, want %d", tc.addr, w.Code, tc.want)
-		}
 	}
 }

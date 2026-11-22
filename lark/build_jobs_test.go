@@ -183,20 +183,23 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Cat"}); err != nil {
 		t.Fatal(err)
 	}
-	s := testConnectWS(t, base, "unit", true)
-	s.helloWeb(t, "web-dead0001", device, capDrag, false)
-	s.text(t, "Make me a dinosaur quiz.")
+	s := testConnectWS(t, base, "unit", false)
+	s.hello(t, "vocat-0001", device)
+	b.ws.mu.Lock()
+	b.ws.startTurn(b.ws.terminals["vocat-0001"], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
+		b.ws.runTurn(ctx, b.ws.terminals["vocat-0001"], turn, "Make me a dinosaur quiz.", "voice", nil)
+	})
+	b.ws.mu.Unlock()
 	cardAndSpeech := func(label string) {
 		t.Helper()
-		var seenCard bool
+		waitSVG(t, b.ws, "vocat-0001", label)
 		var end wsFrame
 		s.until(t, func(f wsFrame) bool {
-			seenCard = seenCard || hasSVG(label)(f)
 			p := framePayload(f)
 			if hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd {
 				end = f
 			}
-			return seenCard && end.data != nil
+			return end.data != nil
 		})
 		audioID := binary.LittleEndian.Uint64(framePayload(end)[1:9])
 		s.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
@@ -416,13 +419,18 @@ func TestBuildForegroundLatencyStub(t *testing.T) {
 			stub := &buildStub{delay: delay, reply: quizProposal}
 			b, _ := stubBuildBridge(t, stub, background, nil)
 			start := time.Now()
-			result, err := b.turn(t.Context(), companionState{ID: "build-eval", companionLook: companionLook{Name: "Synthetic"}}, prompt)
+			reply, _, err := b.buildReply(t.Context(), "build-eval", prompt)
+			if err == nil && reply == "" {
+				var gen generatedReply
+				gen, err = b.generateReply(t.Context(), b.root, companionState{ID: "build-eval", companionLook: companionLook{Name: "Synthetic"}}, prompt, turnOptions{source: "voice"})
+				reply = gen.reply
+			}
 			elapsed := time.Since(start)
 			t.Logf("stub foreground acknowledgement: %s (fixed model delay %s)", elapsed, delay)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if background && (result.Reply != "Building it now!" || elapsed >= delay) {
+			if background && (reply != "Building it now!" || elapsed >= delay) {
 				t.Fatalf("foreground waited for the builder: %s", elapsed)
 			}
 			if !background && elapsed < delay {

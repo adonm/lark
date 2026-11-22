@@ -23,16 +23,13 @@ import (
 
 func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 	for _, tc := range []struct {
-		id, source, kind string
-		web              bool
+		id, source string
 	}{
-		{"vocat-33d8", "voice", "hardware", false},
-		{"web-1234abcd", "typed", "web", true},
-		{"web-1234", "tap", "web", true},
-		{"other-id", "tap", "web", true},
+		{"vocat-33d8", "voice"},
+		{"box3-b324", "typed"},
 	} {
-		if got := turnPrompt(tc.id, tc.web, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}); got !=
-			"[Cake ("+tc.id+") · "+tc.kind+" · "+tc.source+"]\nHi" {
+		if got := turnPrompt(tc.id, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}); got !=
+			"[Cake ("+tc.id+") · hardware · "+tc.source+"]\nHi" {
 			t.Fatal(got)
 		}
 	}
@@ -134,88 +131,6 @@ func BenchmarkSincOneSecond(b *testing.B) {
 	}
 }
 
-func TestAudioStream(t *testing.T) {
-	b := &larkServer{token: "unit"}
-	srv := httptest.NewServer(b)
-	defer srv.Close()
-	client := srv.Client()
-	client.Timeout = 2 * time.Second
-	first, last := bytes.Repeat([]byte{1, 0}, 32), bytes.Repeat([]byte{2, 0}, 32)
-	open := func(id string) *http.Response {
-		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/audio/"+id, nil)
-		req.Header.Set("X-Lark-Token", "unit")
-		res, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return res
-	}
-	for _, fail := range []bool{false, true} {
-		s := newAudioStream()
-		woke := make(chan bool, 1)
-		go func() { chunk, err := s.chunk(t.Context(), 0); woke <- err == nil && bytes.Equal(chunk, first) }()
-		if !s.append(first) || !<-woke {
-			t.Fatal("first chunk did not wake reader")
-		}
-		id, size, streaming := b.audio.add(s)
-		if id == "" || size != 0 || !streaming {
-			t.Fatal("not streaming")
-		}
-		res := open(id)
-		if res.StatusCode != 200 || !slices.Contains(res.TransferEncoding, "chunked") {
-			t.Fatal("missing chunked framing")
-		}
-		got := make([]byte, len(first))
-		if _, err := io.ReadFull(res.Body, got); err != nil || !bytes.Equal(got, first) {
-			t.Fatalf("first chunk: %v", err)
-		}
-		if fail {
-			s.finish(errTTS)
-		} else {
-			s.append(last)
-			s.finish(nil)
-		}
-		tail, err := io.ReadAll(res.Body)
-		res.Body.Close()
-		replay := open(id)
-		pcm, replayErr := io.ReadAll(replay.Body)
-		replay.Body.Close()
-		if fail && (err != io.ErrUnexpectedEOF || replay.StatusCode != 404) {
-			t.Fatalf("failed stream persisted or looked complete: %v HTTP %d", err, replay.StatusCode)
-		}
-		if !fail && (err != nil || replayErr != nil || !bytes.Equal(tail, last) || replay.ContentLength != int64(len(first)+len(last)) ||
-			!bytes.Equal(pcm, append(slices.Clone(first), last...))) {
-			t.Fatalf("bad cached replay (%v / %v)", err, replayErr)
-		}
-	}
-	stall := newAudioStream()
-	if _, err := stall.waitChunk(t.Context(), 0, 5*time.Millisecond); err == nil {
-		t.Fatal("stalled stream did not time out")
-	}
-	if id, _, _ := b.audio.add(stall); id != "" {
-		t.Fatal("cached timed-out stream")
-	}
-	ids := make([]string, 17)
-	for i := range ids {
-		s := newAudioStream()
-		s.append(first)
-		s.finish(nil)
-		ids[i], _, _ = b.audio.add(s)
-		if i == 15 {
-			res := open(ids[0])
-			res.Body.Close()
-		}
-	}
-	for i, want := range []int{200, 404} {
-		res := open(ids[i])
-		res.Body.Close()
-		if res.StatusCode != want {
-			t.Fatalf("LRU item %d: %d != %d", i, res.StatusCode, want)
-		}
-	}
-}
-
 func TestStateAndDirectMessage(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lark.db")
@@ -257,7 +172,7 @@ func TestBridgeAuthAndBody(t *testing.T) {
 		{[]string{"wrong"}, 401},
 		{[]string{"correct", "correct"}, 401},
 	} {
-		req := httptest.NewRequest(http.MethodGet, "/api/scope", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/companions", nil)
 		for _, token := range tc.lark {
 			req.Header.Add("X-Lark-Token", token)
 		}
@@ -277,7 +192,7 @@ func TestBridgeAuthAndBody(t *testing.T) {
 			t.Fatalf("%s: retired bridge endpoint returned HTTP %d", path, res.Code)
 		}
 	}
-	for _, path := range []string{"/api/companions", "/api/terminals", "/api/audio/unknown", "/api/tts", "/ota/version.json"} {
+	for _, path := range []string{"/api/companions", "/api/terminals", "/ota/version.json"} {
 		for _, tokens := range [][]string{nil, {"wrong"}, {"correct", "correct"}} {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			for _, token := range tokens {
@@ -288,27 +203,6 @@ func TestBridgeAuthAndBody(t *testing.T) {
 			if res.Code != 401 || res.Body.String() != `{"error":"Unauthorized"}` {
 				t.Fatalf("%s: HTTP %d: %s", path, res.Code, res.Body)
 			}
-		}
-	}
-	for _, c := range []struct {
-		body, kind string
-		code       int
-	}{
-		{`{"text":"Hello"}`, jsonType, 503},
-		{`{"text":""}`, jsonType, 400},
-		{`[]`, jsonType, 400},
-		{`{} trailing`, jsonType, 400},
-		{`{}`, pcmType, 415},
-		{strings.Repeat(" ", maxJSON+1), jsonType, 413},
-	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/tts", strings.NewReader(c.body))
-		req.RemoteAddr = "127.0.0.1:10000"
-		req.Header.Set("Content-Type", c.kind)
-		req.Header.Set("X-Lark-Token", "correct")
-		res := httptest.NewRecorder()
-		b.ServeHTTP(res, req)
-		if res.Code != c.code {
-			t.Fatalf("%s: HTTP %d instead of %d: %s", truncate(c.body, 64), res.Code, c.code, res.Body)
 		}
 	}
 }
@@ -420,5 +314,42 @@ func TestCredentialReloadOnUnauthorized(t *testing.T) {
 	u := upstream{"OpenCode", pooledClient(), &fileCache[endpoint]{path: path, read: openCodeEndpoint}}
 	if !u.reachable(t.Context(), "/health") || attempts.Load() != 2 {
 		t.Fatalf("unauthorized did not reload credentials: %d requests", attempts.Load())
+	}
+}
+
+func TestOpenCodeExplicitEndpointAndDiscovery(t *testing.T) {
+	state := t.TempDir()
+	password := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if ok && user != "opencode" {
+			t.Error("unexpected Basic auth user")
+		}
+		password <- pass
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer server.Close()
+	dir := filepath.Join(state, "opencode")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeMap(filepath.Join(dir, "service.json"), object{"url": server.URL, "password": "discovered"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ url, password, want string }{
+		{"", "ignored", "discovered"},
+		{server.URL, "dedicated", "dedicated"},
+		{server.URL, "", ""},
+	} {
+		api, err := openCodeUpstream(server.Client(), state, tc.url, tc.password)
+		if err != nil || !api.reachable(t.Context(), "/api/info") {
+			t.Fatalf("OpenCode endpoint unavailable: %v", err)
+		}
+		if <-password != tc.want {
+			t.Fatal("OpenCode sent the wrong Authorization header")
+		}
+	}
+	if _, err := openCodeUpstream(server.Client(), state, "http://example.org:49375", "secret"); err == nil {
+		t.Fatal("accepted a nonlocal OpenCode endpoint")
 	}
 }

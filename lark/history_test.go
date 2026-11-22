@@ -26,9 +26,6 @@ func TestDeviceResetHistory(t *testing.T) {
 	v := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Milo"}, 201))
 	id := str(v["id"])
 	path := base + "/api/companions/" + id
-	watcher := testConnectWS(t, base, "unit", true)
-	watcher.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
-	watcher.until(t, hasProto(msgPeers, ""))
 	const other = "other-companion"
 	for _, e := range []chatEntry{newChat("user", "You", "Hi", "typed"), newChat("companion", "Milo", "Hello", "typed")} {
 		b.history.add(id, e)
@@ -75,8 +72,7 @@ func TestDeviceResetHistory(t *testing.T) {
 		}
 		assertHistory(other, untouched)
 	}
-	watcher.until(t, hasProto(msgEvent, id))
-	if got := apiObjects(t, path+"/messages", "messages"); len(got) != 0 {
+	if got := read(id); len(got) != 0 {
 		t.Fatal("reset device still exposes archived history")
 	}
 	var archive string
@@ -96,7 +92,7 @@ func TestDeviceResetHistory(t *testing.T) {
 }
 
 func TestHistoryCursorPagination(t *testing.T) {
-	b, base := wsHarness(t, nil)
+	b, _ := wsHarness(t, nil)
 	const id = "lark-history"
 	tx, err := b.db.BeginTx(t.Context(), nil)
 	if err != nil {
@@ -117,10 +113,10 @@ func TestHistoryCursorPagination(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	read := func(path string) (p historyPage) {
+	read := func(limit int, before *historyCursor) (p historyPage) {
 		t.Helper()
-		raw := testRequest(t, http.MethodGet, base+path, "unit", nil, 200)
-		if err := json.Unmarshal(raw, &p); err != nil {
+		p, err := b.readHistoryPage(t.Context(), id, limit, before)
+		if err != nil {
 			t.Fatal(err)
 		}
 		if p.CompanionID != id || p.HasMore != (p.Next != nil) {
@@ -128,25 +124,20 @@ func TestHistoryCursorPagination(t *testing.T) {
 		}
 		return
 	}
-	path := "/api/companions/" + id + "/messages"
-	if p := read(path); len(p.Messages) != 100 || p.Next == nil || p.Next.ID != "msg-405" || p.Messages[99].ID != "msg-504" {
+	if p := read(100, nil); len(p.Messages) != 100 || p.Next == nil || p.Next.ID != "msg-405" || p.Messages[99].ID != "msg-504" {
 		t.Fatalf("unexpected default page: %d messages, cursor %v", len(p.Messages), p.Next)
 	}
-	p := read("/api/companions/" + id + "/messages?limit=900")
+	p := read(500, nil)
 	if len(p.Messages) != 500 || p.Next == nil || p.Next.ID != "msg-005" {
 		t.Fatalf("unexpected max page: %d messages, cursor %v", len(p.Messages), p.Next)
 	}
-	before := func(c *historyCursor) string { return fmt.Sprintf("&before_ts=%d&before_id=%s", c.TS, c.ID) }
-	p = read(path + "?limit=3" + before(p.Next))
+	p = read(3, p.Next)
 	if len(p.Messages) != 3 || p.Messages[0].ID != "msg-002" || p.Messages[2].ID != "msg-004" || p.Next == nil {
 		t.Fatalf("same timestamp IDs were skipped: %+v", p)
 	}
-	p = read(path + "?limit=3" + before(p.Next))
+	p = read(3, p.Next)
 	if len(p.Messages) != 2 || p.Messages[0].ID != "msg-000" || p.Messages[1].ID != "msg-001" || p.HasMore {
 		t.Fatalf("unexpected last page: %+v", p)
-	}
-	for _, query := range []string{"limit=0", "limit=abc", "before_ts=bad&before_id=msg-005", "before_ts=1700000000000", "before_id=msg-005"} {
-		testRequest(t, http.MethodGet, base+path+"?"+query, "unit", nil, 400)
 	}
 }
 

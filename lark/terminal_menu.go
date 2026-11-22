@@ -25,10 +25,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 				c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid hello"))
 				return
 			}
-			if c.scope != nil && hello.companionID != "" && !strings.EqualFold(hello.companionID, c.scope.ID) {
-				c.enqueueProto(msgReject, encodeReject(rejectBadToken, "companion out of scope"))
-				return
-			}
 			h.handleHello(c, hello, now)
 		case msgResume:
 			res, err := parseTerminalResume(payload)
@@ -49,57 +45,7 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	}
 	defer h.mu.Unlock()
 	d := c.terminal
-	if d == nil {
-		if msgType == msgWatch && c.kind == "watcher" {
-			watchID, ok := parseWatch(payload)
-			if !ok {
-				return
-			}
-			watchID = strings.ToLower(strings.TrimSpace(watchID))
-			if watchID == "" {
-				c.watch = ""
-				return
-			}
-			if c.scope != nil && !strings.EqualFold(watchID, c.scope.ID) {
-				return
-			}
-			c.watch = watchID
-			target := h.terminals[c.watch]
-			if target == nil || !h.active(target) {
-				target = h.voiceOwner(c.watch)
-			}
-			if target != nil && h.active(target) {
-				if target.svgWire != nil {
-					c.enqueueProto(msgFrameSVG, target.svgWire)
-				}
-				c.enqueueProto(msgVolume, encodeVolumeMsg(target.vol, false, target.autoVol, target.id, target.companionID))
-				c.enqueueProto(msgPower, []byte{byte(target.brightness())})
-				if st, ok := h.companionStatuses[target.companionID]; ok {
-					c.enqueueProto(msgStatus, encodeStatus(st.seq, st.state, st.progress, st.kind, st.text))
-				}
-				if owner := h.voiceOwner(target.companionID); owner != nil {
-					c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(h.nextSeq(), target.companionID, owner.id))
-				}
-			} else {
-				c.watch = ""
-			}
-			return
-		}
-		d = h.terminals[c.watch]
-		if d == nil || !h.active(d) {
-			d = h.voiceOwner(c.watch)
-		}
-		if msgType != msgPointer && msgType != msgTextInput && msgType != msgPromptReply {
-			return
-		}
-	}
 	if d == nil || !h.active(d) {
-		return
-	}
-	if c.scope != nil && msgType == msgWatch {
-		if watchID, ok := parseWatch(payload); ok && strings.EqualFold(watchID, c.scope.ID) && d.svgWire != nil {
-			c.enqueueProto(msgFrameSVG, d.svgWire)
-		}
 		return
 	}
 
@@ -158,24 +104,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		if d.recording.active() {
 			h.endRecording(d, target, cancelled, now)
 		}
-	case msgTextInput:
-		raw, ok := parseTextInput(payload)
-		if !ok {
-			return
-		}
-		h.clearDoneOrErrorStatus(d)
-		text := strings.TrimSpace(raw)
-		if text != "" && len(text) <= 4096 {
-			h.startTurn(d, now, false, "typed", func(ctx context.Context, id uint64) {
-				h.runTurn(ctx, d, id, text, "typed", nil)
-			})
-		}
-	case msgPromptReply:
-		id, choice, ok := parsePromptReply(payload)
-		if !ok || d.companionID == "" {
-			return
-		}
-		h.resolvePrompt(d.companionID, id, choice)
 	case msgSetVolume:
 		auto, level, ok := parseSetVolume(payload)
 		if !ok || c.terminal != d {

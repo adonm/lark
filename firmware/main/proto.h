@@ -28,9 +28,6 @@ enum {
     LARK_MSG_REC_END = 0x07,
     LARK_MSG_TTS_ACK = 0x08,
     LARK_MSG_MEDIA = 0x0A,
-    LARK_MSG_TEXT_INPUT = 0x0B,
-    LARK_MSG_PROMPT_REPLY = 0x0C,
-    LARK_MSG_WATCH = 0x0D,
     LARK_MSG_SET_VOLUME = 0x0E,
     LARK_MSG_PING = 0x0F,
     LARK_MSG_PONG = 0x10,
@@ -41,7 +38,6 @@ enum {
     LARK_MSG_WELCOME = 0x81,
     LARK_MSG_REJECT = 0x82,
     LARK_MSG_FRAME = 0x83,
-    LARK_MSG_FRAME_SVG = 0x84,
     LARK_MSG_WAKE_WORD_CTRL = 0x85,
     LARK_MSG_REC_CTRL = 0x86,
     LARK_MSG_TTS_CTRL = 0x87,
@@ -51,23 +47,16 @@ enum {
     LARK_MSG_VOLUME = 0x8C,
     LARK_MSG_STATUS = 0x8D,
     LARK_MSG_VOICE_OWNER = 0x8E,
-    LARK_MSG_PROMPT = 0x8F,
-    LARK_MSG_PROMPT_ENDED = 0x90,
-    LARK_MSG_COMPANION = 0x91,
-    LARK_MSG_PEERS = 0x92,
-    LARK_MSG_EVENT = 0x93,
 };
 
 // Terminal kind
 enum {
     LARK_KIND_HARDWARE = 0,
-    LARK_KIND_WEB = 1,
 };
 
 // Display format bits
 enum {
     LARK_DISP_RGB565 = 1u << 0,
-    LARK_DISP_SVG = 1u << 1,
 };
 
 // Frame codec bits
@@ -119,13 +108,6 @@ enum {
     LARK_STATE_BLOCKED = 4,
     LARK_STATE_DONE = 5,
     LARK_STATE_ERROR = 6,
-};
-
-// Prompt / status kinds
-enum {
-    LARK_PROMPT_NONE = 0,
-    LARK_PROMPT_PERMISSION = 1,
-    LARK_PROMPT_QUESTION = 2,
 };
 
 // Pointer kinds

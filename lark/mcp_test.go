@@ -309,23 +309,6 @@ func TestMCPSavedAppEdits(t *testing.T) {
 	const id = "cake"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-book", "Cake")
-	watcher := testConnectWS(t, base, "unit", false)
-	watcher.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
-	watcher.until(t, hasProto(msgPeers, ""))
-	savedAppsFrame := func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgEvent, "")(f) && len(p) >= 5 && p[4] == eventSavedApps
-	}
-	noSavedAppsFrame := func() {
-		t.Helper()
-		watcher.write(t, maskedFrame(wsPing, true, nil))
-		watcher.until(t, func(f wsFrame) bool {
-			if savedAppsFrame(f) {
-				t.Fatal("unexpected saved_apps notification")
-			}
-			return f.op == wsPong
-		})
-	}
 	patch := func(args object, failed bool) object {
 		t.Helper()
 		return toolTest(t, base, "patch", object{"apps": args}, failed)
@@ -384,14 +367,12 @@ func TestMCPSavedAppEdits(t *testing.T) {
 			t.Fatal(got)
 		}
 	}
-	noSavedAppsFrame()
 
 	got := patch(object{"rename": []object{{"from": " Book ", "to": "NOVEL", "title": "First Edition"}}}, false)["apps"].(object)
 	renamed := []any{object{"from": "book", "to": "novel", "title": "First Edition"}}
 	if !reflect.DeepEqual(got["renamed"], renamed) || len(got["deleted"].([]any)) != 0 {
 		t.Fatal(got)
 	}
-	watcher.until(t, savedAppsFrame)
 	toolTest(t, base, "state", object{"app_name": "book"}, true)
 	app := toolTest(t, base, "state", object{"app_name": "novel"}, false)["app"].(object)
 	if app["name"] != "novel" || app["title"] != "First Edition" || app["kind"] != "drawing" ||
@@ -409,7 +390,6 @@ func TestMCPSavedAppEdits(t *testing.T) {
 	if !reflect.DeepEqual(got["renamed"], renamed) {
 		t.Fatal(got)
 	}
-	watcher.until(t, savedAppsFrame)
 	app = toolTest(t, base, "state", object{"app_name": "novel"}, false)["app"].(object)
 	if app["title"] != "Second Edition" || !reflect.DeepEqual(stored()["app:novel"], written["app:book"]) {
 		t.Fatal(app)
@@ -421,14 +401,12 @@ func TestMCPSavedAppEdits(t *testing.T) {
 	}
 	assertTimerApp("novel")
 	toolTest(t, base, "state", object{"app_name": "discard"}, false)
-	noSavedAppsFrame()
 	patchTimerTest(t, base, object{"op": "cancel", "device_id": id, "id": timer["id"]}, false)
 
 	got = patch(object{"delete": []string{"novel", "missing", "discard"}}, false)["apps"].(object)
 	if !slices.Equal(got["deleted"].([]any), []any{"novel", "discard"}) || len(got["renamed"].([]any)) != 0 {
 		t.Fatal(got)
 	}
-	watcher.until(t, savedAppsFrame)
 	toolTest(t, base, "state", object{"app_name": "novel"}, true)
 	toolTest(t, base, "state", object{"app_name": "discard"}, true)
 	if mem := stored(); len(mem["app:novel"].(object)) != 0 || len(mem["app:discard"].(object)) != 0 || !reflect.DeepEqual(mem["app:reserved"], written["app:reserved"]) {
@@ -438,7 +416,6 @@ func TestMCPSavedAppEdits(t *testing.T) {
 	if len(got["deleted"].([]any)) != 0 {
 		t.Fatal(got)
 	}
-	noSavedAppsFrame()
 }
 
 func TestEmitIntercom(t *testing.T) {
@@ -449,18 +426,15 @@ func TestEmitIntercom(t *testing.T) {
 	if _, err := b.createCompanion(t.Context(), object{"id": to, "name": "Mint"}); err != nil {
 		t.Fatal(err)
 	}
-	sender, recipient := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
+	sender, recipient := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", false)
 	sender.hello(t, "vocat-0001", "Cake")
-	recipient.helloWeb(t, "web-bee10000", to, capDrag, false)
+	recipient.hello(t, "vocat-0002", to)
 	out := toolTest(t, base, "emit", object{"to": "all", "intercom": object{"from": from, "text": text}}, false)
 	if !slices.Equal(out["intercom"].(object)["sent_to"].([]any), []any{to}) {
 		t.Fatal(out)
 	}
-	var card, audio bool
-	recipient.until(t, func(f wsFrame) bool {
-		card, audio = card || hasSVG(text)(f), audio || isPlayback(f)
-		return card && audio
-	})
+	recipient.until(t, isPlayback)
+	waitSVG(t, b.ws, "vocat-0002", text)
 	for _, id := range []string{from, to} {
 		s := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"messages"}}, false)
 		msgs := s["messages"].([]any)
@@ -475,12 +449,6 @@ func TestMCPControl(t *testing.T) {
 	const termID, id = "vocat-control", "cake"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, termID, "Cake")
-	watcher := testConnectWS(t, base, "unit", false)
-	watcher.watch(t, id)
-	watcher.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
-	})
 
 	for _, invalid := range []object{
 		{}, {"volume": -1}, {"volume": 101}, {"volume": 1.5}, {"sleep": "true"},
@@ -496,7 +464,7 @@ func TestMCPControl(t *testing.T) {
 	if out["terminal_id"] != termID || out["volume"] != json.Number("0") || out["sleeping"] != true {
 		t.Fatal(out)
 	}
-	for _, client := range []*testWS{c, watcher} {
+	for _, client := range []*testWS{c} {
 		client.until(t, func(f wsFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 0
@@ -569,12 +537,6 @@ func waitPool(t *testing.T, ready func() bool) {
 		case <-deadline.C:
 			t.Fatal("condition did not become true")
 		}
-	}
-}
-
-func chatFrame(text string) func(wsFrame) bool {
-	return func(f wsFrame) bool {
-		return f.op == wsText && bytes.Contains(f.data, []byte(`"type":"chat"`)) && bytes.Contains(f.data, []byte(text))
 	}
 }
 

@@ -7,8 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -292,7 +290,6 @@ func TestLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	conf := liveConfig(t, home)
 	client := pooledClient()
 	client.Timeout = 115 * time.Second
@@ -305,10 +302,8 @@ func TestLive(t *testing.T) {
 	liveHealthy(t, c)
 	unauthorized := c
 	unauthorized.token = ""
-	unauthorized.read(t, "/api/devices", nil, "", nil, 401)
-	unauthorized.read(t, "/api/chat", []byte("{}"), jsonType, nil, 401)
+	unauthorized.read(t, "/api/companions", nil, "", nil, 401)
 	unauthorized.read(t, "/ota/latest.bin", nil, "", nil, 401)
-	run := "lark-live-" + hex.EncodeToString([]byte(strconv.FormatInt(time.Now().UnixNano(), 36)))
 
 	liveDevices := func(t *testing.T) map[string]string {
 		t.Helper()
@@ -354,111 +349,6 @@ func TestLive(t *testing.T) {
 			}
 			t.Logf("%s verified: %d bytes, SHA-256 %s", path, manifest.Size, digest)
 		}
-	})
-
-	direct, res := c.read(t, "/api/tts", []byte(`{"text":"The Moon reflects sunlight."}`), jsonType, nil, 200)
-	if res.Header.Get("Content-Type") != pcmType || !livePCMOK(direct) {
-		t.Fatal("direct TTS returned invalid PCM")
-	}
-	t.Run("DeployedSTT", func(t *testing.T) {
-		unauthorized.read(t, "/api/diagnostics/stt", []byte{}, "", nil, 401)
-		probe := liveJSON[struct {
-			Transcript string
-			ClipMS     int `json:"clip_ms"`
-			STTMS      int `json:"stt_ms"`
-		}](t, c, "/api/diagnostics/stt", nil, []byte{}, "", nil)
-		if !strings.EqualFold(probe.Transcript, "The moon reflects sunlight.") || probe.ClipMS < 500 {
-			t.Fatal("deployed bridge did not transcribe the synthetic clip")
-		}
-		t.Logf("Parakeet decoded %d ms of synthetic speech in %d ms", probe.ClipMS, probe.STTMS)
-	})
-	t.Run("VoiceAndChat", func(t *testing.T) {
-		settings := openCodeSettings("lark")
-		settings.Model = ocModel{Provider: "test", ID: "deterministic"}
-		stub, oc := liveModelStub(t, settings.Model)
-		conf := maps.Clone(conf)
-		conf["LARK_OPENCODE_URL"], conf["LARK_OPENCODE_PASSWORD"], conf["LARK_OPENCODE_AGENT"] = stub, "", settings.Agent
-		iso := liveIsolated(t, data, conf, run, client)
-		id := run + "-voice"
-		board := testConnectWS(t, iso.base, iso.token, false)
-		board.timeout = 25 * time.Second
-		board.helloV2(t, id, "LiveVoice")
-		viewer := testConnectWS(t, iso.base, iso.token, true)
-		viewer.timeout = 25 * time.Second
-		viewer.watch(t, id)
-		input, _ := json.Marshal(object{"text": liveVoicePrompt})
-		recording, _ := iso.read(t, "/api/tts", input, jsonType, nil, 200)
-		board.recStart(t, "")
-		var seq uint16
-		for offset := 0; offset < len(recording); offset += rtpPCMBytes {
-			chunk := recording[offset:min(offset+rtpPCMBytes, len(recording))]
-			seq++
-			board.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*rtpSamples, 1, chunk)
-		}
-		board.recEnd(t, "", false)
-		board.until(t, func(f wsFrame) bool {
-			p := framePayload(f)
-			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeThink
-		})
-		board.until(t, func(f wsFrame) bool {
-			p := framePayload(f)
-			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
-		})
-		var spoken []byte
-		end := board.until(t, func(f wsFrame) bool {
-			if isPlayback(f) {
-				spoken = append(spoken, framePayload(f)...)
-			}
-			p := framePayload(f)
-			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
-		})
-		if !livePCMOK(spoken) {
-			t.Fatal("voice turn did not return playable PCM")
-		}
-		board.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
-		board.write(t, maskedFrame(wsClose, true, wsCloseFrame(1000).data))
-		board.until(t, func(f wsFrame) bool { return f.op == wsClose })
-		viewer.until(t, hasProto(msgPeers, ""))
-		entries := liveJSON[struct{ Messages []chatEntry }](t, iso, "/api/devices/"+id+"/messages", nil, nil, "", nil).Messages
-		if len(entries) != 2 || entries[0].Source != "voice" || !strings.Contains(strings.ToLower(entries[0].Text), "right triangle") {
-			t.Fatal("voice question and answer not in canonical history")
-		}
-
-		follow := liveJSON[struct {
-			Reply     string
-			SessionID string `json:"session_id"`
-			AudioURL  string `json:"audio_url"`
-		}](t, iso, "/api/chat", object{"device_id": id, "text": "Repeat in one sentence, without tools: Paris is the capital of France."}, nil, "", nil)
-		assertLiveActor(t, oc, follow.SessionID, settings)
-		if !strings.Contains(strings.ToLower(follow.Reply), "paris") || !strings.HasPrefix(follow.AudioURL, "/api/audio/") {
-			t.Fatal("remembered device could not chat and play a text reply")
-		}
-		pcm, res := iso.read(t, follow.AudioURL, nil, "", nil, 200)
-		replay, fixed := iso.read(t, follow.AudioURL, nil, "", nil, 200)
-		if !livePCMOK(pcm) || res.Header.Get("Content-Type") != pcmType || !bytes.Equal(pcm, replay) || fixed.ContentLength != int64(len(pcm)) {
-			t.Fatal("live chat audio was silent, corrupt, or not byte-identical on replay")
-		}
-		messages, err := ocData[[]struct{ Text string }](t.Context(), oc, http.MethodGet, "/api/session/"+follow.SessionID+"/message?order=asc&limit=10&type=user", nil)
-		if err != nil || len(messages) != 2 || !strings.HasPrefix(messages[0].Text, "[LiveVoice ("+id+") · hardware · voice]") {
-			t.Fatal("HTTP chat did not reuse the WebSocket voice session or preserve provenance")
-		}
-		t.Logf("validated voice capture, playback, canonical history, HTTP follow-up and %d replayed PCM bytes", len(pcm))
-
-		board = testConnectWS(t, iso.base, iso.token, false)
-		board.helloV2(t, id, "LiveVoice")
-		viewer = testConnectWS(t, iso.base, iso.token, true)
-		viewer.watch(t, id)
-		board.text(t, liveQuotaPrompt)
-		viewer.until(t, hasSVG("Try again"))
-		board.write(t, maskedFrame(wsPing, true, nil))
-		board.until(t, func(f wsFrame) bool {
-			p := framePayload(f)
-			if (hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart) || isPlayback(f) {
-				t.Fatal("model rejection unexpectedly started audio")
-			}
-			return f.op == wsPong
-		})
-		t.Log("stub model 429 produced the WebSocket error scene instead of TTS")
 	})
 	t.Run("DevicesAfter", func(t *testing.T) {
 		if !maps.Equal(before, liveDevices(t)) {

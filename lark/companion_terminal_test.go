@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -21,23 +20,23 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	hw := testConnectWS(t, base, "unit", false)
 	hw.helloV2(t, "vocat-33d8", "Cake")
 
-	// 3. Browser web terminal created by hello attached to Cake -> Cake now has two terminals.
-	const webID = "web-11223344"
-	web := testConnectWS(t, base, "unit", true)
-	web.helloWeb(t, webID, cakeID, capDrag, false)
+	// 3. Second hardware terminal attached to Cake -> Cake now has two terminals.
+	const secondID = "vocat-2cac"
+	second := testConnectWS(t, base, "unit", false)
+	second.helloV2(t, secondID, cakeID)
 
-	if _, ok := b.terminalByID(webID); !ok {
-		t.Fatal("browser hello did not persist web terminal")
+	if _, ok := b.terminalByID(secondID); !ok {
+		t.Fatal("second hello did not persist terminal")
 	}
 
 	// 4. Companion with two terminals: both receive frames when companion changes or app runs.
 	toolTest(t, base, "patch", object{"companion_id": cakeID, "companion": object{"face_bg": "#112233"}}, false)
 	hw.until(t, isDisplay)
-	web.until(t, hasSVG("#112233"))
+	waitSVG(t, b.ws, secondID, "#112233")
 
 	toolTest(t, base, "app", object{"companions": cakeID, "svg": `<svg><text x="180" y="180">SharedScreen</text></svg>`}, false)
 	hw.until(t, isDisplay)
-	web.until(t, hasSVG("SharedScreen"))
+	waitSVG(t, b.ws, secondID, "SharedScreen")
 
 	// Cannot delete a companion that still has attached terminals.
 	testRequest(t, http.MethodDelete, base+"/api/companions/"+cakeID, "unit", nil, 409)
@@ -49,8 +48,8 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	}
 	hw.until(t, isDisplay)
 
-	// 6. Detach web terminal from Cake -> Cake becomes dormant and can be deleted.
-	detached := testObject(t, testRequest(t, http.MethodPost, base+"/api/terminals/"+webID+"/detach", "unit", object{}, 200))
+	// 6. Detach second terminal from Cake -> Cake becomes dormant and can be deleted.
+	detached := testObject(t, testRequest(t, http.MethodPost, base+"/api/terminals/"+secondID+"/detach", "unit", object{}, 200))
 	if detached["companion_id"] != "" {
 		t.Fatalf("terminal did not detach: %v", detached)
 	}
@@ -61,32 +60,22 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	testRequest(t, http.MethodDelete, base+"/api/companions/"+cakeID, "unit", nil, 204)
 }
 
-func TestCompanionIntercomAndTunnelScope(t *testing.T) {
+func TestCompanionIntercom(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
 	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
 	_, _ = b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"})
-	cake := testConnectWS(t, base, "unit", true)
-	cake.helloWeb(t, "web-00000001", "cake", capDrag, false)
-	mint := testConnectWS(t, base, "unit", true)
-	mint.helloWeb(t, "web-00000002", "mint", capDrag, false)
+	cake := testConnectWS(t, base, "unit", false)
+	cake.hello(t, "vocat-0001", "cake")
+	mint := testConnectWS(t, base, "unit", false)
+	mint.hello(t, "vocat-0002", "mint")
 
 	// Intercom addressed by companion.
 	intercom := toolTest(t, base, "emit", object{"to": "mint", "intercom": object{"from": "cake", "text": "Tea time!"}}, false)
 	if r := intercom["receipts"].([]any)[0].(object); r["companion_id"] != "mint" || r["status"] != "queued" {
 		t.Fatalf("unexpected intercom receipt: %v", intercom)
 	}
-	mint.until(t, hasSVG("Tea time!"))
+	waitSVG(t, b.ws, "vocat-0002", "Tea time!")
 	_ = cake
-
-	// Tunnel scope restricted to companion.
-	c, _ := b.companionByID("mint")
-	scoped := httptest.NewServer(b.scoped(c, "mint-token"))
-	defer scoped.Close()
-	testRequest(t, http.MethodGet, scoped.URL+"/api/companions/mint/messages", "mint-token", nil, 200)
-	testRequest(t, http.MethodGet, scoped.URL+"/api/companions/cake/messages", "mint-token", nil, 403)
-	testRequest(t, http.MethodPost, scoped.URL+"/api/companions/cake/voice", "mint-token", object{"voice": fableVoice}, 403)
-	testRequest(t, http.MethodGet, scoped.URL+"/api/companions", "mint-token", nil, 404)
-	testRequest(t, http.MethodGet, scoped.URL+"/api/terminals", "mint-token", nil, 404)
 }

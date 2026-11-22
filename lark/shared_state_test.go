@@ -51,16 +51,7 @@ func TestMemoryCRUDAndAtomicCAS(t *testing.T) {
 	if got := memoryScope(t, base, scope)["round:1"].(object); got["version"] != json.Number("2") || got["value"].(object)["move"] == json.Number("0") {
 		t.Fatal(got)
 	}
-	api := base + "/api/memory"
-	list := testObject(t, testRequest(t, "GET", api+"?scope="+scope, "unit", nil, 200))["entries"].([]any)
-	if len(list) != 1 || list[0].(object)["value"].(object)["move"] == json.Number("0") {
-		t.Fatal(list)
-	}
-	scopes := apiObjects(t, api+"/scopes", "scopes")
-	if len(scopes) != 1 || scopes[0].(object)["scope"] != scope {
-		t.Fatal(scopes)
-	}
-	testRequest(t, "DELETE", api+"?scope="+scope+"&key=round:1", "unit", nil, 204)
+	toolTest(t, base, "patch", object{"memory": object{"scope": scope, "key": "round:1", "op": "delete"}}, false)
 	if got := memoryScope(t, base, scope); len(got) != 0 {
 		t.Fatal(got)
 	}

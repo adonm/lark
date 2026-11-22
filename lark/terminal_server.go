@@ -215,7 +215,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 	nc.client = c
 
 	s.hub.mu.Lock()
-	if s.hub.closed || len(s.hub.clients) >= wsConnections {
+	if s.hub.closed || len(s.hub.clients) >= 64 {
 		s.hub.mu.Unlock()
 		cancel()
 		writeNativeReject(conn, rejectFull, "server full")

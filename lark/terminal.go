@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 )
 
 var (
@@ -105,43 +104,6 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			return nil, err
 		}
 		return object{"terminals": list}, nil
-	case path == "/api/terminals" && r.Method == http.MethodPost:
-		obj, err := jsonBody(r)
-		if err != nil {
-			return nil, err
-		}
-		kind := str(obj["kind"])
-		if kind == "" {
-			kind = "web"
-		}
-		if kind != "web" {
-			return nil, problem(400, "Only web terminals can be created via API")
-		}
-		compID := strings.ToLower(strings.TrimSpace(str(obj["companion_id"])))
-		if compID != "" {
-			if !validCompanionID(compID) {
-				return nil, problem(400, "Invalid companion ID")
-			}
-			if _, ok := b.companionByID(compID); !ok {
-				return nil, problem(404, "Companion not found")
-			}
-		}
-		t := terminalRecord{
-			ID:          "web-" + randomHex(4),
-			Kind:        "web",
-			CompanionID: compID,
-			CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
-		}
-		if err := b.terminals.save(t.ID, t, false); err != nil {
-			return nil, problem(502, "Cannot create terminal")
-		}
-		if b.ws != nil {
-			b.ws.mu.Lock()
-			b.ws.broadcastPeers()
-			b.ws.mu.Unlock()
-		}
-		sendJSON(w, 201, b.terminalEntry(t, false))
-		return nil, nil
 	}
 	rest, ok := strings.CutPrefix(path, "/api/terminals/")
 	if !ok || rest == "" {

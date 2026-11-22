@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,15 +28,12 @@ type larkServer struct {
 	stt             func(context.Context, []byte) (string, error)
 	endpoint        *endpointSettings
 	oc              *openCode
-	pairPort        int
 	worker          *synthWorker
 	voices          companionVoices
 	clips           speechClips
-	audio           audioCache
 	ota             otaFile
 	box3OTA         otaFile
 	ws              *wsHub
-	tunnels         *tunnelManager
 	history         *chatHistory
 	timers          *timerManager
 	builders        *buildManager
@@ -42,6 +41,12 @@ type larkServer struct {
 	diag            diagnostics
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
 	companionTitles sync.Mutex
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func sendBytes(w http.ResponseWriter, status int, kind string, data []byte) {
@@ -57,6 +62,15 @@ func sendJSON(w http.ResponseWriter, status int, v any) {
 		data, status = []byte(`{"error":"Cannot encode response"}`), 500
 	}
 	sendBytes(w, status, jsonType, data)
+}
+
+func tokenMatches(values []string, want string) bool {
+	if want == "" || len(values) != 1 {
+		return false
+	}
+	wantHash := sha256.Sum256([]byte(want))
+	gotHash := sha256.Sum256([]byte(values[0]))
+	return subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) == 1
 }
 
 func tokenHeaderMatches(h http.Header, name, want string) bool {
@@ -191,28 +205,6 @@ func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
 	return object{"companion_id": id, "voice": voice}, nil
 }
 
-type answer struct {
-	Reply, SessionID string
-	AudioURL         *string
-}
-
-func (b *larkServer) attachAudio(ctx context.Context, out *answer, stream *AudioStream, start time.Time) {
-	if stream != nil {
-		if pcm, err := stream.chunk(ctx, 0); err == nil && len(pcm) != 0 {
-			stream.traceFirst(traceFrom(ctx), start)
-			if id, _, _ := b.audio.add(stream); id != "" {
-				path := "/api/audio/" + id
-				out.AudioURL = &path
-				traceFrom(ctx).firstPCM(time.Now())
-			}
-		}
-	}
-}
-
-type delivery struct {
-	sent, delivered, failed []string
-}
-
 func intercomConfirmation(target string, recipients []companionTarget, sent, partial bool) (title, reply string) {
 	if broadcast(target) {
 		target = "everyone"
@@ -241,67 +233,8 @@ func (b *larkServer) intercomIntent(id, text string) ([]companionTarget, *interc
 	return others, directMessage(others, body), nil
 }
 
-func (b *larkServer) relay(ctx context.Context, sender companionState, others []companionTarget, target, text string) (answer, error) {
-	recipients := b.intercomTargets(others, target)
-	d := b.deliver(ctx, sender, recipients, text, nil)
-	_, reply := intercomConfirmation(target, recipients, len(d.delivered) != 0, len(d.failed) != 0)
-	sid, err := b.oc.get(sender.ID)
-	if err != nil {
-		return answer{}, err
-	}
-	out := answer{Reply: reply, SessionID: sid}
-	start := time.Now()
-	if b.worker != nil && b.worker.ready.Load() {
-		if pcm, err := b.clips.get(ctx, b.worker, b.voiceFor(sender.ID), reply); err == nil {
-			s := newAudioStream()
-			s.append(pcm)
-			s.finish(nil)
-			b.attachAudio(ctx, &out, s, start)
-		}
-	}
-	return out, nil
-}
-
-func (b *larkServer) turn(ctx context.Context, sender companionState, text string) (answer, error) {
-	const source = "typed"
-	if traceFrom(ctx) == nil {
-		ctx = b.traceTurn(ctx, sender.ID, sender.Name, source, time.Now())
-	}
-	others, direct, err := b.intercomIntent(sender.ID, text)
-	if err != nil {
-		return answer{}, err
-	}
-	if direct != nil {
-		b.chat(sender.ID, newChat("user", "You", text, source), true)
-		return b.relay(ctx, sender, others, direct.target, direct.text)
-	}
-	if reply, _, err := b.buildReply(ctx, sender.ID, text); err != nil {
-		return answer{}, err
-	} else if reply != "" {
-		out := answer{Reply: reply}
-		if w := b.worker; w != nil && w.ready.Load() {
-			start := time.Now()
-			audioCtx, cancel := context.WithTimeout(ctx, ttsWait)
-			defer cancel()
-			speech := newSpeechTurn(audioCtx, cancel, w, b.voiceFor(sender.ID), nil)
-			speech.complete([]string{reply})
-			b.attachAudio(ctx, &out, speech.stream, start)
-		}
-		if err := b.deliverOfflineBuildReply(ctx, sender, text, reply, source); err != nil {
-			return answer{}, err
-		}
-		return out, nil
-	}
-	options := turnOptions{source: source}
-	gen, err := b.generateReply(ctx, b.root, sender, text, options)
-	if err != nil {
-		return answer{}, err
-	}
-	out := answer{Reply: gen.reply, SessionID: gen.sid}
-	if gen.reply != "" {
-		b.attachAudio(ctx, &out, gen.audio, gen.ttsStart)
-	}
-	return out, nil
+type delivery struct {
+	sent, delivered, failed []string
 }
 
 type generatedReply struct {
@@ -312,16 +245,11 @@ type generatedReply struct {
 
 type turnOptions struct {
 	source  string
-	web     bool
-	scoped  bool
 	publish func(*AudioStream, time.Time)
 }
 
-func turnPrompt(companionID string, web bool, source, text string, companion companionState) string {
+func turnPrompt(companionID string, source, text string, companion companionState) string {
 	kind := "hardware"
-	if web {
-		kind = "web"
-	}
 	extra := ""
 	if !companion.Configured {
 		extra += " · setup"
@@ -389,7 +317,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	}}
 	prepare := func() (string, string) {
 		companion := b.companionFor(sender.ID)
-		return companion.Name, turnPrompt(sender.ID, options.web, options.source, text, companion)
+		return companion.Name, turnPrompt(sender.ID, options.source, text, companion)
 	}
 	raw, sid, err := b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source,
 		nil, func(entry chatEntry) {
@@ -429,33 +357,13 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
 	switch {
-	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/portraits/"):
-		return nil, b.servePortrait(w, r, path, "")
 	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/"):
 		return b.companionAPI(w, r, path)
 	case path == "/api/terminals" || strings.HasPrefix(path, "/api/terminals/"):
 		return b.terminalAPI(w, r, path)
-	case path == "/api/memory" || path == "/api/memory/scopes":
-		return b.memoryAPI(w, r, path)
-	case path == "/api/apps" || strings.HasPrefix(path, "/api/apps/"):
-		return b.appAPI(w, r, path)
-	case path == "/api/timers" || strings.HasPrefix(path, "/api/timers/"):
-		return b.timerAPI(w, r, path, "")
-	case path == "/api/tunnel/status" || path == "/api/tunnels" || strings.HasPrefix(path, "/api/tunnels/"):
-		return b.tunnelAPI(w, r, path)
-	case r.Method == http.MethodPost && path == "/api/chat":
-		return b.chatAPI(r, "")
 	}
-	switch r.Method {
-	case http.MethodGet:
+	if r.Method == http.MethodGet {
 		switch {
-		case path == "/":
-			http.Redirect(w, r, "/app", http.StatusFound)
-			return nil, nil
-		case b.servePWA(w, r, path, nil, "") || serveApp(w, path):
-			return nil, nil
-		case path == "/ws" && b.ws != nil:
-			return nil, b.ws.serve(w, r)
 		case path == "/health":
 			o := b.oc != nil && b.oc.reachable(ctx, "/api/info")
 			ready := b.worker != nil && b.worker.ready.Load()
@@ -467,54 +375,10 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 				"opencode": o, "tts": ready, "tts_engine": engine}, nil
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
-		case path == "/api/scope":
-			b.setPWACookie(w)
-			return object{"scoped": false, "auto_volume": true, "voices": voiceCatalog}, nil
-		case strings.HasPrefix(path, "/api/audio/"):
-			return nil, b.audio.ServeAudio(w, r, strings.TrimPrefix(path, "/api/audio/"))
 		case path == "/ota/version.json" || path == "/ota/latest.bin":
 			return b.ota.serve(w, path == "/ota/version.json")
 		case path == "/ota/box3/version.json" || path == "/ota/box3/latest.bin":
 			return b.box3OTA.serve(w, path == "/ota/box3/version.json")
-		}
-	case http.MethodPost:
-		if path == "/api/diagnostics/stt" {
-			return b.probeSTT(r)
-		}
-		if path == "/api/opencode/pair" {
-			return b.pairOpenCode(r)
-		}
-		if path == "/api/opencode/compact" {
-			return b.compactAPI(w, r)
-		}
-		if path == "/api/tts" {
-			obj, err := jsonBody(r)
-			if err != nil {
-				return nil, err
-			}
-			text, err := spokenText(str(obj["text"]))
-			if err != nil {
-				return nil, err
-			}
-			if b.worker == nil || !b.worker.ready.Load() {
-				return nil, problem(503, "TTS unavailable")
-			}
-			id, err := companionIDArg(r, obj, false)
-			if err != nil {
-				return nil, err
-			}
-			voice := b.voices.defaultFor("")
-			if id != "" {
-				voice = b.voiceFor(id)
-			}
-			ctx, cancel := context.WithTimeout(ctx, ttsWait)
-			defer cancel()
-			pcm, err := b.worker.synthesize(ctx, voice, text)
-			if err != nil {
-				return nil, problem(502, "TTS synthesis failed")
-			}
-			sendBytes(w, 200, pcmType, pcm)
-			return nil, nil
 		}
 	}
 	return nil, problem(404, "Not found")

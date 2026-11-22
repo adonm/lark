@@ -41,7 +41,6 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS terminals (id TEXT PRIMARY KEY, kind TEXT NOT NULL, companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL, ip TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
 	`CREATE TABLE IF NOT EXISTS sessions (companion_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
-	`CREATE TABLE IF NOT EXISTS tunnels (companion_id TEXT PRIMARY KEY, route_name TEXT NOT NULL, url TEXT NOT NULL, local_port INTEGER NOT NULL, scoped_token TEXT NOT NULL, profile TEXT NOT NULL, created_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS messages_companion_ts_id ON messages (companion_id, ts_ms, id)`,
 	`CREATE TABLE IF NOT EXISTS memory (scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key))`,
@@ -389,16 +388,4 @@ func sessionStore(d *larkDB) *store[string] {
 			err := r.Scan(&id, &sid, &at)
 			return id, sid, err
 		}, values: func(id, sid string) []any { return []any{id, sid, time.Now().UnixMilli()} }}
-}
-
-func tunnelStore(d *larkDB) *store[tunnelRecord] {
-	return &store[tunnelRecord]{db: d.DB, readDB: d.readDB(), table: "tunnels", key: "companion_id", columns: "companion_id,route_name,url,local_port,scoped_token,profile,created_at",
-		upsert: "route_name=excluded.route_name,url=excluded.url,local_port=excluded.local_port,scoped_token=excluded.scoped_token,profile=excluded.profile",
-		scan: func(r rowScanner) (string, tunnelRecord, error) {
-			var v tunnelRecord
-			err := r.Scan(&v.CompanionID, &v.RouteName, &v.URL, &v.LocalPort, &v.Token, &v.Profile, &v.CreatedAt)
-			return v.CompanionID, v, err
-		}, values: func(id string, v tunnelRecord) []any {
-			return []any{id, v.RouteName, v.URL, v.LocalPort, v.Token, v.Profile, v.CreatedAt}
-		}}
 }

@@ -190,9 +190,6 @@ func (b *larkServer) companionEntry(c companionState, full bool) object {
 	if full {
 		entry["face_svg"] = c.FaceSVG
 	}
-	if details := b.tunnels.info(c.ID); details != nil {
-		entry["tunnel"] = details
-	}
 	return entry
 }
 
@@ -555,14 +552,6 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	if len(terms) > 0 {
 		return problem(409, "Detach or remove terminals before deleting companion")
 	}
-	if b.tunnels != nil {
-		b.tunnels.mu.Lock()
-		err := b.tunnels.removeLocked(ctx, id, false)
-		b.tunnels.mu.Unlock()
-		if err != nil {
-			return err
-		}
-	}
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return problem(502, "Cannot delete companion")
@@ -618,12 +607,6 @@ func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path s
 	rest, ok := strings.CutPrefix(path, "/api/companions/")
 	if !ok || rest == "" {
 		return nil, problem(404, "Not found")
-	}
-	if id, ok := strings.CutSuffix(rest, "/messages"); ok && r.Method == http.MethodGet {
-		if !validCompanionID(strings.ToLower(id)) {
-			return nil, problem(400, "Invalid companion ID")
-		}
-		return b.messages(r, strings.ToLower(id))
 	}
 	if id, ok := strings.CutSuffix(rest, "/reset"); ok && r.Method == http.MethodPost {
 		if !validCompanionID(strings.ToLower(id)) {

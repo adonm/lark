@@ -535,9 +535,7 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         }
         break;
     }
-    case LARK_MSG_VOICE_OWNER:
-    case LARK_MSG_PROMPT:
-    case LARK_MSG_PROMPT_ENDED: {
+    case LARK_MSG_VOICE_OWNER: {
         if (len >= 4) {
             uint32_t seq = (uint32_t)payload[0] | ((uint32_t)payload[1] << 8) |
                            ((uint32_t)payload[2] << 16) | ((uint32_t)payload[3] << 24);

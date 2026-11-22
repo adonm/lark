@@ -883,14 +883,13 @@ func TestRectangularScreen(t *testing.T) {
 }
 
 func TestBox3HelloAndRawAppTaps(t *testing.T) {
-	_, base := wsHarness(t, nil)
+	b, base := wsHarness(t, nil)
 	box := testConnectWS(t, base, "unit", false)
 	round := testConnectWS(t, base, "unit", false)
-	web := testConnectWS(t, base, "unit", true)
 	const boxID, roundID = "box3-test", "vocat-round"
 	box.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
 		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
-		width: 320, height: 240, shape: shapeRect, terminalID: boxID, board: "esp-box-3", firmware: "0.12.0",
+		width: 320, height: 240, shape: shapeRect, terminalID: boxID, board: "esp-box-3", firmware: "0.12.0", token: "unit",
 	}))
 	box.until(t, hasProto(msgWelcome, ""))
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); r != image.Rect(0, 0, 320, 240) {
@@ -906,25 +905,17 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 		t.Fatal(boxStatus)
 	}
 
-	boxFrame := web.watch(t, boxID)
-	if !bytes.Contains(framePayload(boxFrame), []byte(boxID)) {
-		t.Fatalf("BOX-3 mirror tag = %x", framePayload(boxFrame))
-	}
 	code := `function init(){ return {hits:"untouched"} }
 	function render(s){ return '<svg><rect width="360" height="360" fill="#123456"/>'+
 		'<rect width="30" height="30" fill="red" data-id="corner"/><text x="100" y="180">'+s.hits+'</text></svg>' }
 	function onTap(s,p,id,x,y){ s.hits=id+":"+x+","+y; }`
 	toolTest(t, base, "app", object{"companions": []string{"new-companion", "cake"}, "code": code}, false)
-	web.until(t, hasSVG("untouched"))
+	waitSVG(t, b.ws, boxID, "untouched")
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); !r.In(image.Rect(0, 0, 320, 240)) {
 		t.Fatalf("BOX-3 app sent an out-of-bounds frame: %v", r)
 	}
 	box.tap(t, 48, 10, 0)
-	web.until(t, hasSVG("corner:12,15"))
-	web.tap(t, 20, 18, 0)
-	web.until(t, hasSVG("corner:20,18"))
-	web.sendProto(t, msgWatch, appendStr8(nil, roundID))
-	web.until(t, hasSVG(roundID))
+	waitSVG(t, b.ws, boxID, "corner:12,15")
 }
 
 func TestFrameCodecsAndSmartSelector(t *testing.T) {

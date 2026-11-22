@@ -119,14 +119,14 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 			return "", nil
 		}
 	})
-	const id = "web-e0210000"
+	const id = "vocat-e021"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
+	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
 	start := func() {
-		d.recStart(t, "")
+		d.tap(t, 180, 180, 0)
 		d.until(t, func(f wsFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
@@ -229,13 +229,13 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 			}
 		}
 	})
-	const id = "web-e0250000"
+	const id = "vocat-e025"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
-	d.recStart(t, "")
+	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
+	d.tap(t, 180, 180, 0)
 	d.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
@@ -335,13 +335,13 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 
 func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
-	const id = "web-e0230000"
+	const id = "vocat-e023"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
-	d.recStart(t, "")
+	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
+	d.tap(t, 180, 180, 0)
 	d.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
@@ -371,7 +371,7 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 
 func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
-	const id = "web-e0240000"
+	const id = "vocat-e024"
 	d := testConnectWS(t, base, "unit", false)
 	d.hello(t, id, "")
 	b.ws.mu.Lock()
@@ -390,7 +390,7 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 }
 
 func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
-	const sid, id = "ses-followup", "web-e0220000"
+	const sid, id = "ses-followup", "vocat-e022"
 	prompts := make(chan string, 2)
 	finishFirst := make(chan struct{})
 	var count atomic.Int32
@@ -432,10 +432,16 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
-	d.text(t, "Draw a dragon")
+	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
+	b.ws.mu.Lock()
+	b.ws.startTurn(b.ws.terminals[id], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
+		b.ws.runTurn(ctx, b.ws.terminals[id], turn, "Draw a dragon", "voice", nil)
+	})
+	b.ws.mu.Unlock()
 	expectValue(t, prompts, "Draw a dragon")
-	d.recStart(t, "")
+	b.ws.mu.Lock()
+	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
+	b.ws.mu.Unlock()
 	d.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0

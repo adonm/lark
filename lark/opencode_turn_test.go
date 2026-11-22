@@ -184,7 +184,11 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 			})
 			device := testConnectWS(t, base, "unit", false)
 			device.hello(t, id, "Cake")
-			device.text(t, "Speak two sentences.")
+			b.ws.mu.Lock()
+			b.ws.startTurn(b.ws.terminals[id], time.Now(), false, "typed", func(ctx context.Context, turn uint64) {
+				b.ws.runTurn(ctx, b.ws.terminals[id], turn, "Speak two sentences.", "typed", nil)
+			})
+			b.ws.mu.Unlock()
 			ttsMsg := func(op uint8) func(wsFrame) bool {
 				return func(f wsFrame) bool {
 					p := framePayload(f)
@@ -297,7 +301,11 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			}
 			board := testConnectWS(t, base, "unit", false)
 			board.helloV2(t, id, "Cake")
-			board.text(t, "Speak two sentences.")
+			b.ws.mu.Lock()
+			b.ws.startTurn(b.ws.terminals[id], time.Now(), false, "typed", func(ctx context.Context, turn uint64) {
+				b.ws.runTurn(ctx, b.ws.terminals[id], turn, "Speak two sentences.", "typed", nil)
+			})
+			b.ws.mu.Unlock()
 			nextSpeech(first).done <- ttsResult{pcm: make([]byte, 640)}
 			ttsMatch := func(op uint8) func(wsFrame) bool {
 				return func(f wsFrame) bool {
@@ -573,8 +581,6 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	c.hello(t, termID, "Cake")
 	mint := testConnectWS(t, base, "unit", false)
 	mint.hello(t, "vocat-0003", "Mint")
-	mirror := testConnectWS(t, base, "unit", true)
-	mirror.watch(t, id)
 	toolTest(t, base, "emit", object{"to": id, "chime": "tap"}, false)
 	c.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
@@ -585,20 +591,24 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 		t.Fatal("local-only tap started an AI session:", created)
 	default:
 	}
-	testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "Next quiz round!"}, 200)
+	b.ws.mu.Lock()
+	b.ws.startTurn(b.ws.terminals[termID], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
+		b.ws.runTurn(ctx, b.ws.terminals[termID], turn, "Next quiz round!", "voice", nil)
+	})
+	b.ws.mu.Unlock()
 	expectValue(t, titles, "Lark: Cake (cake)")
 	select {
 	case text := <-prompts:
 		if !strings.HasSuffix(text, "Next quiz round!") {
-			t.Fatal("chat did not submit its explicit prompt")
+			t.Fatal("turn did not submit its explicit prompt")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("chat did not start a turn")
+		t.Fatal("turn did not start")
 	}
-	if frame := mirror.until(t, hasSVG("Done.")); !hasSVG("Answer")(frame) {
+	if svg := waitSVG(t, b.ws, termID, "Done."); !strings.Contains(svg, "Answer") {
 		t.Fatal("no-audio answer notice was missing")
 	}
-	if got := apiObjects(t, base+"/api/companions/mint/messages", "messages"); len(got) != 0 {
-		t.Fatal("fenced prose triggered intercom")
+	if got, err := b.history.list(t.Context(), "mint"); err != nil || len(got) != 0 {
+		t.Fatal("fenced prose triggered intercom", err, got)
 	}
 }

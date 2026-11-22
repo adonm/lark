@@ -11,13 +11,18 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
+)
+
+var (
+	testTermMu    sync.Mutex
+	testTermAddrs = map[string]string{}
 )
 
 type testWS struct {
@@ -26,88 +31,38 @@ type testWS struct {
 	timeout time.Duration
 }
 
-const testKey = "dGhlIHNhbXBsZSBub25jZQ=="
-const testAccept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
-
-func dialTestWS(t *testing.T, base, token string, query bool, headers object) (*testWS, *http.Response) {
+func apiObjects(t *testing.T, url, field string) []any {
 	t.Helper()
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatal("invalid WebSocket test address")
+	return testObject(t, testRequest(t, http.MethodGet, url, "unit", nil, 200))[field].([]any)
+}
+
+func testConnectWS(t *testing.T, base, _ string, _ bool) *testWS {
+	t.Helper()
+	testTermMu.Lock()
+	addr := testTermAddrs[base]
+	testTermMu.Unlock()
+	if addr == "" {
+		t.Fatalf("no terminal server for %s", base)
 	}
-	u.Path = "/ws"
-	if query {
-		u.RawQuery = url.Values{"token": {token}}.Encode()
-	}
-	conn, err := net.DialTimeout("tcp", u.Host, 3*time.Second)
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
-		t.Fatal("cannot connect to WebSocket test address")
+		t.Fatal("cannot connect to terminal test address:", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
-	req := &http.Request{Method: "GET", URL: u, Host: u.Host, Header: http.Header{}}
-	req.Header.Set("Connection", "keep-alive, Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Sec-WebSocket-Version", "13")
-	req.Header.Set("Sec-WebSocket-Key", testKey)
-	if !query && token != "" {
-		req.Header.Set("X-Lark-Token", token)
-	}
-	for k, v := range headers {
-		req.Header.Set(k, str(v))
-	}
-	if req.Write(conn) != nil {
-		t.Fatal("cannot write upgrade request")
-	}
-	in := bufio.NewReader(conn)
-	res, err := http.ReadResponse(in, req)
-	if err != nil {
-		t.Fatal("cannot read upgrade response")
-	}
-	return &testWS{conn: conn, in: in}, res
-}
-
-func testConnectWS(t *testing.T, base, token string, query bool) *testWS {
-	t.Helper()
-	ws, res := dialTestWS(t, base, token, query, nil)
-	if res.StatusCode != 101 || res.Header.Get("Sec-WebSocket-Accept") != testAccept {
-		t.Fatalf("upgrade failed: HTTP %d", res.StatusCode)
-	}
-	return ws
-}
-
-func maskedFrame(op byte, final bool, data []byte) []byte {
-	if final {
-		op |= 128
-	}
-	f := []byte{op}
-	switch n := len(data); {
-	case n < 126:
-		f = append(f, 128|byte(n))
-	case n <= 65535:
-		f = binary.BigEndian.AppendUint16(append(f, 128|126), uint16(n))
-	default:
-		f = binary.BigEndian.AppendUint64(append(f, 128|127), uint64(n))
-	}
-	mask := []byte{0xb1, 0xf1, 0x27, 0xe6}
-	f = append(f, mask...)
-	for i, c := range data {
-		f = append(f, c^mask[i%4])
-	}
-	return f
+	return &testWS{conn: conn, in: bufio.NewReader(conn)}
 }
 
 func (s *testWS) write(t *testing.T, data []byte) {
 	t.Helper()
 	_ = s.conn.SetWriteDeadline(time.Now().Add(4 * time.Second))
 	if _, err := s.conn.Write(data); err != nil {
-		t.Fatal("cannot send WebSocket frame:", err)
+		t.Fatal("cannot send terminal packet:", err)
 	}
 }
 
 func (s *testWS) sendProto(t *testing.T, msgType uint8, payload []byte) {
 	t.Helper()
-	s.write(t, maskedFrame(wsBinary, true, packProtoPacket(msgType, 0, payload)))
+	s.write(t, packProtoPacket(msgType, 0, payload))
 }
 
 func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) {
@@ -120,11 +75,6 @@ func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts, ssrc uint32, pc
 func (s *testWS) tap(t *testing.T, x, y int, rev uint16) {
 	t.Helper()
 	s.sendProto(t, msgPointer, encodePointer(ptrTap, uint16(x), uint16(y), rev))
-}
-
-func (s *testWS) text(t *testing.T, msg string) {
-	t.Helper()
-	s.sendProto(t, msgTextInput, appendStr16(nil, msg))
 }
 
 func (s *testWS) recStart(t *testing.T, target string) {
@@ -148,40 +98,30 @@ func (s *testWS) recEnd(t *testing.T, target string, cancelled bool) {
 
 func (s *testWS) barrier(t *testing.T) {
 	t.Helper()
-	s.write(t, maskedFrame(wsPing, true, nil))
-	s.until(t, func(f wsFrame) bool { return f.op == wsPong })
+	s.sendProto(t, msgPing, []byte{1, 2, 3, 4})
+	s.until(t, hasProto(msgPong, ""))
 }
 
 func (s *testWS) read(t *testing.T) wsFrame {
 	t.Helper()
 	_ = s.conn.SetReadDeadline(time.Now().Add(max(5*time.Second, s.timeout)))
-	var h [8]byte
-	if _, err := io.ReadFull(s.in, h[:2]); err != nil {
-		t.Fatal("cannot read WebSocket frame:", err)
+	var hdr [protoHeaderSize]byte
+	if _, err := io.ReadFull(s.in, hdr[:]); err != nil {
+		t.Fatal("cannot read terminal packet:", err)
 	}
-	if h[0]&0xf0 != 0x80 || h[1]&128 != 0 {
-		t.Fatal("invalid server frame header")
+	if hdr[0] != protoMagic {
+		t.Fatalf("invalid terminal header: %x", hdr)
 	}
-	op, n := h[0]&15, uint64(h[1])
-	if n == 126 {
-		if _, err := io.ReadFull(s.in, h[:2]); err != nil {
-			t.Fatal(err)
-		}
-		n = uint64(binary.BigEndian.Uint16(h[:2]))
-	} else if n == 127 {
-		if _, err := io.ReadFull(s.in, h[:]); err != nil {
-			t.Fatal(err)
-		}
-		n = binary.BigEndian.Uint64(h[:])
+	payloadLen := binary.LittleEndian.Uint32(hdr[4:8])
+	if payloadLen > protoMaxPayload {
+		t.Fatalf("invalid terminal header: %x", hdr)
 	}
-	if n > maxPCM+1 {
-		t.Fatal("oversized server frame")
+	pkt := make([]byte, protoHeaderSize+int(payloadLen))
+	copy(pkt[:protoHeaderSize], hdr[:])
+	if _, err := io.ReadFull(s.in, pkt[protoHeaderSize:]); err != nil {
+		t.Fatal("cannot read terminal payload:", err)
 	}
-	data := make([]byte, n)
-	if _, err := io.ReadFull(s.in, data); err != nil {
-		t.Fatal(err)
-	}
-	return wsFrame{op, data}
+	return wsFrame{wsBinary, pkt}
 }
 
 func (s *testWS) until(t *testing.T, match func(wsFrame) bool) wsFrame {
@@ -195,13 +135,12 @@ func (s *testWS) until(t *testing.T, match func(wsFrame) bool) wsFrame {
 		if match(f) {
 			return f
 		}
-		if f.op == wsPing {
-			s.write(t, maskedFrame(wsPong, true, f.data))
-		} else if f.op == wsClose {
-			t.Fatal("unexpected close frame")
+		mt, _, payload, ok := unpackProtoPacket(f.data)
+		if ok && mt == msgPing && len(payload) == 4 {
+			s.sendProto(t, msgPong, payload)
 		}
 	}
-	t.Fatal("wanted operation not found in WebSocket frames")
+	t.Fatal("wanted operation not found in terminal frames")
 	return wsFrame{}
 }
 
@@ -215,7 +154,23 @@ func hasProto(msgType uint8, sample string) func(wsFrame) bool {
 	}
 }
 
-func hasSVG(sample string) func(wsFrame) bool { return hasProto(msgFrameSVG, sample) }
+func waitSVG(t *testing.T, h *wsHub, termID, sample string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		d := h.terminals[strings.ToLower(termID)]
+		if d != nil && strings.Contains(d.svg.source, sample) {
+			got := d.svg.source
+			h.mu.Unlock()
+			return got
+		}
+		h.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q on %s", sample, termID)
+	return ""
+}
 
 func isPlayback(f wsFrame) bool {
 	if f.op != wsBinary {
@@ -253,39 +208,14 @@ func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) wsF
 		companionID:    compID,
 		board:          "esp-vocat",
 		firmware:       "0.12.0",
+		token:          "unit",
 	}))
 	s.until(t, hasProto(msgWelcome, ""))
 	return s.until(t, isDisplay)
 }
 
-func (s *testWS) helloWeb(t *testing.T, id, compID string, caps uint32, ifFree bool) wsFrame {
-	t.Helper()
-	var flags uint8
-	if ifFree {
-		flags |= helloFlagIfFree
-	}
-	s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
-		protoVersion:   protoVersion1,
-		kind:           termKindWeb,
-		capsMask:       caps,
-		displayFormats: dispSVG,
-		width:          360,
-		height:         360,
-		shape:          shapeRound,
-		flags:          flags,
-		terminalID:     id,
-		companionID:    compID,
-		firmware:       "web",
-	}))
-	s.until(t, hasProto(msgWelcome, ""))
-	return s.until(t, hasSVG(""))
-}
-
 func (s *testWS) hello(t *testing.T, id, compID string) wsFrame {
 	t.Helper()
-	if webTerminalID.MatchString(strings.ToLower(id)) {
-		return s.helloWeb(t, id, compID, capDrag, false)
-	}
 	return s.helloHardware(t, id, compID, capBattery|capDrag)
 }
 
@@ -299,92 +229,24 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 		setup(b, dir)
 	}
 	b.ws = newWSHub(b, false)
+	termSrv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(b)
+	testTermMu.Lock()
+	testTermAddrs[srv.URL] = termSrv.tcpLn.Addr().String()
+	testTermMu.Unlock()
 	t.Cleanup(func() {
+		testTermMu.Lock()
+		delete(testTermAddrs, srv.URL)
+		testTermMu.Unlock()
+		termSrv.shutdown()
 		b.ws.shutdown()
 		cancel()
 		srv.Close()
 	})
 	return b, srv.URL
-}
-
-func TestWSHandshakeAndRFC6455(t *testing.T) {
-	b, base := wsHarness(t, nil)
-	for _, c := range []struct {
-		token string
-		query bool
-		h     object
-		want  int
-	}{
-		{"", false, nil, 401},
-		{"wrong", true, nil, 401},
-		{"unit", true, object{"Origin": "http://example.test"}, 403},
-		{"unit", true, object{"Sec-WebSocket-Version": "12"}, 426},
-		{"unit", false, object{"Sec-WebSocket-Key": "dGhpcw=="}, 400},
-	} {
-		_, res := dialTestWS(t, base, c.token, c.query, c.h)
-		if res.StatusCode != c.want || c.want == 426 && res.Header.Get("Sec-WebSocket-Version") != "13" {
-			t.Fatalf("handshake HTTP %d, wanted %d", res.StatusCode, c.want)
-		}
-		res.Body.Close()
-	}
-	c := testConnectWS(t, base, "unit", false)
-	helloPkt := packProtoPacket(msgHello, 0, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
-	c.write(t, slices.Concat(maskedFrame(wsBinary, false, helloPkt[:6]),
-		maskedFrame(wsPing, true, []byte("hi")), maskedFrame(0, true, helloPkt[6:])))
-	pong := c.read(t)
-	if pong.op != wsPong || string(pong.data) != "hi" {
-		t.Fatal("ping was not echoed during fragmentation")
-	}
-	c.until(t, hasProto(msgWelcome, ""))
-	c.until(t, hasProto(msgPeers, ""))
-	reply := wsCloseFrame(1000)
-	c.write(t, maskedFrame(wsClose, true, reply.data))
-	for {
-		got := c.read(t)
-		if got.op == wsClose {
-			if !bytes.Equal(got.data, reply.data) {
-				t.Fatal("close not echoed")
-			}
-			break
-		}
-	}
-	for _, tt := range []struct {
-		name string
-		raw  []byte
-		code uint16
-	}{
-		{"unmasked", []byte{0x81, 0}, 1002},
-		{"reserved bit", []byte{0xc1, 0x80}, 1002},
-		{"orphan continuation", maskedFrame(0, true, nil), 1002},
-		{"fragmented ping", maskedFrame(wsPing, false, []byte("hi")), 1002},
-		{"nonminimal length", []byte{0x81, 0xfe, 0, 1}, 1002},
-		{"invalid UTF-8", maskedFrame(wsText, true, []byte{0xff}), 1007},
-		{"invalid close code", maskedFrame(wsClose, true, []byte{3, 237}), 1002},
-		{"oversize", maskedFrame(wsBinary, true, make([]byte, wsLimit+1)), 1009},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c := testConnectWS(t, base, "unit", true)
-			c.write(t, tt.raw)
-			got := c.read(t)
-			if got.op != wsClose || len(got.data) != 2 || binary.BigEndian.Uint16(got.data) != tt.code {
-				t.Fatalf("bad close frame: %+v", got)
-			}
-		})
-	}
-	shutdown := testConnectWS(t, base, "unit", true)
-	b.ws.shutdown()
-	if got := shutdown.read(t); got.op != wsClose || !bytes.Equal(got.data, wsCloseFrame(1001).data) {
-		t.Fatalf("hub did not send a going-away close: %+v", got)
-	}
-}
-
-func (s *testWS) watch(t *testing.T, id string) wsFrame {
-	t.Helper()
-	s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
-	s.until(t, hasProto(msgPeers, id))
-	s.sendProto(t, msgWatch, appendStr8(nil, id))
-	return s.until(t, hasSVG("companion-ring"))
 }
 
 func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
@@ -393,7 +255,7 @@ func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	const id = "box3-hello"
 	dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
 		protoVersion: 0, kind: termKindHardware, displayFormats: dispRGB565,
-		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3",
+		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3", token: "unit",
 	}))
 	rej := dev.until(t, hasProto(msgReject, ""))
 	if framePayload(rej)[0] != rejectBadVersion {
@@ -402,9 +264,10 @@ func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	if list := apiObjects(t, base+"/api/terminals", "terminals"); len(list) != 0 {
 		t.Fatal("bad version registered a terminal", list)
 	}
+	dev = testConnectWS(t, base, "unit", false)
 	dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
 		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
-		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3", firmware: "0.12.0",
+		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3", firmware: "0.12.0", token: "unit",
 	}))
 	dev.until(t, hasProto(msgWelcome, ""))
 	frame, _, _ := decodeDisplay(t, dev.until(t, isDisplay))
@@ -420,101 +283,6 @@ func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	if err != nil || !ok || p.Kind != "hardware" || p.IP != "127.0.0.1" || p.Port != 80 || p.LastSeen <= 0 {
 		t.Fatalf("incorrect remembered identity: %+v (%v)", p, err)
 	}
-	web := testConnectWS(t, base, "unit", true)
-	web.hello(t, "web-12345678", "")
-	if p2, exists, err := terminalStore(b.db).get("web-12345678"); !exists || err != nil || p2.Kind != "web" {
-		t.Fatal("web hello did not register a web terminal", err)
-	}
-}
-
-func TestWSMirrorAndControls(t *testing.T) {
-	_, base := wsHarness(t, nil)
-	const id = "vocat-mir0"
-	dev := testConnectWS(t, base, "unit", false)
-	_, rev, _ := decodeDisplay(t, dev.helloHardware(t, id, "", capBattery|capDrag))
-	web := testConnectWS(t, base, "unit", true)
-	first := web.watch(t, id)
-	svgRev, _ := decodeFrameSVG(first)
-	if svgRev != uint32(rev) || !hasSVG("120,292,120,48")(first) {
-		t.Fatal("watch did not receive current frame with centered Menu control")
-	}
-	var st [16]byte
-	rssi, batt := int16(-45), int16(25)
-	binary.LittleEndian.PutUint16(st[0:2], uint16(rssi))
-	binary.LittleEndian.PutUint16(st[2:4], uint16(batt))
-	dev.sendProto(t, msgTelemetry, st[:])
-	web.until(t, hasSVG(menuSuccess))
-	web.tap(t, 180, 300, 0)
-	web.until(t, hasSVG("menu-next"))
-	web.tap(t, 248, 294, 0)
-	if f := web.until(t, hasSVG("menu-stats")); !hasSVG("menu-voice")(f) {
-		t.Fatal("menu did not mirror voice controls")
-	}
-	testRequest(t, "POST", base+"/api/terminals/"+id+"/volume", "unit", object{"auto": false, "volume": 62}, 200)
-	for _, c := range []*testWS{dev, web} {
-		c.until(t, func(f wsFrame) bool {
-			p := framePayload(f)
-			return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 62
-		})
-	}
-	web.tap(t, 180, 294, 0)
-	web.until(t, hasSVG("companion-ring"))
-	web.tap(t, 180, 180, 0)
-	dev.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
-	})
-	dev.recEnd(t, "", true)
-	dev.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
-	})
-}
-
-func TestWSWebOnlyDisplayAndIdenticalAppRender(t *testing.T) {
-	b, base := wsHarness(t, nil)
-	const id = "web-ab120000"
-	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
-		t.Fatal(err)
-	}
-	web := testConnectWS(t, base, "unit", true)
-	web.helloWeb(t, id, "cake", capDrag, false)
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
-	native := d.svg.fb != nil
-	b.ws.mu.Unlock()
-	if native {
-		t.Fatal("native framebuffer allocated for a browser terminal")
-	}
-	const code = `function render() {
-		return '<svg><circle data-id="app-dot" cx="180" cy="180" r="35" fill="#3579da"/></svg>';
-	} function onTap(s,p,id) { if (id === "app-dot") chime("tap"); }`
-	toolTest(t, base, "app", object{"companions": "cake", "code": code}, false)
-	web.until(t, func(f wsFrame) bool {
-		if isDisplay(f) {
-			t.Fatal("web-only app received RGB565")
-		}
-		return hasSVG("app-dot")(f)
-	})
-	b.ws.mu.Lock()
-	native = d.svg.fb != nil || d.appView.fb != nil
-	hit := hitID(d.svg.hits, 180, 180)
-	rev, gen := d.rev, d.renderGen
-	b.ws.mu.Unlock()
-	if native || hit != "app-dot" {
-		t.Fatal("web-only app needs hitboxes but no native framebuffer", hit)
-	}
-	web.tap(t, 180, 180, 0)
-	web.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
-	})
-	b.ws.mu.Lock()
-	unchanged := d.rev == rev && d.renderGen == gen
-	b.ws.mu.Unlock()
-	if !unchanged {
-		t.Fatal("identical app SVG scheduled a new frame")
-	}
 }
 
 func TestWSRecordingLimits(t *testing.T) {
@@ -529,7 +297,6 @@ func TestWSRecordingLimits(t *testing.T) {
 		{"cross PCM cap", append(bytes.Repeat([]byte{12, 0}, (maxPCM-2)/2), 15, 0, 16, 0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			const id = "web-a1230000"
 			pcm := tc.pcm[:min(len(tc.pcm), maxPCM)]
 			sttCalled := make(chan struct{}, 1)
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -545,11 +312,12 @@ func TestWSRecordingLimits(t *testing.T) {
 					return "", nil
 				}
 			})
+			const id = "vocat-e001"
 			if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
 				t.Fatal(err)
 			}
 			dev := testConnectWS(t, base, "unit", false)
-			dev.helloWeb(t, id, "cake", capDrag, false)
+			dev.hello(t, id, "cake")
 			dev.recStart(t, "")
 			dev.until(t, func(f wsFrame) bool {
 				p := framePayload(f)
@@ -621,11 +389,10 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 					return "", nil
 				}
 			})
-			dev, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
+			dev := testConnectWS(t, base, "unit", false)
 			dev.hello(t, id, "Cake")
-			web.watch(t, id)
 			dev.recStart(t, "")
-			web.until(t, hasSVG("rec-send"))
+			waitSVG(t, b.ws, id, "rec-send")
 			dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, first)
 			dev.tap(t, 247, 310, 0)
 			dev.until(t, func(f wsFrame) bool {
@@ -711,9 +478,9 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
 		t.Fatal(err)
 	}
-	from, to := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
+	from, to := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", false)
 	from.hello(t, "vocat-000a", "Cake")
-	to.helloWeb(t, "web-000b0000", "mint", capDrag, false)
+	to.hello(t, "vocat-000b", "mint")
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	from.recStart(t, "mint")
 	from.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm[:100])
@@ -739,8 +506,7 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	to.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	close(allowSTT)
 	closed = true
-	captionFrame := to.until(t, hasSVG("Voice caption."))
-	_, capSVG := decodeFrameSVG(captionFrame)
+	capSVG := waitSVG(t, b.ws, "vocat-000b", "Voice caption.")
 	rx, ry, ok := hitCenter(capSVG, "reply")
 	if !ok {
 		t.Fatal("missing reply hit")
@@ -773,18 +539,20 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		defer server.Close()
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		c := &wsClient{wire: &websocket{conn: server}, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 12)}
+		nc := &nativeClient{conn: server, out: make(chan nativeOutMsg, 12)}
+		c := &wsClient{native: nc, ctx: ctx, cancel: cancel}
+		nc.client = c
 		dev := &testWS{conn: client, in: bufio.NewReader(client)}
 		d := &wsTerminal{client: c, key: "lark-slow", id: "lark-slow", screen: roundScreen, companion: blankCompanion()}
 		h := &wsHub{terminals: map[string]*wsTerminal{d.key: d}}
-		go c.write()
+		go nc.writeLoop()
 		start := time.Now()
 		h.mu.Lock()
 		h.play(d, stream)
 		h.mu.Unlock()
 		// Pause reads until the playback goroutine is waiting for queue space.
 		synctest.Wait()
-		if c.drained == nil || c.ctx.Err() != nil {
+		if nc.drained == nil || c.ctx.Err() != nil {
 			t.Fatal("expected live playback to wait on a full audio queue")
 		}
 		if !h.mu.TryLock() {
@@ -834,12 +602,12 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 
 func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "web-a1230000"
+	const id = "vocat-a123"
 	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
 		t.Fatal(err)
 	}
-	phone := testConnectWS(t, base, "unit", true)
-	phone.helloWeb(t, id, "cake", capDrag, false)
+	phone := testConnectWS(t, base, "unit", false)
+	phone.hello(t, id, "cake")
 	stream := newAudioStream()
 	stream.append(bytes.Repeat([]byte{12, 0}, sampleRate))
 	stream.finish(nil)
@@ -1031,8 +799,6 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	})
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-a000", "Cake")
-	mirror := testConnectWS(t, base, "unit", true)
-	mirror.watch(t, "vocat-a000")
 	dev.recStart(t, "")
 	dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
 	dev.recEnd(t, "", false)
@@ -1049,8 +815,11 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		return len(turns) == 1 && turns[0].TTS != nil && turns[0].E2E != nil && turns[0].Total == nil
 	})
 	if stopWhileGenerating {
-		mirror.until(t, func(f wsFrame) bool {
-			return hasSVG(`aria-label="Stop"`)(f) && !bytes.Contains(f.data, []byte("Thinking"))
+		b.ws.sig.wait(t, func() bool {
+			b.ws.mu.Lock()
+			defer b.ws.mu.Unlock()
+			d := b.ws.terminals["vocat-a000"]
+			return d != nil && strings.Contains(d.svg.source, `aria-label="Stop"`) && !strings.Contains(d.svg.source, "Thinking")
 		})
 		dev.tap(t, 180, 315, 0)
 		abort := dev.until(t, func(f wsFrame) bool {
@@ -1060,9 +829,9 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		if binary.LittleEndian.Uint64(framePayload(abort)[1:9]) != binary.LittleEndian.Uint64(framePayload(start)[1:9]) {
 			t.Fatal("one Stop tap must abort the audio that is playing")
 		}
-		entries := apiObjects(t, base+"/api/companions/cake/messages", "messages")
-		if len(entries) != 1 {
-			t.Fatal("Stop during eager playback must not commit a reply")
+		entries, err := b.history.list(t.Context(), "cake")
+		if err != nil || len(entries) != 1 {
+			t.Fatal("Stop during eager playback must not commit a reply", err, entries)
 		}
 		return
 	}
@@ -1084,12 +853,11 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	if !settled {
 		t.Fatal("device did not settle after tts_ack")
 	}
-	entries := apiObjects(t, base+"/api/companions/cake/messages", "messages")
-	if len(entries) != 2 || !slices.ContainsFunc(entries, func(v any) bool {
-		e := v.(object)
-		return e["id"] == "msg2" && e["text"] == first+last
+	entries, err := b.history.list(t.Context(), "cake")
+	if err != nil || len(entries) != 2 || !slices.ContainsFunc(entries, func(e chatEntry) bool {
+		return e.ID == "msg2" && e.Text == first+last
 	}) {
-		t.Fatal("assistant fence leaked to canonical history", entries)
+		t.Fatal("assistant fence leaked to canonical history", entries, err)
 	}
 	var diag diagReport
 	if err := json.Unmarshal(testRequest(t, "GET", base+"/api/diagnostics", "unit", nil, 200), &diag); err != nil {
@@ -1111,44 +879,6 @@ func syncOnceClose(ch chan struct{}) func() {
 		if !closed {
 			close(ch)
 			closed = true
-		}
-	}
-}
-
-func TestEmbeddedApp(t *testing.T) {
-	b := &larkServer{}
-	assets, err := webFiles.ReadDir("web")
-	if err != nil {
-		t.Fatal(err)
-	}
-	paths := []string{"/", "/app", "/app/style.css"}
-	for _, f := range assets {
-		if strings.HasSuffix(f.Name(), ".js") && !strings.HasSuffix(f.Name(), ".test.js") {
-			paths = append(paths, "/app/"+f.Name())
-		}
-	}
-	for _, path := range paths {
-		w := httptest.NewRecorder()
-		b.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
-		if path == "/" {
-			if w.Code != 302 || w.Header().Get("Location") != "/app" {
-				t.Fatal("missing app redirect")
-			}
-		} else if w.Code != 200 || w.Body.Len() == 0 || w.Header().Get("Referrer-Policy") != "no-referrer" {
-			t.Fatalf("%s: missing app asset or security headers", path)
-		} else if strings.HasSuffix(path, ".js") && (w.Header().Get("Content-Type") != "text/javascript; charset=utf-8" ||
-			w.Header().Get("Cache-Control") != "no-store") {
-			t.Fatalf("%s: wrong module headers: %v", path, w.Header())
-		} else if path == "/app" && (!strings.Contains(w.Body.String(), `viewBox="0 0 360 360"`) || !strings.Contains(w.Body.String(), "New Chat") ||
-			!strings.Contains(w.Body.String(), `id="web-controls"`)) {
-			t.Fatal("app is missing its SVG or web controls")
-		}
-	}
-	for _, path := range []string{"/app/mic.test.mjs", "/app/mic.test.js", "/app/missing.js", "/app/../client.js", "/app/%2e%2e/client.js", "/app/%2flive.js"} {
-		w := httptest.NewRecorder()
-		b.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
-		if w.Code != 404 {
-			t.Errorf("%s = HTTP %d, want 404", path, w.Code)
 		}
 	}
 }

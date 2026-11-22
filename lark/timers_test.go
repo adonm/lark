@@ -8,7 +8,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +32,7 @@ func patchTimerTest(t *testing.T, base string, args object, failed bool) object 
 
 func TestTimerLocalFireAndCancel(t *testing.T) {
 	tts := make(chan string, 8)
-	_, base := wsHarness(t, func(b *larkServer, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.voices = companionVoiceStore(b.db, fableVoice)
 		b.worker = &synthWorker{requests: make(chan ttsRequest)}
 		b.worker.ready.Store(true)
@@ -57,8 +56,6 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	const id = "cake"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0001", "Cake")
-	web := testConnectWS(t, base, "unit", false)
-	web.watch(t, id)
 	patchControl(t, base, id, object{"sleep": true})
 	dev.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
@@ -67,12 +64,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 
 	set := object{"companion_id": id, "in_seconds": 1, "label": "Cake break", "say": "Take a break."}
 	timer := patchTimerTest(t, base, set, false)
-	hasUpdate := func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgEvent, id)(f) && len(p) >= 5 && p[4] == eventTimers
-	}
-	web.until(t, hasUpdate)
-	if got := apiObjects(t, base+"/api/timers?companion_id="+id, "timers"); len(got) != 1 || got[0].(object)["id"] != timer["id"] {
+	if got := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any); len(got) != 1 || got[0].(object)["id"] != timer["id"] {
 		t.Fatal(got)
 	}
 	dev.until(t, func(f wsFrame) bool {
@@ -83,28 +75,20 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})
-	var card wsFrame
-	updated := false
-	web.until(t, func(f wsFrame) bool {
-		if hasSVG("up!")(f) {
-			card = f
-		}
-		updated = updated || hasUpdate(f)
-		return updated && card.data != nil
-	})
-	if !bytes.Contains(card.data, []byte("OK")) || !bytes.Contains(card.data, []byte("Cake break")) {
-		t.Fatal(string(card.data))
+	card := waitSVG(t, b.ws, "vocat-0001", "up!")
+	if !strings.Contains(card, "OK") || !strings.Contains(card, "Cake break") {
+		t.Fatal(card)
 	}
 	dev.until(t, func(f wsFrame) bool { return isPlayback(f) && bytes.Equal(framePayload(f), []byte{1, 2, 3, 4}) })
 	expectValue(t, tts, fableVoice)
-	if len(tts) != 0 || len(apiObjects(t, base+"/api/timers", "timers")) != 0 {
+	if got := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any); len(tts) != 0 || len(got) != 0 {
 		t.Fatal("timer didn't synthesize and remove exactly once")
 	}
 	dev.tap(t, 180, 315, 0)
-	web.until(t, hasSVG("companion-ring"))
-	entries := apiObjects(t, base+"/api/companions/"+id+"/messages", "messages")
-	if len(entries) != 2 || entries[0].(object)["text"] != "Timer: Cake break" || entries[1].(object)["source"] != "timer" {
-		t.Fatal(entries)
+	waitSVG(t, b.ws, "vocat-0001", "companion-ring")
+	entries, err := b.history.list(t.Context(), id)
+	if err != nil || len(entries) != 2 || entries[0].Text != "Timer: Cake break" || entries[1].Source != "timer" {
+		t.Fatal(entries, err)
 	}
 	set["in_seconds"] = 3600
 	timer = toolTest(t, base, "patch", object{"timer": set}, false)["timer"].(object)
@@ -115,7 +99,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	if cancelled := patchTimerTest(t, base, object{"op": "cancel", "companion_id": id, "id": timer["id"]}, false); cancelled["cancelled"] != true {
 		t.Fatal(cancelled)
 	}
-	if got := apiObjects(t, base+"/api/timers?companion_id="+id, "timers"); len(got) != 0 {
+	if got := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any); len(got) != 0 {
 		t.Fatal(got)
 	}
 }
@@ -126,9 +110,8 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 		t.Cleanup(b.timers.close)
 	})
 	const id, name = "cake", "stretch"
-	dev, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
+	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0002", "Cake")
-	web.watch(t, id)
 	set := object{"op": "set", "companion_id": id, "in_seconds": 1, "app": name}
 	if out := patchTimerTest(t, base, set, true); !strings.Contains(str(out["error"]), "App not found") {
 		t.Fatal(out)
@@ -144,7 +127,7 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})
-	web.until(t, hasSVG("Stretch now"))
+	waitSVG(t, b.ws, "vocat-0002", "Stretch now")
 	if a := stateMe(t, base, id)["active_app"].(object); a["name"] != name {
 		t.Fatal(a)
 	}
@@ -323,19 +306,8 @@ func TestScopedTimerIsolationAndCaps(t *testing.T) {
 		}
 	})
 	ownTimer := patchTimerTest(t, base, object{"companion_id": owner, "op": "set", "in_seconds": 3600}, false)
-	otherTimer := patchTimerTest(t, base, object{"companion_id": other, "op": "set", "in_seconds": 3600}, false)
-	c, _ := b.companionByID(owner)
-	scope := httptest.NewServer(b.scoped(c, "scoped"))
-	defer scope.Close()
-	get := testObject(t, testRequest(t, "GET", scope.URL+"/api/timers", "scoped", nil, 200))["timers"].([]any)
-	if len(get) != 1 || get[0].(object)["id"] != ownTimer["id"] {
-		t.Fatal(get)
-	}
-	testRequest(t, "GET", scope.URL+"/api/timers?companion_id="+other, "scoped", nil, 403)
-	testRequest(t, "DELETE", scope.URL+"/api/timers/"+str(otherTimer["id"]), "scoped", nil, 403)
-	testRequest(t, "GET", scope.URL+"/api/memory/scopes", "scoped", nil, 404)
-	testRequest(t, "GET", scope.URL+"/api/assets", "scoped", nil, 404)
-	testRequest(t, "DELETE", scope.URL+"/api/timers/"+str(ownTimer["id"]), "scoped", nil, 204)
+	_ = patchTimerTest(t, base, object{"companion_id": other, "op": "set", "in_seconds": 3600}, false)
+	patchTimerTest(t, base, object{"companion_id": owner, "op": "cancel", "id": ownTimer["id"]}, false)
 	ctx := context.Background()
 	for i := range 31 {
 		id := fmt.Sprintf("companion-%d", i/8)

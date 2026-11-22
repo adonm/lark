@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -159,16 +158,7 @@ func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatE
 	return entry, ok
 }
 
-func (h *wsHub) broadcastChat(id string, entry chatEntry) {
-	raw, _ := json.Marshal(entry)
-	pkt := encodeEventMsg(h.nextSeq(), eventChat, id, "", string(raw))
-	key := strings.ToLower(id)
-	for c := range h.clients {
-		if c.watch == key || c.terminal != nil && c.terminal.companionID == key && c.terminal.virtual() {
-			c.enqueueProto(msgEvent, pkt)
-		}
-	}
-}
+func (h *wsHub) broadcastChat(id string, entry chatEntry) {}
 
 func (b *larkServer) messages(r *http.Request, id string) (any, error) {
 	id = strings.ToLower(id)
@@ -212,65 +202,6 @@ func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, 
 	}
 	out.Messages = entries
 	return out, nil
-}
-
-func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
-	obj, err := jsonBody(r)
-	if err != nil {
-		return nil, err
-	}
-	if scope != "" && !strings.EqualFold(str(obj["companion_id"]), scope) {
-		return nil, problem(403, "Companion out of scope")
-	}
-	id, err := companionIDArg(r, obj, true)
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
-	defer cancel()
-	text := strings.TrimSpace(str(obj["text"]))
-	if text == "" || len(text) > 4096 {
-		return nil, problem(400, "Expected nonempty text of at most 4096 bytes")
-	}
-	sender, ok := b.companionByID(id)
-	if !ok {
-		return nil, problem(404, "Companion not found")
-	}
-	if b.ws != nil {
-		b.ws.mu.Lock()
-		key, now := strings.ToLower(id), time.Now()
-		if t := b.ws.voiceOwner(key); t != nil {
-			if b.oc == nil {
-				b.ws.mu.Unlock()
-				return nil, problem(503, "Chat unavailable")
-			}
-			b.ws.startTurn(t, now, false, "typed", func(ctx context.Context, turn uint64) {
-				b.ws.runTurn(ctx, t, turn, text, "typed", nil)
-			})
-			b.ws.mu.Unlock()
-			return object{"ok": true, "companion_id": sender.ID}, nil
-		}
-		if b.oc == nil {
-			b.ws.mu.Unlock()
-			return nil, problem(503, "Chat unavailable")
-		}
-		b.ws.mu.Unlock()
-	}
-	if b.oc == nil {
-		return nil, problem(503, "Chat unavailable")
-	}
-	out, err := b.turn(ctx, sender, text)
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if err != nil {
-		return nil, err
-	}
-	result := object{"ok": true, "companion_id": sender.ID, "reply": out.Reply, "session_id": out.SessionID}
-	if scope == "" {
-		result["audio_url"] = out.AudioURL
-	}
-	return result, nil
 }
 
 func (b *larkServer) resetCompanion(r *http.Request, id string) (any, error) {
@@ -348,12 +279,4 @@ func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, ar
 	})
 }
 
-func (h *wsHub) historyArchived(id string) {
-	key := strings.ToLower(id)
-	pkt := encodeEventMsg(h.nextSeq(), eventHistoryArchived, id, "", "")
-	for c := range h.clients {
-		if (c.kind == "web" || c.kind == "watcher") && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
-			c.enqueueProto(msgEvent, pkt)
-		}
-	}
-}
+func (h *wsHub) historyArchived(id string) {}

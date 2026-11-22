@@ -59,18 +59,9 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	v := testObject(t, testRequest(t, http.MethodPost, c.base+"/api/companions", c.token,
 		object{"name": character}, http.StatusCreated))
 	id := str(v["id"])
-	term := testObject(t, testRequest(t, http.MethodPost, c.base+"/api/terminals", c.token,
-		object{"kind": "web", "companion_id": id}, http.StatusCreated))
-	termID := str(term["id"])
-	if !webTerminalID.MatchString(termID) {
-		t.Fatal("unexpected web terminal ID")
-	}
 	defer func() {
-		testRequest(t, http.MethodDelete, c.base+"/api/terminals/"+termID, c.token, nil, http.StatusNoContent)
 		testRequest(t, http.MethodDelete, c.base+"/api/companions/"+id, c.token, nil, http.StatusNoContent)
 	}()
-	sock := testConnectWS(t, c.base, c.token, true)
-	sock.helloWeb(t, termID, id, capDrag, false)
 	api := liveOpenCode(t, client, home, config)
 	type serverInfo struct {
 		Name   string
@@ -118,7 +109,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := turnPrompt(id, false, "typed",
+	prompt := turnPrompt(id, "typed",
 		"Run a live screen and controls check. Use Code Mode execute to call tools.lark.state({companion_id:'"+id+
 			"',include:['companions']}), tools.lark.patch({companion_id:'"+id+"',terminal:{sleep:false}}), tools.lark.emit({to:'"+id+
 			"',chime:'tap'}), and tools.lark.app({companions:'"+id+
@@ -162,9 +153,6 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("Code Mode results not seen: %v (tool references: %v; latest tool result: %s)", want, attempted, lastResult)
-	}
-	if messages := liveJSON[struct{ Messages []chatEntry }](t, c, "/api/devices/"+id+"/messages", nil, nil, "", nil).Messages; len(messages) != 0 {
-		t.Fatal("Code Mode smoke test wrote to canonical chat history")
 	}
 	t.Log("lark agent completed state, patch, app, and emit through execute")
 }

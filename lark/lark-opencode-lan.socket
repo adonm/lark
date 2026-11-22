@@ -1,8 +1,0 @@
-[Unit]
-Description=Lark OpenCode pairing on the LAN
-
-[Socket]
-ListenStream=0.0.0.0:49376
-
-[Install]
-WantedBy=sockets.target

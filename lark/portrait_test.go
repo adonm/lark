@@ -329,18 +329,7 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 			t.Fatalf("%s not private: %v", pose, err)
 		}
 	}
-	s1 := httptest.NewServer(b.scoped(companionState{ID: id}, "on-device"))
-	defer s1.Close()
-	s2 := httptest.NewServer(b.scoped(companionState{ID: str(other["id"])}, "other-device"))
-	defer s2.Close()
-	path := "/api/portraits/" + asset + "/idle.png"
-	testRequest(t, "GET", s1.URL+path, "", nil, 401)
-	testRequest(t, "GET", s2.URL+path, "other-device", nil, 404)
-	testRequest(t, "GET", base+"/api/portraits/"+asset+"/sheet.png", "unit", nil, 404)
-	out := testRequest(t, "GET", s1.URL+path, "on-device", nil, 200)
-	if config, err := png.DecodeConfig(bytes.NewReader(out)); err != nil || config.Width != 360 || config.Height != 360 {
-		t.Fatalf("expected aligned pose PNG: %v", err)
-	}
+	_ = other
 	for _, pair := range []struct {
 		mood, pose string
 		blink      bool
@@ -364,6 +353,5 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	if newAsset := activePortrait(str(edited["face_svg"])); newAsset == "" || asset == newAsset || edited["face_bg"] != c["face_bg"] {
 		t.Fatal(edited)
 	}
-	testRequest(t, "GET", s1.URL+path, "on-device", nil, 404)
 	toolTest(t, base, "patch", object{"device_id": str(other["id"]), "companion": object{"face_svg": raw}}, true)
 }

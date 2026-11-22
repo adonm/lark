@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -128,10 +127,6 @@ func TestCompanionVoiceAPI(t *testing.T) {
 	})
 	cake := testConnectWS(t, base, "unit", false)
 	cake.hello(t, "vocat-33d8", "Cake")
-	profile := testObject(t, testRequest(t, "GET", base+"/api/scope", "unit", nil, 200))
-	if profile["scoped"] != false {
-		t.Fatal("LAN listener reported itself as scoped")
-	}
 	path := "/api/companions/CAKE/voice"
 	testRequest(t, "POST", base+path, "", object{"voice": fableVoice}, 401)
 	for _, voice := range []any{"bad", "bf_alice", 1, nil} {
@@ -152,26 +147,10 @@ func TestCompanionVoiceAPI(t *testing.T) {
 	created := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{
 		"name": "Green", "voice": "bm_george",
 	}, 201))
-	id := str(created["id"])
+	_ = str(created["id"])
 	if listed := apiObjects(t, base+"/api/companions", "companions"); len(listed) != 2 ||
 		created["voice"] != "bm_george" || listed[1].(object)["voice"] != "bm_george" {
 		t.Fatal("companion did not persist its initial voice")
-	}
-	c, ok := b.companionByID(id)
-	if !ok {
-		t.Fatal("companion not found")
-	}
-	scoped := httptest.NewServer(b.scoped(c, "scoped-test"))
-	defer scoped.Close()
-	path = "/api/companions/" + id + "/voice"
-	testRequest(t, "POST", scoped.URL+path, "unit", object{"voice": emmaVoice}, 401)
-	testRequest(t, "POST", scoped.URL+"/api/companions/cake/voice", "scoped-test", object{"voice": emmaVoice}, 403)
-	testRequest(t, "POST", scoped.URL+"/api/companions/other/voice", "scoped-test", object{"voice": emmaVoice}, 403)
-	testRequest(t, "GET", scoped.URL+path, "scoped-test", nil, 404)
-	testRequest(t, "POST", scoped.URL+path, "scoped-test", object{"voice": heartVoice}, 200)
-	scope := testObject(t, testRequest(t, "GET", scoped.URL+"/api/scope", "scoped-test", nil, 200))
-	if scope["voice"] != heartVoice || !reflect.DeepEqual(profile["voices"], scope["voices"]) || len(scope["voices"].([]any)) != len(voiceCatalog) || b.voices.get("cake", "cake") != fableVoice {
-		t.Fatal("scoped update did not stay on the scoped companion")
 	}
 }
 
@@ -183,39 +162,35 @@ func TestMenuVoicePicker(t *testing.T) {
 	const id = "cake"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, termID, "Cake")
-	web := testConnectWS(t, base, "unit", true)
-	web.watch(t, id)
-	web.tap(t, 180, 316, 0)
-	web.until(t, hasSVG("menu-next"))
-	web.tap(t, 248, 294, 0)
-	p2 := web.until(t, hasSVG("Heart"))
-	_, p2svg := decodeFrameSVG(p2)
+	c.tap(t, 180, 316, 0)
+	waitSVG(t, b.ws, termID, "menu-next")
+	c.tap(t, 248, 294, 0)
+	p2svg := waitSVG(t, b.ws, termID, "Heart")
 	vx, vy, ok := hitCenter(p2svg, "menu-voice")
 	if !ok {
 		t.Fatal("missing menu-voice hit")
 	}
-	web.tap(t, vx, vy, 0)
-	page := web.until(t, hasSVG("voice-george"))
+	c.tap(t, vx, vy, 0)
+	svg := waitSVG(t, b.ws, termID, "voice-george")
 	for _, voice := range []int{1, 2, 3, 0} {
 		choice := voiceCatalog[voice]
-		_, svg := decodeFrameSVG(page)
 		x, y, ok := hitCenter(svg, "voice-"+strings.ToLower(choice.Name))
 		if !ok {
 			t.Fatalf("missing hit for %s", choice.Name)
 		}
-		web.tap(t, x, y, 0)
-		page = web.until(t, hasSVG(menuWarning))
+		c.tap(t, x, y, 0)
+		c.barrier(t)
+		svg = waitSVG(t, b.ws, termID, menuWarning)
 		if reloaded := companionVoiceStore(b.db, heartVoice); reloaded.get(id, "cake") != choice.ID {
 			t.Errorf("voice picker did not persist %s", choice.ID)
 		}
 	}
-	_, lastSVG := decodeFrameSVG(page)
-	bx, by, ok := hitCenter(lastSVG, "menu-back")
+	bx, by, ok := hitCenter(svg, "menu-back")
 	if !ok {
 		t.Fatal("missing menu-back hit")
 	}
-	web.tap(t, bx, by, 0)
-	web.until(t, hasSVG("menu-voice"))
+	c.tap(t, bx, by, 0)
+	waitSVG(t, b.ws, termID, "menu-voice")
 	testRequest(t, "POST", base+"/api/companions/"+id+"/voice", "unit", object{"voice": "af_bella"}, 200)
-	web.until(t, hasSVG("Bella"))
+	waitSVG(t, b.ws, termID, "Bella")
 }

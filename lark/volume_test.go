@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -48,9 +47,9 @@ func TestAmbientRMSAndVolume(t *testing.T) {
 
 func TestAmbientVolumePrecedesPlaybackWithoutPersisting(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "web-beef0000"
+	const id = "vocat-beef"
 	web := testConnectWS(t, base, "unit", false)
-	web.helloWeb(t, id, "", capDrag, false)
+	web.hello(t, id, "")
 	volume := func(want byte) func(wsFrame) bool {
 		return func(f wsFrame) bool {
 			p := framePayload(f)
@@ -98,15 +97,13 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 			t.Fatalf("unexpected volume frame: level=%d persist=%d auto=%d", p[0], p[1], p[2])
 		}
 	}
-	web := testConnectWS(t, base, "unit", true)
-	web.watch(t, id)
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
 	tap(180, 300)
-	web.until(t, hasSVG("menu-next"))
+	waitSVG(t, b.ws, id, "menu-next")
 	tap(248, 294)
-	web.until(t, hasSVG("Auto · 55%"))
+	waitSVG(t, b.ws, id, "Auto · 55%")
 	tap(245, 130)
-	drawer := string(web.until(t, hasSVG("vol-auto")).data)
+	drawer := waitSVG(t, b.ws, id, "vol-auto")
 	for _, control := range []string{"vol-minus", "vol-plus", "menu-back"} {
 		if !strings.Contains(drawer, control) {
 			t.Fatal("missing volume submenu control", control)
@@ -119,13 +116,13 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	var st [16]byte
 	board.sendProto(t, msgTelemetry, st[:])
 	tap(180, 315)
-	web.until(t, hasSVG("menu-volume"))
+	waitSVG(t, b.ws, id, "menu-volume")
 	entry := apiObjects(t, base+"/api/terminals", "terminals")[0].(object)
 	if auto, vol := b.volumePrefs(id); auto || vol != 55 || entry["auto_volume"] != false || entry["volume"] != json.Number("55") {
 		t.Fatalf("unintended head-touch volume change: persisted %t %d, device %v", auto, vol, entry)
 	}
 	tap(245, 130)
-	web.until(t, hasSVG("vol-auto"))
+	waitSVG(t, b.ws, id, "vol-auto")
 	tap(180, 262)
 	level(55, true, false)
 	tap(180, 262)
@@ -137,30 +134,13 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	}
 }
 
-func TestVolumeAPIAndScopedPersistence(t *testing.T) {
-	b, base := wsHarness(t, nil)
+func TestVolumePersistence(t *testing.T) {
+	_, base := wsHarness(t, nil)
 	v := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{}, 201))
 	id := str(v["id"])
-	term := testObject(t, testRequest(t, http.MethodPost, base+"/api/terminals", "unit", object{"kind": "web", "companion_id": id}, 201))
-	termID := str(term["id"])
-	client, _ := b.companionByID(id)
-	scoped := httptest.NewServer(b.scoped(client, "private"))
-	defer scoped.Close()
-	path := "/api/terminals/" + termID + "/volume"
-	testRequest(t, http.MethodPost, scoped.URL+"/api/terminals/vocat-0000/volume", "private", object{"auto": true}, 403)
-	testRequest(t, http.MethodPost, base+path, "unit", object{"auto": false, "volume": 101}, 400)
-	testRequest(t, http.MethodPost, scoped.URL+path, "private", object{"auto": false, "volume": 65}, 200)
-	f := testObject(t, testRequest(t, http.MethodGet, scoped.URL+"/api/scope", "private", nil, 200))
-	terms := f["terminals"].([]any)
-	if len(terms) != 1 || terms[0].(object)["auto_volume"] != false || terms[0].(object)["volume"] != json.Number("65") {
-		t.Fatal("unexpected scoped preferences", f)
-	}
+	const termID = "vocat-0001"
 	ws := testConnectWS(t, base, "unit", false)
-	ws.helloWeb(t, termID, id, capDrag, false)
-	ws.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgVolume, "")(f) && len(p) >= 3 && p[0] == 65
-	})
+	ws.hello(t, termID, id)
 	manual := patchControl(t, base, id, object{"volume": 70})
 	if manual["auto_volume"] != false || manual["volume"] != json.Number("70") {
 		t.Fatal(manual)

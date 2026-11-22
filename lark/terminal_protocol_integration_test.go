@@ -18,13 +18,14 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 	hw := testConnectWS(t, base, "unit", false)
 	hw.helloHardware(t, "vocat-33d8", "cake", capDrag|capWakeWord)
 
-	web := testConnectWS(t, base, "unit", true)
-	web.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
-		protoVersion: protoVersion1, kind: termKindWeb, capsMask: capDrag, displayFormats: dispSVG,
-		terminalID: "web-11223344", companionID: "cake",
+	hw2 := testConnectWS(t, base, "unit", false)
+	hw2.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, capsMask: capDrag, displayFormats: dispRGB565,
+		frameCodecs: codecBitAll, width: 360, height: 360, shape: shapeRound,
+		terminalID: "vocat-2cac", companionID: "cake", board: "esp-vocat", firmware: "0.12.0", token: "unit",
 	}))
-	welcome := framePayload(web.until(t, hasProto(msgWelcome, "")))
-	web.until(t, hasSVG(""))
+	welcome := framePayload(hw2.until(t, hasProto(msgWelcome, "")))
+	hw2.until(t, isDisplay)
 	var resumeTok [resumeTokenLen]byte
 	copy(resumeTok[:], welcome[20:36])
 	snapSeq := binary.LittleEndian.Uint32(welcome[16:20])
@@ -32,41 +33,41 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 		t.Fatal("expected non-zero snapshot seq in WELCOME")
 	}
 
-	// Web takes voice ownership via rec_start.
-	web.recStart(t, "")
+	// Second hardware terminal takes voice ownership via rec_start.
+	hw2.recStart(t, "")
 	hw.until(t, func(f wsFrame) bool {
-		return hasProto(msgVoiceOwner, "web-11223344")(f)
+		return hasProto(msgVoiceOwner, "vocat-2cac")(f)
 	})
-	web.recEnd(t, "", true)
+	hw2.recEnd(t, "", true)
 
-	// Disconnect web and resume inside the window -> keeps voice ownership and gets fresh snapshot.
-	web.conn.Close()
+	// Disconnect hw2 and resume inside the window -> keeps voice ownership and gets fresh snapshot.
+	hw2.conn.Close()
 	b.ws.sig.wait(t, func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()
-		return b.ws.terminals["web-11223344"] == nil
+		return b.ws.terminals["vocat-2cac"] == nil
 	})
 
-	web2 := testConnectWS(t, base, "unit", true)
-	web2.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, resumeTok, snapSeq, "web-11223344"))
-	w2 := framePayload(web2.until(t, hasProto(msgWelcome, "")))
+	hw2r := testConnectWS(t, base, "unit", false)
+	hw2r.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, resumeTok, snapSeq, "vocat-2cac"))
+	w2 := framePayload(hw2r.until(t, hasProto(msgWelcome, "")))
 	newSeq := binary.LittleEndian.Uint32(w2[16:20])
 	if newSeq <= snapSeq {
 		t.Fatalf("resume welcome seq %d <= prior %d", newSeq, snapSeq)
 	}
-	web2.until(t, hasSVG(""))
-	vo := web2.until(t, hasProto(msgVoiceOwner, "web-11223344"))
+	hw2r.until(t, isDisplay)
+	vo := hw2r.until(t, hasProto(msgVoiceOwner, "vocat-2cac"))
 	voSeq := binary.LittleEndian.Uint32(framePayload(vo)[0:4])
 	if voSeq <= newSeq {
 		t.Fatalf("snapshot VOICE_OWNER seq %d <= welcome seq %d", voSeq, newSeq)
 	}
 
 	// Expired resume token gets REJECT(rejectUnknownTerminal), then fresh HELLO works.
-	web2.conn.Close()
+	hw2r.conn.Close()
 	b.ws.sig.wait(t, func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()
-		return b.ws.terminals["web-11223344"] == nil
+		return b.ws.terminals["vocat-2cac"] == nil
 	})
 	b.ws.mu.Lock()
 	for k, e := range b.ws.resumes {
@@ -75,18 +76,19 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 	}
 	b.ws.mu.Unlock()
 
-	web3 := testConnectWS(t, base, "unit", true)
+	hw2e := testConnectWS(t, base, "unit", false)
 	var expiredTok [resumeTokenLen]byte
 	copy(expiredTok[:], w2[20:36])
-	web3.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, expiredTok, newSeq, "web-11223344"))
-	rej := framePayload(web3.until(t, hasProto(msgReject, "")))
+	hw2e.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, expiredTok, newSeq, "vocat-2cac"))
+	rej := framePayload(hw2e.until(t, hasProto(msgReject, "")))
 	if rej[0] != rejectUnknownTerminal {
 		t.Fatalf("expected rejectUnknownTerminal for expired resume, got %d", rej[0])
 	}
-	web3.helloWeb(t, "web-11223344", "cake", capDrag, false)
+	hw2f := testConnectWS(t, base, "unit", false)
+	hw2f.hello(t, "vocat-2cac", "cake")
 }
 
-func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackStatusAndPrompt(t *testing.T) {
+func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing.T) {
 	sttGot := make(chan []byte, 1)
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.stt = func(_ context.Context, pcm []byte) (string, error) {
@@ -100,74 +102,39 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackStatusAndPrompt(t *t
 	hw := testConnectWS(t, base, "unit", false)
 	hw.helloHardware(t, "vocat-33d8", "cake", capDrag|capWakeWord)
 
-	web := testConnectWS(t, base, "unit", true)
-	web.helloWeb(t, "web-aabbccdd", "cake", capDrag, false)
+	hw2 := testConnectWS(t, base, "unit", false)
+	hw2.helloHardware(t, "vocat-2cac", "cake", capDrag)
 
-	// 1. Two terminals on one companion: hw gets FRAME, web gets FRAME_SVG.
+	// 1. Two terminals on one companion both receive display frames.
 	toolTest(t, base, "app", object{"companions": "cake", "svg": `<svg><text x="180" y="180">DualView</text></svg>`}, false)
 	hw.until(t, isDisplay)
-	web.until(t, hasSVG("DualView"))
+	hw2.until(t, isDisplay)
+	waitSVG(t, b.ws, "vocat-2cac", "DualView")
 
-	// 2. Voice ownership take on tap/rec_start and fallback on disconnect.
-	web.recStart(t, "")
-	hw.until(t, hasProto(msgVoiceOwner, "web-aabbccdd"))
-	web.until(t, hasProto(msgVoiceOwner, "web-aabbccdd"))
+	// 2. Voice ownership take on rec_start and fallback on disconnect.
+	hw2.recStart(t, "")
+	hw.until(t, hasProto(msgVoiceOwner, "vocat-2cac"))
+	hw2.until(t, hasProto(msgVoiceOwner, "vocat-2cac"))
 	// STATUS broadcast: listening.
 	hw.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
 	})
-	// RTP-in-WS from browser into STT.
 	pcm := bytes.Repeat([]byte{0x31, 0x00}, rtpSamples)
-	web.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
-	web.recEnd(t, "", false)
+	hw2.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	hw2.recEnd(t, "", false)
 	select {
 	case got := <-sttGot:
 		if !bytes.Equal(got, pcm) {
-			t.Fatalf("RTP-in-WS STT mismatch: got %d bytes", len(got))
+			t.Fatalf("RTP STT mismatch: got %d bytes", len(got))
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for RTP-in-WS in STT")
+		t.Fatal("timed out waiting for RTP in STT")
 	}
 
-	// Disconnect web -> ownership falls back to hw.
-	web.conn.Close()
+	// Disconnect hw2 -> ownership falls back to hw.
+	hw2.conn.Close()
 	hw.until(t, hasProto(msgVoiceOwner, "vocat-33d8"))
-
-	// Reconnect web for PROMPT first-reply-wins test.
-	web2 := testConnectWS(t, base, "unit", true)
-	web2.helloWeb(t, "web-aabbccdd", "cake", capDrag, false)
-
-	// 3. PROMPT broadcast, first PROMPT_REPLY wins, PROMPT_ENDED sent to all.
-	replies := make(chan string, 2)
-	b.ws.mu.Lock()
-	b.ws.openPrompt("cake", promptPermission, "perm-1", "Allow tool?", []string{"allow", "deny"}, func(choice string) {
-		replies <- choice
-	})
-	b.ws.mu.Unlock()
-
-	hw.until(t, hasProto(msgPrompt, "perm-1"))
-	web2.until(t, hasProto(msgPrompt, "perm-1"))
-
-	replyPkt := appendStr8(appendStr8(nil, "perm-1"), "allow")
-	web2.sendProto(t, msgPromptReply, replyPkt)
-	hw.sendProto(t, msgPromptReply, appendStr8(appendStr8(nil, "perm-1"), "deny"))
-
-	hw.until(t, hasProto(msgPromptEnded, "perm-1"))
-	web2.until(t, hasProto(msgPromptEnded, "perm-1"))
-	select {
-	case got := <-replies:
-		if got != "allow" {
-			t.Fatalf("expected first reply 'allow', got %q", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("prompt callback did not fire")
-	}
-	select {
-	case extra := <-replies:
-		t.Fatalf("second reply %q should have been ignored", extra)
-	case <-time.After(50 * time.Millisecond):
-	}
 }
 
 func TestProtocolWireSizesAndAllocs(t *testing.T) {

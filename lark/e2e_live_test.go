@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +57,7 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	s := &e2eSuite{liveClient: liveClient{client: client, token: randomHex(32)},
 		workspace: filepath.Join(root, "workspace"), prefix: "E2E-" + randomHex(5), real: real}
 	config := filepath.Join(root, "config")
-	e2eWrite(t, filepath.Join(root, "bin/opentunnel"), []byte(e2eTunnelCLI), 0o700)
+	_ = config
 	for _, name := range []string{"stt-models", "tts-models"} {
 		if err := os.Symlink(filepath.Join(data, "lark", name), filepath.Join(local, name)); err != nil {
 			t.Fatal(err)
@@ -254,23 +253,6 @@ type e2eCompanion struct {
 	svg         string
 }
 
-func (s *e2eSuite) browser(t *testing.T, name string) *e2eCompanion {
-	t.Helper()
-	name = s.prefix + " " + name
-	v := testObject(t, s.request(t, "POST", "/api/companions", object{"name": name}, 201))
-	id := str(v["id"])
-	term := testObject(t, s.request(t, "POST", "/api/terminals", object{"kind": "web", "companion_id": id}, 201))
-	termID := str(term["id"])
-	if !webTerminalID.MatchString(termID) {
-		t.Fatal("missing web terminal ID")
-	}
-	ws := testConnectWS(t, s.base, s.token, true)
-	ws.helloWeb(t, termID, id, capDrag|capBridgeEndpoint, false)
-	c := &e2eCompanion{testWS: ws, id: id, name: name}
-	c.scene(t, "companion-ring")
-	return c
-}
-
 func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	t.Helper()
 	name := s.prefix + " " + label
@@ -289,7 +271,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 		protoVersion: protoVersion1, kind: termKindHardware, capsMask: caps,
 		displayFormats: dispRGB565, frameCodecs: codecBitAll,
 		width: uint16(width), height: uint16(height), shape: wireShape,
-		terminalID: id, companionID: name, board: variant, firmware: "0.12.0",
+		terminalID: id, companionID: name, board: variant, firmware: "0.12.0", token: s.token,
 	}))
 	c := &e2eCompanion{testWS: ws, id: id, name: name, width: width, high: height, pixels: make([]uint16, width*height)}
 	ws.until(t, hasProto(msgWelcome, ""))
@@ -299,13 +281,6 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 		t.Fatal("board did not receive full native framebuffer:", r)
 	}
 	return c
-}
-
-func (c *e2eCompanion) mirrorOn(t *testing.T, s *e2eSuite) {
-	t.Helper()
-	c.mirror = testConnectWS(t, s.base, s.token, true)
-	c.updateScene(t, c.mirror.watch(t, c.id))
-	c.syncRevision(t)
 }
 
 func (c *e2eCompanion) apply(t *testing.T, f wsFrame) {
@@ -331,71 +306,21 @@ func (c *e2eCompanion) expect(t *testing.T, label string, matches func(wsFrame) 
 	for time.Now().Before(deadline) {
 		f := c.read(t)
 		c.apply(t, f)
-		c.updateScene(t, f)
-		if f.op == wsClose {
-			t.Fatalf("%s closed waiting for %s", c.name, label)
-		}
 		if matches(f) {
 			return f
 		}
-		if f.op == wsPing {
-			c.write(t, maskedFrame(wsPong, true, f.data))
+		mt, _, payload, ok := unpackProtoPacket(f.data)
+		if ok && mt == msgPing && len(payload) == 4 {
+			c.sendProto(t, msgPong, payload)
 		}
 	}
 	t.Fatalf("%s did not receive %s before the deadline", c.name, label)
 	return wsFrame{}
 }
 
-func (c *e2eCompanion) updateScene(t *testing.T, f wsFrame) {
-	t.Helper()
-	if hasSVG("")(f) {
-		_, c.svg = decodeFrameSVG(f)
-	}
-}
-
-func (c *e2eCompanion) scene(t *testing.T, text ...string) string {
-	t.Helper()
-	return c.sceneWhere(t, strings.Join(text, ", "), func(f wsFrame) bool {
-		for _, part := range text {
-			if !bytes.Contains(f.data, []byte(part)) {
-				return false
-			}
-		}
-		return true
-	})
-}
-
-func (c *e2eCompanion) sceneWhere(t *testing.T, label string, filter func(wsFrame) bool) string {
-	t.Helper()
-	match := func(f wsFrame) bool { return hasSVG("")(f) && filter(f) }
-	if c.mirror != nil {
-		defer func() {
-			if t.Failed() {
-				t.Logf("%s: wanted mirror scene %q", c.name, label)
-			}
-		}()
-		f := c.mirror.until(t, match)
-		c.updateScene(t, f)
-		rev, _ := decodeFrameSVG(f)
-		c.syncTo(t, uint16(rev))
-	} else {
-		c.expect(t, label, match)
-	}
-	return c.svg
-}
-
 func e2eNumber(v any) int {
 	n, _ := strconv.Atoi(fmt.Sprint(v))
 	return n
-}
-
-func (c *e2eCompanion) syncTo(t *testing.T, rev uint16) {
-	t.Helper()
-	if int16(c.revision-rev) < 0 {
-		c.expect(t, "framebuffer matching mirror revision", func(f wsFrame) bool {
-			return isDisplay(f) && int16(c.revision-rev) >= 0
-		})
-	}
 }
 
 func (c *e2eCompanion) syncRevision(t *testing.T) {
@@ -407,8 +332,8 @@ func (c *e2eCompanion) syncRevision(t *testing.T) {
 
 func (c *e2eCompanion) syncFrames(t *testing.T) {
 	t.Helper()
-	c.write(t, maskedFrame(wsPing, true, []byte("sync")))
-	c.expect(t, "frame barrier", func(f wsFrame) bool { return f.op == wsPong && string(f.data) == "sync" })
+	c.sendProto(t, msgPing, []byte("sync"))
+	c.expect(t, "frame barrier", hasProto(msgPong, "sync"))
 }
 
 func (c *e2eCompanion) input(t *testing.T, ev string, x, y int, revision uint16) {
@@ -466,50 +391,4 @@ func (c *e2eCompanion) ack(t *testing.T, end wsFrame) {
 	}
 	audio := binary.LittleEndian.Uint64(p[1:9])
 	c.sendProto(t, msgTTSAck, encodeTTSAck(false, audio))
-}
-
-func (s *e2eSuite) history(t *testing.T, id, query string) []chatEntry {
-	t.Helper()
-	var out struct{ Messages []chatEntry }
-	if err := json.Unmarshal(s.request(t, "GET", "/api/devices/"+id+"/messages"+query, nil, 200), &out); err != nil {
-		t.Fatal("cannot decode canonical history")
-	}
-	return out.Messages
-}
-
-func (s *e2eSuite) synth(t *testing.T, text string) []byte {
-	t.Helper()
-	pcm := s.request(t, "POST", "/api/tts", object{"text": text}, 200)
-	if !livePCMOK(pcm) {
-		t.Fatal("Kokoro did not produce non-silent PCM")
-	}
-	return pcm
-}
-
-func (s *e2eSuite) scope(t *testing.T, id string) liveClient {
-	t.Helper()
-	v := testObject(t, s.request(t, "POST", "/api/tunnels", object{"device_id": id}, 201))
-	u, err := url.Parse(str(v["share_url"]))
-	if err != nil || u.Host != "scoped.test.opentunnel.example" || v["active"] != true {
-		t.Fatal("fake tunnel CLI did not provision the scoped local listener")
-	}
-	port, token := e2eNumber(v["local_port"]), u.Query().Get("token")
-	if port <= 0 || !scopeKey.MatchString(token) {
-		t.Fatal("invalid scoped listener or credential")
-	}
-	t.Cleanup(func() {
-		// The subtest context is already canceled when Cleanup runs.
-		req, _ := http.NewRequest("DELETE", s.base+"/api/tunnels/"+id, nil)
-		req.Header.Set("X-Lark-Token", s.token)
-		res, err := s.client.Do(req)
-		if err != nil {
-			t.Error("could not remove isolated scoped listener")
-			return
-		}
-		res.Body.Close()
-		if res.StatusCode != 204 && res.StatusCode != 200 {
-			t.Errorf("could not remove isolated scoped listener: HTTP %d", res.StatusCode)
-		}
-	})
-	return liveClient{s.client, "http://127.0.0.1:" + strconv.Itoa(port), token}
 }
