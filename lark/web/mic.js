@@ -1,20 +1,25 @@
-const vadSamples = 320; // 20 ms at 16 kHz.
-const callSamples = 640; // 40 ms at 16 kHz.
+const rtpHdrBytes = 12;
+const frameSamples = 320; // 20 ms at 16 kHz.
+const ptRecPCM = 96;
+const ptCallUp = 97;
 
 class EchoMic extends AudioWorkletProcessor {
   constructor({processorOptions} = {}) {
     super();
     this.call = processorOptions?.mode === "call";
     this.bridgeEndpoint = processorOptions?.mode === "bridge";
-    this.prefix = this.call && processorOptions.prefix === 4 ? 4 : 1;
+    this.pt = this.call ? ptCallUp : ptRecPCM;
+    this.ssrc = (processorOptions?.ssrc >>> 0) || 1;
     this.muted = this.call && !!processorOptions.muted;
-    this.packetBytes = 1 + 2 * (this.call ? callSamples : vadSamples);
+    this.packetBytes = rtpHdrBytes + 2 * frameSamples;
     this.ratio = sampleRate / 16000;
     this.left = this.ratio;
     this.sum = 0;
+    this.rtpSeq = 0;
+    this.rtpTS = 0;
     this.packet = new Uint8Array(this.packetBytes);
     this.buffer = new DataView(this.packet.buffer);
-    this.used = 1;
+    this.used = rtpHdrBytes;
     this.live = true;
     this.energy = 0;
     this.frames = 0;
@@ -26,7 +31,7 @@ class EchoMic extends AudioWorkletProcessor {
       if (!this.call) this.finish("end");
       else if (typeof data?.muted === "boolean") {
         this.muted = data.muted;
-        this.used = 1;
+        this.used = rtpHdrBytes;
         this.sum = 0;
         this.left = this.ratio;
         if (!this.muted) this.port.postMessage(data.seq);
@@ -36,7 +41,7 @@ class EchoMic extends AudioWorkletProcessor {
   finish(message) {
     if (!this.live) return;
     this.live = false;
-    if (this.used > 1) this.send();
+    if (this.used > rtpHdrBytes) this.send();
     this.port.postMessage(message);
   }
   hear(rms) {
@@ -48,7 +53,7 @@ class EchoMic extends AudioWorkletProcessor {
     }
   }
   frame() {
-    const rms = Math.sqrt(this.energy / vadSamples);
+    const rms = Math.sqrt(this.energy / frameSamples);
     this.energy = 0;
     this.frames++;
     if (this.frames <= 10) {
@@ -68,12 +73,18 @@ class EchoMic extends AudioWorkletProcessor {
     }
   }
   send() {
-    this.packet[0] = this.prefix;
+    const samples = (this.used - rtpHdrBytes) >> 1;
+    this.buffer.setUint8(0, 0x80);
+    this.buffer.setUint8(1, this.pt);
+    this.buffer.setUint16(2, this.rtpSeq++ & 0xffff, false);
+    this.buffer.setUint32(4, this.rtpTS >>> 0, false);
+    this.buffer.setUint32(8, this.ssrc, false);
+    this.rtpTS = (this.rtpTS + samples) >>> 0;
     const frame = this.used === this.packet.length ? this.packet.buffer : this.packet.buffer.slice(0, this.used);
     this.port.postMessage(frame, [frame]);
     this.packet = new Uint8Array(this.packetBytes);
     this.buffer = new DataView(this.packet.buffer);
-    this.used = 1;
+    this.used = rtpHdrBytes;
   }
   process(inputs) {
     if (!this.live) return false;

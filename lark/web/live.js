@@ -1,11 +1,12 @@
-import {audioBusy, canCaptureMic, endMic, handleCall, handleTTS, micStopping, playChime, playPCM, setVolume, startMic, stopCall, unlockAudio} from "./audio.js";
+import {audioBusy, canCaptureMic, endMic, handleCall, handleTTS, micStopping, playChime, playMedia, playPCM, setVolume, startMic, stopCall, unlockAudio} from "./audio.js";
 import {loadHistory, receiveChat, reloadArchivedHistory, resetTranscript} from "./chat.js";
 import {applyVolume, browserTerminal, refreshDevices, renderCallTarget, renderDevices, renderTargets, renderVoice, renderVolume} from "./devices.js";
-import {$, colors, companionName, isLive, nodes, say, screen, svgNS} from "./dom.js";
+import {$, colors, companionName, isLive, node, nodes, say, screen, svgNS} from "./dom.js";
 import {busyMode, idleWatch} from "./idle.js";
 import {loadSaved, loadTimers} from "./library.js";
+import {CAP, DISP, HELLO_FLAG, KIND, MSG, SHAPE, decodeServerMsg, encodeCallReq, encodeHello, encodePointer, encodePromptReply, encodeResume, encodeWatch, unpackFrame} from "./proto.js";
 import {installer} from "./pwa.js";
-import {send, state} from "./state.js";
+import {sendProto, state} from "./state.js";
 
 let screenHits = [];
 const occupiedCode = 4001; // wsCompanionOccupied
@@ -100,6 +101,29 @@ function renderCurrent() {
   say("chat-mode", !c ? "" : paused === "occupied" ? "In use" : paused ? "Paused" :
     state.view.web ? active ? (modeLabel[state.view.mode] || "Idle") : "Connecting" :
     isLive(c) ? mode || "Live" : c.dormant ? "Dormant" : "Offline");
+  const voBadge = $("voice-owner-badge");
+  const vo = state.view?.voiceOwner;
+  voBadge.hidden = !c || !vo;
+  if (vo) voBadge.textContent = vo === browserTerminal ? "Voice: Here" : `Voice: ${vo}`;
+  const prompt = state.view?.prompt;
+  $("prompt-banner").hidden = !prompt;
+  if (prompt) {
+    say("prompt-text", prompt.text || (prompt.kind === "permission" ? "Permission requested" : "Question"));
+    const opts = $("prompt-options");
+    if (opts.dataset.promptId !== prompt.id) {
+      opts.dataset.promptId = prompt.id;
+      opts.replaceChildren(...(prompt.options || []).map(choice => {
+        const btn = node("button", "outline", choice);
+        btn.type = "button";
+        btn.onclick = () => {
+          sendProto(MSG.PROMPT_REPLY, encodePromptReply(prompt.id, choice));
+          state.view.prompt = null;
+          renderCurrent();
+        };
+        return btn;
+      }));
+    }
+  }
   $("reconnect-overlay").hidden = !paused;
   say("reconnect-note", paused === "occupied" ? "This terminal is open in another tab." :
     paused === "lost" ? "The live connection was lost." : "Disconnected while idle. Your chat is still here.");
@@ -134,7 +158,7 @@ function canStartCall() {
 function startPeerCall(target) {
   if (!target || !canStartCall()) return;
   unlockAudio();
-  send({ev:"call",target});
+  sendProto(MSG.CALL_REQ, encodeCallReq(1, 0, target));
 }
 
 function disconnect({keepFace = false} = {}) {
@@ -185,16 +209,26 @@ function connect(attempt = 0, ifFree = false) {
   socket.onopen = () => {
     if (state.ws !== socket) return;
     loadTimers();
+    if (view.web && state.resumeToken && Date.now() < state.resumeExpiresAt && state.resumeTerminalId === browserTerminal) {
+      sendProto(MSG.RESUME, encodeResume({resumeToken: state.resumeToken, lastSeq: state.seq, terminalId: browserTerminal}));
+      return;
+    }
     const micAvailable = canCaptureMic();
-    send(view.web ? {ev:"hello",role:"web",terminal_id:browserTerminal,companion_id:view.id,firmware:"web",
-      if_free:ifFree,caps:{call:micAvailable,call_pcm:micAvailable,drag:true,bridge_endpoint:micAvailable}}
-      : {ev:"hello",role:"web"});
+    const caps = CAP.DRAG | (micAvailable ? CAP.CALL | CAP.CALL_PCM | CAP.BRIDGE_ENDPOINT : 0);
+    sendProto(MSG.HELLO, encodeHello({
+      kind: KIND.WEB, caps, displayFormats: DISP.SVG, shape: SHAPE.ROUND,
+      flags: ifFree ? HELLO_FLAG.IF_FREE : 0,
+      terminalId: view.web ? browserTerminal : "", companionId: view.web ? view.id : "", firmware: "web",
+    }));
   };
   socket.onmessage = e => {
-    if (state.ws !== socket) return;
-    if (typeof e.data === "string") {
-      try { command(JSON.parse(e.data)); } catch { updateStatus("Invalid screen update."); }
-    } else if (view.web) playPCM(e.data);
+    if (state.ws !== socket || !(e.data instanceof ArrayBuffer)) return;
+    const frame = unpackFrame(e.data);
+    if (!frame) return;
+    if (frame.type === MSG.PING) { sendProto(MSG.PONG, frame.payload); return; }
+    if (frame.type === MSG.MEDIA) { if (state.view?.web) playMedia(frame.payload); idle.refresh(); return; }
+    const msg = decodeServerMsg(frame.type, frame.payload);
+    if (msg) handleServerMsg(frame.type, msg);
     idle.refresh();
   };
   socket.onclose = e => {
@@ -227,20 +261,20 @@ function syncWatch(live) {
   if (state.watched !== id) {
     state.watched = id;
     clearScene();
-    send({ev:"watch", companion_id:state.view.id});
+    sendProto(MSG.WATCH, encodeWatch(id ? state.view.id : ""));
     const name = companionName(state.view.companion);
     updateStatus(id ? `Opening ${name}’s live screen…` : `${name} is offline.`);
   }
 }
 
-const modeLabel = {idle:"Idle", thinking:"Thinking", listening:"Listening", speaking:"Speaking", sleepy:"Sleepy", calling:"Ringing", call:"In call"};
+const modeLabel = {idle:"Idle", thinking:"Thinking", listening:"Listening", speaking:"Speaking", sleepy:"Sleepy", calling:"Ringing", call:"In call", blocked:"Waiting", done:"Done", error:"Error"};
 
-function updateCompanion({companion_id, name, companion, voice}) {
-  const fields = {name, ...companion, voice};
+function updateCompanion({companionId, name, voice, face_bg, mark_color, accent_color}) {
+  const fields = {name, face_bg, mark_color, accent_color, voice};
   state.app.companionVersion++;
-  const comp = (state.app.companions || []).find(c => c.id === companion_id);
+  const comp = (state.app.companions || []).find(c => c.id === companionId);
   if (comp) Object.assign(comp, fields);
-  if (state.view?.id === companion_id) {
+  if (state.view?.id === companionId) {
     Object.assign(state.view.companion, fields);
     if (state.rev) updateStatus(liveLabel(state.view));
     renderCurrent();
@@ -248,30 +282,31 @@ function updateCompanion({companion_id, name, companion, voice}) {
   renderDevices();
 }
 
-function command(msg) {
-  if (msg.type === "saved_apps") {
-    loadSaved();
-    return;
-  }
-  if (msg.type === "timers") {
-    if (msg.companion_id === state.view.id) loadTimers();
-    return;
-  }
-  if (msg.type === "chat") {
-    if (msg.companion_id === state.view.id) receiveChat(msg.entry);
-    return;
-  }
-  switch (msg.op) {
-    case "capabilities":
-      if (state.view.web) state.view.bridgeEndpoint = msg.bridge_endpoint === true;
+function handleServerMsg(type, msg) {
+  switch (type) {
+    case MSG.WELCOME:
+      state.seq = msg.seq;
+      state.ssrc = msg.ssrc;
+      state.resumeToken = msg.resumeToken;
+      state.resumeExpiresAt = Date.now() + msg.resumeWindowMs;
+      state.resumeTerminalId = msg.terminalId;
+      if (state.view?.web) state.view.bridgeEndpoint = msg.bridgeEndpoint;
       break;
-    case "companion":
-      updateCompanion(msg);
+    case MSG.REJECT:
+      if (msg.reason === "occupied") { pause("occupied"); return; }
+      if (msg.reason === "unknown_terminal" && state.resumeToken) {
+        state.resumeToken = null;
+        state.resumeExpiresAt = 0;
+        connect(0, false);
+        return;
+      }
+      say("chat-note", msg.message || "Connection rejected.");
       break;
-    case "history_archived":
-      if (msg.companion_id === state.view.id) reloadArchivedHistory();
+    case MSG.COMPANION:
+      if (msg.seq >= state.seq) { state.seq = msg.seq; updateCompanion(msg); }
       break;
-    case "peers": {
+    case MSG.PEERS: {
+      if (msg.seq >= state.seq) state.seq = msg.seq;
       const list = msg.companions || [];
       if (state.app.scope) {
         renderTargets(list);
@@ -285,8 +320,8 @@ function command(msg) {
       }
       break;
     }
-    case "svg": {
-      if (msg.companion_id && msg.companion_id !== state.view.id) return;
+    case MSG.FRAME_SVG: {
+      if (msg.companionId && msg.companionId !== state.view.id) return;
       const first = !state.rev;
       const svg = new DOMParser().parseFromString(msg.svg, "image/svg+xml").documentElement;
       if (svg.localName !== "svg" || svg.namespaceURI !== svgNS || svg.getAttribute("viewBox") !== "0 0 360 360") return;
@@ -322,13 +357,68 @@ function command(msg) {
       renderCurrent();
       break;
     }
-    case "power":
+    case MSG.POWER:
       screen.dataset.dim = String(msg.brightness < 20);
       break;
-    case "parent_policy":
-      if (msg.companion_id === state.view.id) {
+    case MSG.STATUS:
+      if (msg.seq < state.seq) return;
+      state.seq = msg.seq;
+      if (state.view) {
+        state.view.mode = msg.state;
+        if (msg.state === "error" && msg.text) say("chat-note", msg.text);
+        renderCurrent();
+        renderDevices();
+      }
+      break;
+    case MSG.VOICE_OWNER:
+      if (msg.seq < state.seq) return;
+      state.seq = msg.seq;
+      if (state.view && (!msg.companionId || msg.companionId === state.view.id)) {
+        state.view.voiceOwner = msg.terminalId;
+        renderCurrent();
+      }
+      break;
+    case MSG.PROMPT:
+      if (msg.seq < state.seq) return;
+      state.seq = msg.seq;
+      if (state.view) { state.view.prompt = msg; renderCurrent(); }
+      break;
+    case MSG.PROMPT_ENDED:
+      if (msg.seq < state.seq) return;
+      state.seq = msg.seq;
+      if (state.view?.prompt?.id === msg.id) { state.view.prompt = null; renderCurrent(); }
+      break;
+    case MSG.VOLUME:
+      if (!msg.companionId || msg.companionId === state.view.id) applyVolume(state.app, state.view, msg.level, msg.auto);
+      break;
+    case MSG.CHIME:
+      if (state.view.web) playChime(msg.kind);
+      break;
+    case MSG.REC_CTRL:
+      if (state.view.web) {
+        if (msg.action === "start") startMic(msg.target || "", null, msg.bridgeEndpoint ? "bridge" : "");
+        else endMic(msg.action === "cancel", msg.action !== "cancel", false, true);
+      }
+      break;
+    case MSG.TTS_CTRL:
+      if (state.view.web) handleTTS(msg);
+      break;
+    case MSG.TTS_PCM:
+      if (state.view.web) playPCM(msg.pcm);
+      break;
+    case MSG.CALL_CTRL:
+      if (state.view.web) handleCall(msg);
+      break;
+    case MSG.EVENT:
+      if (msg.seq >= state.seq) state.seq = msg.seq;
+      if (msg.kind === "saved_apps") loadSaved();
+      else if (msg.kind === "timers" && msg.companionId === state.view.id) loadTimers();
+      else if (msg.kind === "chat" && msg.companionId === state.view.id) {
+        try { receiveChat(JSON.parse(msg.arg2)); } catch {}
+      } else if (msg.kind === "history_archived" && msg.companionId === state.view.id) reloadArchivedHistory();
+      else if (msg.kind === "parent_policy" && msg.companionId === state.view.id) {
         const wasResting = !!state.view.parentMessage;
-        state.view.parentMessage = msg.message || "";
+        state.view.parentMessage = msg.arg2 || "";
         if (state.view.parentMessage) {
           endMic(true, false, false, true);
           stopCall();
@@ -338,37 +428,6 @@ function command(msg) {
         }
         renderCurrent();
       }
-      break;
-    case "mode":
-      if (state.view.web) {
-        state.view.mode = msg.mode;
-        renderCurrent();
-        renderDevices();
-      }
-      break;
-    case "volume":
-      if (!msg.companion_id || msg.companion_id === state.view.id) applyVolume(state.app, state.view, msg.level, msg.auto_volume);
-      break;
-    case "chime":
-      if (state.view.web) playChime(msg.kind);
-      break;
-    case "rec":
-      if (state.view.web) {
-        if (msg.action === "start") startMic(msg.target || "", null, msg.endpoint);
-        else if (msg.action === "stop") {
-          endMic(!!msg.cancelled, !msg.cancelled, false, true);
-        }
-      }
-      break;
-    case "tts":
-      if (state.view.web) handleTTS(msg);
-      break;
-    case "call":
-      if (state.view.web) handleCall(msg);
-      break;
-    case "error":
-      say("chat-note", "The bridge couldn’t complete the live action.");
-      if (msg.status === 404 && state.view.web && !state.app.scope) refreshDevices();
       break;
   }
 }
@@ -393,17 +452,17 @@ screen.addEventListener("pointermove", e => {
   state.pointer.dragged ||= Math.hypot(e.clientX - state.pointer.x, e.clientY - state.pointer.y) >= 4;
   if (!state.pointer.dragged || e.timeStamp - state.pointer.last < 50) return;
   state.pointer.last = e.timeStamp;
-  send({ev:"drag",id:state.pointer.target,...xy(e)});
+  const {x, y} = xy(e);
+  sendProto(MSG.POINTER, encodePointer("drag", x, y, 0));
 });
 screen.addEventListener("pointerup", e => {
   if (state.pointer?.id !== e.pointerId) return;
   const dragged = state.pointer.dragged || Math.hypot(e.clientX - state.pointer.x, e.clientY - state.pointer.y) >= 4;
-  const id = state.pointer.target;
   state.pointer = null;
   if (state.view.web) unlockAudio();
   const point = xy(e);
-  send({ev:"up",id,...point});
-  if (!dragged) send({ev:"tap",...point});
+  sendProto(MSG.POINTER, encodePointer("up", point.x, point.y, 0));
+  if (!dragged) sendProto(MSG.POINTER, encodePointer("tap", point.x, point.y, 0));
 });
 for (const ev of ["pointercancel", "lostpointercapture"]) {
   screen.addEventListener(ev, e => { if (state.pointer?.id === e.pointerId) state.pointer = null; });
@@ -415,7 +474,7 @@ screen.addEventListener("keydown", e => {
   if (e.repeat) return;
   if (state.view.web) unlockAudio();
   const [x1, y1, x2, y2] = hitBounds(control);
-  send({ev:"tap",id:control.dataset.id,x:Math.round((x1+x2)/2),y:Math.round((y1+y2)/2)});
+  sendProto(MSG.POINTER, encodePointer("tap", Math.round((x1+x2)/2), Math.round((y1+y2)/2), 0));
 });
 
 export {canStartCall, disconnect, renderCurrent, select, startPeerCall, updateCompanion};

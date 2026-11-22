@@ -57,10 +57,14 @@ async function audioFixture(label) {
   };
   Object.defineProperty(globalThis, "navigator", {configurable:true, value:{mediaDevices}});
   globalThis.window = {isSecureContext:true, AudioWorkletNode};
+  const {unpackFrame, MSG} = await import("../web/proto.js");
   const audio = await import(`../web/audio.js?${label}`);
   const {state} = await import("../web/state.js");
   state.view = {virtual:true};
-  state.ws = {readyState:1, bufferedAmount:0, send:raw => events.push(typeof raw === "string" ? JSON.parse(raw) : raw)};
+  state.ws = {readyState:1, bufferedAmount:0, send:raw => {
+    const f = unpackFrame(raw);
+    events.push(f ? {type: f.type, seq: f.seq, payload: f.payload, MSG} : raw);
+  }};
   assert.equal(await audio.unlockAudio(), true);
   return {audio, sources, events, tracks, constraints, nodes, tones, context, state, dom, mediaDevices};
 }

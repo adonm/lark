@@ -83,10 +83,15 @@ test("renders the selected live device after the dashboard modules load", async 
   const sent = [];
   state.view = {id:"mint", web:true, mode:"idle"};
   state.rev = 1;
+  const {unpackFrame, MSG} = await import("./proto.js");
   state.ws = {readyState:1, send:raw => {
-    const event = JSON.parse(raw);
-    activation.push(event.ev);
-    sent.push(event);
+    const f = unpackFrame(raw);
+    if (f?.type === MSG.CALL_REQ) {
+      activation.push("call");
+      sent.push({type: f.type, action: f.payload[0], target: new TextDecoder().decode(f.payload.subarray(6))});
+    } else if (f?.type === MSG.POINTER) {
+      activation.push(["tap", "drag", "up"][f.payload[0]]);
+    }
   }};
   renderDevices();
   const call = els.get("companions").children[0].children[1];
@@ -94,7 +99,7 @@ test("renders the selected live device after the dashboard modules load", async 
   assert.equal(call.disabled, false);
   assert.equal(call.attrs["aria-label"], "Call Cake");
   call.onclick();
-  assert.deepEqual(sent, [{ev:"call", target:c.id}]);
+  assert.deepEqual(sent, [{type: MSG.CALL_REQ, action: 1, target: c.id}]);
   assert.deepEqual(activation, ["resume", "call"]);
 
   const stage = els.get("stage").listeners;

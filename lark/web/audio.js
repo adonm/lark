@@ -1,5 +1,6 @@
 import {$, say} from "./dom.js";
-import {send, state} from "./state.js";
+import {MSG, RTP_PT, decodeRTP, encodeCallReq, encodeRecEnd, encodeRecStart, encodeTTSAck} from "./proto.js";
+import {sendProto, state} from "./state.js";
 
 let audio, gain, playAt = 0, volume = 55, endedAudio = null, muted = false, call = null;
 const speaking = new Set();
@@ -52,8 +53,8 @@ $("sound").onclick = async () => {
     say("chat-note", "The browser couldn’t enable audio.");
   }
 };
-function playPCM(raw) {
-  if (!(raw instanceof ArrayBuffer) || raw.byteLength < 3 || raw.byteLength % 2 !== 1 || new Uint8Array(raw)[0] !== 2) return;
+function schedulePCM(pcmBytes) {
+  if (!(pcmBytes instanceof Uint8Array) || pcmBytes.byteLength < 2 || pcmBytes.byteLength % 2 !== 0) return;
   if (!canBufferPCM() || mic && !call || call?.problem) return;
   if (call && audio.state === "suspended") {
     if (!call.resuming) {
@@ -64,7 +65,7 @@ function playPCM(raw) {
     }
     return;
   }
-  const wire = new DataView(raw,1), count = wire.byteLength / 2;
+  const wire = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength), count = wire.byteLength / 2;
   const now = audio.currentTime;
   if (call) {
     if (!canPlay() || count > 640) return;
@@ -87,9 +88,17 @@ function playPCM(raw) {
     if (!speaking.size) audioActivityChanged?.();
   };
 }
+function playPCM(raw) {
+  const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw || 0);
+  schedulePCM(bytes);
+}
+function playMedia(raw) {
+  const rtp = decodeRTP(raw);
+  if (rtp && rtp.pt === RTP_PT.CALL_DOWN) schedulePCM(rtp.pcm);
+}
 function ackIfDone() {
   if (endedAudio !== null && speaking.size === 0) {
-    send({ev:"tts_ack", state:"done", audio:endedAudio});
+    sendProto(MSG.TTS_ACK, encodeTTSAck(false, endedAudio));
     endedAudio = null;
   }
 }
@@ -165,7 +174,7 @@ function failCall(inCall, notice) {
   inCall.problem = notice;
   stopSound();
   say("chat-note", notice);
-  send({ev:"call_end",call:inCall.id});
+  sendProto(MSG.CALL_REQ, encodeCallReq(0, inCall.id, ""));
 }
 async function startMic(target, inCall = null, endpoint = "") {
   if (mic || call && !inCall) return;
@@ -174,7 +183,7 @@ async function startMic(target, inCall = null, endpoint = "") {
     if (inCall) {
       failCall(inCall, window.isSecureContext ? "Call ended: this browser can’t capture microphone audio." :
         "Call ended: microphone access requires HTTPS or localhost.");
-    } else send({ev:"rec_end",cancelled:true,target});
+    } else sendProto(MSG.REC_END, encodeRecEnd(1, true, target));
     return;
   }
   if (!inCall) {
@@ -192,7 +201,7 @@ async function startMic(target, inCall = null, endpoint = "") {
     const ready = unlockAudio();
     // Autoplay policy can leave resume pending. Still ask for mic permission
     // now so a failure can end the call instead of leaving silent endpoints.
-    if ((inCall ? !gain || audio.state === "closed" : !await ready) || !state.view?.virtual ||
+    if ((inCall ? !gain || audio.state === "closed" : !await ready) || !state.view?.web && !state.view?.virtual ||
         mic !== rec || state.ws?.readyState !== WebSocket.OPEN) throw new Error();
     rec.stream = await navigator.mediaDevices.getUserMedia({
       audio:{channelCount:1, echoCancellation:true, noiseSuppression:!!inCall, autoGainControl:!!inCall},
@@ -207,24 +216,26 @@ async function startMic(target, inCall = null, endpoint = "") {
     rec.source = audio.createMediaStreamSource(rec.stream);
     rec.node = new AudioWorkletNode(audio,"echo-mic",{
       channelCount:1, channelCountMode:"explicit", processorOptions:inCall ?
-        {mode:"call", prefix:inCall.prefix, muted:inCall.muted} : {mode:rec.bridgeEndpoint ? "bridge" : "note"},
+        {mode:"call", ssrc:state.ssrc || 1, muted:inCall.muted} : {mode:rec.bridgeEndpoint ? "bridge" : "note", ssrc:state.ssrc || 1},
     });
     rec.node.port.onmessage = event => {
       if (mic !== rec) return;
       if (inCall) {
         if (inCall.waiting && event.data === inCall.waiting) inCall.waiting = 0;
         if (event.data instanceof ArrayBuffer && !inCall.muted && !inCall.waiting && state.ws?.readyState === WebSocket.OPEN &&
-            state.ws.bufferedAmount < 6 * 1281) state.ws.send(event.data);
+            state.ws.bufferedAmount < 6 * 660) sendProto(MSG.MEDIA, new Uint8Array(event.data));
       } else if (event.data === "end" || event.data === "auto_end") {
         endMic(false, true, true);
       } else if (state.ws?.readyState === WebSocket.OPEN) {
         if (state.ws.bufferedAmount > 256*1024) {
           endMic(true);
           say("chat-note", "Recording cancelled: the connection is too slow.");
-        } else state.ws.send(event.data);
+        } else if (event.data instanceof ArrayBuffer) {
+          sendProto(MSG.MEDIA, new Uint8Array(event.data));
+        }
       }
     };
-    if (!inCall) send({ev:"rec_start",target});
+    if (!inCall) sendProto(MSG.REC_START, encodeRecStart(1, target));
     rec.source.connect(rec.node).connect(audio.destination);
     if (!inCall) {
       $("mic-send").disabled = false;
@@ -257,14 +268,14 @@ function endMic(cancelled, tell = true, flushed = false, fromBridge = false) {
   rec.node?.disconnect();
   rec.node?.port.close();
   if (rec.call) {
-    if (tell) send({ev:"call_end",call:rec.call.id});
+    if (tell) sendProto(MSG.CALL_REQ, encodeCallReq(0, rec.call.id, ""));
     return;
   }
   recordUI(false);
   audioActivityChanged?.();
   if (tell) {
     cancelled ||= !rec.node;
-    send({ev:"rec_end",cancelled,target:rec.target});
+    sendProto(MSG.REC_END, encodeRecEnd(1, cancelled, rec.target));
     say("chat-note", cancelled ? "Recording cancelled." : "Message sent to the bridge.");
   }
 }
@@ -281,18 +292,21 @@ function handleCall(msg) {
     if (call?.id === msg.call) return;
     endMic(true, false);
     stopCall();
-    call = {id:msg.call, muted:!!msg.muted, prefix:msg.mic_prefix, muteSeq:0, waiting:0};
+    call = {id:msg.call, muted:!!msg.muted, muteSeq:0, waiting:0};
     say("chat-note", "Voice call connected.");
     return startMic("", call);
   }
   if (call && call.id !== msg.call) return;
-  if (msg.state === "mute" && call && call.muted !== !!msg.muted) {
-    call.muted = !!msg.muted;
-    if (mic?.call === call && mic.node) {
-      const seq = ++call.muteSeq;
-      // Ignore already queued worklet PCM until it acknowledges the reset.
-      call.waiting = call.muted ? 0 : seq;
-      mic.node.port.postMessage({muted:call.muted, seq});
+  if (msg.state === "mute" || msg.state === "unmute") {
+    const isMuted = msg.state === "mute";
+    if (call && call.muted !== isMuted) {
+      call.muted = isMuted;
+      if (mic?.call === call && mic.node) {
+        const seq = ++call.muteSeq;
+        // Ignore already queued worklet PCM until it acknowledges the reset.
+        call.waiting = call.muted ? 0 : seq;
+        mic.node.port.postMessage({muted:call.muted, seq});
+      }
     }
   }
   if (msg.state === "end") {
@@ -306,12 +320,12 @@ function handleCall(msg) {
 function requestMic(target) {
   if (!target && state.view?.bridgeEndpoint) {
     unlockAudio(); // Preserve the user gesture before the bridge's start reply.
-    send({ev:"rec_request"});
+    sendProto(MSG.REC_START, encodeRecStart(1, ""));
   } else startMic(target);
 }
 $("talk").onclick = () => requestMic($("target").value);
 $("mic-send").onclick = () => endMic(false);
 $("cancel").onclick = () => endMic(true);
 
-export {audioBusy, canCaptureMic, endMic, handleCall, handleTTS, micStopping, onAudioActivityChanged, playChime, playPCM,
+export {audioBusy, canCaptureMic, endMic, handleCall, handleTTS, micStopping, onAudioActivityChanged, playChime, playMedia, playPCM,
   setVolume, startMic, stopCall, unlockAudio, volume};
