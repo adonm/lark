@@ -145,8 +145,10 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	tap(160, 210) // Menu after the 360-square view is letterboxed into 320×240.
 	waitSVG(t, b.ws, id, "menu-next")
 	tap(206, 197)
+	waitSVG(t, b.ws, id, "menu-pair")
+	tap(206, 197)
 	waitSVG(t, b.ws, id, "menu-stats")
-	tap(116, 146)
+	tap(116, 84)
 	hud := waitSVG(t, b.ws, id, "CPU 27%")
 	if !strings.Contains(hud, "0.12.0 · esp-box-3") || !strings.Contains(hud, "USB") {
 		t.Fatal("missing identity/power in HUD")

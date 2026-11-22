@@ -4,6 +4,46 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Delta Chat Messaging & Hardware-Only Protocol (`0.13.0`)
+
+### Affects
+- Host / Config / Systemd / SQLite / Lark Server / Firmware (`0.13.0`)
+
+### Breaking Changes
+- **Messaging moved to Delta Chat**: Removed live calls (`CALL_REQ`, `CALL_CTRL`, RTP PT 97/98), in-house intercom, and chat/history/apps/timers/memory/portraits/tunnels HTTP routes.
+- **Web UI & parental controls removed**: Removed `lark/web/`, browser `/ws`, PWA, `FRAME_SVG`, `WATCH`, `TEXT_INPUT`, `PROMPT*`, `PEERS`, `EVENT`, `kind='web'` terminals, `/api/opencode/pair`, `lark-opencode-lan.{socket,service}`, `parent_settings`, and `parent_usage`.
+- **CLI admin**: Added `lark status`, `lark companions [add|rm]`, `lark terminals [attach|detach]`.
+- **QR Pairing**: Pair phones by scanning the QR on the device's **Pair** menu screen; remove contacts via **Unpair**.
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db ".tables"` lists `parent_settings`, `parent_usage`, or `tunnels`, or `companions` lacks `dc_account_id`.
+- `systemctl --user list-units 'opentunnel*' 'lark-opencode-lan*'` shows legacy tunnel/LAN-pairing units.
+
+### Upgrade Steps
+1. Stop `lark.service`, back up `lark.db` and `lark.env`, and remove Lark's `opentunnel-*` and `lark-opencode-lan.{socket,service}` units:
+   ```sh
+   systemctl --user stop lark.service
+   systemctl --user disable --now lark-opencode-lan.socket lark-opencode-lan.service 2>/dev/null || true
+   rm -f ~/.config/systemd/user/lark-opencode-lan.socket ~/.config/systemd/user/lark-opencode-lan.service
+   ```
+   Inspect `systemctl --user list-units 'opentunnel*'` and stop/disable/remove any units created for Lark.
+2. Apply SQLite schema changes:
+   ```sql
+   DROP TABLE IF EXISTS parent_settings;
+   DROP TABLE IF EXISTS parent_usage;
+   DROP TABLE IF EXISTS tunnels;
+   DELETE FROM terminals WHERE kind='web';
+   ALTER TABLE companions ADD COLUMN dc_account_id INTEGER NOT NULL DEFAULT 0;
+   ```
+3. Ensure `ffmpeg` is installed on `PATH`, then run `./scripts/setup-host.sh --gpu-index 0`.
+4. Build and OTA firmware `0.13.0` to all boards.
+5. Note for users: pair phones by scanning the QR on the device's **Pair** screen.
+
+### Verification
+- `lark status` shows `ok=true opencode=true stt=true tts=true deltachat=true`, 8 companions with `dc=` account IDs, and hardware terminals online on `0.13.0`.
+
+---
+
 ## 2026-11-22 — Unified Binary Terminal Protocol `v1` (`0.12.0`)
 
 ### Affects

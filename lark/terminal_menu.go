@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -188,7 +189,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		}
 		if a.kind != "menu-back" {
 			switch d.drawer {
-			case drawerGames, drawerMemories, drawerHistory:
+			case drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
 				h.loadMenu(d)
 				return
 			}
@@ -204,6 +205,18 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	case "game-run":
 		if d.scene.menu == d.menuData {
 			h.launchMenuGame(d, a.value)
+		}
+	case "unpair-contact":
+		cid, err := strconv.ParseUint(a.value, 10, 32)
+		if err == nil && cid > 0 && h.b.dc != nil && d.companionID != "" {
+			compID := d.companionID
+			h.mu.Unlock()
+			_ = h.b.dc.unpairContact(compID, uint32(cid))
+			h.mu.Lock()
+			if h.active(d) && d.drawer == drawerUnpair {
+				h.chime(d, "tap")
+				h.loadMenu(d)
+			}
 		}
 	case "rec-cancel", "rec-send":
 		h.recordingControl(d, now, a.kind == "rec-cancel")
@@ -306,6 +319,7 @@ type menuContent struct {
 	games  []tile
 	rows   []menuRow
 	detail *menuRow
+	qrSVG  string
 	notice string
 }
 
@@ -314,6 +328,10 @@ func (m *menuContent) scene(drawer string, page int) sceneView {
 	switch drawer {
 	case drawerGames:
 		return gamesScene(m.games, page, m.notice)
+	case drawerPair:
+		return pairScene("", m.qrSVG)
+	case drawerUnpair:
+		return unpairScene(m.games, page, m.notice)
 	case drawerMemories:
 		title = "Memories"
 	}
@@ -338,7 +356,7 @@ func (h *wsHub) loadMenu(d *wsTerminal) {
 		menu = menuContent{notice: "Menu unavailable"}
 	}
 	count, pageSize := len(menu.rows), menuRowsPerPage
-	if drawer == drawerGames {
+	if drawer == drawerGames || drawer == drawerUnpair {
 		count, pageSize = len(menu.games), tilesPerPage
 	}
 	d.menuData = &menu
@@ -359,6 +377,34 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 			}
 			m.games = append(m.games, tile{id: "game-" + strconv.Itoa(i), label: menuClip(str(app["title"]), 13),
 				detail: detail, icon: "games", action: sceneAction{"game-run", str(app["name"])}, colors: navPalette})
+		}
+		if len(m.games) != 0 {
+			m.notice = ""
+		}
+		return m, err
+	case drawerPair:
+		if b.dc == nil {
+			return m, errors.New("Delta Chat unavailable")
+		}
+		qr, err := b.dc.pairQR(id)
+		m.qrSVG = qr
+		return m, err
+	case drawerUnpair:
+		if b.dc == nil {
+			m.notice = "Delta Chat unavailable"
+			return m, nil
+		}
+		contacts, err := b.dc.listPairedContacts(id)
+		m.notice = "No paired contacts"
+		for i, ct := range contacts {
+			m.games = append(m.games, tile{
+				id:     "unpair-" + strconv.Itoa(i),
+				label:  menuClip(ct.Name, 13),
+				detail: "Remove",
+				icon:   "unpair",
+				action: sceneAction{"unpair-contact", strconv.FormatUint(uint64(ct.ID), 10)},
+				colors: dangerPalette,
+			})
 		}
 		if len(m.games) != 0 {
 			m.notice = ""

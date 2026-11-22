@@ -106,12 +106,12 @@ static void test_hello_welcome_reject(void)
         .tok_len = 5,
     };
     uint8_t buf[128];
-    size_t n = lark_encode_hello(buf, sizeof(buf), &h, "vocat-33d8", "", "esp-vocat", "0.12.0", "token");
+    size_t n = lark_encode_hello(buf, sizeof(buf), &h, "vocat-33d8", "", "esp-vocat", "0.13.0", "token");
     assert(n == sizeof(lark_hello_t) + 10 + 0 + 9 + 6 + 5);
     assert(buf[0] == LARK_PROTO_VERSION);
     assert(buf[1] == LARK_KIND_HARDWARE);
-    assert(memcmp(buf + sizeof(lark_hello_t), "vocat-33d8esp-vocat0.12.0token", 30) == 0);
-    assert(lark_encode_hello(buf, 10, &h, "vocat-33d8", "", "esp-vocat", "0.12.0", "token") == 0);
+    assert(memcmp(buf + sizeof(lark_hello_t), "vocat-33d8esp-vocat0.13.0token", 30) == 0);
+    assert(lark_encode_hello(buf, 10, &h, "vocat-33d8", "", "esp-vocat", "0.13.0", "token") == 0);
 
     uint8_t wbuf[sizeof(lark_welcome_t) + 14];
     lark_welcome_t w = {

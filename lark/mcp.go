@@ -205,7 +205,7 @@ var mcpTools = func() []object {
 				"template": enum(templateNames()...), "data": appTemplateSchema(""),
 				"save_current": schema(object{"name": text, "title": text}, "name"),
 				"load":         text, "save_as": text, "delete_saved": text, "initial_state": jsonObject, "state_patch": jsonObject, "tick_ms": number, "max_ticks": number, "exit": flag})),
-		tool("emit", "Send intercom or play notes/effects. Receipts describe queued or skipped deliveries, not playback.",
+		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), or play notes/effects on terminals.",
 			schema(object{"to": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
 	}
@@ -325,8 +325,12 @@ func (b *larkServer) callMCP(ctx context.Context, name string, args object) (obj
 }
 
 func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
-	to := strings.ToLower(str(args["to"]))
-	if !validCompanionID(to) && to != "all" {
+	toRaw := strings.TrimSpace(str(args["to"]))
+	to := strings.ToLower(toRaw)
+	if toRaw == "" {
+		return nil, problem(400, "Expected recipient name, companion ID, or all")
+	}
+	if _, hasIntercom := args["intercom"]; !hasIntercom && !validCompanionID(to) && to != "all" {
 		return nil, problem(400, "Expected exact companion ID or all")
 	}
 	out := object{"ok": true, "to": to}
@@ -539,7 +543,19 @@ func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []ob
 	if _, err := spokenText(text); err != nil {
 		return nil, nil, err
 	}
-	to := strings.ToLower(str(args["to_companion_id"]))
+	to := strings.TrimSpace(str(args["to_companion_id"]))
+	if b.dc != nil && b.dc.ready.Load() {
+		sentTo, err := b.dc.sendIntercom(ctx, sender.ID, to, text, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		receipts := make([]object, 0, len(sentTo))
+		for _, target := range sentTo {
+			receipts = append(receipts, deliveryReceipt("intercom", target, ""))
+		}
+		return object{"ok": len(sentTo) > 0, "sent_to": sentTo}, receipts, nil
+	}
+	to = strings.ToLower(to)
 	others, err := b.peerSnapshot(sender.ID)
 	if err != nil {
 		return nil, nil, err

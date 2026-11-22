@@ -171,6 +171,9 @@ func run() error {
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
+	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
+	go b.dc.start(root)
+	defer b.dc.shutdown()
 	var termSrv *terminalServer
 	if devicePort != 0 {
 		termSrv, err = newTerminalServer(b.ws, host, devicePorts)

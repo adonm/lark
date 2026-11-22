@@ -46,6 +46,8 @@ var uiIcons = map[string]string{
 	"games":    "M7 6h10q3 0 4 4l1 6q0 4-4 2l-3-3H9l-3 3q-4 2-4-2l1-6q1-4 4-4zm1 2v5m-2-2.5h4m5 .5h.1m3-2h.1",
 	"history":  "M3 10a9 9 0 1 1 1 7M3 4v6h6m3-3v6l4 2",
 	"memories": "M12 20 4 12a5 5 0 0 1 8-6 5 5 0 0 1 8 6z",
+	"pair":     "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h3v3h-3zm4 4h3v3h-3zm0-4h3v1h-3zm-4 4h1v3h-1z",
+	"unpair":   "M16 14l4 4m0-4l-4 4M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-5 9a6 6 0 0 1 10-4",
 }
 
 type bounds struct{ x, y, w, h int }
@@ -150,6 +152,8 @@ const (
 	drawerGames     = "games"
 	drawerMemories  = "memories"
 	drawerHistory   = "history"
+	drawerPair      = "pair"
+	drawerUnpair    = "unpair"
 )
 
 func clampMenuPage(page, count, pageSize int) int {
@@ -196,7 +200,9 @@ func menuHome(voice string, auto bool, level int, scoped bool, page int) sceneVi
 		choices = append(choices, link(drawerMemories, "Memories", "", "memories", accentPalette))
 	}
 	choices = append(choices, link("voice", "Voice", voiceName(voice), "voice", voicePalette),
-		link("volume", "Volume", volumeLabel(auto, level), "volume", volumePalette))
+		link("volume", "Volume", volumeLabel(auto, level), "volume", volumePalette),
+		link(drawerPair, "Pair", "", "pair", successPalette),
+		link(drawerUnpair, "Unpair", "", "unpair", dangerPalette))
 	if !scoped {
 		choices = append(choices, link("stats", "Stats", "", "stats", successPalette))
 	}
@@ -306,6 +312,58 @@ func peerScene(peers []menuPeer, page int) sceneView {
 			action: sceneAction{action, p.id}, colors: palette{p.face, menuPeerInk(p.face)}})
 	}
 	s := tileGrid(title, choices, page)
+	return s
+}
+
+func embedQRSvg(qrSVG string, x, y, size int) string {
+	// Delta Chat's CreateQrSvg returns a standalone <svg ... viewBox="0 0 N N">...</svg>.
+	// Strip XML header if present and position it cleanly inside our 360x360 scene.
+	start := strings.Index(qrSVG, "<svg")
+	if start < 0 {
+		return ""
+	}
+	endTag := strings.IndexByte(qrSVG[start:], '>')
+	if endTag < 0 {
+		return ""
+	}
+	closeIdx := strings.LastIndex(qrSVG, "</svg>")
+	if closeIdx <= start+endTag {
+		return ""
+	}
+	attrs := qrSVG[start+4 : start+endTag]
+	inner := qrSVG[start+endTag+1 : closeIdx]
+	vb := `viewBox="0 0 100 100"`
+	if i := strings.Index(attrs, `viewBox="`); i >= 0 {
+		if j := strings.IndexByte(attrs[i+9:], '"'); j >= 0 {
+			vb = attrs[i : i+9+j+1]
+		}
+	}
+	return fmt.Sprintf(`<svg x="%d" y="%d" width="%d" height="%d" %s>%s</svg>`, x, y, size, size, vb, inner)
+}
+
+func pairScene(name, qrSVG string) sceneView {
+	title := "Pair"
+	if name != "" {
+		title = "Pair " + truncate(name, 16)
+	}
+	s := menuScene(title)
+	if embedded := embedQRSvg(qrSVG, 94, 80, 172); embedded != "" {
+		s.art += svgRect(86, 72, 188, 188, 14, "#FFFFFF", "none", 0) + embedded
+	} else {
+		menuEmpty(&s, "Pairing unavailable")
+	}
+	s.control(bounds{120, 292, 120, 46}, actionTile("menu-back", "Back", "back", navPalette))
+	return s
+}
+
+func unpairScene(contacts []tile, page int, notice string) sceneView {
+	s := tileGrid("Unpair", contacts, page)
+	if len(contacts) == 0 {
+		if notice == "" {
+			notice = "No paired contacts"
+		}
+		menuEmpty(&s, notice)
+	}
 	return s
 }
 

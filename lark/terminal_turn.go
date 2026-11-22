@@ -428,6 +428,12 @@ func (h *wsHub) sendIntercom(ctx context.Context, d *wsTerminal, id uint64, othe
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, sender.ID, sender.Name, "intercom", time.Now())
 	}
+	if h.b.dc != nil && h.b.dc.ready.Load() {
+		sentTo, err := h.b.dc.sendIntercom(ctx, sender.ID, target, text, pcm)
+		recipients := h.b.intercomTargets(others, target)
+		h.confirm(ctx, d, id, target, recipients, err == nil && len(sentTo) > 0, false)
+		return
+	}
 	recipients := h.b.intercomTargets(others, target)
 	res := h.b.deliver(ctx, sender, recipients, text, pcm)
 	h.confirm(ctx, d, id, target, recipients, len(res.sent) != 0, len(res.failed) != 0)

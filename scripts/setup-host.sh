@@ -38,7 +38,7 @@ if ! "$models_only"; then
     # shellcheck source=scripts/go-bin.sh
     source "$REPO_DIR/scripts/go-bin.sh"
     GO_BIN=$(resolve_go)
-    for cmd in gcc c++ cmake glslc ninja opencode python3 systemctl; do
+    for cmd in gcc c++ cmake glslc ninja opencode python3 systemctl ffmpeg; do
         command -v "$cmd" >/dev/null || { echo "Install $cmd before running setup." >&2; exit 1; }
     done
     spirv_found=false
@@ -112,6 +112,37 @@ install_silero
 if "$models_only"; then
     exit 0
 fi
+
+install_deltachat_rpc() (
+    local version=v2.56.0
+    local bin_dir="$data/bin" dest="$data/bin/deltachat-rpc-server" arch checksum url staged
+    case $(uname -m) in
+        x86_64)
+            arch=x86_64-linux
+            checksum=312d4753160ca0c50f32d3e4f6de4fcaf91527f53980e04f52505a6bf951843c
+            ;;
+        *)
+            printf 'Unsupported architecture %s for deltachat-rpc-server.\n' "$(uname -m)" >&2
+            return 1
+            ;;
+    esac
+    verify() { printf '%s  %s\n' "$checksum" "$1" | sha256sum --check --status; }
+    if [[ -x "$dest" ]] && verify "$dest"; then
+        return 0
+    fi
+    install -d -m 700 -- "$bin_dir"
+    staged=$(mktemp "$bin_dir/.dc-rpc.XXXXXXXX")
+    trap 'rm -f -- "$staged"' EXIT
+    url="https://github.com/chatmail/core/releases/download/$version/deltachat-rpc-server-$arch"
+    curl --fail --silent --show-error --location --output "$staged" "$url"
+    if ! verify "$staged"; then
+        printf 'deltachat-rpc-server failed SHA-256 verification.\n' >&2
+        return 1
+    fi
+    chmod 700 -- "$staged"
+    mv -fT -- "$staged" "$dest"
+)
+install_deltachat_rpc
 
 lark_bin="$data/lark"
 build_tmp=$(mktemp "$lark_bin.XXXXXXXX")
@@ -196,6 +227,8 @@ settings = {
     "LARK_OPENCODE_PASSWORD": password,
     "OPENCODE_SERVER_PASSWORD": password,
 }
+if not re.search(r"^LARK_CHATMAIL_RELAY=", old, re.M):
+    settings["LARK_CHATMAIL_RELAY"] = "nine.testrun.org"
 if sys.argv[2] != "false":
     settings["GGML_VK_VISIBLE_DEVICES"] = sys.argv[2]
 kept = [line for line in old.splitlines(keepends=True)

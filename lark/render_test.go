@@ -216,8 +216,11 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 		reg("voice icon", voicePalette.bg, 104, 94, 22, 21, 13, 8),
 		reg("voice label", voicePalette.bg, 68, 118, 94, 18, 34, 9),
 		reg("voice subtitle", voicePalette.bg, 68, 140, 94, 15, 22, 6),
-		reg("stats icon", successPalette.bg, 102, 193, 22, 21, 13, 10),
-		reg("stats label", successPalette.bg, 66, 221, 94, 22, 32, 9))
+		reg("pair label", successPalette.bg, 67, 221, 94, 22, 32, 9),
+		reg("unpair label", dangerPalette.bg, 199, 221, 94, 22, 42, 9))
+	menu("home page 3", menuHome(heartVoice, true, 55, false, 2),
+		reg("stats icon", successPalette.bg, 102, 98, 22, 21, 13, 10),
+		reg("stats label", successPalette.bg, 66, 126, 94, 22, 32, 9))
 	game := tile{id: "game-0", label: "Puzzle", detail: "Saved app", icon: "games", colors: navPalette}
 	menu("games", gamesScene([]tile{game}, 0, ""),
 		reg("game icon", navPalette.bg, 103, 94, 22, 21, 13, 8),

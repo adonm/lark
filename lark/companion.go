@@ -25,9 +25,10 @@ type companionLook struct {
 type companionState struct {
 	ID string `json:"id,omitempty"`
 	companionLook
-	Voice     string `json:"voice"`
-	FaceSVG   string `json:"face_svg"`
-	UpdatedAt int64  `json:"updated_at,omitempty"`
+	Voice       string `json:"voice"`
+	FaceSVG     string `json:"face_svg"`
+	UpdatedAt   int64  `json:"updated_at,omitempty"`
+	DCAccountID uint32 `json:"dc_account_id,omitempty"`
 }
 
 func blankCompanion() companionState {
@@ -54,12 +55,12 @@ func validCompanionID(id string) bool {
 	return len(id) >= 1 && len(id) <= 64 && companionSlugRE.MatchString(id)
 }
 
-const companionColumns = `id,name,configured,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at`
+const companionColumns = `id,name,configured,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at,dc_account_id`
 
 func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured int
-	err := row.Scan(&c.ID, &c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.Voice, &c.FaceSVG, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.Voice, &c.FaceSVG, &c.UpdatedAt, &c.DCAccountID)
 	c.Configured = configured != 0
 	c.Voice = storedVoice(c.Voice)
 	if err == nil && c.FaceSVG == "" {
@@ -70,11 +71,12 @@ func readCompanionRow(row rowScanner) (companionState, error) {
 
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
 	id = strings.ToLower(id)
-	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
+	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,face_bg=excluded.face_bg,
 		mark_color=excluded.mark_color,accent_color=excluded.accent_color,personality=excluded.personality,
-		voice=excluded.voice,face_svg=excluded.face_svg,updated_at=max(companions.updated_at+1,excluded.updated_at)`,
-		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli())
+		voice=excluded.voice,face_svg=excluded.face_svg,updated_at=max(companions.updated_at+1,excluded.updated_at),
+		dc_account_id=CASE WHEN excluded.dc_account_id>0 THEN excluded.dc_account_id ELSE companions.dc_account_id END`,
+		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli(), c.DCAccountID)
 	return err
 }
 
@@ -189,6 +191,9 @@ func (b *larkServer) companionEntry(c companionState, full bool) object {
 	}
 	if full {
 		entry["face_svg"] = c.FaceSVG
+	}
+	if c.DCAccountID != 0 {
+		entry["dc_account_id"] = c.DCAccountID
 	}
 	return entry
 }
@@ -449,6 +454,9 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 	if op != "get" && c.Name != before.Name && b.oc != nil {
 		b.syncCompanionTitle(ctx, id)
 	}
+	if op != "get" && b.dc != nil && b.dc.ready.Load() && c.DCAccountID != 0 {
+		go b.dc.syncProfile(c, c.DCAccountID)
+	}
 	return object{"ok": true, "companion_id": id, "companion": c}, nil
 }
 
@@ -533,6 +541,14 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 		b.ws.mu.Lock()
 		b.ws.broadcastPeers()
 		b.ws.mu.Unlock()
+	}
+	if b.dc != nil && b.dc.ready.Load() {
+		if accID, err := b.dc.ensureCompanion(ctx, c); err == nil && accID != 0 {
+			c.DCAccountID = accID
+			go b.dc.autoPairAll(b.root)
+		} else if err != nil {
+			log.Printf("Delta Chat provision for %s: %v", c.ID, err)
+		}
 	}
 	return c, nil
 }

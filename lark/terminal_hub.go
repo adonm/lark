@@ -643,7 +643,7 @@ func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
 
 func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	switch d.drawer {
-	case drawerGames, drawerMemories, drawerHistory:
+	case drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
 	default:
 		d.menuData = nil
 	}
@@ -672,7 +672,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	switch {
 	case d.drawer != "" && mood == "idle":
 		switch d.drawer {
-		case drawerGames, drawerMemories, drawerHistory:
+		case drawerGames, drawerMemories, drawerHistory, drawerPair, drawerUnpair:
 			r.view = d.menuData.scene(d.drawer, d.menuPage)
 			r.view.menu = d.menuData
 		case "volume":

@@ -77,13 +77,15 @@ func TestWSMainMenuPages(t *testing.T) {
 	c.hello(t, "vocat-0001", "cake")
 	bindMenu(c, b.ws, "vocat-0001")
 	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-games", "menu-history", "menu-memories", "menu-next")
-	page2 := tapMenu(t, c, "menu-next", "menu-prev", "menu-voice", "menu-volume", "menu-stats")
+	page2 := tapMenu(t, c, "menu-next", "menu-prev", "menu-voice", "menu-volume", "menu-pair", "menu-unpair", "menu-next")
+	page3 := tapMenu(t, c, "menu-next", "menu-stats", "menu-prev")
 	for _, check := range []struct {
 		svg  string
 		omit []string
 	}{
-		{page1, []string{"menu-prev", "menu-voice", "menu-volume", "menu-stats"}},
-		{page2, []string{"menu-next", "menu-intercom", "menu-games", "menu-history", "menu-memories"}},
+		{page1, []string{"menu-prev", "menu-voice", "menu-volume", "menu-pair", "menu-unpair", "menu-stats"}},
+		{page2, []string{"menu-intercom", "menu-games", "menu-history", "menu-memories", "menu-stats"}},
+		{page3, []string{"menu-next", "menu-voice", "menu-volume", "menu-pair", "menu-unpair"}},
 	} {
 		for _, id := range check.omit {
 			if strings.Contains(check.svg, id) {
@@ -91,6 +93,7 @@ func TestWSMainMenuPages(t *testing.T) {
 			}
 		}
 	}
+	tapMenu(t, c, "menu-prev", "menu-voice", "menu-pair")
 	tapMenu(t, c, "menu-prev", "menu-intercom", "menu-next")
 	tapMenu(t, c, "menu-back", "companion-ring")
 }

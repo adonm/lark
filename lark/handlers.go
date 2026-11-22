@@ -34,6 +34,7 @@ type larkServer struct {
 	ota             otaFile
 	box3OTA         otaFile
 	ws              *wsHub
+	dc              *dcService
 	history         *chatHistory
 	timers          *timerManager
 	builders        *buildManager
@@ -230,6 +231,13 @@ func (b *larkServer) intercomIntent(id, text string) ([]companionTarget, *interc
 	if err != nil {
 		return nil, nil, err
 	}
+	if b.dc != nil && b.dc.ready.Load() {
+		if paired, err := b.dc.listPairedContacts(id); err == nil {
+			for _, ct := range paired {
+				others = append(others, companionTarget{ID: ct.Name, Name: ct.Name})
+			}
+		}
+	}
 	return others, directMessage(others, body), nil
 }
 
@@ -372,7 +380,8 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 				engine = kokoroEngine
 			}
 			return object{"ok": true, "stt": b.stt != nil, "stt_engine": sttEngine,
-				"opencode": o, "tts": ready, "tts_engine": engine}, nil
+				"opencode": o, "tts": ready, "tts_engine": engine,
+				"deltachat": b.dc != nil && b.dc.ready.Load()}, nil
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
 		case path == "/ota/version.json" || path == "/ota/latest.bin":
