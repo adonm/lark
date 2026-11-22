@@ -4,6 +4,20 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Webxdc Panel Upgrade, Old Panel Cleanup & History Tab
+
+### Affects
+- Lark Server / Webxdc (`dc_panel` v3)
+
+### Changes
+- **Old panel & story cleanup**: Track `dc_panel_msg:` and `dc_story_msgs:` in `meta`; on panel version bump, `/panel` resend, or `/story <name>` resend, delete previous messages for everyone via `DeleteMessagesForAll` (including a one-off scan of existing `"Lark Control"` webxdc messages on first v3 upgrade).
+- **Panel v3**: Added live companion state header pushes (throttled, active-panel only), quick Say input, story progress bars with Continue/Start over, curated voice preview taps, and a History tab with channel filters, `LIKE` search, and `(ts_ms, id)` cursor pagination.
+
+### Upgrade Steps
+1. Restart `lark.service`; existing verified contacts automatically receive the v3 panel and have older panel messages deleted on next startup sync or `/panel`.
+
+---
+
 ## 2026-11-22 — Semantic End-of-Turn (Smart Turn v3.2) & Malloc Arena Cap
 
 ### Affects

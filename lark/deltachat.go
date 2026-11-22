@@ -46,7 +46,10 @@ type dcRPC interface {
 	GetBasicChatInfo(accID uint32, chatID uint32) (deltachat.BasicChat, error)
 	GetChatContacts(accID uint32, chatID uint32) ([]uint32, error)
 	GetMessage(accID uint32, msgID uint32) (deltachat.Message, error)
+	GetChatMedia(accID uint32, chatID *uint32, msgType deltachat.Viewtype, or2 *deltachat.Viewtype, or3 *deltachat.Viewtype) ([]uint32, error)
+	GetWebxdcInfo(accID uint32, instanceMsgID uint32) (deltachat.WebxdcMessageInfo, error)
 	SendMsg(accID uint32, chatID uint32, data deltachat.MessageData) (uint32, error)
+	DeleteMessagesForAll(accID uint32, msgIDs []uint32) error
 	GetWebxdcStatusUpdates(accID uint32, instanceMsgID uint32, lastKnownSerial uint32) (string, error)
 	SendWebxdcStatusUpdate(accID uint32, instanceMsgID uint32, updateStr string, descr *string) error
 }
@@ -69,10 +72,12 @@ type dcService struct {
 	rpc       dcRPC
 	transport *deltachat.IOTransport
 	bot       *deltachat.Bot
-	addrs     map[string]string // companionID -> email address
-	byAcc     map[uint32]string // dc_account_id -> companionID
-	stopCh    chan struct{}
-	doneCh    chan struct{}
+	addrs             map[string]string // companionID -> email address
+	byAcc             map[uint32]string // dc_account_id -> companionID
+	activePanels      map[panelWatchKey]*panelWatch
+	panelWatchRunning bool
+	stopCh            chan struct{}
+	doneCh            chan struct{}
 }
 
 func newDCService(b *larkServer, bin, accountsDir, relay string) *dcService {
@@ -894,19 +899,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
 				return
 			}
-			s.b.chat(companionID, newChat("user", senderName, text, "deltachat"), true)
-			if s.b.ws != nil {
-				s.b.ws.deliverNotice(ctx, terminalNotice{
-					recipientIDs: []string{companionID},
-					sender:       who,
-					text:         arg,
-					speakText:    arg,
-					voice:        s.b.voiceFor(companionID),
-					chime:        "intercom",
-					showCard:     true,
-					replyTo:      senderName,
-				})
-			}
+			s.sayOnCompanion(ctx, companionID, senderName, arg)
 			ack := "Said it."
 			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &ack}); err != nil {
 				log.Printf("Delta Chat SendMsg error: %v", err)
@@ -940,7 +933,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
 				return
 			}
-			s.sendStoryFiles(ctx, rpc, accID, msg.ChatId, arg)
+			s.sendStoryFiles(ctx, rpc, companionID, accID, msg.ChatId, arg)
 			return
 		default:
 			hint := "Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /panel, or /help."
