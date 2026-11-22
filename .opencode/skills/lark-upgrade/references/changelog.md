@@ -4,6 +4,26 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Delta Chat Welcome Instructions (`dc_welcome` in `meta`)
+
+### Affects
+- SQLite (`meta` keys) / Lark Server
+
+### Breaking Changes
+- **Welcome & `/help` versioning**: Added `dcWelcomeVersion` (`"1"`), tracked per companion and verified human contact in `meta` (`dc_welcome:<companion_id>:<contact_addr>`).
+- **Startup & SecureJoin delivery**: On startup (`syncWelcomes`) and on SecureJoin verification (`EventTypeSecurejoinInviterProgress`), companions send the welcome message once per version to verified human contacts (never to companions).
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT key, value FROM meta WHERE key LIKE 'dc_welcome:%';"` is empty when no welcomes have been recorded.
+
+### Upgrade Steps
+1. Deploy the updated server (`./scripts/setup-host.sh --gpu-index 0`). No schema migration is needed because `meta` already exists.
+
+### Verification
+- `journalctl --user -u lark.service` shows startup sync without errors, and existing verified human contacts receive the welcome once (not re-sent on restart).
+
+---
+
 ## 2026-11-22 — Strict Stored Voice Validation & Head-Pad Removal (`0.16.0`)
 
 ### Affects

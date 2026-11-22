@@ -989,3 +989,48 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 		t.Fatalf("/say not recorded in messages with deltachat channel: %+v", entries)
 	}
 }
+
+func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
+	b, _, stub := dcTestHarness(t)
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cake, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stub.mu.Lock()
+	// Existing verified human contact.
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	// Unverified human contact.
+	stub.contacts[greg.DCAccountID][11] = deltachat.Contact{Id: 11, DisplayName: "Stranger", Address: "stranger@example.org", IsVerified: false}
+	// Companion-to-companion contact (should never receive welcome).
+	stub.contacts[greg.DCAccountID][12] = deltachat.Contact{Id: 12, DisplayName: "Cake", Address: stub.configs[cake.DCAccountID]["addr"], IsVerified: true, IsBot: true}
+	stub.mu.Unlock()
+
+	// Startup sync sends welcome once to Mum, skips Stranger and Cake.
+	b.dc.syncWelcomes(t.Context())
+	b.dc.syncWelcomes(t.Context())
+
+	stub.mu.Lock()
+	if len(stub.sent) != 1 {
+		t.Fatalf("expected 1 welcome on startup sync, got %d: %+v", len(stub.sent), stub.sent)
+	}
+	if !strings.Contains(*stub.sent[0].data.Text, "Hi! I'm Greg, an old chameleon.") {
+		t.Fatalf("unexpected welcome text: %q", *stub.sent[0].data.Text)
+	}
+	// New human completes SecureJoin.
+	stub.contacts[greg.DCAccountID][13] = deltachat.Contact{Id: 13, DisplayName: "Dad", Address: "dad@example.org", IsVerified: true}
+	stub.mu.Unlock()
+
+	b.dc.handleSecureJoinVerified(t.Context(), greg.DCAccountID, 13)
+	b.dc.handleSecureJoinVerified(t.Context(), greg.DCAccountID, 13)
+
+	stub.mu.Lock()
+	if len(stub.sent) != 2 {
+		t.Fatalf("expected 2 total welcomes after SecureJoin, got %d: %+v", len(stub.sent), stub.sent)
+	}
+	stub.mu.Unlock()
+}

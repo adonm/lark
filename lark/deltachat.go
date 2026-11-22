@@ -22,7 +22,10 @@ import (
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 )
 
-const defaultChatmailRelay = "nine.testrun.org"
+const (
+	defaultChatmailRelay = "nine.testrun.org"
+	dcWelcomeVersion     = "1"
+)
 
 type dcRPC interface {
 	AddAccount() (uint32, error)
@@ -154,6 +157,13 @@ func (s *dcService) runOnce(ctx context.Context) error {
 	bot.OnNewMsg(func(_ *deltachat.Bot, accID, msgID uint32) {
 		s.handleMessage(ctx, accID, msgID)
 	})
+	bot.On(&deltachat.EventTypeSecurejoinInviterProgress{}, func(_ *deltachat.Bot, accID uint32, ev deltachat.EventType) {
+		p, ok := ev.(*deltachat.EventTypeSecurejoinInviterProgress)
+		if !ok || p.Progress < 1000 {
+			return
+		}
+		s.handleSecureJoinVerified(ctx, accID, p.ContactId)
+	})
 
 	s.mu.Lock()
 	s.transport = tr
@@ -228,6 +238,7 @@ func (s *dcService) syncAccounts(ctx context.Context) error {
 		}
 	}
 	s.autoPairAll(ctx)
+	s.syncWelcomes(ctx)
 	return nil
 }
 
@@ -688,28 +699,110 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 	return sentTo, nil
 }
 
+func (s *dcService) companionForAccount(ctx context.Context, accID uint32) string {
+	s.mu.Lock()
+	companionID := s.byAcc[accID]
+	s.mu.Unlock()
+	if companionID != "" || s.b == nil {
+		return companionID
+	}
+	comps, err := s.b.allCompanions(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, c := range comps {
+		if c.DCAccountID == accID {
+			s.mu.Lock()
+			s.byAcc[accID] = c.ID
+			s.mu.Unlock()
+			return c.ID
+		}
+	}
+	return ""
+}
+
+func dcContactKey(ct deltachat.Contact) string {
+	if addr := strings.ToLower(strings.TrimSpace(ct.Address)); addr != "" {
+		return addr
+	}
+	return strconv.FormatUint(uint64(ct.Id), 10)
+}
+
+func (s *dcService) syncWelcomes(ctx context.Context) {
+	rpc := s.getRPC()
+	if rpc == nil || s.b == nil {
+		return
+	}
+	comps, err := s.b.allCompanions(ctx)
+	if err != nil {
+		return
+	}
+	for _, c := range comps {
+		if ctx.Err() != nil {
+			return
+		}
+		if c.DCAccountID == 0 {
+			continue
+		}
+		contacts, err := rpc.GetContacts(c.DCAccountID, 0, nil)
+		if err != nil {
+			continue
+		}
+		for _, ct := range contacts {
+			s.sendWelcomeIfNeeded(ctx, c, c.DCAccountID, ct)
+		}
+	}
+}
+
+func (s *dcService) handleSecureJoinVerified(ctx context.Context, accID, contactID uint32) {
+	rpc := s.getRPC()
+	if rpc == nil || s.b == nil || contactID == 0 {
+		return
+	}
+	companionID := s.companionForAccount(ctx, accID)
+	if companionID == "" {
+		return
+	}
+	ct, err := rpc.GetContact(accID, contactID)
+	if err != nil {
+		return
+	}
+	s.sendWelcomeIfNeeded(ctx, s.b.companionFor(companionID), accID, ct)
+}
+
+func (s *dcService) sendWelcomeIfNeeded(ctx context.Context, c companionState, accID uint32, ct deltachat.Contact) {
+	rpc := s.getRPC()
+	if rpc == nil || s.b == nil || s.b.db == nil {
+		return
+	}
+	if ct.Id == deltachat.ContactSelf || !ct.IsVerified || ct.IsBlocked || ct.IsBot {
+		return
+	}
+	if _, isPeer := s.companionByAddr(ct.Address); isPeer {
+		return
+	}
+	key := "dc_welcome:" + c.ID + ":" + dcContactKey(ct)
+	if seen, err := s.b.db.getMeta(ctx, key); err == nil && seen == dcWelcomeVersion {
+		return
+	}
+	chatID, err := rpc.CreateChatByContactId(accID, ct.Id)
+	if err != nil {
+		return
+	}
+	txt := welcomeText(c)
+	if _, err := rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &txt}); err != nil {
+		log.Printf("Delta Chat welcome SendMsg error (%s): %v", c.ID, err)
+		return
+	}
+	_ = s.b.db.setMeta(ctx, key, dcWelcomeVersion)
+}
+
 func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	rpc := s.getRPC()
 	if rpc == nil {
 		return
 	}
-	s.mu.Lock()
-	companionID := s.byAcc[accID]
-	s.mu.Unlock()
-	if companionID == "" {
-		comps, err := s.b.allCompanions(ctx)
-		if err == nil {
-			for _, c := range comps {
-				if c.DCAccountID == accID {
-					companionID = c.ID
-					s.mu.Lock()
-					s.byAcc[accID] = companionID
-					s.mu.Unlock()
-					break
-				}
-			}
-		}
-	}
+	companionID := s.companionForAccount(ctx, accID)
 	if companionID == "" {
 		return
 	}
