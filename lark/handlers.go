@@ -267,6 +267,7 @@ type turnChannel struct {
 	sender     string
 	senderKind string // "contact", "companion"
 	replyTo    string // Delta Chat sender name when replying in listening mode
+	private    bool
 }
 
 type turnOptions struct {
@@ -298,7 +299,11 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 		if sender == "" {
 			sender = "Friend"
 		}
-		prefix = fmt.Sprintf("Delta Chat from %s (%s) · %s (%s)", sender, kind, companion.Name, companionID)
+		if ch.private {
+			prefix = fmt.Sprintf("Delta Chat from %s (%s) · private · %s (%s)", sender, kind, companion.Name, companionID)
+		} else {
+			prefix = fmt.Sprintf("Delta Chat from %s (%s) · %s (%s)", sender, kind, companion.Name, companionID)
+		}
 	case ch.channel == "timer" || source == "timer":
 		prefix = fmt.Sprintf("Timer · %s (%s)", companion.Name, companionID)
 	case ch.replyTo != "":

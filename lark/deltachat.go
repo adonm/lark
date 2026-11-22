@@ -759,9 +759,6 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	if text == "" {
 		return
 	}
-	if s.b.oc == nil {
-		return
-	}
 	who := s.b.companionFor(companionID)
 	senderName := strings.TrimSpace(contact.DisplayName)
 	if senderName == "" {
@@ -771,12 +768,67 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		senderName = "Friend"
 	}
 
+	private := false
+	if !isVoice && strings.HasPrefix(text, "/") {
+		cmd, arg := splitSlashCommand(text)
+		switch cmd {
+		case "/say":
+			if arg == "" {
+				hint := "Usage: /say <words>"
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
+				return
+			}
+			s.b.chat(companionID, newChat("user", senderName, text, "deltachat"), true)
+			if s.b.ws != nil {
+				s.b.ws.deliverNotice(ctx, terminalNotice{
+					recipientIDs: []string{companionID},
+					sender:       who,
+					text:         arg,
+					speakText:    arg,
+					voice:        s.b.voiceFor(companionID),
+					chime:        "intercom",
+					showCard:     true,
+					replyTo:      senderName,
+				})
+			}
+			ack := "Said it."
+			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &ack}); err != nil {
+				log.Printf("Delta Chat SendMsg error: %v", err)
+			}
+			return
+		case "/private":
+			if arg == "" {
+				hint := "Usage: /private <words>"
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
+				return
+			}
+			private = true
+			text = arg
+		case "/help":
+			help := welcomeText(who)
+			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &help}); err != nil {
+				log.Printf("Delta Chat SendMsg error: %v", err)
+			}
+			return
+		default:
+			hint := "Unknown command. Try /say <words>, /private <words>, /panel, or /help."
+			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint}); err != nil {
+				log.Printf("Delta Chat SendMsg error: %v", err)
+			}
+			return
+		}
+	}
+
+	if s.b.oc == nil {
+		return
+	}
+
 	turnCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 	turnCtx = s.b.traceTurn(turnCtx, companionID, who.Name, "deltachat", time.Now())
 
 	s.b.chat(companionID, newChat("user", senderName, text, "deltachat"), true)
-	if s.b.ws != nil {
+	if !private && s.b.ws != nil {
 		cardSender := blankCompanion()
 		cardSender.ID = senderName
 		cardSender.Name = senderName
@@ -797,6 +849,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		channel:    "deltachat",
 		sender:     senderName,
 		senderKind: "contact",
+		private:    private,
 	}, time.Now().In(s.b.location()))
 	s.b.setDCBuildTarget(companionID, accID, msg.ChatId)
 	defer s.b.setDCBuildTarget(companionID, 0, 0)
@@ -833,7 +886,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	if _, err := rpc.SendMsg(accID, msg.ChatId, outMsg); err != nil {
 		log.Printf("Delta Chat SendMsg error: %v", err)
 	}
-	if s.b.ws != nil {
+	if !private && s.b.ws != nil {
 		s.b.ws.deliverNotice(ctx, terminalNotice{
 			recipientIDs: []string{companionID},
 			sender:       who,
@@ -845,6 +898,35 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			trace:        traceFrom(turnCtx),
 		})
 	}
+}
+
+func splitSlashCommand(text string) (cmd, arg string) {
+	text = strings.TrimSpace(text)
+	for i, r := range text {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return strings.ToLower(text[:i]), strings.TrimSpace(text[i:])
+		}
+	}
+	return strings.ToLower(text), ""
+}
+
+func welcomeText(c companionState) string {
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = "Lark"
+	}
+	intro := fmt.Sprintf("Hi! I'm %s.", name)
+	if form := strings.TrimSpace(c.Form); form != "" {
+		intro = fmt.Sprintf("Hi! I'm %s, %s.", name, form)
+	}
+	return strings.Join([]string{
+		intro + " Text me anytime — I'll read it out at home and reply.",
+		"/say <words> — I'll say it out loud exactly",
+		"/private <words> — just between us",
+		"/panel — open my control panel",
+		"/help — this message",
+		"When listening mode is on, people at home can answer you out loud.",
+	}, "\n")
 }
 
 func decodeAudioToPCM16k(ctx context.Context, path string) ([]byte, error) {

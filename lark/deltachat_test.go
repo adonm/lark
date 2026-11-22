@@ -873,3 +873,119 @@ func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
 		t.Fatalf("excerpt missing channel/sender format: %s", excerpt)
 	}
 }
+
+func TestDeltaChatSlashCommands(t *testing.T) {
+	var prompts []string
+	var promptsMu sync.Mutex
+	b, base, _ := listenHarness(t, func(prompt string) string {
+		promptsMu.Lock()
+		prompts = append(prompts, prompt)
+		promptsMu.Unlock()
+		return "Just between us."
+	})
+	stub := newStubDCRPC()
+	b.dc = newDCService(b, "", t.TempDir(), "nine.testrun.org")
+	b.dc.rpc = stub
+	b.dc.ready.Store(true)
+
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-cmd", "greg")
+	patchControl(t, base, "greg", object{"sleep": true})
+
+	var spoken []string
+	var spokenMu sync.Mutex
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				spokenMu.Lock()
+				spoken = append(spoken, req.voice+":"+req.text)
+				spokenMu.Unlock()
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "/say Bedtime!", ViewType: deltachat.ViewtypeText}
+	stub.msgs[greg.DCAccountID][2] = deltachat.Message{Id: 2, ChatId: 200, FromId: 10, Text: "/private Secret plan", ViewType: deltachat.ViewtypeText}
+	stub.msgs[greg.DCAccountID][3] = deltachat.Message{Id: 3, ChatId: 200, FromId: 10, Text: "/help", ViewType: deltachat.ViewtypeText}
+	stub.msgs[greg.DCAccountID][4] = deltachat.Message{Id: 4, ChatId: 200, FromId: 10, Text: "/bogus", ViewType: deltachat.ViewtypeText}
+	stub.mu.Unlock()
+
+	// 1. /say: spoken word for word, no agent turn, "Said it." reply, recorded in messages.
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
+	end := dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
+	})
+	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
+	waitSVG(t, b.ws, "box3-cmd", "Bedtime!")
+
+	// 2. /private: agent turn with private label, reply in chat, nothing spoken.
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 2)
+
+	// 3. /help: sends welcome instructions, no agent turn, nothing spoken.
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 3)
+
+	// 4. /bogus: sends short help hint, no agent turn, nothing spoken.
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 4)
+
+	spokenMu.Lock()
+	gotSpoken := slices.Clone(spoken)
+	spokenMu.Unlock()
+	wantSay := b.voiceFor("greg") + ":Bedtime!"
+	if len(gotSpoken) != 1 || gotSpoken[0] != wantSay {
+		t.Fatalf("spoken = %v, want [%q]", gotSpoken, wantSay)
+	}
+
+	promptsMu.Lock()
+	gotPrompts := slices.Clone(prompts)
+	promptsMu.Unlock()
+	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[Delta Chat from Mum (contact) · private · Greg (greg)") || !strings.HasSuffix(gotPrompts[0], "\nSecret plan") {
+		t.Fatalf("unexpected agent prompts: %v", gotPrompts)
+	}
+
+	stub.mu.Lock()
+	sent := slices.Clone(stub.sent)
+	stub.mu.Unlock()
+	if len(sent) != 4 {
+		t.Fatalf("expected 4 chat replies, got %d: %+v", len(sent), sent)
+	}
+	if *sent[0].data.Text != "Said it." {
+		t.Fatalf("/say reply = %q, want Said it.", *sent[0].data.Text)
+	}
+	if *sent[1].data.Text != "Just between us." {
+		t.Fatalf("/private reply = %q", *sent[1].data.Text)
+	}
+	if !strings.Contains(*sent[2].data.Text, "Hi! I'm Greg, an old chameleon.") || !strings.Contains(*sent[2].data.Text, "/panel") {
+		t.Fatalf("/help reply = %q", *sent[2].data.Text)
+	}
+	if !strings.Contains(*sent[3].data.Text, "Unknown command") {
+		t.Fatalf("unknown command reply = %q", *sent[3].data.Text)
+	}
+
+	entries, err := b.history.list(t.Context(), "greg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundSay bool
+	for _, e := range entries {
+		if e.Source == "deltachat" && e.Text == "/say Bedtime!" {
+			foundSay = true
+		}
+	}
+	if !foundSay {
+		t.Fatalf("/say not recorded in messages with deltachat channel: %+v", entries)
+	}
+}
