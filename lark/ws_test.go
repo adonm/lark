@@ -904,3 +904,54 @@ func syncOnceClose(ch chan struct{}) func() {
 		}
 	}
 }
+
+func TestNativeClientPrioritizesControlAndCoalescesFrames(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	nc := &nativeClient{
+		conn:        server,
+		ctrlOut:     make(chan nativeOutMsg, 8),
+		out:         make(chan nativeOutMsg, 8),
+		frameNotify: make(chan struct{}, 1),
+	}
+	c := &wsClient{native: nc, ctx: ctx, cancel: cancel}
+	nc.client = c
+	dev := &testWS{conn: client, in: bufio.NewReader(client)}
+
+	// Enqueue frames, PCM, and control before writeLoop starts so priority order is deterministic.
+	nc.enqueue(msgFrame, []byte("frame-old"))
+	nc.enqueue(msgFrame, []byte("frame-new"))
+	nc.enqueue(msgTTSPCM, []byte("pcm-1"))
+	nc.enqueue(msgRecCtrl, []byte("rec-start"))
+
+	go nc.writeLoop()
+
+	var got []struct {
+		mt uint8
+		p  string
+	}
+	for range 3 {
+		f := dev.read(t)
+		mt, _, p, ok := unpackProtoPacket(f.data)
+		if !ok {
+			t.Fatal("invalid packet")
+		}
+		got = append(got, struct {
+			mt uint8
+			p  string
+		}{mt, string(p)})
+	}
+	if got[0].mt != msgRecCtrl || got[0].p != "rec-start" {
+		t.Fatalf("first packet = (%#x, %q), want msgRecCtrl", got[0].mt, got[0].p)
+	}
+	if got[1].mt != msgTTSPCM || got[1].p != "pcm-1" {
+		t.Fatalf("second packet = (%#x, %q), want msgTTSPCM", got[1].mt, got[1].p)
+	}
+	if got[2].mt != msgFrame || got[2].p != "frame-new" {
+		t.Fatalf("third packet = (%#x, %q), want coalesced frame-new", got[2].mt, got[2].p)
+	}
+}

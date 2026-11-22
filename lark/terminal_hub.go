@@ -985,7 +985,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					rect = image.Rect(0, 0, 1, 1)
 				}
 				if !rect.Empty() {
-					native = d.encoder.encodeWithCodecs(screen.fb, nil, rect, rev, geometry.width, codecs)
+					frameCodecs := codecs
+					fullScene := prev.fb == nil || r.full || screen.grade != prev.grade
+					if !fullScene || r.drawer != "" || r.app != nil || r.view.title != "" || r.view.heading != "" || r.view.text != "" {
+						frameCodecs &^= codecBitJPEG
+					}
+					native = d.encoder.encodeWithCodecs(screen.fb, nil, rect, rev, geometry.width, frameCodecs)
 					rawBytes = 12 + rect.Dx()*rect.Dy()*2
 				}
 			}
@@ -1089,7 +1094,8 @@ func (h *wsHub) animate(ctx context.Context) {
 				if !h.active(d) {
 					continue
 				}
-				if checkGrade && !d.virtual() && !(d.asleep && d.caps.PanelSleep) &&
+				turnActive := d.recording.active() || d.busy || d.ttsStarted || d.awaitAck
+				if checkGrade && !turnActive && !d.virtual() && !(d.asleep && d.caps.PanelSleep) &&
 					d.svg.grade != h.frameGrade(d, now) {
 					h.render(d, now, false)
 				}
@@ -1098,12 +1104,12 @@ func (h *wsHub) animate(ctx context.Context) {
 					h.stopRecordingAtLimit(d, now)
 				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(4*time.Second)):
 					h.playbackDone(d, now, false)
-				case !d.asleep && d.drawer != drawerPair && !d.busy && !d.recording.active() && !d.ttsStarted && !d.awaitAck && now.Sub(d.last) >= idleSleep:
+				case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
 					h.render(d, now, false)
 				case d.asleep && d.caps.PanelSleep && !d.virtual():
 					// The battery board's panel is off; skip idle updates.
-				case d.drawer == "stats" && !d.asleep && now.Sub(d.statsAt) >= diagInterval:
+				case d.drawer == "stats" && !d.asleep && !turnActive && now.Sub(d.statsAt) >= diagInterval:
 					h.render(d, now, false)
 				case d.stopTapsExpired(now):
 					h.render(d, now, false)

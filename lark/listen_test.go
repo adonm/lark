@@ -96,7 +96,12 @@ func setupListenTerminal(t *testing.T, b *larkServer, base, termID, compName str
 	}
 	hw := testConnectWS(t, base, "unit", false)
 	hw.helloHardware(t, termID, cid, capDrag|capBridgeEndpoint)
-	hw.until(t, hasProto(msgVoiceOwner, termID))
+	b.ws.mu.Lock()
+	owner := b.ws.voiceOwners[cid]
+	b.ws.mu.Unlock()
+	if owner != termID {
+		t.Fatalf("voice owner = %q, want %q", owner, termID)
+	}
 	return hw, cid
 }
 
@@ -358,7 +363,12 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 	hw1, cid := setupListenTerminal(t, b, base, "box3-owner", "Greg", 30)
 	hw2 := testConnectWS(t, base, "unit", false)
 	hw2.helloHardware(t, "vocat-other", cid, capDrag|capBridgeEndpoint)
-	hw2.until(t, hasProto(msgVoiceOwner, "box3-owner"))
+	b.ws.mu.Lock()
+	if owner := b.ws.voiceOwners[cid]; owner != "box3-owner" {
+		b.ws.mu.Unlock()
+		t.Fatalf("voice owner = %q, want box3-owner", owner)
+	}
+	b.ws.mu.Unlock()
 
 	audioID := sendSpeechAndWaitTTS(t, hw1, b, "box3-owner", "Hi Greg")
 	hw1.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))

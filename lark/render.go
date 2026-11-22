@@ -197,7 +197,7 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 		}
 		e.jpegBuf.Reset()
 		if err := jpeg.Encode(&e.jpegBuf, src, &jpeg.Options{Quality: 82}); err == nil {
-			if e.jpegBuf.Len() < len(bestPayload)*7/10 {
+			if e.jpegBuf.Len() < len(bestPayload)*6/10 {
 				bestCodec = frameCodecJPEG
 				bestPayload = e.jpegBuf.Bytes()
 			}

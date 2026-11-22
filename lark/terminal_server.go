@@ -26,10 +26,13 @@ type nativeClient struct {
 	ssrc     uint32
 	client   *wsClient
 
-	out     chan nativeOutMsg
-	outMu   sync.Mutex
-	drained chan struct{}
-	txSeq   uint16
+	ctrlOut      chan nativeOutMsg
+	out          chan nativeOutMsg
+	outMu        sync.Mutex
+	drained      chan struct{}
+	pendingFrame *nativeOutMsg
+	frameNotify  chan struct{}
+	txSeq        uint16
 
 	udpMu   sync.Mutex
 	udpAddr *net.UDPAddr
@@ -199,13 +202,15 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 		initialUDP = &net.UDPAddr{IP: remoteIP.AsSlice(), Port: int(hello.udpPort)}
 	}
 	nc := &nativeClient{
-		server:   s,
-		hub:      s.hub,
-		conn:     conn,
-		remoteIP: remoteIP,
-		ssrc:     ssrc,
-		out:      make(chan nativeOutMsg, 192),
-		udpAddr:  initialUDP,
+		server:      s,
+		hub:         s.hub,
+		conn:        conn,
+		remoteIP:    remoteIP,
+		ssrc:        ssrc,
+		ctrlOut:     make(chan nativeOutMsg, 64),
+		out:         make(chan nativeOutMsg, 192),
+		frameNotify: make(chan struct{}, 1),
+		udpAddr:     initialUDP,
 	}
 	c := &wsClient{
 		native: nc,
@@ -248,7 +253,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 	if !ok {
 		// Flush any REJECT frame queued before closing.
 		select {
-		case msg := <-nc.out:
+		case msg := <-nc.ctrlOut:
 			pkt := packProtoPacket(msg.msgType, nc.txSeq, msg.payload)
 			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			_, _ = conn.Write(pkt)
@@ -332,14 +337,65 @@ func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 	}
 }
 
+func (nc *nativeClient) writePacket(msgType uint8, payload []byte) bool {
+	pkt := packProtoPacket(msgType, nc.txSeq, payload)
+	nc.txSeq++
+	_ = nc.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_, err := nc.conn.Write(pkt)
+	return err == nil
+}
+
+func (nc *nativeClient) nextMsg() (nativeOutMsg, bool, bool) {
+	// Priority 1: control messages (REC_CTRL, TTS_CTRL, chimes, power, pong).
+	select {
+	case msg := <-nc.ctrlOut:
+		return msg, false, true
+	default:
+	}
+	// Priority 2: TTS PCM audio.
+	select {
+	case msg := <-nc.out:
+		return msg, true, true
+	default:
+	}
+	// Priority 3: latest coalesced display frame.
+	nc.outMu.Lock()
+	if nc.pendingFrame != nil {
+		msg := *nc.pendingFrame
+		nc.pendingFrame = nil
+		nc.outMu.Unlock()
+		return msg, false, true
+	}
+	nc.outMu.Unlock()
+	return nativeOutMsg{}, false, false
+}
+
 func (nc *nativeClient) writeLoop() {
 	defer nc.conn.Close()
 	ping := time.NewTicker(12 * time.Second)
 	defer ping.Stop()
 	for nc.client.ctx.Err() == nil {
+		if msg, isPCM, ok := nc.nextMsg(); ok {
+			if isPCM {
+				nc.outMu.Lock()
+				if nc.drained != nil {
+					close(nc.drained)
+					nc.drained = nil
+				}
+				nc.outMu.Unlock()
+			}
+			if !nc.writePacket(msg.msgType, msg.payload) {
+				return
+			}
+			continue
+		}
 		select {
 		case <-nc.client.ctx.Done():
 			return
+		case msg := <-nc.ctrlOut:
+			if !nc.writePacket(msg.msgType, msg.payload) {
+				return
+			}
 		case msg := <-nc.out:
 			nc.outMu.Lock()
 			if nc.drained != nil {
@@ -347,12 +403,10 @@ func (nc *nativeClient) writeLoop() {
 				nc.drained = nil
 			}
 			nc.outMu.Unlock()
-			pkt := packProtoPacket(msg.msgType, nc.txSeq, msg.payload)
-			nc.txSeq++
-			_ = nc.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if _, err := nc.conn.Write(pkt); err != nil {
+			if !nc.writePacket(msg.msgType, msg.payload) {
 				return
 			}
+		case <-nc.frameNotify:
 		case <-ping.C:
 			now := time.Now()
 			nc.client.pingMu.Lock()
@@ -360,10 +414,7 @@ func (nc *nativeClient) writeLoop() {
 			nc.client.pingMu.Unlock()
 			var ts [4]byte
 			binary.LittleEndian.PutUint32(ts[:], uint32(now.UnixMilli()))
-			pkt := packProtoPacket(msgPing, nc.txSeq, ts[:])
-			nc.txSeq++
-			_ = nc.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if _, err := nc.conn.Write(pkt); err != nil {
+			if !nc.writePacket(msgPing, ts[:]) {
 				return
 			}
 		}
@@ -376,8 +427,20 @@ func (nc *nativeClient) enqueue(msgType uint8, payload []byte) bool {
 	if nc.client.ctx.Err() != nil {
 		return false
 	}
+	if msgType == msgFrame {
+		nc.pendingFrame = &nativeOutMsg{msgType: msgFrame, payload: payload}
+		select {
+		case nc.frameNotify <- struct{}{}:
+		default:
+		}
+		return true
+	}
+	dst := nc.ctrlOut
+	if dst == nil || msgType == msgTTSPCM {
+		dst = nc.out
+	}
 	select {
-	case nc.out <- nativeOutMsg{msgType: msgType, payload: payload}:
+	case dst <- nativeOutMsg{msgType: msgType, payload: payload}:
 		return true
 	default:
 		nc.client.cancel()
