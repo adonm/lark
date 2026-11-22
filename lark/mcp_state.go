@@ -28,11 +28,12 @@ func stringList(raw any, key string) ([]string, error) {
 }
 
 func (b *larkServer) mcpState(ctx context.Context, args object) (object, error) {
-	now := time.Now()
+	loc := b.location()
+	now := time.Now().In(loc)
 	id := strings.ToLower(str(args["companion_id"]))
 	include := stateSlices[:4]
 	var err error
-	out := object{"now": object{"local": now.Format(time.RFC3339), "unix_ms": now.UnixMilli()}}
+	out := object{"now": object{"local": formatLocalTimeIn(now, loc), "rfc3339": now.Format(time.RFC3339), "unix_ms": now.UnixMilli()}}
 	if raw, exists := args["app_name"]; exists {
 		name, ok := raw.(string)
 		if !ok {

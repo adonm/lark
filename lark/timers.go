@@ -71,7 +71,11 @@ func scanTimer(r rowScanner) (savedTimer, error) {
 	}
 	t.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 	if err == nil {
+		t.CreatedAt = t.CreatedAt.In(time.Local)
 		t.FireAt, err = time.Parse(time.RFC3339Nano, fire)
+		if err == nil {
+			t.FireAt = t.FireAt.In(time.Local)
+		}
 	}
 	return t, err
 }
@@ -98,14 +102,16 @@ func (m *timerManager) list(ctx context.Context, id string) ([]savedTimer, error
 }
 
 func (t savedTimer) state(now time.Time) object {
+	loc := now.Location()
 	remaining := max(time.Duration(0), t.FireAt.Sub(now))
 	notes := t.Notes
 	if notes == nil {
 		notes = []string{}
 	}
 	return object{"id": t.ID, "companion_id": t.CompanionID, "label": t.Label, "say": t.Say, "notes": notes,
-		"app": t.AppName, "wake_agent": t.WakeAgent, "created_at": t.CreatedAt, "chime": t.Chime,
-		"fire_at": t.FireAt, "remaining_s": (remaining + time.Second - 1) / time.Second}
+		"app": t.AppName, "wake_agent": t.WakeAgent, "created_at": t.CreatedAt.In(loc), "chime": t.Chime,
+		"fire_at": t.FireAt.In(loc), "fire_at_local": formatLocalTimeIn(t.FireAt, loc),
+		"remaining_s": (remaining + time.Second - 1) / time.Second}
 }
 
 func (b *larkServer) timerState(ctx context.Context, id string, now time.Time) ([]object, error) {
@@ -153,8 +159,21 @@ func (m *timerManager) restore(now time.Time) error {
 }
 
 func parseTimer(args object, now time.Time) (savedTimer, error) {
-	t := savedTimer{ID: randomHex(12), CompanionID: strings.ToLower(str(args["companion_id"])), CreatedAt: now.UTC(), Label: "Timer", Chime: "celebrate"}
+	t := savedTimer{ID: randomHex(12), CompanionID: strings.ToLower(str(args["companion_id"])), CreatedAt: now.In(now.Location()), Label: "Timer", Chime: "celebrate"}
 	return editTimer(t, args, now, false)
+}
+
+func parseTimerAt(raw string, loc *time.Location) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.In(loc), nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, raw, loc); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, errors.New("invalid timer timestamp")
 }
 
 func editTimer(t savedTimer, args object, now time.Time, update bool) (savedTimer, error) {
@@ -167,14 +186,13 @@ func editTimer(t savedTimer, args object, now time.Time, update bool) (savedTime
 		if *seconds < 1 || *seconds > 86400 {
 			return t, problem(400, "in_seconds must be 1–86400")
 		}
-		t.FireAt = now.Add(time.Duration(*seconds) * time.Second).UTC()
+		t.FireAt = now.Add(time.Duration(*seconds) * time.Second).In(now.Location())
 	} else if atSet {
-		t.FireAt, err = time.Parse(time.RFC3339, str(at))
+		t.FireAt, err = parseTimerAt(str(at), now.Location())
 		delay := t.FireAt.Sub(now)
 		if err != nil || delay <= 0 || delay > 24*time.Hour {
-			return t, problem(400, "at must be RFC3339 within the next 24 hours")
+			return t, problem(400, "at must be RFC3339 or local time within the next 24 hours")
 		}
-		t.FireAt = t.FireAt.UTC()
 	}
 	if v, ok := args["wake_agent"]; ok {
 		if t.WakeAgent, ok = v.(bool); !ok {
@@ -549,7 +567,7 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 		if !ok {
 			return nil, problem(404, "Companion not found")
 		}
-		now := time.Now()
+		now := time.Now().In(b.location())
 		t, err := parseTimer(withCompanion(args, id), now)
 		if err != nil {
 			return nil, err

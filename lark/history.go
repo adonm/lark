@@ -35,7 +35,7 @@ type chatEntry struct {
 
 func newChat(role, sender, text, source string) chatEntry {
 	return chatEntry{ID: "bridge-" + randomHex(12), Role: role, Sender: sender, Text: text,
-		Source: source, Timestamp: time.Now().UTC()}
+		Source: source, Timestamp: time.Now().In(time.Local)}
 }
 
 type chatHistory struct{ db *larkDB }
@@ -129,7 +129,7 @@ func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, befo
 		if err := rows.Scan(&e.ID, &e.Role, &e.Sender, &e.Text, &e.Source, &e.SceneTitle, &ts); err != nil {
 			return nil, problem(502, "Cannot read chat events")
 		}
-		e.Timestamp = time.UnixMilli(ts).UTC()
+		e.Timestamp = time.UnixMilli(ts).In(time.Local)
 		entries = append(entries, e)
 	}
 	if rows.Err() != nil {

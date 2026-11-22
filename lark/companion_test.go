@@ -62,7 +62,8 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		blank["accent_color"] != "#ED8F87" || blank["voice"] != heartVoice || blank["face_svg"] != blankCompanion().FaceSVG {
 		t.Fatal("invalid blank starter", blank)
 	}
-	if got := turnPrompt(id, "voice", "Hi", blankCompanion()); got != "[New Companion ("+id+") · hardware · voice · setup]\nHi" {
+	if got := turnPrompt(id, "voice", "Hi", blankCompanion()); !strings.HasPrefix(got, "[New Companion ("+id+") · hardware · voice · now: ") ||
+		!strings.HasSuffix(got, " · setup]\nHi") {
 		t.Fatal(got)
 	}
 	dev := testConnectWS(t, base, "unit", false)
@@ -103,7 +104,8 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		t.Fatal("companions API did not reflect companion design", list)
 	}
 	stored := b.companionFor(id)
-	if got := turnPrompt(id, "voice", "Hi", stored); got != "[Cosmo ("+id+") · hardware · voice · vibe: curious space explorer]\nHi" {
+	if got := turnPrompt(id, "voice", "Hi", stored); !strings.HasPrefix(got, "[Cosmo ("+id+") · hardware · voice · now: ") ||
+		!strings.HasSuffix(got, " · vibe: curious space explorer]\nHi") {
 		t.Fatal(got)
 	}
 	if c := call(false, "reset_blank", object{})["companion"].(object); c["configured"] != false || c["personality"] != "" || c["face_svg"] != blankCompanion().FaceSVG {

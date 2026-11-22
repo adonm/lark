@@ -1223,7 +1223,7 @@ func appLayoutWarnings(views []svgScreen, round bool) []string {
 }
 
 func appFailure(spec savedApp, action string, err error, now time.Time) object {
-	return object{"name": spec.Name, "title": spec.Title, "action": action, "error": truncate(err.Error(), 1024), "at": now.UTC()}
+	return object{"name": spec.Name, "title": spec.Title, "action": action, "error": truncate(err.Error(), 1024), "at": now.In(time.Local)}
 }
 
 func (h *wsHub) activeAppState(a *appInstance) object {

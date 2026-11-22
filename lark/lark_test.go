@@ -22,16 +22,56 @@ import (
 )
 
 func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
+	loc := time.FixedZone("AEDT", 11*3600)
+	fixed := time.Date(2026, 11, 22, 18, 4, 0, 0, loc)
 	for _, tc := range []struct {
 		id, source string
 	}{
 		{"vocat-33d8", "voice"},
 		{"box3-b324", "typed"},
 	} {
-		if got := turnPrompt(tc.id, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}); got !=
-			"[Cake ("+tc.id+") · hardware · "+tc.source+"]\nHi" {
+		if got := turnPromptAt(tc.id, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}, fixed); got !=
+			"[Cake ("+tc.id+") · hardware · "+tc.source+" · now: 2026-11-22 18:04 AEDT (+11:00)]\nHi" {
 			t.Fatal(got)
 		}
+	}
+}
+
+func TestLocalTimeAcrossAgentSurfaces(t *testing.T) {
+	loc := time.FixedZone("AEDT", 11*3600)
+	fixed := time.Date(2026, 11, 22, 18, 4, 0, 0, loc)
+	if got := formatLocalTimeIn(fixed, loc); got != "2026-11-22 18:04 AEDT (+11:00)" {
+		t.Fatalf("formatLocalTimeIn = %q", got)
+	}
+
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
+		b.loc = loc
+		b.history = &chatHistory{b.db}
+		b.timers = newTimerManager(b)
+		t.Cleanup(b.timers.close)
+	})
+	s := toolTest(t, base, "state", object{"include": []string{}}, false)
+	nowObj := s["now"].(object)
+	localStr := str(nowObj["local"])
+	if !strings.Contains(localStr, "AEDT (+11:00)") {
+		t.Fatalf("state now.local = %q, want AEDT (+11:00)", localStr)
+	}
+	if !strings.HasSuffix(str(nowObj["rfc3339"]), "+11:00") {
+		t.Fatalf("state now.rfc3339 = %q, want +11:00", str(nowObj["rfc3339"]))
+	}
+
+	id := "greg"
+	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Greg"}); err != nil {
+		t.Fatal(err)
+	}
+	// Timer `at` without offset must be interpreted in local time.
+	atLocal := time.Now().In(loc).Add(30 * time.Minute).Format("2006-01-02T15:04:05")
+	timer := toolTest(t, base, "patch", object{"companion_id": id, "timer": object{"op": "set", "at": atLocal, "label": "Tea"}}, false)["timer"].(object)
+	if !strings.Contains(str(timer["fire_at_local"]), "AEDT (+11:00)") {
+		t.Fatalf("timer fire_at_local = %q, want AEDT (+11:00)", str(timer["fire_at_local"]))
+	}
+	if !strings.HasSuffix(str(timer["fire_at"]), "+11:00") {
+		t.Fatalf("timer fire_at = %q, want +11:00", str(timer["fire_at"]))
 	}
 }
 

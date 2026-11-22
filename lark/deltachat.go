@@ -692,7 +692,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		s.b.ws.mu.Unlock()
 	}
 
-	prompt := fmt.Sprintf("[%s (%s) · deltachat · from %s]\n%s", who.Name, companionID, senderName, text)
+	prompt := fmt.Sprintf("[%s (%s) · deltachat · from %s · now: %s]\n%s", who.Name, companionID, senderName, formatLocalTimeIn(time.Now(), s.b.location()), text)
 	raw, _, err := s.b.oc.askPrepared(turnCtx, companionID, func() (string, string) {
 		return who.Name, prompt
 	}, turnStream{}, "deltachat", nil, nil)

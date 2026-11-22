@@ -40,8 +40,16 @@ type larkServer struct {
 	builders        *buildManager
 	portraits       *portraitStore
 	diag            diagnostics
+	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
 	companionTitles sync.Mutex
+}
+
+func (b *larkServer) location() *time.Location {
+	if b != nil && b.loc != nil {
+		return b.loc
+	}
+	return time.Local
 }
 
 func randomHex(n int) string {
@@ -256,9 +264,24 @@ type turnOptions struct {
 	publish func(*AudioStream, time.Time)
 }
 
+func formatLocalTime(t time.Time) string {
+	return formatLocalTimeIn(t, time.Local)
+}
+
+func formatLocalTimeIn(t time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.Local
+	}
+	return t.In(loc).Format("2006-01-02 15:04 MST (-07:00)")
+}
+
 func turnPrompt(companionID string, source, text string, companion companionState) string {
+	return turnPromptAt(companionID, source, text, companion, time.Now())
+}
+
+func turnPromptAt(companionID string, source, text string, companion companionState, now time.Time) string {
 	kind := "hardware"
-	extra := ""
+	extra := " · now: " + formatLocalTimeIn(now, now.Location())
 	if !companion.Configured {
 		extra += " · setup"
 	}
@@ -325,7 +348,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	}}
 	prepare := func() (string, string) {
 		companion := b.companionFor(sender.ID)
-		return companion.Name, turnPrompt(sender.ID, options.source, text, companion)
+		return companion.Name, turnPromptAt(sender.ID, options.source, text, companion, time.Now().In(b.location()))
 	}
 	raw, sid, err := b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source,
 		nil, func(entry chatEntry) {
