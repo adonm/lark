@@ -234,6 +234,7 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			"terminal_id": d.id,
 			"screen":      screen,
 			"state":       state,
+			"rev":         d.nativeRev,
 			"width":       w,
 			"height":      h,
 			"hits":        hits,

@@ -516,6 +516,9 @@ func (s *simTerminal) execLine(ctx context.Context, line string) (object, error)
 		if err != nil {
 			return nil, err
 		}
+		if rev, ok := numInt(res["rev"]); ok && rev > 0 {
+			s.waitFor(500*time.Millisecond, func() bool { return s.frameRev == uint16(rev) })
+		}
 		s.mu.Lock()
 		prevFrames := s.frameCount
 		s.mu.Unlock()

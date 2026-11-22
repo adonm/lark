@@ -382,6 +382,9 @@ func (h *wsHub) leaveScene(d *wsTerminal, now time.Time, reason string) {
 	h.cancelTurn(d, reason)
 	h.stopPlayback(d, true)
 	h.clearView(d)
+	if !d.recording.active() {
+		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
+	}
 	h.render(d, now, true)
 }
 

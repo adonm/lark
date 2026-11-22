@@ -22,6 +22,9 @@ func TestTerminalHitsRoute(t *testing.T) {
 	if res["terminal_id"] != "vocat-33d8" || res["screen"] != "home" || res["state"] != "idle" {
 		t.Fatalf("unexpected hits header: %v", res)
 	}
+	if _, ok := numInt(res["rev"]); !ok {
+		t.Fatalf("expected numeric rev in hits response, got %v", res["rev"])
+	}
 	hits, _ := res["hits"].([]any)
 	var menuHit object
 	for _, item := range hits {
@@ -55,5 +58,23 @@ func TestTTSRoute(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(raw[40:44]); got != 4 {
 		t.Fatalf("expected data chunk size 4, got %d", got)
+	}
+}
+
+func TestLeaveSceneResetsCompanionStatus(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	hw := testConnectWS(t, base, "unit", false)
+	const id = "vocat-stop-status"
+	hw.helloV2(t, id, "Cake")
+
+	b.ws.mu.Lock()
+	d := b.ws.terminals[id]
+	b.ws.setCompanionStatus(d.companionID, statusSpeaking, 0, promptNone, "")
+	d.ttsStarted = true
+	b.ws.tapStop(d, d.last)
+	st := b.ws.companionStatuses[d.companionID]
+	b.ws.mu.Unlock()
+	if st.state != statusIdle {
+		t.Fatalf("tapStop left companion status = %d, want statusIdle (%d)", st.state, statusIdle)
 	}
 }
