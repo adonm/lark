@@ -636,6 +636,33 @@ func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path s
 		}
 		return b.voiceAPI(r, strings.ToLower(id))
 	}
+	if id, ok := strings.CutSuffix(rest, "/dc"); ok && r.Method == http.MethodGet {
+		id = strings.ToLower(id)
+		if !validCompanionID(id) {
+			return nil, problem(400, "Invalid companion ID")
+		}
+		c, ok := b.companionByID(id)
+		if !ok {
+			return nil, problem(404, "Companion not found")
+		}
+		if b.dc == nil || c.DCAccountID == 0 {
+			return object{"dc_account_id": c.DCAccountID, "verified_peers": []string{}}, nil
+		}
+		rpc := b.dc.getRPC()
+		var peers []string
+		if rpc != nil {
+			if contacts, err := rpc.GetContacts(c.DCAccountID, 0, nil); err == nil {
+				for _, ct := range contacts {
+					if ct.IsVerified && !ct.IsBlocked {
+						if pid, isPeer := b.dc.companionByAddr(ct.Address); isPeer {
+							peers = append(peers, pid)
+						}
+					}
+				}
+			}
+		}
+		return object{"dc_account_id": c.DCAccountID, "verified_peers": peers}, nil
+	}
 	if strings.Contains(rest, "/") {
 		return nil, problem(404, "Not found")
 	}

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 var (
@@ -125,6 +126,40 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 	}
 	if id, ok := strings.CutSuffix(rest, "/volume"); ok && r.Method == http.MethodPost {
 		return b.volumeAPI(r, id)
+	}
+	if id, ok := strings.CutSuffix(rest, "/pair"); ok && r.Method == http.MethodPost {
+		if b.ws == nil || b.dc == nil {
+			return nil, problem(503, "Pairing unavailable")
+		}
+		id = strings.ToLower(id)
+		b.ws.mu.Lock()
+		d := b.ws.terminals[id]
+		if d == nil || !b.ws.active(d) || d.companionID == "" {
+			b.ws.mu.Unlock()
+			return nil, problem(409, "Terminal not connected to a companion")
+		}
+		compID, compName, geom := d.companionID, d.companion.Name, d.screen
+		b.ws.mu.Unlock()
+		qrSVG, err := b.dc.pairQR(compID)
+		if err != nil {
+			return nil, problem(502, err.Error())
+		}
+		pngBytes, err := renderScenePNG(pairScene(compName, qrSVG), geom)
+		if err != nil {
+			return nil, problem(502, err.Error())
+		}
+		b.ws.mu.Lock()
+		if d = b.ws.terminals[id]; b.ws.active(d) && d.companionID == compID {
+			now := time.Now()
+			b.ws.wake(d, now)
+			d.drawer = drawerPair
+			d.menuPage = 0
+			d.menuData = &menuContent{qrSVG: qrSVG}
+			b.ws.render(d, now, false)
+		}
+		b.ws.mu.Unlock()
+		sendBytes(w, 200, "image/png", pngBytes)
+		return nil, nil
 	}
 	if strings.Contains(rest, "/") {
 		return nil, problem(404, "Not found")

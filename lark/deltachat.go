@@ -314,11 +314,23 @@ func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
 			return nil, err
 		}
 	}
-	w, h := roundScreen.width, roundScreen.height
+	return fbToPNG(screen.fb, roundScreen)
+}
+
+func renderScenePNG(view sceneView, geom screenGeometry) ([]byte, error) {
+	screen, err := screens.buildGraded(view.svg(""), false, geom, gradeDay)
+	if err != nil {
+		return nil, err
+	}
+	return fbToPNG(screen.fb, geom)
+}
+
+func fbToPNG(fb []uint16, geom screenGeometry) ([]byte, error) {
+	w, h := geom.width, geom.height
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
 	for y := range h {
 		for x := range w {
-			v := screen.fb[y*w+x]
+			v := fb[y*w+x]
 			r5 := uint8((v >> 11) & 0x1f)
 			g6 := uint8((v >> 5) & 0x3f)
 			b5 := uint8(v & 0x1f)
