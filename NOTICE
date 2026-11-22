@@ -36,3 +36,4 @@ Optional components:
 * espressif/esp-sr 2.4.0 — ESPRESSIF MIT License, restricted to Espressif
   products. The round-board firmware uses it for optional WakeNet support.
   https://components.espressif.com/components/espressif/esp-sr/versions/2.4.0/license
+* Dogica / Dogica Pixel, Copyright (c) 2020 Roberto Mocci, Reserved Font Name "Dogica", SIL OFL 1.1.
