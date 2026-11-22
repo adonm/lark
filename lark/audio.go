@@ -93,8 +93,13 @@ var sinc = func() (phases [2][2*sincRadius + 1]float32) {
 }()
 
 func synthPCM(raw []float32, rate int) ([]byte, error) {
+	pcm, _, err := synthPCMWithScratch(raw, rate, nil)
+	return pcm, err
+}
+
+func synthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []float32, error) {
 	if len(raw) == 0 || (rate != kokoroRate && rate != sampleRate) {
-		return nil, errInvalidPCM
+		return nil, scratch, errInvalidPCM
 	}
 	n := len(raw)
 	count := n
@@ -102,12 +107,20 @@ func synthPCM(raw []float32, rate int) ([]byte, error) {
 		count = (n*2 + 2) / 3
 	}
 	if count > maxPCM/2 {
-		return nil, errInvalidPCM
+		return nil, scratch, errInvalidPCM
 	}
 	var input []float32
 	if rate == kokoroRate {
-		input = make([]float32, n+2*sincRadius+1)
-		copy(input[sincRadius:], raw)
+		need := n + 2*sincRadius + 1
+		if cap(scratch) < need {
+			scratch = make([]float32, need)
+		} else {
+			scratch = scratch[:need]
+		}
+		clear(scratch[:sincRadius])
+		copy(scratch[sincRadius:], raw)
+		clear(scratch[sincRadius+n : need])
+		input = scratch
 	}
 	pcm := make([]byte, count*2)
 	var peak float64
@@ -133,9 +146,9 @@ func synthPCM(raw []float32, rate int) ([]byte, error) {
 		le.PutUint16(pcm[2*i:], uint16(int16(math.RoundToEven(math.Copysign(mag, scaled)*32767))))
 	}
 	if peak < 1e-5 || math.IsNaN(peak) || math.IsInf(peak, 0) {
-		return nil, errInvalidPCM
+		return nil, scratch, errInvalidPCM
 	}
-	return pcm, nil
+	return pcm, scratch, nil
 }
 
 func NormalizeVoicePCM(pcm16k []byte) []byte {

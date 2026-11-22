@@ -119,7 +119,7 @@ func TestKokoroReal(t *testing.T) {
 
 func BenchmarkKokoroThreads(b *testing.B) {
 	dir := kokoroTestDir(b)
-	for _, threads := range []int{4, 6, 8} {
+	for _, threads := range []int{4, 6, 8, 12} {
 		b.Run(fmt.Sprint(threads), func(b *testing.B) {
 			k, err := openKokoro(dir, threads)
 			if err != nil {

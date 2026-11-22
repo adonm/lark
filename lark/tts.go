@@ -51,24 +51,29 @@ func newSynthWorker(ctx context.Context, open func() (speechEngine, error)) *syn
 }
 
 func synthesizePCM(ctx context.Context, engine speechEngine, id, text string) ([]byte, error) {
+	pcm, _, err := synthesizePCMWithScratch(ctx, engine, id, text, nil)
+	return pcm, err
+}
+
+func synthesizePCMWithScratch(ctx context.Context, engine speechEngine, id, text string, scratch []float32) ([]byte, []float32, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, scratch, err
 	}
 	if id == "" {
 		id = heartVoice
 	}
 	voice := voiceByID(id)
 	if voice.ID == "" {
-		return nil, fmt.Errorf("unknown voice %q", id)
+		return nil, scratch, fmt.Errorf("unknown voice %q", id)
 	}
 	samples, rate := engine.generate(text, voice, func() bool { return ctx.Err() == nil })
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, scratch, err
 	}
 	resampleStart := time.Now()
-	pcm, err := synthPCM(samples, rate)
+	pcm, scratch, err := synthPCMWithScratch(samples, rate, scratch)
 	traceFrom(ctx).measure(diagResample, time.Since(resampleStart))
-	return pcm, err
+	return pcm, scratch, err
 }
 
 func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)) {
@@ -81,6 +86,7 @@ func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)
 	defer engine.close()
 	w.ready.Store(true)
 	defer w.ready.Store(false)
+	scratch := make([]float32, 0, kokoroRate*10)
 	for ctx.Err() == nil {
 		req, ok := w.next(ctx)
 		if !ok {
@@ -95,7 +101,8 @@ func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)
 		trace := traceFrom(req.ctx)
 		admitted := time.Now()
 		trace.measure(diagTTSQueue, admitted.Sub(req.queuedAt))
-		pcm, err := synthesizePCM(turn, engine, req.voice, req.text)
+		var pcm []byte
+		pcm, scratch, err = synthesizePCMWithScratch(turn, engine, req.voice, req.text, scratch)
 		trace.measure(diagTTSInfer, time.Since(admitted))
 		stop()
 		cancel()
