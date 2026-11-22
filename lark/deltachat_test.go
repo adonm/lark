@@ -811,7 +811,7 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 					}
 					mu.Unlock()
 					reply := "Local reply"
-					if strings.Contains(last, "Delta Chat from Mum") {
+					if strings.Contains(last, "Mum via Delta Chat") {
 						reply = "Remote reply to Mum"
 					}
 					uid := "msg-" + string(rune('0'+id))
@@ -928,7 +928,7 @@ func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(excerpt, "[Delta Chat from Mum (contact)") || !strings.Contains(excerpt, "[In person at Greg's device") {
+	if !strings.Contains(excerpt, "[You are Greg. Speaker: Mum via Delta Chat (contact)") || !strings.Contains(excerpt, "[You are Greg. Speaker: someone in person at your device (name unknown)") {
 		t.Fatalf("excerpt missing channel/sender format: %s", excerpt)
 	}
 }
@@ -1011,7 +1011,7 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 	promptsMu.Lock()
 	gotPrompts := slices.Clone(prompts)
 	promptsMu.Unlock()
-	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[Delta Chat from Mum (contact) · private · Greg (greg)") || !strings.Contains(gotPrompts[0], "\nSecret plan\n[state: ") {
+	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[You are Greg (greg). Speaker: Mum via Delta Chat (contact) · private") || !strings.Contains(gotPrompts[0], "\nSecret plan\n[state: ") {
 		t.Fatalf("unexpected agent prompts: %v", gotPrompts)
 	}
 

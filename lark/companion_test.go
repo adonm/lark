@@ -48,7 +48,7 @@ func TestCompanionLifecycleAndValidation(t *testing.T) {
 	if blank["name"] != "New Companion" || blank["voice"] != heartVoice {
 		t.Fatal("invalid blank starter", blank)
 	}
-	if got := turnPrompt(id, "voice", "Hi", blankCompanion()); !strings.HasPrefix(got, "[In person at New Companion's device · New Companion ("+id+") · voice · setup]\nHi\n[state: now: ") {
+	if got := turnPrompt(id, "voice", "Hi", blankCompanion()); !strings.HasPrefix(got, "[You are New Companion ("+id+"). Speaker: someone in person at your device (name unknown) · voice · setup]\nHi\n[state: now: ") {
 		t.Fatal(got)
 	}
 	dev := testConnectWS(t, base, "unit", false)
@@ -78,7 +78,7 @@ func TestCompanionLifecycleAndValidation(t *testing.T) {
 		t.Fatal("companions API did not reflect companion", list)
 	}
 	stored := b.companionFor(id)
-	if got := turnPrompt(id, "voice", "Hi", stored); !strings.HasPrefix(got, "[In person at Cosmo's device · Cosmo ("+id+") · voice · vibe: curious space explorer]\nHi\n[state: now: ") {
+	if got := turnPrompt(id, "voice", "Hi", stored); !strings.HasPrefix(got, "[You are Cosmo ("+id+"). Speaker: someone in person at your device (name unknown) · voice · vibe: curious space explorer]\nHi\n[state: now: ") {
 		t.Fatal(got)
 	}
 	if c := call(false, "reset_blank", object{})["companion"].(object); c["configured"] != false || c["personality"] != "" {

@@ -324,16 +324,16 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 			sender = "Friend"
 		}
 		if ch.private {
-			prefix = fmt.Sprintf("Delta Chat from %s (%s) · private · %s (%s)", sender, kind, companion.Name, companionID)
+			prefix = fmt.Sprintf("You are %s (%s). Speaker: %s via Delta Chat (%s) · private", companion.Name, companionID, sender, kind)
 		} else {
-			prefix = fmt.Sprintf("Delta Chat from %s (%s) · %s (%s)", sender, kind, companion.Name, companionID)
+			prefix = fmt.Sprintf("You are %s (%s). Speaker: %s via Delta Chat (%s)", companion.Name, companionID, sender, kind)
 		}
 	case ch.channel == "timer" || source == "timer":
-		prefix = fmt.Sprintf("Timer · %s (%s)", companion.Name, companionID)
+		prefix = fmt.Sprintf("You are %s (%s). Event: timer", companion.Name, companionID)
 	case ch.replyTo != "":
-		prefix = fmt.Sprintf("In person at %s's device · replying to %s (Delta Chat) · %s (%s) · %s", companion.Name, ch.replyTo, companion.Name, companionID, source)
+		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · replying to %s (Delta Chat) · %s", companion.Name, companionID, ch.replyTo, source)
 	default:
-		prefix = fmt.Sprintf("In person at %s's device · %s (%s) · %s", companion.Name, companion.Name, companionID, source)
+		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · %s", companion.Name, companionID, source)
 	}
 	if !companion.Configured {
 		extra := " · setup"

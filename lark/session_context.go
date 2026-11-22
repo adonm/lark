@@ -91,9 +91,9 @@ func (o *openCode) recentDialogue(ctx context.Context, companion string, after i
 				if sender == "" {
 					sender = "Friend"
 				}
-				clean = "[Delta Chat from " + sender + " (contact) · now: " + formatLocalTime(ts) + "] " + clean
+				clean = "[You are " + compName + ". Speaker: " + sender + " via Delta Chat (contact) · now: " + formatLocalTime(ts) + "] " + clean
 			} else {
-				clean = "[In person at " + compName + "'s device · now: " + formatLocalTime(ts) + "] " + clean
+				clean = "[You are " + compName + ". Speaker: someone in person at your device (name unknown) · now: " + formatLocalTime(ts) + "] " + clean
 			}
 		}
 		recent = append(recent, line{Role: role, Text: clean})

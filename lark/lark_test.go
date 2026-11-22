@@ -31,19 +31,39 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		{"box3-b324", "typed"},
 	} {
 		if got := turnPromptAt(tc.id, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}, fixed); got !=
-			"[In person at Cake's device · Cake ("+tc.id+") · "+tc.source+"]\nHi\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
+			"[You are Cake ("+tc.id+"). Speaker: someone in person at your device (name unknown) · "+tc.source+"]\nHi\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
 			t.Fatal(got)
 		}
 	}
 	if got := turnPromptChannelAt("greg", "deltachat", "Dinner?", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
 		turnChannel{channel: "deltachat", sender: "Mum", senderKind: "contact"}, fixed); got !=
-		"[Delta Chat from Mum (contact) · Greg (greg)]\nDinner?\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
+		"[You are Greg (greg). Speaker: Mum via Delta Chat (contact)]\nDinner?\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
 		t.Fatal(got)
 	}
 	if got := turnPromptChannelAt("greg", "deltachat", "Hey", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
 		turnChannel{channel: "deltachat", sender: "cake", senderKind: "companion"}, fixed); got !=
-		"[Delta Chat from cake (companion) · Greg (greg)]\nHey\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
+		"[You are Greg (greg). Speaker: cake via Delta Chat (companion)]\nHey\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
 		t.Fatal(got)
+	}
+}
+
+func TestTurnHeaderNeverPutsCompanionInSpeakerPosition(t *testing.T) {
+	fixed := time.Date(2026, 11, 22, 18, 4, 0, 0, time.UTC)
+	comp := companionState{companionLook: companionLook{Name: "greg", Configured: true}}
+	for _, ch := range []turnChannel{
+		{},
+		{replyTo: "Mum"},
+		{channel: "deltachat", sender: "Mum", senderKind: "contact"},
+		{channel: "deltachat", sender: "Mum", senderKind: "contact", private: true},
+	} {
+		hdr := turnHeader("greg", "voice", comp, ch, fixed)
+		_, afterSpeaker, ok := strings.Cut(hdr, "Speaker: ")
+		if !ok {
+			t.Fatalf("header missing Speaker: %q", hdr)
+		}
+		if strings.Contains(strings.ToLower(afterSpeaker), "greg") {
+			t.Fatalf("companion name appeared in speaker position: %q", hdr)
+		}
 	}
 }
 
