@@ -59,6 +59,14 @@ func voiceByID(id string) voiceChoice {
 
 func voiceName(id string) string { return voiceByID(id).Name }
 
+func voicePreviewText(id string) string {
+	name := voiceName(id)
+	if name == "" {
+		name = "Lark"
+	}
+	return "Hi! I'm " + name + "."
+}
+
 type companionVoices struct {
 	db       *larkDB
 	fallback string

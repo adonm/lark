@@ -209,6 +209,9 @@ func run() error {
 		defer cancel()
 		_, _ = b.clips.getWith(ctx, worker.warm, b.voices.fallback, "Sent to everyone!")
 		b.clips.warmFillers(ctx, worker, b.voices.fallback)
+		for _, v := range voiceCatalog {
+			_, _ = b.clips.getWith(ctx, worker.warm, v.ID, voicePreviewText(v.ID))
+		}
 		if list, err := b.allCompanions(ctx); err == nil {
 			seen := map[string]bool{b.voices.fallback: true}
 			for _, c := range list {

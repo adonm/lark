@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -302,5 +304,73 @@ func TestOpenStoryEntersStartPassage(t *testing.T) {
 
 	if sess == nil || sess.text != "Once upon a time." || len(sess.choices) != 1 {
 		t.Fatalf("openStory did not enter start passage: %+v", sess)
+	}
+}
+
+func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
+		b.voices = companionVoiceStore(b.db, heartVoice)
+	})
+	samplePCM := bytes.Repeat([]byte{0x12, 0x34}, 1600) // 100ms 16kHz mono PCM
+	_, _ = b.clips.getWith(t.Context(), func(_ context.Context, _, _ string) ([]byte, error) {
+		return samplePCM, nil
+	}, "bm_fable", voicePreviewText("bm_fable"))
+
+	const termID = "vocat-voice-prev"
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, termID, "Cake")
+	dev.tapMenu(t)
+	waitSVG(t, b.ws, termID, "menu-next")
+	dev.tap(t, 248, 294, 0)
+	p2svg := waitSVG(t, b.ws, termID, "menu-voice")
+	vx, vy, ok := hitCenter(p2svg, "menu-voice")
+	if !ok {
+		t.Fatal("missing menu-voice hit")
+	}
+	dev.tap(t, vx, vy, 0)
+	waitSVG(t, b.ws, termID, "voice-bm_fable")
+
+	b.ws.mu.Lock()
+	var x, y int
+	for _, h := range b.ws.terminals[termID].svg.hits {
+		if h.id == "voice-bm_fable" {
+			x, y = (h.x1+h.x2)/2, (h.y1+h.y2)/2
+		}
+	}
+	b.ws.mu.Unlock()
+	if x == 0 && y == 0 {
+		t.Fatal("voice-bm_fable hit not found")
+	}
+
+	dev.tap(t, x, y, 0)
+	dev.until(t, func(f wsFrame) bool {
+		if len(f.data) > 0 {
+			p := framePayload(f)
+			if hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart {
+				return true
+			}
+		}
+		return false
+	})
+	var gotPCM []byte
+	dev.until(t, func(f wsFrame) bool {
+		if isPlayback(f) {
+			gotPCM = append(gotPCM, framePayload(f)...)
+			return len(gotPCM) >= len(samplePCM)
+		}
+		return false
+	})
+	if !bytes.Equal(gotPCM[:len(samplePCM)], samplePCM) {
+		t.Fatalf("preview PCM mismatch: got %d bytes, want %d", len(gotPCM), len(samplePCM))
+	}
+	if got := b.voiceFor("cake"); got != "bm_fable" {
+		t.Fatalf("voiceFor(cake) = %q, want bm_fable", got)
+	}
+	msgs, err := b.history.list(t.Context(), "cake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("voice preview should not record messages, got %d", len(msgs))
 	}
 }

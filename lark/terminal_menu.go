@@ -269,12 +269,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
 		}
 	case "voice-set":
-		h.mu.Unlock()
-		err := h.saveVoice(d.companionID, a.value)
-		h.mu.Lock()
-		if err == nil && h.active(d) {
-			h.chime(d, "tap")
-		}
+		h.selectAndPreviewVoice(d, a.value)
 	case "intercom-to":
 		h.chime(d, "tap")
 		h.startRecording(d, a.value, now, true)
@@ -310,12 +305,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		d.card = nil
 		h.render(d, now, false)
 	case "voice-select":
-		h.mu.Unlock()
-		err := h.saveVoice(d.companionID, a.value)
-		h.mu.Lock()
-		if err == nil && h.active(d) {
-			h.chime(d, "tap")
-		}
+		h.selectAndPreviewVoice(d, a.value)
 	case "vol-auto", "vol-minus", "vol-plus":
 		if err := h.setVolume(d.client.ctx, d, false, 0, a.kind); err != nil && h.active(d) {
 			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
@@ -330,6 +320,37 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			h.startRecording(d, a.value, now, true)
 		}
 	}
+}
+
+func (h *wsHub) selectAndPreviewVoice(d *wsTerminal, voiceID string) {
+	h.mu.Unlock()
+	err := h.saveVoice(d.companionID, voiceID)
+	h.mu.Lock()
+	if err != nil || !h.active(d) {
+		return
+	}
+	previewText := voicePreviewText(voiceID)
+	if pcm := h.b.clips.peek(voiceID, previewText); len(pcm) > 0 {
+		h.playPCM(d, pcm)
+		return
+	}
+	if w := h.b.worker; w != nil && w.ready.Load() {
+		go func() {
+			ctx, cancel := context.WithTimeout(d.client.ctx, ttsWait)
+			defer cancel()
+			pcm, err := h.b.clips.get(ctx, w, voiceID, previewText)
+			if err != nil || len(pcm) == 0 {
+				return
+			}
+			h.mu.Lock()
+			if h.active(d) && d.voice == voiceID {
+				h.playPCM(d, pcm)
+			}
+			h.mu.Unlock()
+		}()
+		return
+	}
+	h.chime(d, "tap")
 }
 
 func (d *wsTerminal) acceptPointerRevision(action string, rev *uint16) bool {
