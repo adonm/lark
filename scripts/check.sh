@@ -3,8 +3,8 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 case "$#:${1-}" in
-    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model) ;;
-    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model]\n' "$0" >&2; exit 2 ;;
+    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw) ;;
+    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw]\n' "$0" >&2; exit 2 ;;
 esac
 
 for script in scripts/*.sh; do
@@ -104,4 +104,8 @@ if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
     )
 elif [[ ${1-} == --real-model ]]; then
     (cd lark && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
+elif [[ ${1-} == --qa ]]; then
+    (cd lark && "$GO_BIN" test -tags=live -v -count=1 -run '^TestQASimSuite$' .)
+elif [[ ${1-} == --qa-hw ]]; then
+    (cd lark && LARK_QA_HW=1 "$GO_BIN" test -tags=live -v -count=1 -run '^(TestQASimSuite|TestQAHardwareSuite)$' .)
 fi

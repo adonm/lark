@@ -1,0 +1,6 @@
+attach {{COMP1}}
+tap 180 180
+say What is two plus two?
+wait thinking 10s
+wait idle 25s
+timeline
