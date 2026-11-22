@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -195,9 +196,13 @@ func TestMCPStateSlices(t *testing.T) {
 	})
 	const termID, id = "vocat-0001", "cake"
 	board := testConnectWS(t, base, "unit", false)
-	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "terminal_id": termID, "character": "Cake", "caps": object{"battery": true}})
-	board.until(t, hasWS("hello_ok", ""))
-	board.json(t, object{"ev": "status", "wifi_rssi": -62, "cpu_pct": 24, "battery_pct": 73})
+	board.helloHardware(t, termID, "Cake", capBattery|capDrag)
+	var st [16]byte
+	rssi, batt := int16(-62), int16(73)
+	binary.LittleEndian.PutUint16(st[0:2], uint16(rssi))
+	binary.LittleEndian.PutUint16(st[2:4], uint16(batt))
+	st[5] = 24
+	board.sendProto(t, msgTelemetry, st[:])
 	board.barrier(t)
 	b.ws.mu.Lock()
 	wifiOK := b.ws.terminals[termID].telemetry.WiFi != nil
@@ -306,10 +311,11 @@ func TestMCPSavedAppEdits(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-book", "Cake")
 	watcher := testConnectWS(t, base, "unit", false)
-	watcher.json(t, object{"ev": "hello", "role": "web"})
-	watcher.until(t, hasWS("peers", ""))
+	watcher.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	watcher.until(t, hasProto(msgPeers, ""))
 	savedAppsFrame := func(f wsFrame) bool {
-		return f.op == wsText && bytes.Equal(f.data, []byte(`{"type":"saved_apps"}`))
+		p := framePayload(f)
+		return hasProto(msgEvent, "")(f) && len(p) >= 5 && p[4] == eventSavedApps
 	}
 	noSavedAppsFrame := func() {
 		t.Helper()
@@ -446,15 +452,14 @@ func TestEmitIntercom(t *testing.T) {
 	}
 	sender, recipient := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	sender.hello(t, "vocat-0001", "Cake")
-	recipient.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-bee10000", "companion_id": to})
-	recipient.until(t, hasWS("svg", ""))
+	recipient.helloWeb(t, "web-bee10000", to, capDrag, false)
 	out := toolTest(t, base, "emit", object{"to": "all", "intercom": object{"from": from, "text": text}}, false)
 	if !slices.Equal(out["intercom"].(object)["sent_to"].([]any), []any{to}) {
 		t.Fatal(out)
 	}
 	var card, audio bool
 	recipient.until(t, func(f wsFrame) bool {
-		card, audio = card || hasWS("svg", text)(f), audio || isPlayback(f)
+		card, audio = card || hasSVG(text)(f), audio || isPlayback(f)
 		return card && audio
 	})
 	for _, id := range []string{from, to} {
@@ -472,10 +477,11 @@ func TestMCPControl(t *testing.T) {
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, termID, "Cake")
 	watcher := testConnectWS(t, base, "unit", false)
-	watcher.json(t, object{"ev": "hello", "role": "web"})
-	watcher.until(t, hasWS("peers", id))
-	watcher.json(t, object{"ev": "watch", "companion_id": id})
-	watcher.until(t, hasWS("power", `"brightness":85`))
+	watcher.watch(t, id)
+	watcher.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
+	})
 
 	for _, invalid := range []object{
 		{}, {"volume": -1}, {"volume": 101}, {"volume": 1.5}, {"sleep": "true"},
@@ -492,8 +498,14 @@ func TestMCPControl(t *testing.T) {
 		t.Fatal(out)
 	}
 	for _, client := range []*testWS{c, watcher} {
-		client.until(t, hasWS("volume", `"level":0`))
-		client.until(t, hasWS("power", `"brightness":12`))
+		client.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 0
+		})
+		client.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
+		})
 	}
 	b.ws.finishTurn(d, turn, nil, nil)
 	checkStatus := func(mode, volume string) {
@@ -509,11 +521,17 @@ func TestMCPControl(t *testing.T) {
 	if wake := patchControl(t, base, id, object{"sleep": false}); wake["sleeping"] != false || wake["volume"] != json.Number("0") {
 		t.Fatal(wake)
 	}
-	c.until(t, hasWS("power", `"brightness":85`))
+	c.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
+	})
 	if vol := patchControl(t, base, id, object{"volume": 42}); vol["sleeping"] != false || vol["volume"] != json.Number("42") {
 		t.Fatal(vol)
 	}
-	c.until(t, hasWS("volume", `"level":42`))
+	c.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 42
+	})
 	checkStatus("idle", "42")
 }
 

@@ -275,7 +275,7 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 		rows = append(rows, reg("stats row "+strconv.Itoa(i+1), menuCard, 55, 106+27*i, 250, 18, 90, 6))
 	}
 	hub := &wsHub{b: &larkServer{}}
-	menu("stats", hub.statsScene(&wsTerminal{client: &wsClient{role: "device"}, companion: companion, board: "esp-vocat", firmware: "0.9.1", vol: 55}), rows...)
+	menu("stats", hub.statsScene(&wsTerminal{kind: "hardware", client: &wsClient{kind: "hardware"}, companion: companion, board: "esp-vocat", firmware: "0.12.0", vol: 55}), rows...)
 
 	for _, geometry := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
 		for _, s := range scenes {
@@ -707,6 +707,9 @@ func TestSVGSanitization(t *testing.T) {
 func decodeDisplay(t *testing.T, f wsFrame) (image.Rectangle, uint16, []uint16) {
 	t.Helper()
 	p := f.data
+	if f.op == wsBinary && len(p) >= protoHeaderSize && p[0] == protoMagic && p[1] == msgFrame {
+		_, _, p, _ = unpackProtoPacket(p)
+	}
 	if f.op != wsBinary || len(p) < 12 || p[0] != 0x03 {
 		t.Fatalf("not a display packet: %x", p[:min(len(p), 12)])
 	}
@@ -889,9 +892,12 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	box := testConnectWS(t, base, "unit", false)
 	round := testConnectWS(t, base, "unit", false)
 	web := testConnectWS(t, base, "unit", true)
-	const boxID, roundID = "box3-test", "lark-round"
-	box.json(t, object{"ev": "hello", "role": "device", "device_id": boxID, "proto": 2, "firmware": "0.8.0",
-		"width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
+	const boxID, roundID = "box3-test", "vocat-round"
+	box.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
+		width: 320, height: 240, shape: shapeRect, terminalID: boxID, board: "esp-box-3", firmware: "0.12.0",
+	}))
+	box.until(t, hasProto(msgWelcome, ""))
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); r != image.Rect(0, 0, 320, 240) {
 		t.Fatalf("BOX-3 initial frame = %v", r)
 	}
@@ -905,27 +911,25 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 		t.Fatal(boxStatus)
 	}
 
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "terminal_id": boxID})
-	boxFrame := web.until(t, hasWS("svg", "companion-ring"))
-	if got := testObject(t, boxFrame.data)["terminal_id"]; got != boxID {
-		t.Fatalf("BOX-3 mirror tag = %v", got)
+	boxFrame := web.watch(t, boxID)
+	if !bytes.Contains(framePayload(boxFrame), []byte(boxID)) {
+		t.Fatalf("BOX-3 mirror tag = %x", framePayload(boxFrame))
 	}
 	code := `function init(){ return {hits:"untouched"} }
 	function render(s){ return '<svg><rect width="360" height="360" fill="#123456"/>'+
 		'<rect width="30" height="30" fill="red" data-id="corner"/><text x="100" y="180">'+s.hits+'</text></svg>' }
 	function onTap(s,p,id,x,y){ s.hits=id+":"+x+","+y; }`
 	toolTest(t, base, "app", object{"companions": []string{"new-companion", "cake"}, "code": code}, false)
-	web.until(t, hasWS("svg", "untouched"))
+	web.until(t, hasSVG("untouched"))
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); !r.In(image.Rect(0, 0, 320, 240)) {
 		t.Fatalf("BOX-3 app sent an out-of-bounds frame: %v", r)
 	}
-	box.json(t, object{"ev": "tap", "x": 48, "y": 10})
-	web.until(t, hasWS("svg", "corner:12,15"))
-	web.json(t, object{"ev": "tap", "x": 20, "y": 18})
-	web.until(t, hasWS("svg", "corner:20,18"))
-	web.json(t, object{"ev": "watch", "terminal_id": roundID})
-	web.until(t, hasWS("svg", `"terminal_id":"`+roundID+`"`))
+	box.tap(t, 48, 10, 0)
+	web.until(t, hasSVG("corner:12,15"))
+	web.tap(t, 20, 18, 0)
+	web.until(t, hasSVG("corner:20,18"))
+	web.sendProto(t, msgWatch, appendStr8(nil, roundID))
+	web.until(t, hasSVG(roundID))
 }
 
 func TestFrameCodecsAndSmartSelector(t *testing.T) {

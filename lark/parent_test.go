@@ -62,19 +62,30 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 				ws       *testWS
 				id, name string
 			}{{dev, "vocat-0001", "Mint"}, {friend, "vocat-0002", "Cake"}} {
-				pr.ws.json(t, object{"ev": "hello", "role": "device", "proto": 2, "terminal_id": pr.id, "character": pr.name,
-					"caps": object{"wake_word": true, "call": true}})
-				pr.ws.until(t, isDisplay)
+				if _, err := b.createCompanion(t.Context(), object{"id": strings.ToLower(pr.name), "name": pr.name}); err != nil {
+					t.Fatal(err)
+				}
+				pr.ws.helloHardware(t, pr.id, "", capWakeWord|capCall|capDrag)
+				_, _ = b.attachTerminal(t.Context(), pr.id, strings.ToLower(pr.name))
 			}
 			viewer := testConnectWS(t, base, "unit", false)
-			viewer.json(t, object{"ev": "hello", "role": "web"})
-			viewer.json(t, object{"ev": "watch", "companion_id": id})
-			viewer.until(t, hasWS("svg", "companion-ring"))
-			viewer.json(t, object{"ev": "wake_word", "enabled": true, "terminal_id": "vocat-0001"})
-			dev.until(t, hasWS("wake_word", `"enabled":true`))
-			dev.json(t, object{"ev": "wake_word"})
-			dev.until(t, hasWS("rec", `"action":"start"`))
-			dev.json(t, object{"ev": "rec_start"})
+			viewer.watch(t, id)
+			b.ws.mu.Lock()
+			if t0 := b.ws.terminals["vocat-0001"]; t0 != nil {
+				t0.wakeWord = true
+				b.ws.pushWakeWord(t0, true)
+			}
+			b.ws.mu.Unlock()
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgWakeWordCtrl, "")(f) && len(p) >= 1 && p[0] == 1
+			})
+			dev.sendProto(t, msgWakeWord, nil)
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+			})
+			dev.recStart(t, "")
 			dev.barrier(t)
 
 			now := time.Now().UTC()
@@ -92,24 +103,37 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 			case parentPause:
 				parentRequest(t, base, "POST", path, object{"action": "pause", "minutes": 5}, 200)
 			}
-			dev.until(t, hasWS("rec", `"cancelled":true`))
-			dev.until(t, hasWS("power", `"brightness":20`))
-			dev.until(t, hasWS("wake_word", `"enabled":false`))
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
+			})
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 20
+			})
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgWakeWordCtrl, "")(f) && len(p) >= 1 && p[0] == 0
+			})
 			title, _ := reason.notice()
-			viewer.until(t, hasWS("svg", title))
+			viewer.until(t, hasSVG(title))
 			if reason == parentLimit {
 				dev.until(t, isPlayback)
 			}
 
-			for _, event := range []object{{"ev": "tap", "x": 180, "y": 215}, {"ev": "head", "action": "pet"},
-				{"ev": "wake_word"}, {"ev": "rec_start"}, {"ev": "rec_request"}, {"ev": "text", "text": "unlock the device"},
-				{"ev": "call", "target": peerID}, {"ev": "intercom", "target": peerID, "text": "hello"}} {
-				dev.json(t, event)
+			dev.tap(t, 180, 215, 0)
+			dev.sendProto(t, msgWakeWord, nil)
+			dev.recStart(t, "")
+			dev.text(t, "unlock the device")
+			callStartPayload := func(tgt string) []byte {
+				b := append([]byte{callOpStart, 0, 0, 0, 0}, byte(len(tgt)))
+				return append(b, tgt...)
 			}
-			dev.write(t, maskedFrame(wsBinary, true, []byte{micPrefix, 0, 0}))
-			dev.json(t, object{"ev": "rec_end"})
+			dev.sendProto(t, msgCallReq, callStartPayload(peerID))
+			dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, []byte{0, 0})
+			dev.recEnd(t, "", false)
 			dev.barrier(t)
-			friend.json(t, object{"ev": "call", "target": id})
+			friend.sendProto(t, msgCallReq, callStartPayload(id))
 			friend.barrier(t)
 			testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "hello"}, 423)
 			toolTest(t, base, "patch", object{"companion_id": id, "terminal": object{"sleep": false}}, true)
@@ -134,7 +158,7 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 				t.Fatal("wrong policy on MCP state", policy)
 			}
 			b.ws.mu.Lock()
-			d, f := b.ws.audioTerminal(id), b.ws.audioTerminal(peerID)
+			d, f := b.ws.voiceOwner(id), b.ws.voiceOwner(peerID)
 			blocked := d.asleep && d.parentReason == reason && !d.recording.active() && len(d.recording.pcm) == 0 &&
 				d.callState == callNone && f.callState == callNone && d.app == nil && !d.busy && d.card == nil && d.view == nil
 			b.ws.mu.Unlock()
@@ -143,9 +167,15 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 			}
 
 			parentRequest(t, base, "POST", path, object{"action": "unlock", "minutes": 5}, 200)
-			dev.until(t, hasWS("wake_word", `"enabled":true`))
-			dev.json(t, object{"ev": "wake_word"})
-			dev.until(t, hasWS("rec", `"action":"start"`))
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgWakeWordCtrl, "")(f) && len(p) >= 1 && p[0] == 1
+			})
+			dev.sendProto(t, msgWakeWord, nil)
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+			})
 		})
 	}
 }
@@ -155,9 +185,13 @@ func TestParentAdminAndChildPause(t *testing.T) {
 	d := testConnectWS(t, base, "unit", false)
 	const id, text = "mint", "Stop working for five minutes so I can’t use you."
 	const path = "/api/companions/" + id + "/parent"
-	d.hello(t, "vocat-1111", "Mint")
-	d.json(t, object{"ev": "text", "text": text})
-	d.until(t, hasWS("parent_policy", `"reason":"paused"`))
+	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Mint"}); err != nil {
+		t.Fatal(err)
+	}
+	d.helloHardware(t, "vocat-1111", "", capDrag)
+	_, _ = b.attachTerminal(t.Context(), "vocat-1111", id)
+	d.text(t, text)
+	d.until(t, hasProto(msgEvent, "paused"))
 	testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "pause for one minute"}, 423)
 	testRequest(t, "GET", base+"/api/parent", "", nil, 401)
 	testRequest(t, "GET", base+"/api/parent", "unit", nil, 403)
@@ -192,10 +226,16 @@ func TestParentAdminAndChildPause(t *testing.T) {
 	// Reconnecting without wake-word capability must not drop a persisted pause.
 	d = testConnectWS(t, base, "unit", false)
 	d.hello(t, "vocat-1111", "Mint")
-	d.json(t, object{"ev": "rec_start"})
-	d.until(t, hasWS("rec", `"cancelled":true`))
+	d.recStart(t, "")
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
+	})
 	parentRequest(t, base, "POST", path, object{"action": "unlock", "minutes": 5}, 200)
-	d.until(t, hasWS("parent_policy", `"reason":""`))
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgEvent, "")(f) && len(p) >= 5 && p[4] == eventParentPolicy
+	})
 	for _, text := range []string{"pause for 99 minutes", "don't pause for five minutes", "tell me to pause for five minutes"} {
 		if childPauseMinutes(text) != 0 {
 			t.Fatal("treated discussion or an excessive duration as a command")
@@ -234,28 +274,47 @@ func TestParentTearsDownActiveAppCallAndOfflineChat(t *testing.T) {
 	d := testConnectWS(t, base, "unit", false)
 	peer := testConnectWS(t, base, "unit", false)
 	for _, p := range []struct {
-		ws         *testWS
-		id, name   string
+		ws       *testWS
+		id, name string
 	}{{d, "vocat-0001", "Mint"}, {peer, "vocat-0002", "Cake"}} {
-		p.ws.json(t, object{"ev": "hello", "role": "device", "proto": 2, "terminal_id": p.id, "character": p.name, "caps": object{"call": true}})
-		p.ws.until(t, isDisplay)
+		if _, err := b.createCompanion(t.Context(), object{"id": strings.ToLower(p.name), "name": p.name}); err != nil {
+			t.Fatal(err)
+		}
+		p.ws.helloHardware(t, p.id, "", capCall|capDrag)
+		_, _ = b.attachTerminal(t.Context(), p.id, strings.ToLower(p.name))
 	}
 	toolTest(t, base, "app", object{"companions": id, "svg": `<svg viewBox="0 0 360 360"><text x="150" y="160">Game</text></svg>`}, false)
 	parentRequest(t, base, "POST", path, object{"action": "pause", "minutes": 5}, 200)
 	b.ws.mu.Lock()
-	running := b.ws.audioTerminal(id).app != nil
+	running := b.ws.voiceOwner(id).app != nil
 	b.ws.mu.Unlock()
 	if running {
 		t.Fatal("app wasn't removed on pause")
 	}
 	parentRequest(t, base, "POST", path, object{"action": "unlock", "minutes": 15}, 200)
-	d.json(t, object{"ev": "call", "target": peerID})
-	peer.until(t, hasWS("chime", `"kind":"ring"`))
-	peer.json(t, object{"ev": "call", "target": id})
-	d.until(t, hasWS("call", `"state":"start"`))
+	callStart := func(tgt string) []byte {
+		b := append([]byte{callOpStart, 0, 0, 0, 0}, byte(len(tgt)))
+		return append(b, tgt...)
+	}
+	d.sendProto(t, msgCallReq, callStart(peerID))
+	peer.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeRing
+	})
+	peer.sendProto(t, msgCallReq, callStart(id))
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpStart
+	})
 	parentRequest(t, base, "POST", path, object{"action": "pause", "minutes": 5}, 200)
-	d.until(t, hasWS("call", `"state":"end"`))
-	peer.until(t, hasWS("call", `"state":"end"`))
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpEnd
+	})
+	peer.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpEnd
+	})
 	d.write(t, maskedFrame(wsClose, true, wsCloseFrame(1000).data))
 	d.until(t, func(f wsFrame) bool { return f.op == wsClose })
 	parentRequest(t, base, "POST", path, object{"action": "unlock", "minutes": 15}, 200)

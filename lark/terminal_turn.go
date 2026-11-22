@@ -64,6 +64,8 @@ func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, requ
 		}
 		h.pushRecStart(d, target, bridgeEndpoint)
 	}
+	h.takeVoiceOwnership(d)
+	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
 	h.render(d, now, false)
 }
 
@@ -75,7 +77,7 @@ func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
 	if cancelled {
 		h.pushRecStop(d, c.target, true)
 		c.suppressLateStart()
-		h.endRecording(d, wsEvent{Cancelled: true}, now)
+		h.endRecording(d, "", true, now)
 		return
 	}
 	if !c.requestStop() {
@@ -85,7 +87,7 @@ func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
 		c.endpoint.commitAt = now
 	}
 	h.pushRecStop(d, "", false)
-	if d.client.role == "web" && c.endpoint == nil {
+	if d.virtual() && c.endpoint == nil {
 		return
 	}
 	// Keep accepting DMA packets until the board's rec_end. The timer is
@@ -96,17 +98,30 @@ func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
 		defer h.mu.Unlock()
 		if h.active(d) && c.stopTimer == timer {
 			c.suppressLateStart()
-			h.endRecording(d, wsEvent{}, time.Now())
+			h.endRecording(d, "", false, time.Now())
 		}
 	})
 	c.stopTimer = timer
 }
 
-func (h *wsHub) micChunk(c *wsClient, data []byte) {
-	if len(data) < 3 || len(data)%2 != 1 {
+func (h *wsHub) handleRTPPacket(c *wsClient, pkt []byte) {
+	if len(pkt) < rtpHeaderSize+2 || (len(pkt)-rtpHeaderSize)%2 != 0 {
 		return
 	}
-	h.micChunkPCM(c, data[0], data[1:])
+	pt, _, _, _, ok := decodeRTPHeader(pkt)
+	if !ok {
+		return
+	}
+	h.dispatchRTPPCM(c, pt, pkt[rtpHeaderSize:])
+}
+
+func (h *wsHub) dispatchRTPPCM(c *wsClient, pt uint8, pcm []byte) {
+	switch pt {
+	case rtpPTRecPCM:
+		h.micChunkPCM(c, micPrefix, pcm)
+	case rtpPTCallUp:
+		h.micChunkPCM(c, callMicPrefix, pcm)
+	}
 }
 
 func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
@@ -153,26 +168,27 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 
 func (h *wsHub) stopRecordingAtLimit(d *wsTerminal, now time.Time) {
 	h.pushRecStop(d, "", false)
-	h.endRecording(d, wsEvent{}, now)
+	h.endRecording(d, "", false, now)
 }
 
-func (h *wsHub) endRecording(d *wsTerminal, ev wsEvent, now time.Time) {
+func (h *wsHub) endRecording(d *wsTerminal, reqTarget string, cancelled bool, now time.Time) {
 	if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
 		return
 	}
-	if d.recording.endpoint != nil && !ev.Cancelled {
+	if d.recording.endpoint != nil && !cancelled {
 		h.finishEndpoint(d, now)
 		return
 	}
 	pcm, target := d.recording.pcm, d.recording.target
-	if requested, ok := recordTarget(ev.Target); ok && requested != "" {
+	if requested, ok := recordTarget(reqTarget); ok && requested != "" {
 		target = requested
 	}
 	d.recording.clear()
-	if ev.Cancelled || len(pcm) == 0 {
-		if ev.Cancelled {
+	if cancelled || len(pcm) == 0 {
+		if cancelled {
 			h.pushChime(d, "cancel")
 		}
+		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
 		h.wake(d, now)
 		h.render(d, now, false)
 		return
@@ -240,6 +256,7 @@ func (h *wsHub) beginTurn(d *wsTerminal, now time.Time, keepView bool, source st
 	if !keepView {
 		h.pushChime(d, "think")
 	}
+	h.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
 	h.render(d, now, false)
 	go run(ctx, id)
 }
@@ -292,11 +309,23 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 			return
 		}
 	}
+	if !d.ttsStarted && !d.awaitAck {
+		if d.queuedVoice != nil {
+			h.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
+		} else if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
+			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
+		}
+	}
 	h.render(d, now, false)
 	d.trace = nil
 }
 
 func (h *wsHub) turnError(d *wsTerminal, id uint64, message string) {
+	h.mu.Lock()
+	if h.active(d) && d.turn == id {
+		h.setCompanionStatus(d.companionID, statusError, 0, promptNone, message)
+	}
+	h.mu.Unlock()
 	view := noticeScene("Try again", message)
 	h.finishTurn(d, id, &view, nil)
 }
@@ -541,17 +570,14 @@ func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace,
 
 func (h *wsHub) streamPlayback(ctx context.Context, d *wsTerminal, id uint64, stream *AudioStream, trace *turnTrace, ttsStart time.Time) error {
 	control := func(state string) bool {
-		if d.client.native != nil {
-			op := ttsOpStop
-			switch state {
-			case "start":
-				op = ttsOpStart
-			case "end":
-				op = ttsOpEnd
-			}
-			return d.client.native.enqueueWait(ctx, msgTTSCtrl, encodeIDCtrl(op, id))
+		op := ttsOpStop
+		switch state {
+		case "start":
+			op = ttsOpStart
+		case "end":
+			op = ttsOpEnd
 		}
-		return d.client.enqueueWait(ctx, textFrame(object{"op": "tts", "state": state, "audio": id}))
+		return d.client.enqueueProtoWait(ctx, msgTTSCtrl, encodeTTSCtrl(op, id))
 	}
 	var until time.Time
 	for i := 0; ; i++ {
@@ -584,6 +610,7 @@ func (h *wsHub) streamPlayback(ctx context.Context, d *wsTerminal, id uint64, st
 			}
 			d.ttsStarted = true
 			h.applyAmbientVolume(d)
+			h.setCompanionStatus(d.companionID, statusSpeaking, 0, promptNone, "")
 			h.mu.Unlock()
 			if !control("start") {
 				return context.Canceled
@@ -606,17 +633,8 @@ func (h *wsHub) streamPlayback(ctx context.Context, d *wsTerminal, id uint64, st
 					return ctx.Err()
 				}
 			}
-			if d.client.native != nil {
-				if !d.client.native.enqueueWait(ctx, msgTTSPCM, pcm[:n]) {
-					return context.Canceled
-				}
-			} else {
-				packet := make([]byte, n+1)
-				packet[0] = pcmPrefix
-				copy(packet[1:], pcm[:n])
-				if !d.client.enqueueWait(ctx, wsFrame{wsBinary, packet}) {
-					return context.Canceled
-				}
+			if !d.client.enqueueProtoWait(ctx, msgTTSPCM, pcm[:n]) {
+				return context.Canceled
 			}
 			now := time.Now()
 			if until.IsZero() {
@@ -691,6 +709,11 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time) {
 		d.view, d.pending = d.pending, nil
 	}
 	d.last = now
+	if !d.busy {
+		if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
+			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
+		}
+	}
 	if !h.maybeStartVoice(d, now) {
 		h.render(d, now, false)
 	}
@@ -713,7 +736,7 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 	defer h.mu.Unlock()
 	var connected []companionTarget
 	for _, p := range others {
-		if d := h.audioTerminal(p.ID); d != nil && d.callState == callNone {
+		if d := h.voiceOwner(p.ID); d != nil && d.callState == callNone {
 			connected = append(connected, p)
 		}
 	}
@@ -724,7 +747,7 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender companionState, recipi
 	h.mu.Lock()
 	var connected []*wsTerminal
 	for _, p := range recipients {
-		if d := h.audioTerminal(p.ID); d != nil {
+		if d := h.voiceOwner(p.ID); d != nil {
 			connected = append(connected, d)
 		}
 	}

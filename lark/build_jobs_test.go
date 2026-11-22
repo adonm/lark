@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"path"
@@ -183,21 +184,22 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := testConnectWS(t, base, "unit", true)
-	s.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-dead0001", "companion_id": device})
-	s.until(t, hasWS("svg", ""))
-	s.json(t, object{"ev": "text", "text": "Make me a dinosaur quiz."})
+	s.helloWeb(t, "web-dead0001", device, capDrag, false)
+	s.text(t, "Make me a dinosaur quiz.")
 	cardAndSpeech := func(label string) {
 		t.Helper()
 		var seenCard bool
 		var end wsFrame
 		s.until(t, func(f wsFrame) bool {
-			seenCard = seenCard || hasWS("svg", label)(f)
-			if hasWS("tts", `"state":"end"`)(f) {
+			seenCard = seenCard || hasSVG(label)(f)
+			p := framePayload(f)
+			if hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd {
 				end = f
 			}
 			return seenCard && end.data != nil
 		})
-		s.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
+		audioID := binary.LittleEndian.Uint64(framePayload(end)[1:9])
+		s.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 		s.barrier(t)
 	}
 	cardAndSpeech("Cancel build")
@@ -210,7 +212,7 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 
 	h := b.ws
 	h.mu.Lock()
-	d := h.audioTerminal(device)
+	d := h.voiceOwner(device)
 	h.stopCompanionTurn(d) // Same foreground cancellation primitive; not the job gate.
 	h.mu.Unlock()
 	_, err := b.runApp(t.Context(), object{"companions": device, "title": "Not the build",
@@ -262,27 +264,28 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			s := testConnectWS(t, base, "unit", true)
-			s.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-dead0002", "companion_id": device})
-			s.until(t, hasWS("svg", ""))
+			s.helloWeb(t, "web-dead0002", device, capDrag, false)
 			finishSpeech := func(label, chat string) {
 				t.Helper()
 				seenCard := label == ""
 				seenChat := chat == ""
 				var end wsFrame
 				s.until(t, func(f wsFrame) bool {
-					seenCard = seenCard || hasWS("svg", label)(f)
-					if f.op == wsText && strings.Contains(string(f.data), `"type":"chat"`) {
-						seenChat = seenChat || strings.Contains(string(f.data), chat)
+					seenCard = seenCard || hasSVG(label)(f)
+					p := framePayload(f)
+					if hasProto(msgEvent, chat)(f) && len(p) >= 5 && p[4] == eventChat {
+						seenChat = seenChat || strings.Contains(string(p), chat)
 					}
-					if hasWS("tts", `"state":"end"`)(f) {
+					if hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd {
 						end = f
 					}
 					return seenCard && seenChat && end.data != nil
 				})
-				s.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
+				audioID := binary.LittleEndian.Uint64(framePayload(end)[1:9])
+				s.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 				s.barrier(t)
 			}
-			s.json(t, object{"ev": "text", "text": prompt})
+			s.text(t, prompt)
 			finishSpeech("Cancel build", "Building it now!")
 			var job string
 			select {
@@ -293,7 +296,7 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 
 			h := b.ws
 			h.mu.Lock()
-			d := h.audioTerminal(device)
+			d := h.voiceOwner(device)
 			turn := d.turn
 			now := time.Now().UTC()
 			settings := parentSettings{Timezone: "UTC"}
@@ -330,7 +333,7 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 				t.Error("restricted offline acknowledgement delivered")
 			}
 			testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": device, "text": prompt}, 423)
-			s.json(t, object{"ev": "text", "text": prompt})
+			s.text(t, prompt)
 			s.barrier(t)
 			if id, err := b.builders.enqueue(t.Context(), d.companionID, buildIntent{kind: "new"}, prompt); err == nil || id != "" {
 				t.Fatalf("restricted enqueue: %q, %v", id, err)

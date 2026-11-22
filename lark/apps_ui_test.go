@@ -167,8 +167,11 @@ func TestAppUIPagedTextRawTaps(t *testing.T) {
 	}
 	tap := func(x, y int, page string) {
 		t.Helper()
-		board.json(t, object{"ev": "tap", "x": x, "y": y})
-		board.until(t, hasWS("chime", `"kind":"tap"`))
+		board.tap(t, x, y, 0)
+		board.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
+		})
 		board.until(t, isDisplay)
 		checkPage(page)
 	}
@@ -177,7 +180,7 @@ func TestAppUIPagedTextRawTaps(t *testing.T) {
 		tap(xy[0], xy[1], "1") // Center, inner padded edge, outer padded corner.
 		tap(124, 62, "0")
 	}
-	board.json(t, object{"ev": "tap", "x": 180, "y": 320})
+	board.tap(t, 180, 320, 0)
 	board.until(t, isDisplay)
 	if active := stateMe(t, base, "reader")["active_app"]; active != nil {
 		t.Fatalf("Home did not exit the reader: %v", active)

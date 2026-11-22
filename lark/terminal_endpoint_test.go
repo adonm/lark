@@ -124,25 +124,37 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
-	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
+	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
 	start := func() {
-		d.json(t, object{"ev": "rec_request"})
-		d.until(t, hasWS("rec", `"endpoint":"bridge"`))
-		d.json(t, object{"ev": "rec_start"})
+		d.recStart(t, "")
+		d.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
+		})
+		d.recStart(t, "")
 	}
+	var seq uint16
 	appendPCM := func(p []byte) {
-		d.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, p...)))
+		for len(p) > 0 {
+			n := min(2*pcmPacket, len(p))
+			seq++
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			p = p[n:]
+		}
+	}
+	idleOrDone := func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone)
 	}
 	frame := bytes.Repeat([]byte{17, 0}, endpointBytes/2)
 	start()
 	appendPCM(frame)
-	d.json(t, object{"ev": "rec_end", "cancelled": true})
-	d.until(t, hasWS("mode", `"mode":"idle"`))
+	d.recEnd(t, "", true)
+	d.until(t, idleOrDone)
 	start()
 	appendPCM(frame)
-	d.json(t, object{"ev": "rec_end"}) // Browser Send now flushes then sends rec_end.
-	d.until(t, hasWS("mode", `"mode":"idle"`))
+	d.recEnd(t, "", false) // Browser Send now flushes then sends rec_end.
+	d.until(t, idleOrDone)
 	select {
 	case got := <-clips:
 		if !bytes.Equal(got, frame) {
@@ -168,9 +180,12 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	for range 60 {
 		appendPCM(quiet)
 	}
-	d.until(t, hasWS("rec", `"action":"stop"`))
-	d.json(t, object{"ev": "rec_end"})
-	d.until(t, hasWS("mode", `"mode":"idle"`))
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
+	})
+	d.recEnd(t, "", false)
+	d.until(t, idleOrDone)
 	var last []byte
 	for len(clips) != 0 {
 		last = <-clips
@@ -219,13 +234,21 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
-	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
-	d.json(t, object{"ev": "rec_request"})
-	d.until(t, hasWS("rec", `"endpoint":"bridge"`))
-	d.json(t, object{"ev": "rec_start"})
+	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
+	d.recStart(t, "")
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
+	})
+	d.recStart(t, "")
+	var seq uint16
 	appendPCM := func(p []byte) {
-		d.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, p...)))
+		for len(p) > 0 {
+			n := min(2*pcmPacket, len(p))
+			seq++
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			p = p[n:]
+		}
 	}
 	quiet := make([]byte, 4*endpointBytes)
 	appendPCM(frame)
@@ -248,8 +271,11 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	for range 5 {
 		appendPCM(quiet)
 	}
-	d.until(t, hasWS("rec", `"action":"stop"`))
-	d.json(t, object{"ev": "rec_end"})
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
+	})
+	d.recEnd(t, "", false)
 	b.diag.sig.wait(t, func() bool {
 		b.diag.mu.Lock()
 		defer b.diag.mu.Unlock()
@@ -271,12 +297,19 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 				}
 			})
 			d := testConnectWS(t, base, "unit", false)
-			d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": "lark-ep", "character": "Echo", "caps": object{"bridge_endpoint": tc.cap}})
-			d.until(t, isDisplay)
-			d.json(t, object{"ev": "tap", "x": 180, "y": 180})
-			f := d.until(t, hasWS("rec", `"action":"start"`))
-			if got := bytes.Contains(f.data, []byte(`"endpoint":"bridge"`)); got != tc.want {
-				t.Fatalf("negotiation: %s", f.data)
+			var caps uint32 = capDrag
+			if tc.cap {
+				caps |= capBridgeEndpoint
+			}
+			d.helloHardware(t, "vocat-ep00", "", caps)
+			d.tap(t, 180, 180, 0)
+			f := d.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
+			})
+			p := framePayload(f)
+			if got := p[1]&recTargetBridgeE != 0; got != tc.want {
+				t.Fatalf("negotiation: flags=%x want=%t", p[1], tc.want)
 			}
 		})
 	}
@@ -284,16 +317,18 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 
 func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
-	const id = "lark-intercom-ep"
+	const id = "vocat-ep01"
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
-	d.until(t, isDisplay)
+	d.helloHardware(t, id, "", capBridgeEndpoint|capDrag)
 	b.ws.mu.Lock()
 	dev := b.ws.terminals[id]
 	b.ws.startRecording(dev, "all", time.Now(), true)
 	b.ws.mu.Unlock()
-	start := d.until(t, hasWS("rec", `"target":"all"`))
-	if bytes.Contains(start.data, []byte(`"endpoint"`)) {
+	start := d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "all")(f) && len(p) >= 2 && p[0] == recOpStart
+	})
+	if framePayload(start)[1]&recTargetBridgeE != 0 {
 		t.Fatal("intercom should still use the client VAD")
 	}
 }
@@ -305,11 +340,13 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
-	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
-	d.json(t, object{"ev": "rec_request"})
-	d.until(t, hasWS("rec", `"endpoint":"bridge"`))
-	d.json(t, object{"ev": "rec_start"})
+	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
+	d.recStart(t, "")
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
+	})
+	d.recStart(t, "")
 	d.barrier(t)
 	stream := newAudioStream()
 	stream.append([]byte{8, 0, 9, 0})
@@ -318,10 +355,11 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	dev := b.ws.terminals[id]
 	b.ws.play(dev, stream)
 	b.ws.mu.Unlock()
-	d.json(t, object{"ev": "rec_end", "cancelled": true})
+	d.recEnd(t, "", true)
 	cleared := false
 	d.until(t, func(f wsFrame) bool {
-		if hasWS("chime", `"kind":"cancel"`)(f) {
+		p := framePayload(f)
+		if hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel {
 			cleared = true
 		}
 		if isPlayback(f) && !cleared {
@@ -335,7 +373,7 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "web-e0240000"
 	d := testConnectWS(t, base, "unit", false)
-	d.hello(t, id, "Echo")
+	d.hello(t, id, "")
 	b.ws.mu.Lock()
 	dev := b.ws.terminals[id]
 	ctx, cancel := context.WithCancel(dev.client.ctx)
@@ -394,15 +432,19 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
-	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
-	d.json(t, object{"ev": "text", "text": "Draw a dragon"})
+	d.helloWeb(t, id, "echo", capBridgeEndpoint|capDrag, false)
+	d.text(t, "Draw a dragon")
 	expectValue(t, prompts, "Draw a dragon")
-	d.json(t, object{"ev": "rec_request"})
-	d.until(t, hasWS("rec", `"endpoint":"bridge"`))
-	d.json(t, object{"ev": "rec_start"})
-	d.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix, 18, 0}, make([]byte, endpointBytes-2)...)))
-	d.json(t, object{"ev": "rec_end"})
+	d.recStart(t, "")
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
+	})
+	d.recStart(t, "")
+	pcm := make([]byte, endpointBytes)
+	pcm[0] = 18
+	d.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	d.recEnd(t, "", false)
 	d.barrier(t)
 	select {
 	case <-prompts:
@@ -411,7 +453,10 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	}
 	close(finishFirst)
 	expectValue(t, prompts, "and add stars")
-	d.until(t, hasWS("mode", `"mode":"idle"`))
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone)
+	})
 	b.ws.sig.wait(t, func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()

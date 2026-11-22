@@ -1329,6 +1329,13 @@ func (e *frameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *im
 }
 
 func (e *frameEncoder) encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) wsFrame {
+	return e.encodeWithCodecs(fb, rgba, r, rev, width, codecBitAll)
+}
+
+func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int, allowed uint8) wsFrame {
+	if allowed == 0 {
+		allowed = codecBitAll
+	}
 	rw, rh := r.Dx(), r.Dy()
 	pixels := rw * rh
 	rawLen := pixels * 2
@@ -1345,25 +1352,29 @@ func (e *frameEncoder) encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, 
 		}
 	}
 
-	e.rleBuf = encodeRLE565FromBE(e.rleBuf[:0], rawBE, pixels)
 	bestCodec := frameCodecRaw
 	bestPayload := rawBE
-	if len(e.rleBuf) <= len(bestPayload) {
-		bestCodec = frameCodecRLE565
-		bestPayload = e.rleBuf
+	if allowed&codecBitRLE565 != 0 {
+		e.rleBuf = encodeRLE565FromBE(e.rleBuf[:0], rawBE, pixels)
+		if len(e.rleBuf) <= len(bestPayload) {
+			bestCodec = frameCodecRLE565
+			bestPayload = e.rleBuf
+		}
 	}
 
-	bound := lz4.CompressBlockBound(rawLen)
-	if cap(e.lz4Buf) < bound {
-		e.lz4Buf = make([]byte, bound)
-	}
-	lz4Dst := e.lz4Buf[:bound]
-	if n, err := e.lz4Comp.CompressBlock(rawBE, lz4Dst); err == nil && n > 0 && n < len(bestPayload) {
-		bestCodec = frameCodecLZ4
-		bestPayload = lz4Dst[:n]
+	if allowed&codecBitLZ4 != 0 {
+		bound := lz4.CompressBlockBound(rawLen)
+		if cap(e.lz4Buf) < bound {
+			e.lz4Buf = make([]byte, bound)
+		}
+		lz4Dst := e.lz4Buf[:bound]
+		if n, err := e.lz4Comp.CompressBlock(rawBE, lz4Dst); err == nil && n > 0 && n < len(bestPayload) {
+			bestCodec = frameCodecLZ4
+			bestPayload = lz4Dst[:n]
+		}
 	}
 
-	if rw >= 64 && rh >= 64 && len(bestPayload) > rawLen/3 {
+	if allowed&codecBitJPEG != 0 && rw >= 64 && rh >= 64 && len(bestPayload) > rawLen/3 {
 		var src image.Image
 		if rgba != nil && r.In(rgba.Bounds()) {
 			src = rgba.SubImage(r)

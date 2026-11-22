@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -183,43 +184,51 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 			})
 			device := testConnectWS(t, base, "unit", false)
 			device.hello(t, id, "Cake")
-			device.json(t, object{"ev": "text", "text": "Speak two sentences."})
-			start := testObject(t, device.until(t, hasWS("tts", `"state":"start"`)).data)
-			pcm := func(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 1 && f.data[0] == pcmPrefix }
-			device.until(t, pcm) // The upstream is still blocked on finishSSE.
+			device.text(t, "Speak two sentences.")
+			ttsMsg := func(op uint8) func(wsFrame) bool {
+				return func(f wsFrame) bool {
+					p := framePayload(f)
+					return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == op
+				}
+			}
+			ttsAudio := func(f wsFrame) uint64 { return binary.LittleEndian.Uint64(framePayload(f)[1:9]) }
+			startAudio := ttsAudio(device.until(t, ttsMsg(ttsOpStart)))
+			device.until(t, isPlayback) // The upstream is still blocked on finishSSE.
 			b.diag.sig.wait(t, func() bool {
 				turns := b.diagnosticReport().Turns
 				return len(turns) != 0 && turns[0].TTS != nil && turns[0].Total == nil
 			})
 			if mode == "tool" {
 				close(sendTool)
-				abort := testObject(t, device.until(t, hasWS("tts", `"state":"abort"`)).data)
-				if abort["audio"] != start["audio"] {
+				abort := device.until(t, ttsMsg(ttsOpStop))
+				if ttsAudio(abort) != startAudio {
 					t.Fatal("tool did not abort the speculative generation")
 				}
 			}
 			close(finishSSE)
-			var end object
+			var endAudio uint64
+			hasEnd := false
 			continued := false
-			for end == nil {
+			for !hasEnd {
 				f := device.read(t)
 				switch {
-				case pcm(f):
+				case isPlayback(f):
 					continued = true
-				case hasWS("tts", `"state":"abort"`)(f):
-					if mode != "divergent" || testObject(t, f.data)["audio"] != start["audio"] {
-						t.Fatal("unexpected audio abort", string(f.data))
+				case ttsMsg(ttsOpStop)(f):
+					if mode != "divergent" || ttsAudio(f) != startAudio {
+						t.Fatal("unexpected audio abort", f.data)
 					}
-				case hasWS("tts", `"state":"start"`)(f):
-					if mode == "matching" || testObject(t, f.data)["audio"] == start["audio"] {
-						t.Fatal("unexpected audio generation", string(f.data))
+				case ttsMsg(ttsOpStart)(f):
+					if mode == "matching" || ttsAudio(f) == startAudio {
+						t.Fatal("unexpected audio generation", f.data)
 					}
-				case hasWS("tts", `"state":"end"`)(f):
-					end = testObject(t, f.data)
+				case ttsMsg(ttsOpEnd)(f):
+					endAudio = ttsAudio(f)
+					hasEnd = true
 				}
 			}
-			if !continued || (start["audio"] == end["audio"]) != (mode == "matching") {
-				t.Fatalf("unexpected completion: continued=%t, start=%v, end=%v", continued, start, end)
+			if !continued || (startAudio == endAudio) != (mode == "matching") {
+				t.Fatalf("unexpected completion: continued=%t, start=%d, end=%d", continued, startAudio, endAudio)
 			}
 		})
 	}
@@ -288,9 +297,16 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			}
 			board := testConnectWS(t, base, "unit", false)
 			board.helloV2(t, id, "Cake")
-			board.json(t, object{"ev": "text", "text": "Speak two sentences."})
+			board.text(t, "Speak two sentences.")
 			nextSpeech(first).done <- ttsResult{pcm: make([]byte, 640)}
-			start := testObject(t, board.until(t, hasWS("tts", `"state":"start"`)).data)
+			ttsMatch := func(op uint8) func(wsFrame) bool {
+				return func(f wsFrame) bool {
+					p := framePayload(f)
+					return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == op
+				}
+			}
+			startFrame := board.until(t, ttsMatch(ttsOpStart))
+			startAudio := binary.LittleEndian.Uint64(framePayload(startFrame)[1:9])
 			board.until(t, isPlayback)
 			b.diag.sig.wait(t, func() bool {
 				report := b.diagnosticReport()
@@ -305,7 +321,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			switch mode {
 			case "before-final":
 				tail.done <- ttsResult{err: errTTS}
-				board.until(t, hasWS("tts", `"state":"abort"`))
+				board.until(t, ttsMatch(ttsOpStop))
 				close(finish)
 			case "after-final":
 				close(finish)
@@ -315,9 +331,9 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 					return !b.ws.terminals[id].busy
 				})
 				tail.done <- ttsResult{err: errTTS}
-				board.until(t, hasWS("tts", `"state":"abort"`))
+				board.until(t, ttsMatch(ttsOpStop))
 			case "interrupted":
-				board.json(t, object{"ev": "tts_ack", "state": "interrupted", "audio": start["audio"]})
+				board.sendProto(t, msgTTSAck, encodeTTSAck(true, startAudio))
 				board.barrier(t)
 				tail.done <- ttsResult{err: errTTS}
 				close(finish)
@@ -560,7 +576,10 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	mirror := testConnectWS(t, base, "unit", true)
 	mirror.watch(t, id)
 	toolTest(t, base, "emit", object{"to": id, "chime": "tap"}, false)
-	c.until(t, hasWS("chime", `"kind":"tap"`))
+	c.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
+	})
 	select {
 	case created := <-titles:
 		t.Fatal("local-only tap started an AI session:", created)
@@ -576,7 +595,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("chat did not start a turn")
 	}
-	if frame := mirror.until(t, hasWS("svg", "Done.")); !hasWS("svg", "Answer")(frame) {
+	if frame := mirror.until(t, hasSVG("Done.")); !hasSVG("Answer")(frame) {
 		t.Fatal("no-audio answer notice was missing")
 	}
 	if got := apiObjects(t, base+"/api/companions/mint/messages", "messages"); len(got) != 0 {

@@ -130,6 +130,12 @@ func (s *terminalServer) acceptLoop() {
 	}
 }
 
+func writeNativeReject(conn net.Conn, reason uint8, msg string) {
+	pkt := packProtoPacket(msgReject, 0, encodeReject(reason, msg))
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, _ = conn.Write(pkt)
+}
+
 func (s *terminalServer) serveConn(conn net.Conn) {
 	defer conn.Close()
 	if tc, ok := conn.(*net.TCPConn); ok {
@@ -142,14 +148,41 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	msgType, _, payload, err := readProtoFrame(conn)
-	if err != nil || msgType != msgHello {
-		return
-	}
-	hello, err := parseNativeHello(payload)
 	if err != nil {
 		return
 	}
-	if s.hub.b.token == "" || subtle.ConstantTimeCompare([]byte(hello.token), []byte(s.hub.b.token)) != 1 {
+
+	var hello terminalHello
+	var resume terminalResume
+	isResume := false
+	switch msgType {
+	case msgHello:
+		hello, err = parseTerminalHello(payload)
+		if err != nil {
+			writeNativeReject(conn, rejectBadCaps, "invalid hello")
+			return
+		}
+		if hello.protoVersion != protoVersion1 {
+			writeNativeReject(conn, rejectBadVersion, "protocol version mismatch")
+			return
+		}
+		if s.hub.b.token == "" || subtle.ConstantTimeCompare([]byte(hello.token), []byte(s.hub.b.token)) != 1 {
+			writeNativeReject(conn, rejectBadToken, "invalid token")
+			return
+		}
+	case msgResume:
+		isResume = true
+		resume, err = parseTerminalResume(payload)
+		if err != nil {
+			writeNativeReject(conn, rejectUnknownTerminal, "invalid resume")
+			return
+		}
+		if resume.protoVersion != protoVersion1 {
+			writeNativeReject(conn, rejectBadVersion, "protocol version mismatch")
+			return
+		}
+	default:
+		writeNativeReject(conn, rejectBadVersion, "expected hello or resume")
 		return
 	}
 
@@ -163,7 +196,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 	ctx, cancel := context.WithCancel(s.hub.b.root)
 	ssrc := s.nextSSRC()
 	var initialUDP *net.UDPAddr
-	if hello.udpPort > 0 {
+	if !isResume && hello.udpPort > 0 {
 		initialUDP = &net.UDPAddr{IP: remoteIP.AsSlice(), Port: int(hello.udpPort)}
 	}
 	nc := &nativeClient{
@@ -186,6 +219,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 	if s.hub.closed || len(s.hub.clients) >= wsConnections {
 		s.hub.mu.Unlock()
 		cancel()
+		writeNativeReject(conn, rejectFull, "server full")
 		return
 	}
 	s.hub.clients[c] = struct{}{}
@@ -206,7 +240,21 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 		s.hub.detach(c)
 	}()
 
-	if !s.hub.helloNative(nc, hello, time.Now()) {
+	var ok bool
+	if isResume {
+		ok = s.hub.handleResume(c, resume, time.Now())
+	} else {
+		ok = s.hub.handleHello(c, hello, time.Now())
+	}
+	if !ok {
+		// Flush any REJECT frame queued before closing.
+		select {
+		case msg := <-nc.out:
+			pkt := packProtoPacket(msg.msgType, nc.txSeq, msg.payload)
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Write(pkt)
+		default:
+		}
 		return
 	}
 
@@ -238,44 +286,8 @@ func (s *terminalServer) handleTCPMessage(nc *nativeClient, msgType uint8, paylo
 			}
 			c.pingMu.Unlock()
 		}
-	case msgStatus:
-		if st, ok := parseNativeStatus(payload); ok {
-			s.hub.handle(c, wsEvent{Event: "status", wsStatus: st})
-		}
-	case msgPointer:
-		if evName, x, y, rev, ok := parseNativePointer(payload); ok {
-			s.hub.handle(c, wsEvent{Event: evName, X: x, Y: y, RevLo: &rev})
-		}
-	case msgWakeWord:
-		s.hub.handle(c, wsEvent{Event: "wake_word"})
-	case msgRecStart:
-		if _, target, ok := parseNativeRecStart(payload); ok {
-			t := ""
-			if target&recTargetInter != 0 {
-				t = "intercom"
-			}
-			s.hub.handle(c, wsEvent{Event: "rec_start", Target: t})
-		}
-	case msgRecEnd:
-		if _, target, cancelled, ok := parseNativeRecEnd(payload); ok {
-			t := ""
-			if target&recTargetInter != 0 {
-				t = "intercom"
-			}
-			s.hub.handle(c, wsEvent{Event: "rec_end", Target: t, Cancelled: cancelled})
-		}
-	case msgTTSAck:
-		if aborted, id, ok := parseNativeTTSAck(payload); ok {
-			state := "done"
-			if aborted {
-				state = "interrupted"
-			}
-			s.hub.handle(c, wsEvent{Event: "tts_ack", State: state, Audio: id})
-		}
-	case msgCallFailed:
-		if id, ok := parseNativeCallFailed(payload); ok {
-			s.hub.handle(c, wsEvent{Event: "call_end", Call: id})
-		}
+	default:
+		s.hub.handleProto(c, msgType, payload)
 	}
 }
 
@@ -315,13 +327,7 @@ func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 	}
 	nc.udpMu.Unlock()
 
-	pcm := pkt[rtpHeaderSize:]
-	switch pt {
-	case rtpPTRecPCM:
-		s.hub.micChunkPCM(nc.client, micPrefix, pcm)
-	case rtpPTCallUp:
-		s.hub.micChunkPCM(nc.client, callMicPrefix, pcm)
-	}
+	s.hub.dispatchRTPPCM(nc.client, pt, pkt[rtpHeaderSize:])
 	if s.onUDP != nil {
 		s.onUDP()
 	}

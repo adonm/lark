@@ -136,7 +136,7 @@ func (s *e2eSuite) apps(t *testing.T) {
 			}
 			prompt := "Screen regression. In one Code Mode execute call, run the following calls sequentially. Return each result, then say one short sentence. Do not call any other tool:\nreturn [" +
 				strings.Join(calls, ",\n") + "];"
-			c.json(t, object{"ev": "text", "text": prompt})
+			c.text(t, prompt)
 			c.playback(t, time.Now())
 			s.model.mu.Lock()
 			launched := slices.Clone(s.model.templates)
@@ -166,9 +166,12 @@ func (s *e2eSuite) policy(t *testing.T, cat *e2eCompanion, args object, reason s
 func (s *e2eSuite) restricted(t *testing.T, c, peer *e2eCompanion, isolatedPrompts bool) {
 	t.Helper()
 	prompts := s.model.prompts.Load()
-	c.json(t, object{"ev": "rec_start"})
-	c.op(t, "rec", "action", `"stop"`, "cancelled", "true")
-	c.json(t, object{"ev": "text", "text": "Make me a dinosaur quiz."})
+	c.recStart(t, "")
+	c.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
+	})
+	c.text(t, "Make me a dinosaur quiz.")
 	s.request(t, "POST", "/api/chat", object{"device_id": c.id, "text": "Make me a dinosaur quiz."}, 423)
 	call := s.tool(t, "emit", object{"to": peer.id, "call": object{"from": c.id}}, false)
 	receipts, _ := call["receipts"].([]any)
@@ -193,7 +196,7 @@ func (s *e2eSuite) builderParents(t *testing.T) {
 	c.scene(t, "companion-ring")
 
 	start := time.Now()
-	c.json(t, object{"ev": "text", "text": "Make me a dinosaur quiz. Use the quiz template with one simple question."})
+	c.text(t, "Make me a dinosaur quiz. Use the quiz template with one simple question.")
 	c.playback(t, start)
 	if !strings.Contains(c.svg, "Cancel build") {
 		c.scene(t, "Cancel build")

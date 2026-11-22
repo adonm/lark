@@ -527,7 +527,7 @@ func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessa
 		// Geometry and the client role do not change after hello.
 		if terminals == nil {
 			a.geometry[i] = roundScreen
-		} else if terminals[i].client.role != "web" {
+		} else if !terminals[i].virtual() {
 			a.geometry[i] = terminals[i].screen
 			a.gradeSources[i] = &terminals[i].grade
 		}
@@ -1065,7 +1065,7 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		a.SVG = svgString(clean)
 		if a.scripted() {
 			var geometry screenGeometry
-			if slices.ContainsFunc(devices, func(d *wsTerminal) bool { return d.client.role == "device" }) {
+			if slices.ContainsFunc(devices, func(d *wsTerminal) bool { return !d.virtual() }) {
 				geometry = roundScreen
 			}
 			if _, err := buildScreen(a.SVG, false, geometry); err != nil {
@@ -1305,9 +1305,10 @@ func (b *larkServer) appsChanged() {
 	}
 	b.ws.mu.Lock()
 	defer b.ws.mu.Unlock()
+	pkt := encodeEventMsg(b.ws.nextSeq(), eventSavedApps, "", "", "")
 	for c := range b.ws.clients {
-		if c.role == "web" && c.scope == nil {
-			c.enqueue(textFrame(object{"type": "saved_apps"}))
+		if (c.kind == "web" || c.kind == "watcher") && c.scope == nil {
+			c.enqueueProto(msgEvent, pkt)
 		}
 	}
 }
@@ -1499,7 +1500,7 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 		for _, d := range a.terminals {
 			if d != nil && h.active(d) {
 				d.lastAppError = appFailure(a.spec, ev.kind, err, now)
-				h.pushWS(d, object{"op": "error", "status": 400, "error": err.Error()}, true)
+				h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
 			}
 		}
 		h.closeApp(a, now)
@@ -1534,7 +1535,7 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 			if d == nil || !h.active(d) || ev.i >= 0 && j != ev.i && !e.all || (d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) != "") {
 				continue
 			}
-			if h.audioTerminal(d.companionID) != d {
+			if h.voiceOwner(d.companionID) != d {
 				continue
 			}
 			switch e.kind {

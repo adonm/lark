@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -265,8 +266,7 @@ func (s *e2eSuite) browser(t *testing.T, name string) *e2eCompanion {
 		t.Fatal("missing web terminal ID")
 	}
 	ws := testConnectWS(t, s.base, s.token, true)
-	ws.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id, "firmware": "web",
-		"volume": 65, "caps": object{"call": true, "call_pcm": true, "drag": true, "bridge_endpoint": true}})
+	ws.helloWeb(t, termID, id, capCall|capCallPCM|capDrag|capBridgeEndpoint, false)
 	c := &e2eCompanion{testWS: ws, id: id, name: name}
 	c.scene(t, "companion-ring")
 	return c
@@ -276,24 +276,24 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	t.Helper()
 	name := s.prefix + " " + label
 	id := "lark-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
-	width, height, shape, battery := 360, 360, "round", variant == "esp-vocat"
-	var pct, mv, charging any
+	width, height, battery := 360, 360, variant == "esp-vocat"
+	var caps uint32 = capCall | capCallPCM | capDrag | capPointerRev | capBridgeEndpoint | capWakeWord
+	wireShape := shapeRound
 	if battery {
-		pct, mv, charging = 74, 3930, false
+		caps |= capBattery | capPanelSleep
 	} else {
 		id = "box3-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
-		width, height, shape = 320, 240, "rect"
+		width, height, wireShape = 320, 240, shapeRect
 	}
 	ws := testConnectWS(t, s.base, s.token, false)
-	ws.json(t, object{"ev": "hello", "role": "device", "device_id": id, "character": name,
-		"firmware": "0.9.5", "proto": 2, "ip": "127.0.0.1", "width": width, "height": height, "shape": shape, "board": variant,
-		"caps": object{"battery": battery, "head_pads": false, "call": true, "call_pcm": true, "drag": true,
-			"pointer_rev": true, "bridge_endpoint": true, "panel_sleep": battery, "wake_word": true},
-		"free_heap": 124000, "min_free_heap": 104000, "free_psram": 2000000,
-		"wifi_rssi": -43, "rssi": -43, "uptime_s": 412, "cpu_pct": 13,
-		"battery_pct": pct, "battery_mv": mv, "charging": charging, "volume": 65})
+	ws.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, capsMask: caps,
+		displayFormats: dispRGB565, frameCodecs: codecBitAll,
+		width: uint16(width), height: uint16(height), shape: wireShape,
+		terminalID: id, companionID: name, board: variant, firmware: "0.12.0",
+	}))
 	c := &e2eCompanion{testWS: ws, id: id, name: name, width: width, high: height, pixels: make([]uint16, width*height)}
-	ws.until(t, hasWS("hello_ok", ""))
+	ws.until(t, hasProto(msgWelcome, ""))
 	first := c.expect(t, "full initial framebuffer", isDisplay)
 	r, _, _ := decodeDisplay(t, first)
 	if r != image.Rect(0, 0, width, height) {
@@ -349,8 +349,8 @@ func (c *e2eCompanion) expect(t *testing.T, label string, matches func(wsFrame) 
 
 func (c *e2eCompanion) updateScene(t *testing.T, f wsFrame) {
 	t.Helper()
-	if hasWS("svg", "")(f) {
-		c.svg = str(testObject(t, f.data)["svg"])
+	if hasSVG("")(f) {
+		_, c.svg = decodeFrameSVG(f)
 	}
 }
 
@@ -368,7 +368,7 @@ func (c *e2eCompanion) scene(t *testing.T, text ...string) string {
 
 func (c *e2eCompanion) sceneWhere(t *testing.T, label string, filter func(wsFrame) bool) string {
 	t.Helper()
-	match := func(f wsFrame) bool { return hasWS("svg", "")(f) && filter(f) }
+	match := func(f wsFrame) bool { return hasSVG("")(f) && filter(f) }
 	if c.mirror != nil {
 		defer func() {
 			if t.Failed() {
@@ -377,7 +377,8 @@ func (c *e2eCompanion) sceneWhere(t *testing.T, label string, filter func(wsFram
 		}()
 		f := c.mirror.until(t, match)
 		c.updateScene(t, f)
-		c.syncTo(t, uint16(e2eNumber(testObject(t, f.data)["rev"])))
+		rev, _ := decodeFrameSVG(f)
+		c.syncTo(t, uint16(rev))
 	} else {
 		c.expect(t, label, match)
 	}
@@ -400,7 +401,8 @@ func (c *e2eCompanion) syncTo(t *testing.T, rev uint16) {
 
 func (c *e2eCompanion) syncRevision(t *testing.T) {
 	t.Helper()
-	c.json(t, object{"ev": "status", "rssi": -44})
+	var st [16]byte
+	c.sendProto(t, msgTelemetry, st[:])
 	c.syncFrames(t)
 }
 
@@ -416,13 +418,24 @@ func (c *e2eCompanion) input(t *testing.T, ev string, x, y int, revision uint16)
 		side := min(c.width, c.high)
 		x, y = (c.width-side)/2+x*side/360, (c.high-side)/2+y*side/360
 	}
-	c.json(t, object{"ev": ev, "x": x, "y": y, "rev_lo": revision})
+	kind := ptrTap
+	switch ev {
+	case "drag":
+		kind = ptrDrag
+	case "up":
+		kind = ptrUp
+	}
+	c.sendProto(t, msgPointer, encodePointer(kind, uint16(x), uint16(y), revision))
 }
 
 func (c *e2eCompanion) tap(t *testing.T, id string) {
 	t.Helper()
 	if c.width == 0 {
-		c.json(t, object{"ev": "tap", "id": id})
+		x, y, ok := hitCenter(c.svg, id)
+		if !ok {
+			t.Fatalf("%s has no hitbox for %s", c.name, id)
+		}
+		c.testWS.tap(t, x, y, 0)
 		return
 	}
 	// Derive a coordinate from the public SVG hit-box, but submit only native
@@ -437,19 +450,26 @@ func (c *e2eCompanion) tap(t *testing.T, id string) {
 
 func (c *e2eCompanion) audio(t *testing.T, prefix byte, pcm []byte) {
 	t.Helper()
-	for offset := 0; offset < len(pcm); offset += pcmPacket {
-		part := pcm[offset:min(offset+pcmPacket, len(pcm))]
-		c.write(t, maskedFrame(wsBinary, true, append([]byte{prefix}, part...)))
+	pt := rtpPTRecPCM
+	if prefix == callMicPrefix {
+		pt = rtpPTCallUp
+	}
+	var seq uint16
+	for offset := 0; offset < len(pcm); offset += rtpPCMBytes {
+		part := pcm[offset:min(offset+rtpPCMBytes, len(pcm))]
+		seq++
+		c.sendRTP(t, pt, seq, uint32(seq)*320, 1, part)
 	}
 }
 
 func (c *e2eCompanion) ack(t *testing.T, end wsFrame) {
 	t.Helper()
-	audio := testObject(t, end.data)["audio"]
-	if _, ok := audio.(json.Number); !ok {
+	p := framePayload(end)
+	if len(p) < 9 {
 		t.Fatal("missing numeric playback ID")
 	}
-	c.json(t, object{"ev": "tts_ack", "state": "done", "audio": audio})
+	audio := binary.LittleEndian.Uint64(p[1:9])
+	c.sendProto(t, msgTTSAck, encodeTTSAck(false, audio))
 }
 
 func (s *e2eSuite) history(t *testing.T, id, query string) []chatEntry {

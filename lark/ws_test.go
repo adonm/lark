@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -106,9 +105,45 @@ func (s *testWS) write(t *testing.T, data []byte) {
 	}
 }
 
-func (s *testWS) json(t *testing.T, v object) {
+func (s *testWS) sendProto(t *testing.T, msgType uint8, payload []byte) {
 	t.Helper()
-	s.write(t, maskedFrame(wsText, true, textFrame(v).data))
+	s.write(t, maskedFrame(wsBinary, true, packProtoPacket(msgType, 0, payload)))
+}
+
+func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) {
+	t.Helper()
+	pkt := make([]byte, rtpHeaderSize+len(pcm))
+	n := encodeRTPPacket(pkt, pt, seq, ts, ssrc, pcm)
+	s.sendProto(t, msgMedia, pkt[:n])
+}
+
+func (s *testWS) tap(t *testing.T, x, y int, rev uint16) {
+	t.Helper()
+	s.sendProto(t, msgPointer, encodePointer(ptrTap, uint16(x), uint16(y), rev))
+}
+
+func (s *testWS) text(t *testing.T, msg string) {
+	t.Helper()
+	s.sendProto(t, msgTextInput, appendStr16(nil, msg))
+}
+
+func (s *testWS) recStart(t *testing.T, target string) {
+	t.Helper()
+	b := binary.LittleEndian.AppendUint16(nil, 1)
+	b = appendStr8(b, target)
+	s.sendProto(t, msgRecStart, b)
+}
+
+func (s *testWS) recEnd(t *testing.T, target string, cancelled bool) {
+	t.Helper()
+	b := binary.LittleEndian.AppendUint16(nil, 1)
+	var c byte
+	if cancelled {
+		c = 1
+	}
+	b = append(b, c)
+	b = appendStr8(b, target)
+	s.sendProto(t, msgRecEnd, b)
 }
 
 func (s *testWS) barrier(t *testing.T) {
@@ -170,25 +205,88 @@ func (s *testWS) until(t *testing.T, match func(wsFrame) bool) wsFrame {
 	return wsFrame{}
 }
 
-func hasWS(op, sample string) func(wsFrame) bool {
+func hasProto(msgType uint8, sample string) func(wsFrame) bool {
 	return func(f wsFrame) bool {
-		return f.op == wsText && bytes.Contains(f.data, []byte(`"op":"`+op+`"`)) && bytes.Contains(f.data, []byte(sample))
+		if f.op != wsBinary {
+			return false
+		}
+		mt, _, payload, ok := unpackProtoPacket(f.data)
+		return ok && mt == msgType && (sample == "" || bytes.Contains(payload, []byte(sample)))
 	}
 }
 
-func isPlayback(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 1 && f.data[0] == pcmPrefix }
+func hasSVG(sample string) func(wsFrame) bool { return hasProto(msgFrameSVG, sample) }
 
-func (s *testWS) hello(t *testing.T, id, character string) wsFrame {
+func isPlayback(f wsFrame) bool {
+	if f.op != wsBinary {
+		return false
+	}
+	mt, _, payload, ok := unpackProtoPacket(f.data)
+	return ok && mt == msgTTSPCM && len(payload) > 0
+}
+
+func isDisplay(f wsFrame) bool {
+	if f.op != wsBinary {
+		return false
+	}
+	mt, _, payload, ok := unpackProtoPacket(f.data)
+	return ok && mt == msgFrame && len(payload) > 0
+}
+
+func framePayload(f wsFrame) []byte {
+	_, _, payload, _ := unpackProtoPacket(f.data)
+	return payload
+}
+
+func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) wsFrame {
 	t.Helper()
-	role := "device"
-	if webTerminalID.MatchString(strings.ToLower(id)) {
-		role = "web"
-	}
-	s.json(t, object{"ev": "hello", "role": role, "terminal_id": id, "character": character, "firmware": "0.8.4", "proto": 2, "battery_pct": 100, "volume": 80})
-	if role == "web" {
-		return s.until(t, hasWS("svg", ""))
-	}
+	s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion:   protoVersion1,
+		kind:           termKindHardware,
+		capsMask:       caps,
+		displayFormats: dispRGB565,
+		frameCodecs:    codecBitAll,
+		width:          360,
+		height:         360,
+		shape:          shapeRound,
+		terminalID:     id,
+		companionID:    compID,
+		board:          "esp-vocat",
+		firmware:       "0.12.0",
+	}))
+	s.until(t, hasProto(msgWelcome, ""))
 	return s.until(t, isDisplay)
+}
+
+func (s *testWS) helloWeb(t *testing.T, id, compID string, caps uint32, ifFree bool) wsFrame {
+	t.Helper()
+	var flags uint8
+	if ifFree {
+		flags |= helloFlagIfFree
+	}
+	s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion:   protoVersion1,
+		kind:           termKindWeb,
+		capsMask:       caps,
+		displayFormats: dispSVG,
+		width:          360,
+		height:         360,
+		shape:          shapeRound,
+		flags:          flags,
+		terminalID:     id,
+		companionID:    compID,
+		firmware:       "web",
+	}))
+	s.until(t, hasProto(msgWelcome, ""))
+	return s.until(t, hasSVG(""))
+}
+
+func (s *testWS) hello(t *testing.T, id, compID string) wsFrame {
+	t.Helper()
+	if webTerminalID.MatchString(strings.ToLower(id)) {
+		return s.helloWeb(t, id, compID, capDrag, false)
+	}
+	return s.helloHardware(t, id, compID, capBattery|capDrag)
 }
 
 func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, string) {
@@ -231,17 +329,25 @@ func TestWSHandshakeAndRFC6455(t *testing.T) {
 		res.Body.Close()
 	}
 	c := testConnectWS(t, base, "unit", false)
-	c.write(t, slices.Concat(maskedFrame(wsText, false, []byte(`{"ev":"hel`)),
-		maskedFrame(wsPing, true, []byte("hi")), maskedFrame(0, true, []byte(`lo","role":"web"}`))))
+	helloPkt := packProtoPacket(msgHello, 0, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	c.write(t, slices.Concat(maskedFrame(wsBinary, false, helloPkt[:6]),
+		maskedFrame(wsPing, true, []byte("hi")), maskedFrame(0, true, helloPkt[6:])))
 	pong := c.read(t)
 	if pong.op != wsPong || string(pong.data) != "hi" {
 		t.Fatal("ping was not echoed during fragmentation")
 	}
-	c.until(t, hasWS("peers", `"terminals":[]`))
+	c.until(t, hasProto(msgWelcome, ""))
+	c.until(t, hasProto(msgPeers, ""))
 	reply := wsCloseFrame(1000)
 	c.write(t, maskedFrame(wsClose, true, reply.data))
-	if got := c.read(t); got.op != wsClose || !bytes.Equal(got.data, reply.data) {
-		t.Fatal("close not echoed")
+	for {
+		got := c.read(t)
+		if got.op == wsClose {
+			if !bytes.Equal(got.data, reply.data) {
+				t.Fatal("close not echoed")
+			}
+			break
+		}
 	}
 	for _, tt := range []struct {
 		name string
@@ -275,24 +381,32 @@ func TestWSHandshakeAndRFC6455(t *testing.T) {
 
 func (s *testWS) watch(t *testing.T, id string) wsFrame {
 	t.Helper()
-	s.json(t, object{"ev": "hello", "role": "web"})
-	s.until(t, hasWS("peers", id))
-	s.json(t, object{"ev": "watch", "device_id": id})
-	return s.until(t, hasWS("svg", "companion-ring"))
+	s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	s.until(t, hasProto(msgPeers, id))
+	s.sendProto(t, msgWatch, appendStr8(nil, id))
+	return s.until(t, hasSVG("companion-ring"))
 }
 
-func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
+func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	dev := testConnectWS(t, base, "unit", false)
-	const id = "lark-hello"
-	dev.json(t, object{"ev": "hello", "role": "device", "proto": 1, "device_id": id, "character": "Cake"})
-	dev.until(t, hasWS("error", "firmware upgrade required"))
-	if list := apiObjects(t, base+"/api/terminals", "terminals"); len(list) != 0 {
-		t.Fatal("old firmware registered a terminal", list)
+	const id = "box3-hello"
+	dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: 0, kind: termKindHardware, displayFormats: dispRGB565,
+		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3",
+	}))
+	rej := dev.until(t, hasProto(msgReject, ""))
+	if framePayload(rej)[0] != rejectBadVersion {
+		t.Fatalf("expected rejectBadVersion, got %x", framePayload(rej))
 	}
-	dev.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
-		"ip": "192.0.2.123", "port": 8080, "width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
-	dev.until(t, hasWS("hello_ok", ""))
+	if list := apiObjects(t, base+"/api/terminals", "terminals"); len(list) != 0 {
+		t.Fatal("bad version registered a terminal", list)
+	}
+	dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
+		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3", firmware: "0.12.0",
+	}))
+	dev.until(t, hasProto(msgWelcome, ""))
 	frame, _, _ := decodeDisplay(t, dev.until(t, isDisplay))
 	if frame.Dx() != 320 || frame.Dy() != 240 {
 		t.Fatal("unexpected initial framebuffer", frame)
@@ -303,11 +417,11 @@ func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 		return len(list) == 1 && list[0].(object)["ws_connected"] == false
 	})
 	p, ok, err := terminalStore(b.db).get(id)
-	if err != nil || !ok || p.Kind != "hardware" || p.IP != "127.0.0.1" || p.Port != 8080 || p.LastSeen <= 0 {
+	if err != nil || !ok || p.Kind != "hardware" || p.IP != "127.0.0.1" || p.Port != 80 || p.LastSeen <= 0 {
 		t.Fatalf("incorrect remembered identity: %+v (%v)", p, err)
 	}
 	web := testConnectWS(t, base, "unit", true)
-	web.hello(t, "web-12345678", "New Companion")
+	web.hello(t, "web-12345678", "")
 	if p2, exists, err := terminalStore(b.db).get("web-12345678"); !exists || err != nil || p2.Kind != "web" {
 		t.Fatal("web hello did not register a web terminal", err)
 	}
@@ -315,33 +429,46 @@ func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 
 func TestWSMirrorAndControls(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "lark-mirror"
+	const id = "vocat-mir0"
 	dev := testConnectWS(t, base, "unit", false)
-	dev.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
-	_, rev, _ := decodeDisplay(t, dev.until(t, isDisplay))
+	_, rev, _ := decodeDisplay(t, dev.helloHardware(t, id, "", capBattery|capDrag))
 	web := testConnectWS(t, base, "unit", true)
 	first := web.watch(t, id)
-	if testObject(t, first.data)["rev"] != json.Number(strconv.FormatUint(uint64(rev), 10)) || !hasWS("svg", "120,292,120,48")(first) {
+	svgRev, _ := decodeFrameSVG(first)
+	if svgRev != uint32(rev) || !hasSVG("120,292,120,48")(first) {
 		t.Fatal("watch did not receive current frame with centered Menu control")
 	}
-	dev.json(t, object{"ev": "status", "battery_pct": 25, "battery_mv": 3530, "charging": false, "volume": 80, "wifi_rssi": -45})
-	web.until(t, hasWS("svg", menuSuccess))
-	web.json(t, object{"ev": "tap", "x": 180, "y": 300})
-	web.until(t, hasWS("svg", "menu-next"))
-	web.json(t, object{"ev": "tap", "id": "menu-next"})
-	if f := web.until(t, hasWS("svg", "menu-stats")); !hasWS("svg", "menu-voice")(f) {
+	var st [16]byte
+	rssi, batt := int16(-45), int16(25)
+	binary.LittleEndian.PutUint16(st[0:2], uint16(rssi))
+	binary.LittleEndian.PutUint16(st[2:4], uint16(batt))
+	dev.sendProto(t, msgTelemetry, st[:])
+	web.until(t, hasSVG(menuSuccess))
+	web.tap(t, 180, 300, 0)
+	web.until(t, hasSVG("menu-next"))
+	web.tap(t, 248, 294, 0)
+	if f := web.until(t, hasSVG("menu-stats")); !hasSVG("menu-voice")(f) {
 		t.Fatal("menu did not mirror voice controls")
 	}
 	testRequest(t, "POST", base+"/api/terminals/"+id+"/volume", "unit", object{"auto": false, "volume": 62}, 200)
 	for _, c := range []*testWS{dev, web} {
-		c.until(t, hasWS("volume", `"level":62`))
+		c.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 62
+		})
 	}
-	web.json(t, object{"ev": "tap", "id": "menu-back"})
-	web.until(t, hasWS("svg", "companion-ring"))
-	web.json(t, object{"ev": "tap", "x": 180, "y": 180})
-	dev.until(t, hasWS("rec", `"action":"start"`))
-	dev.json(t, object{"ev": "rec_end", "cancelled": true})
-	dev.until(t, hasWS("chime", `"kind":"cancel"`))
+	web.tap(t, 180, 294, 0)
+	web.until(t, hasSVG("companion-ring"))
+	web.tap(t, 180, 180, 0)
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+	})
+	dev.recEnd(t, "", true)
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
+	})
 }
 
 func TestWSWebOnlyDisplayAndIdenticalAppRender(t *testing.T) {
@@ -351,8 +478,7 @@ func TestWSWebOnlyDisplayAndIdenticalAppRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	web := testConnectWS(t, base, "unit", true)
-	web.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "cake"})
-	web.until(t, hasWS("svg", ""))
+	web.helloWeb(t, id, "cake", capDrag, false)
 	b.ws.mu.Lock()
 	d := b.ws.terminals[id]
 	native := d.svg.fb != nil
@@ -368,7 +494,7 @@ func TestWSWebOnlyDisplayAndIdenticalAppRender(t *testing.T) {
 		if isDisplay(f) {
 			t.Fatal("web-only app received RGB565")
 		}
-		return hasWS("svg", "app-dot")(f)
+		return hasSVG("app-dot")(f)
 	})
 	b.ws.mu.Lock()
 	native = d.svg.fb != nil || d.appView.fb != nil
@@ -378,8 +504,11 @@ func TestWSWebOnlyDisplayAndIdenticalAppRender(t *testing.T) {
 	if native || hit != "app-dot" {
 		t.Fatal("web-only app needs hitboxes but no native framebuffer", hit)
 	}
-	web.json(t, object{"ev": "tap", "id": "app-dot", "x": 180, "y": 180})
-	web.until(t, hasWS("chime", `"kind":"tap"`))
+	web.tap(t, 180, 180, 0)
+	web.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
+	})
 	b.ws.mu.Lock()
 	unchanged := d.rev == rev && d.renderGen == gen
 	b.ws.mu.Unlock()
@@ -420,12 +549,16 @@ func TestWSRecordingLimits(t *testing.T) {
 				t.Fatal(err)
 			}
 			dev := testConnectWS(t, base, "unit", false)
-			dev.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "cake"})
-			dev.until(t, hasWS("svg", ""))
-			dev.json(t, object{"ev": "rec_start"})
-			dev.until(t, hasWS("mode", `"mode":"listening"`))
+			dev.helloWeb(t, id, "cake", capDrag, false)
+			dev.recStart(t, "")
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
+			})
+			var seq uint16
 			for chunk := range slices.Chunk(tc.pcm, pcmPacket) {
-				dev.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, chunk...)))
+				seq++
+				dev.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, chunk)
 			}
 			if tc.timeout {
 				// Wait for the server to consume the PCM before aging the recording.
@@ -434,12 +567,16 @@ func TestWSRecordingLimits(t *testing.T) {
 				b.ws.terminals[id].recording.started = time.Now().Add(-91 * time.Second)
 				b.ws.mu.Unlock()
 			}
-			dev.until(t, hasWS("rec", `"action":"stop","op":"rec","target":""`))
 			dev.until(t, func(f wsFrame) bool {
-				if hasWS("chime", `"kind":"cancel"`)(f) {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
+			})
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				if hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel {
 					t.Fatal("recording limits must not play the explicit cancel chime")
 				}
-				return hasWS("mode", `"mode":"idle"`)(f)
+				return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusDone || p[4] == statusIdle)
 			})
 			select {
 			case <-sttCalled:
@@ -487,11 +624,14 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			dev, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 			dev.hello(t, id, "Cake")
 			web.watch(t, id)
-			dev.json(t, object{"ev": "rec_start"})
-			web.until(t, hasWS("svg", "rec-send"))
-			dev.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, first...)))
-			dev.json(t, object{"ev": "tap", "x": 247, "y": 310})
-			dev.until(t, hasWS("rec", `"action":"stop","op":"rec","target":""`))
+			dev.recStart(t, "")
+			web.until(t, hasSVG("rec-send"))
+			dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, first)
+			dev.tap(t, 247, 310, 0)
+			dev.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
+			})
 			b.ws.mu.Lock()
 			d := b.ws.terminals[id]
 			stopping := d.recording.phase == captureStoppingOpen && d.recording.stopTimer != nil && bytes.Equal(d.recording.pcm, first) && !d.busy
@@ -500,8 +640,8 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 				t.Fatal("Send finalized before it could receive the final DMA packet")
 			}
 			if recEnd {
-				dev.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, tail...)))
-				dev.json(t, object{"ev": "rec_end"})
+				dev.sendRTP(t, rtpPTRecPCM, 2, 640, 1, tail)
+				dev.recEnd(t, "", false)
 			}
 			select {
 			case got := <-clips:
@@ -524,8 +664,8 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &larkServer{root: t.Context()}
-		c := &wsClient{role: "device", ctx: t.Context(), out: make(chan wsFrame, 8)}
-		d := &wsTerminal{client: c, key: "lark-no-ack", id: "lark-no-ack", screen: roundScreen, companion: blankCompanion()}
+		c := &wsClient{kind: "hardware", ctx: t.Context(), out: make(chan wsFrame, 8)}
+		d := &wsTerminal{client: c, key: "vocat-noac", id: "vocat-noac", kind: "hardware", screen: roundScreen, companion: blankCompanion()}
 		d.recording.start(time.Now(), "", false)
 		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}}
 		h.mu.Lock()
@@ -573,29 +713,44 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	}
 	from, to := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	from.hello(t, "vocat-000a", "Cake")
-	to.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-000b0000", "companion_id": "mint"})
-	to.until(t, hasWS("svg", ""))
+	to.helloWeb(t, "web-000b0000", "mint", capDrag, false)
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
-	from.json(t, object{"ev": "rec_start", "target": "mint"})
-	from.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm[:100]...)))
-	from.write(t, maskedFrame(wsBinary, true, []byte{0x03, 1, 2})) // wrong audio direction is ignored
-	from.write(t, maskedFrame(wsBinary, false, append([]byte{micPrefix}, pcm[100:140]...)))
-	from.write(t, maskedFrame(0, true, pcm[140:]))
-	from.json(t, object{"ev": "rec_end"})
-	to.until(t, hasWS("chime", `"kind":"intercom"`))
-	to.until(t, hasWS("tts", `"state":"start"`))
-	got := to.until(t, func(f wsFrame) bool { return f.op == wsBinary })
-	if got.data[0] != pcmPrefix || !bytes.Equal(got.data[1:], pcm) {
+	from.recStart(t, "mint")
+	from.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm[:100])
+	from.sendRTP(t, rtpPTCallUp, 1, 320, 1, []byte{1, 2}) // wrong audio direction is ignored
+	from.sendRTP(t, rtpPTRecPCM, 2, 640, 1, pcm[100:])
+	from.recEnd(t, "", false)
+	to.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
+	})
+	to.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
+	})
+	got := to.until(t, isPlayback)
+	if !bytes.Equal(framePayload(got), pcm) {
 		t.Fatal("raw intercom did not preserve concatenated PCM frames")
 	}
-	end := to.until(t, hasWS("tts", `"state":"end"`))
-	to.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
+	end := to.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
+	})
+	to.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	close(allowSTT)
 	closed = true
-	to.until(t, hasWS("svg", "Voice caption."))
-	to.json(t, object{"ev": "tap", "id": "reply", "x": 180, "y": 240})
-	to.until(t, hasWS("rec", `"target":"cake"`))
-	to.json(t, object{"ev": "rec_end", "cancelled": true})
+	captionFrame := to.until(t, hasSVG("Voice caption."))
+	_, capSVG := decodeFrameSVG(captionFrame)
+	rx, ry, ok := hitCenter(capSVG, "reply")
+	if !ok {
+		t.Fatal("missing reply hit")
+	}
+	to.tap(t, rx, ry, 0)
+	to.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "cake")(f) && len(p) >= 1 && p[0] == recOpStart
+	})
+	to.recEnd(t, "", true)
 }
 
 func TestWSLongPlaybackWithBackpressure(t *testing.T) {
@@ -635,30 +790,37 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		if !h.mu.TryLock() {
 			t.Fatal("playback blocked the hub while waiting for the client")
 		}
-		h.pushWS(d, object{"op": "volume", "level": 42}, false)
+		d.vol = 42
+		h.pushVolume(d, false, false)
 		h.mu.Unlock()
 
 		var got []byte
-		var audio any
+		var audio uint64
+		hasAudio := false
 		volume := false
 		for {
 			f := dev.read(t)
+			mt, _, p, ok := unpackProtoPacket(f.data)
+			if !ok {
+				continue
+			}
 			switch {
-			case hasWS("tts", `"state":"start"`)(f):
-				if audio != nil {
+			case mt == msgTTSCtrl && len(p) >= 9 && p[0] == ttsOpStart:
+				if hasAudio {
 					t.Fatal("unexpected second TTS start")
 				}
-				audio = testObject(t, f.data)["audio"]
-			case f.op == wsBinary:
-				if audio == nil || len(f.data) < 3 || len(f.data) > pcmPacket+1 || f.data[0] != pcmPrefix {
+				hasAudio = true
+				audio = binary.LittleEndian.Uint64(p[1:9])
+			case mt == msgTTSPCM:
+				if !hasAudio || len(p) == 0 || len(p) > pcmPacket {
 					t.Fatal("invalid PCM frame or PCM arrived before TTS start")
 				}
-				got = append(got, f.data[1:]...)
+				got = append(got, p...)
 				time.Sleep(5 * time.Millisecond)
-			case hasWS("volume", `"level":42`)(f):
+			case mt == msgVolume && len(p) >= 1 && p[0] == 42:
 				volume = true
-			case hasWS("tts", `"state":"end"`)(f):
-				if !volume || testObject(t, f.data)["audio"] != audio || !bytes.Equal(got, pcm) {
+			case mt == msgTTSCtrl && len(p) >= 9 && p[0] == ttsOpEnd:
+				if !volume || binary.LittleEndian.Uint64(p[1:9]) != audio || !bytes.Equal(got, pcm) {
 					t.Fatalf("invalid TTS end: volume=%v, received %d of %d PCM bytes (must match in order)", volume, len(got), len(pcm))
 				}
 				if time.Since(start) < duration-maxAudioLead {
@@ -673,9 +835,11 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "web-a1230000"
+	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+		t.Fatal(err)
+	}
 	phone := testConnectWS(t, base, "unit", true)
-	phone.json(t, object{"ev": "hello", "role": "web", "terminal_id": id})
-	phone.until(t, hasWS("svg", "companion-ring"))
+	phone.helloWeb(t, id, "cake", capDrag, false)
 	stream := newAudioStream()
 	stream.append(bytes.Repeat([]byte{12, 0}, sampleRate))
 	stream.finish(nil)
@@ -683,13 +847,19 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	d := b.ws.terminals[id]
 	b.ws.play(d, stream)
 	b.ws.mu.Unlock()
-	phone.until(t, hasWS("mode", `"mode":"speaking"`))
-	frame := phone.until(t, hasWS("tts", `"state":"end"`))
-	audio, err := testObject(t, frame.data)["audio"].(json.Number).Int64()
-	if err != nil || audio < 1 {
-		t.Fatal("missing playback ID", err)
+	phone.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusSpeaking
+	})
+	frame := phone.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
+	})
+	audio := binary.LittleEndian.Uint64(framePayload(frame)[1:9])
+	if audio < 1 {
+		t.Fatal("missing playback ID")
 	}
-	phone.json(t, object{"ev": "tts_ack", "state": "done", "audio": audio + 1})
+	phone.sendProto(t, msgTTSAck, encodeTTSAck(false, audio+1))
 	phone.barrier(t)
 	b.ws.mu.Lock()
 	awaiting := d.awaitAck
@@ -697,44 +867,54 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	if !awaiting {
 		t.Fatal("a stale acknowledgment changed the current playback mode")
 	}
-	phone.json(t, object{"ev": "tts_ack", "state": "done", "audio": audio})
-	phone.until(t, hasWS("mode", `"mode":"idle"`))
+	phone.sendProto(t, msgTTSAck, encodeTTSAck(false, audio))
+	phone.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusDone || p[4] == statusIdle)
+	})
 }
 
 func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "lark-abort"
+	const id = "vocat-abrt"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
-	play := func() json.Number {
+	play := func() uint64 {
 		stream := newAudioStream()
 		stream.append(bytes.Repeat([]byte{12, 0}, 800))
 		stream.finish(nil)
 		b.ws.mu.Lock()
 		d := b.ws.terminals[id]
 		b.ws.play(d, stream)
-		audio := json.Number(strconv.FormatUint(d.audio, 10))
+		audio := d.audio
 		b.ws.mu.Unlock()
 		return audio
 	}
 	first := play()
-	dev.until(t, hasWS("tts", `"state":"end"`))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
+	})
 	second := play()
 	if first == second {
 		t.Fatal("replacement reused the aborted generation")
 	}
 	abort := dev.until(t, func(f wsFrame) bool {
-		if hasWS("chime", `"kind":"cancel"`)(f) || hasWS("tts", `"state":"end"`)(f) || hasWS("tts", `"state":"start"`)(f) {
-			t.Fatalf("abort did not precede replacement: %s", f.data)
+		p := framePayload(f)
+		if hasProto(msgChime, "")(f) || (hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && (p[0] == ttsOpEnd || p[0] == ttsOpStart)) {
+			t.Fatalf("abort did not precede replacement: %x", p)
 		}
-		return hasWS("tts", `"state":"abort"`)(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStop
 	})
-	if got := testObject(t, abort.data)["audio"]; got != first {
-		t.Fatalf("abort used audio ID %v, want %v", got, first)
+	if got := binary.LittleEndian.Uint64(framePayload(abort)[1:9]); got != first {
+		t.Fatalf("abort used audio ID %d, want %d", got, first)
 	}
-	dev.until(t, hasWS("tts", `"state":"end"`))
-	dev.json(t, object{"ev": "tts_ack", "state": "done", "audio": first})
-	dev.json(t, object{"ev": "tts_ack", "state": "interrupted", "audio": first})
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
+	})
+	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, first))
+	dev.sendProto(t, msgTTSAck, encodeTTSAck(true, first))
 	dev.barrier(t)
 	awaiting := func() bool {
 		b.ws.mu.Lock()
@@ -744,12 +924,12 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	if !awaiting() {
 		t.Fatal("aborted stream ACK cleared replacement playback")
 	}
-	dev.json(t, object{"ev": "tts_ack", "state": "done"})
+	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, 0))
 	dev.barrier(t)
 	if !awaiting() {
 		t.Fatal("ACK without an audio ID cleared replacement playback")
 	}
-	dev.json(t, object{"ev": "tts_ack", "state": "done", "audio": second})
+	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, second))
 	dev.barrier(t)
 	if awaiting() {
 		t.Fatal("matching audio ACK did not clear replacement playback")
@@ -850,15 +1030,18 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 			b.db, dir, ocSettings{})
 	})
 	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, "lark-a", "Cake")
+	dev.hello(t, "vocat-a000", "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
-	mirror.watch(t, "lark-a")
-	dev.json(t, object{"ev": "rec_start"})
-	dev.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm...)))
-	dev.json(t, object{"ev": "rec_end", "cancelled": false})
-	start := dev.until(t, hasWS("tts", `"state":"start"`))
+	mirror.watch(t, "vocat-a000")
+	dev.recStart(t, "")
+	dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	dev.recEnd(t, "", false)
+	start := dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStart
+	})
 	got := dev.until(t, isPlayback)
-	if got.data[0] != pcmPrefix || !bytes.Equal(got.data[1:], speech) {
+	if !bytes.Equal(framePayload(got), speech) {
 		t.Fatal("did not receive eager Kokoro frame")
 	}
 	b.diag.sig.wait(t, func() bool {
@@ -867,11 +1050,14 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	})
 	if stopWhileGenerating {
 		mirror.until(t, func(f wsFrame) bool {
-			return hasWS("svg", `aria-label=\"Stop\"`)(f) && !bytes.Contains(f.data, []byte("Thinking"))
+			return hasSVG(`aria-label="Stop"`)(f) && !bytes.Contains(f.data, []byte("Thinking"))
 		})
-		dev.json(t, object{"ev": "tap", "x": 180, "y": 315})
-		abort := dev.until(t, hasWS("tts", `"state":"abort"`))
-		if testObject(t, abort.data)["audio"] != testObject(t, start.data)["audio"] {
+		dev.tap(t, 180, 315, 0)
+		abort := dev.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStop
+		})
+		if binary.LittleEndian.Uint64(framePayload(abort)[1:9]) != binary.LittleEndian.Uint64(framePayload(start)[1:9]) {
 			t.Fatal("one Stop tap must abort the audio that is playing")
 		}
 		entries := apiObjects(t, base+"/api/companions/cake/messages", "messages")
@@ -882,14 +1068,17 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	}
 	closeRelease()
 	got = dev.until(t, isPlayback)
-	if len(got.data) != 1+sampleRate/5+len(speech) || !bytes.HasSuffix(got.data, speech) {
+	if len(framePayload(got)) != sampleRate/5+len(speech) || !bytes.HasSuffix(framePayload(got), speech) {
 		t.Fatal("did not receive tail sentence")
 	}
-	end := dev.until(t, hasWS("tts", `"state":"end"`))
-	dev.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
+	end := dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
+	})
+	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	dev.barrier(t)
 	b.ws.mu.Lock()
-	d := b.ws.terminals["lark-a"]
+	d := b.ws.terminals["vocat-a000"]
 	settled := !d.busy && !d.awaitAck && d.scene.title == ""
 	b.ws.mu.Unlock()
 	if !settled {

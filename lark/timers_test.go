@@ -58,25 +58,35 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0001", "Cake")
 	web := testConnectWS(t, base, "unit", false)
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "companion_id": id})
-	web.until(t, hasWS("svg", ""))
+	web.watch(t, id)
 	patchControl(t, base, id, object{"sleep": true})
-	dev.until(t, hasWS("power", `"brightness":12`))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
+	})
 
 	set := object{"companion_id": id, "in_seconds": 1, "label": "Cake break", "say": "Take a break."}
 	timer := patchTimerTest(t, base, set, false)
-	hasUpdate := func(f wsFrame) bool { return bytes.Contains(f.data, []byte(`"type":"timers"`)) }
+	hasUpdate := func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgEvent, id)(f) && len(p) >= 5 && p[4] == eventTimers
+	}
 	web.until(t, hasUpdate)
 	if got := apiObjects(t, base+"/api/timers?companion_id="+id, "timers"); len(got) != 1 || got[0].(object)["id"] != timer["id"] {
 		t.Fatal(got)
 	}
-	dev.until(t, hasWS("power", `"brightness":85`))
-	dev.until(t, hasWS("chime", `"kind":"intercom"`))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
+	})
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
+	})
 	var card wsFrame
 	updated := false
 	web.until(t, func(f wsFrame) bool {
-		if hasWS("svg", "up!")(f) {
+		if hasSVG("up!")(f) {
 			card = f
 		}
 		updated = updated || hasUpdate(f)
@@ -85,13 +95,13 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	if !bytes.Contains(card.data, []byte("OK")) || !bytes.Contains(card.data, []byte("Cake break")) {
 		t.Fatal(string(card.data))
 	}
-	dev.until(t, func(f wsFrame) bool { return f.op == wsBinary && bytes.Equal(f.data, []byte{pcmPrefix, 1, 2, 3, 4}) })
+	dev.until(t, func(f wsFrame) bool { return isPlayback(f) && bytes.Equal(framePayload(f), []byte{1, 2, 3, 4}) })
 	expectValue(t, tts, fableVoice)
 	if len(tts) != 0 || len(apiObjects(t, base+"/api/timers", "timers")) != 0 {
 		t.Fatal("timer didn't synthesize and remove exactly once")
 	}
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 315})
-	web.until(t, hasWS("svg", "companion-ring"))
+	dev.tap(t, 180, 315, 0)
+	web.until(t, hasSVG("companion-ring"))
 	entries := apiObjects(t, base+"/api/companions/"+id+"/messages", "messages")
 	if len(entries) != 2 || entries[0].(object)["text"] != "Timer: Cake break" || entries[1].(object)["source"] != "timer" {
 		t.Fatal(entries)
@@ -118,9 +128,7 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 	const id, name = "cake", "stretch"
 	dev, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	dev.hello(t, "vocat-0002", "Cake")
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "companion_id": id})
-	web.until(t, hasWS("svg", "companion-ring"))
+	web.watch(t, id)
 	set := object{"op": "set", "companion_id": id, "in_seconds": 1, "app": name}
 	if out := patchTimerTest(t, base, set, true); !strings.Contains(str(out["error"]), "App not found") {
 		t.Fatal(out)
@@ -132,8 +140,11 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 	if out := patchTimerTest(t, base, set, false); out["app"] != name {
 		t.Fatal(out)
 	}
-	dev.until(t, hasWS("chime", `"kind":"intercom"`))
-	web.until(t, hasWS("svg", "Stretch now"))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
+	})
+	web.until(t, hasSVG("Stretch now"))
 	if a := stateMe(t, base, id)["active_app"].(object); a["name"] != name {
 		t.Fatal(a)
 	}
@@ -223,7 +234,10 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 	if _, err := b.db.Exec("ALTER TABLE paused_timers RENAME TO timers"); err != nil {
 		t.Fatal(err)
 	}
-	board.until(t, hasWS("chime", `"kind":"intercom"`))
+	board.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
+	})
 	b.timers.fire(timer.ID, nil)
 	left, err := b.timers.list(t.Context(), id)
 	if err != nil || len(left) != 0 {

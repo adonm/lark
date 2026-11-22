@@ -39,8 +39,11 @@ func TestMCPDeclarativeScreen(t *testing.T) {
 	round := testConnectWS(t, base, "unit", false)
 	box := testConnectWS(t, base, "unit", false)
 	round.helloV2(t, "vocat-0001", "Cake")
-	box.json(t, object{"ev": "hello", "role": "device", "terminal_id": "box3-0001", "character": "Mint", "proto": 2,
-		"firmware": "0.9.5", "width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
+	box.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
+		width: 320, height: 240, shape: shapeRect, terminalID: "box3-0001", companionID: "Mint", board: "esp-box-3", firmware: "0.12.0",
+	}))
+	box.until(t, hasProto(msgWelcome, ""))
 	box.until(t, isDisplay)
 	ids := []string{"cake", "mint"}
 	spec, err := decodeObject([]byte(screenTestSpec))
@@ -98,7 +101,7 @@ func TestJSDeclarativeScreen(t *testing.T) {
 		return ui.screen(` + screenTestSpec + `);
 	}`
 	for _, g := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
-		d := &wsTerminal{screen: g, client: &wsClient{role: "device"}}
+		d := &wsTerminal{kind: "hardware", screen: g, client: &wsClient{kind: "hardware"}}
 		spec := savedApp{Code: code}
 		_, views, err := initApp(spec, []appPlayer{{id: "pixel"}}, nil, []*wsTerminal{d}, nil, buildScreen)
 		if err != nil {

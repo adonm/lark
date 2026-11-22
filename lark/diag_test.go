@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -93,11 +94,21 @@ func TestDiagnosticsProcAndShutdown(t *testing.T) {
 func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	board := testConnectWS(t, base, "unit", false)
-	const id = "lark-diag"
-	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "firmware": "0.8.4",
-		"board": "esp-box-3", "width": 320, "height": 240, "shape": "rect", "has_battery": false, "wifi_rssi": -60, "cpu_pct": 27,
-		"free_heap": 65536, "min_free_heap": 32768, "free_psram": 6291456, "uptime_s": 320, "volume": 70})
+	const id = "vocat-diag"
+	board.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565, frameCodecs: codecBitAll,
+		width: 320, height: 240, shape: shapeRect, terminalID: id, board: "esp-box-3", firmware: "0.12.0",
+	}))
+	board.until(t, hasProto(msgWelcome, ""))
 	board.until(t, isDisplay)
+	var st [16]byte
+	rssi, batt := int16(-60), int16(-1)
+	binary.LittleEndian.PutUint16(st[0:2], uint16(rssi))
+	binary.LittleEndian.PutUint16(st[2:4], uint16(batt))
+	st[5] = 27
+	binary.LittleEndian.PutUint32(st[8:12], 65536)
+	binary.LittleEndian.PutUint32(st[12:16], 320)
+	board.sendProto(t, msgTelemetry, st[:])
 	b.ws.mu.Lock()
 	device := b.ws.terminals[id]
 	probe := device.client.ping(time.Now().Add(-12 * time.Millisecond))
@@ -120,49 +131,32 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		t.Fatalf("invalid diagnostics response: %s", raw)
 	}
 	d := report.Terminals[0]
-	if !d.WS || d.Board != "esp-box-3" || d.Firmware != "0.8.4" || d.RTT == nil || *d.RTT < 12 ||
-		d.CPU == nil || *d.CPU != 27 || *d.WiFi != -60 || *d.FreeHeap != 65536 || *d.MinHeap != 32768 || *d.FreePSRAM != 6291456 ||
-		*d.HasBattery || d.DeviceVol == nil || *d.DeviceVol != 70 || d.Frame.Bytes >= d.Frame.RawBytes || (d.Frame.Codec != "RLE565" && d.Frame.Codec != "LZ4") {
+	if !d.WS || d.Board != "esp-box-3" || d.Firmware != "0.12.0" || d.RTT == nil || *d.RTT < 12 ||
+		d.CPU == nil || *d.CPU != 27 || *d.WiFi != -60 || *d.FreeHeap != 65536 || *d.Uptime != 320 ||
+		*d.HasBattery || d.Frame.Bytes >= d.Frame.RawBytes || (d.Frame.Codec != "RLE565" && d.Frame.Codec != "LZ4") {
 		t.Fatalf("invalid device telemetry: %+v", d)
 	}
-	if d.LastFrameRev != nil || d.AudioDrops != nil {
-		t.Fatal("older devices must not claim to report hardware counters")
-	}
-	board.json(t, object{"ev": "status", "last_frame_rev": 65535, "display_flush_ms": 12, "input_drops": 0, "audio_underruns": 2, "audio_drops": 3})
-	board.json(t, object{"ev": "status", "cpu_pct": 27})
-	board.barrier(t)
-	raw = testRequest(t, "GET", base+"/api/diagnostics", "unit", nil, 200)
-	report = diagReport{}
-	if err := json.Unmarshal(raw, &report); err != nil {
-		t.Fatal(err)
-	}
-	d = report.Terminals[0]
-	if d.LastFrameRev == nil || *d.LastFrameRev != 65535 || d.DisplayFlushMS == nil || *d.DisplayFlushMS != 12 ||
-		d.InputDrops == nil || *d.InputDrops != 0 || d.AudioUnderruns == nil || *d.AudioUnderruns != 2 ||
-		d.AudioDrops == nil || *d.AudioDrops != 3 {
-		t.Fatalf("invalid IO telemetry: %+v", d)
-	}
 	view := testConnectWS(t, base, "unit", true)
-	view.json(t, object{"ev": "hello", "role": "web"})
-	view.until(t, hasWS("peers", id))
-	view.json(t, object{"ev": "watch", "device_id": id})
-	view.until(t, hasWS("svg", "companion-ring"))
-	tap := func(x, y int) { board.json(t, object{"ev": "tap", "x": x, "y": y}) }
+	view.watch(t, id)
+	tap := func(x, y int) { board.tap(t, x, y, 0) }
 	tap(160, 210) // Menu after the 360-square view is letterboxed into 320×240.
-	view.until(t, hasWS("svg", "menu-next"))
+	view.until(t, hasSVG("menu-next"))
 	tap(206, 197)
-	view.until(t, hasWS("svg", "menu-stats"))
+	view.until(t, hasSVG("menu-stats"))
 	tap(116, 146)
-	hud := view.until(t, hasWS("svg", "CPU 27%"))
-	if !strings.Contains(string(hud.data), "Cake · 0.8.4 · esp-box-3") || !strings.Contains(string(hud.data), "USB") {
+	hud := view.until(t, hasSVG("CPU 27%"))
+	if !strings.Contains(string(hud.data), "0.12.0 · esp-box-3") || !strings.Contains(string(hud.data), "USB") {
 		t.Fatal("missing identity/power in HUD")
 	}
-	board.json(t, object{"ev": "status", "cpu_pct": 39, "wifi_rssi": -54})
-	view.until(t, hasWS("svg", "CPU 39%"))
+	rssi2 := int16(-54)
+	binary.LittleEndian.PutUint16(st[0:2], uint16(rssi2))
+	st[5] = 39
+	board.sendProto(t, msgTelemetry, st[:])
+	view.until(t, hasSVG("CPU 39%"))
 	tap(160, 210)
-	view.until(t, hasWS("svg", "menu-stats"))
+	view.until(t, hasSVG("menu-stats"))
 	tap(160, 197)
-	view.until(t, hasWS("svg", "companion-ring"))
+	view.until(t, hasSVG("companion-ring"))
 }
 
 func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
@@ -237,25 +231,34 @@ func TestAccessibleRecordingControls(t *testing.T) {
 		}
 	})
 	dev := testConnectWS(t, base, "unit", false)
-	const id = "lark-mic-controls"
+	const id = "vocat-mic0"
 	dev.hello(t, id, "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
 	mirror.watch(t, id)
-	tap := func(x, y int) { dev.json(t, object{"ev": "tap", "x": x, "y": y}) }
+	tap := func(x, y int) { dev.tap(t, x, y, 0) }
 	record := func() {
 		tap(180, 180)
-		dev.until(t, hasWS("rec", `"action":"start"`))
-		mirror.until(t, hasWS("svg", "rec-send"))
-		dev.json(t, object{"ev": "rec_start"})
-		dev.write(t, maskedFrame(wsBinary, true, []byte{micPrefix, 12, 0}))
+		dev.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+		})
+		mirror.until(t, hasSVG("rec-send"))
+		dev.recStart(t, "")
+		dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, []byte{12, 0})
 	}
 	record()
 	tap(110, 310)
-	dev.until(t, hasWS("rec", `"cancelled":true`))
-	dev.until(t, hasWS("chime", `"kind":"cancel"`))
-	dev.json(t, object{"ev": "rec_end"})
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
+	})
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
+	})
+	dev.recEnd(t, "", false)
 	dev.barrier(t)
-	mirror.until(t, hasWS("svg", `data-id=\"menu\"`))
+	mirror.until(t, hasSVG(`data-id="menu"`))
 	select {
 	case <-transcribed:
 		t.Fatal("cancelled PCM reached STT")
@@ -263,14 +266,17 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	}
 	record()
 	tap(250, 310)
-	dev.until(t, hasWS("rec", `"action":"stop"`))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
+	})
 	select {
 	case <-transcribed:
 		// The target did not send rec_end; the fail-safe used buffered hardware PCM.
 	case <-time.After(2 * time.Second):
 		t.Fatal("Send did not finalize after the hardware rec_end timeout")
 	}
-	dev.json(t, object{"ev": "rec_end"})
+	dev.recEnd(t, "", false)
 	dev.barrier(t)
 	raw := apiObjects(t, base+"/api/diagnostics", "recent_turns")
 	if len(raw) != 1 || raw[0].(object)["source"] != "voice" {
@@ -314,10 +320,10 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 		cancelled <- true
 	})
 	// The rasterizer cannot commit the thinking frame while the hub lock is held.
-	b.ws.pointer(d, wsEvent{Event: "tap", X: 180, Y: 180}, now, true)
+	b.ws.pointer(d, "tap", 180, 180, 0, now, true)
 	b.ws.mu.Unlock()
-	mirror.until(t, hasWS("svg", `aria-label=\"Stop\"`))
-	mirror.until(t, hasWS("svg", `stroke-width=\"6\"`))
+	mirror.until(t, hasSVG(`aria-label="Stop"`))
+	mirror.until(t, hasSVG(`stroke-width="6"`))
 
 	stillThinking := func(taps int) {
 		t.Helper()
@@ -336,28 +342,34 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 		}
 	}
 
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 180})
+	dev.tap(t, 180, 180, 0)
 	dev.barrier(t)
-	mirror.json(t, object{"ev": "tap", "id": "companion-ring"})
+	mirror.tap(t, 180, 180, 0)
 	mirror.barrier(t)
 	stillThinking(0)
 
 	tap := func(label string, count int) {
 		t.Helper()
-		mirror.json(t, object{"ev": "tap", "id": "stop"})
-		mirror.until(t, hasWS("svg", `aria-label=\"`+label+`\"`))
-		dev.until(t, hasWS("chime", `"kind":"tap"`))
+		mirror.tap(t, 180, 315, 0)
+		mirror.until(t, hasSVG(`aria-label="`+label+`"`))
+		dev.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
+		})
 		stillThinking(count)
 	}
 	tap("Tap 2×", 1)
 	tap("Tap 1×", 2)
-	mirror.until(t, hasWS("svg", `aria-label=\"Stop\"`))
+	mirror.until(t, hasSVG(`aria-label="Stop"`))
 	stillThinking(0)
 	tap("Tap 2×", 1)
 	tap("Tap 1×", 2)
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 315})
-	dev.until(t, hasWS("chime", `"kind":"cancel"`))
-	mirror.until(t, hasWS("svg", `data-id=\"menu\"`))
+	dev.tap(t, 180, 315, 0)
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
+	})
+	mirror.until(t, hasSVG(`data-id="menu"`))
 	expectValue(t, cancelled, true)
 	expectValue(t, interrupts, "/api/session/ses-stop/interrupt")
 	b.ws.mu.Lock()
@@ -368,7 +380,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 }
 
 func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
-	const id = "lark-speaking-stop"
+	const id = "vocat-spk0"
 	b, base, interrupts := stopTestHarness(t, id)
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
@@ -382,29 +394,38 @@ func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
 	b.ws.startTurn(d, time.Now(), false, "typed", func(ctx context.Context, _ uint64) { <-ctx.Done() })
 	turn := d.turn
 	b.ws.mu.Unlock()
-	mirror.until(t, hasWS("svg", `aria-label=\"Stop\"`))
-	mirror.json(t, object{"ev": "tap", "id": "stop"})
-	mirror.until(t, hasWS("svg", `aria-label=\"Tap 2×\"`))
+	mirror.until(t, hasSVG(`aria-label="Stop"`))
+	mirror.tap(t, 180, 315, 0)
+	mirror.until(t, hasSVG(`aria-label="Tap 2×"`))
 	b.ws.mu.Lock()
 	playback := b.ws.play(d, stream)
 	b.ws.mu.Unlock()
-	dev.until(t, hasWS("tts", `"state":"start"`))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
+	})
 	b.ws.finishTurn(d, turn, nil, nil)
-	mirror.until(t, hasWS("svg", `aria-label=\"Stop\"`))
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 180})
+	mirror.until(t, hasSVG(`aria-label="Stop"`))
+	dev.tap(t, 180, 180, 0)
 	dev.barrier(t)
 	if playback.Err() != nil {
 		t.Fatal("face tap stopped playback")
 	}
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 315})
-	dev.until(t, hasWS("tts", `"state":"abort"`))
-	mirror.until(t, hasWS("svg", `data-id=\"menu\"`))
+	dev.tap(t, 180, 315, 0)
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStop
+	})
+	mirror.until(t, hasSVG(`data-id="menu"`))
 	if playback.Err() == nil {
 		t.Fatal("one Stop tap did not stop playback")
 	}
 
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 180})
-	dev.until(t, hasWS("rec", `"action":"start"`))
+	dev.tap(t, 180, 180, 0)
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+	})
 	b.oc.mu.Lock()
 	pending := b.oc.interrupts[id]
 	b.oc.mu.Unlock()

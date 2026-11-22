@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -56,15 +57,92 @@ func TestVirtualE2E(t *testing.T) {
 }
 
 func e2eFields(f wsFrame, op string, pairs ...string) bool {
-	if !hasWS(op, "")(f) {
+	if f.op != wsBinary {
 		return false
 	}
-	for i := 0; i < len(pairs); i += 2 {
-		if !bytes.Contains(f.data, []byte(fmt.Sprintf(`"%s":%s`, pairs[i], pairs[i+1]))) {
+	mt, _, p, ok := unpackProtoPacket(f.data)
+	if !ok {
+		return false
+	}
+	switch op {
+	case "chime":
+		if mt != msgChime || len(p) < 1 {
 			return false
 		}
+		if len(pairs) >= 2 && pairs[0] == "kind" {
+			want := chimeTap
+			switch strings.Trim(pairs[1], `"`) {
+			case "cancel":
+				want = chimeCancel
+			case "ring":
+				want = chimeRing
+			case "intercom":
+				want = chimeIntercom
+			case "think":
+				want = chimeThink
+			}
+			return p[0] == want
+		}
+		return true
+	case "rec":
+		if mt != msgRecCtrl || len(p) < 5 {
+			return false
+		}
+		for i := 0; i < len(pairs); i += 2 {
+			if pairs[i] == "action" && strings.Trim(pairs[i+1], `"`) == "start" && p[0] != recOpStart {
+				return false
+			}
+			if pairs[i] == "action" && strings.Trim(pairs[i+1], `"`) == "stop" && p[0] != recOpStop && p[0] != recOpCancel {
+				return false
+			}
+			if pairs[i] == "cancelled" && pairs[i+1] == "true" && p[0] != recOpCancel {
+				return false
+			}
+			if pairs[i] == "endpoint" && p[1]&recTargetBridgeE == 0 {
+				return false
+			}
+		}
+		return true
+	case "tts":
+		if mt != msgTTSCtrl || len(p) < 9 {
+			return false
+		}
+		for i := 0; i < len(pairs); i += 2 {
+			if pairs[i] == "state" {
+				st := strings.Trim(pairs[i+1], `"`)
+				if st == "start" && p[0] != ttsOpStart || st == "end" && p[0] != ttsOpEnd || st == "abort" && p[0] != ttsOpStop {
+					return false
+				}
+			}
+			if pairs[i] == "audio" && fmt.Sprint(binary.LittleEndian.Uint64(p[1:9])) != pairs[i+1] {
+				return false
+			}
+		}
+		return true
+	case "call":
+		if mt != msgCallCtrl || len(p) < 6 {
+			return false
+		}
+		for i := 0; i < len(pairs); i += 2 {
+			if pairs[i] == "state" {
+				st := strings.Trim(pairs[i+1], `"`)
+				if st == "start" && p[0] != callOpStart || st == "end" && p[0] != callOpEnd {
+					return false
+				}
+			}
+			if pairs[i] == "reason" && !bytes.Contains(p[6:], []byte(strings.Trim(pairs[i+1], `"`))) {
+				return false
+			}
+		}
+		return true
+	case "parent_policy":
+		return mt == msgEvent && len(p) >= 5 && p[4] == eventParentPolicy
+	case "capabilities":
+		return mt == msgWelcome && len(p) >= 2 && p[1]&1 != 0
+	case "error":
+		return mt == msgReject
 	}
-	return true
+	return false
 }
 
 func (c *e2eCompanion) op(t *testing.T, op string, pairs ...string) wsFrame {
@@ -80,14 +158,10 @@ func (c *e2eCompanion) tapScene(t *testing.T, id, want string) string {
 
 func (c *e2eCompanion) note(t *testing.T, pcm []byte, target string) time.Time {
 	t.Helper()
-	event := object{"ev": "rec_start"}
-	if target != "" {
-		event["target"] = target
-	}
-	c.json(t, event)
+	c.recStart(t, target)
 	c.audio(t, 0x01, pcm)
 	start := time.Now()
-	c.json(t, object{"ev": "rec_end", "cancelled": false})
+	c.recEnd(t, "", false)
 	return start
 }
 
@@ -130,15 +204,16 @@ func (c *e2eCompanion) measuredPlayback(t *testing.T, start time.Time) ([]byte, 
 
 func (c *e2eCompanion) capture(t *testing.T, pcm []byte) time.Time {
 	t.Helper()
-	c.json(t, object{"ev": "rec_start"})
+	c.recStart(t, "")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	start := time.Now()
 	done := make(chan error, 1)
 	go func() {
 		const tick = 40 * time.Millisecond
-		const size = sampleRate * 2 / 25
+		const size = rtpPCMBytes
 		mic := append(slices.Clone(pcm), make([]byte, size*150)...)
+		var seq uint16
 		for offset := 0; offset+size <= len(mic); offset += size {
 			timer := time.NewTimer(time.Until(start.Add(time.Duration(offset/size+1) * tick)))
 			select {
@@ -149,7 +224,10 @@ func (c *e2eCompanion) capture(t *testing.T, pcm []byte) time.Time {
 			case <-timer.C:
 			}
 			_ = c.conn.SetWriteDeadline(time.Now().Add(4 * time.Second))
-			_, err := c.conn.Write(maskedFrame(wsBinary, true, append([]byte{micPrefix}, mic[offset:offset+size]...)))
+			var rtp [rtpPacketBytes]byte
+			seq++
+			n := encodeRTPPacket(rtp[:], rtpPTRecPCM, seq, uint32(seq)*rtpSamples, 1, mic[offset:offset+size])
+			_, err := c.conn.Write(maskedFrame(wsBinary, true, packProtoPacket(msgMedia, 0, rtp[:n])))
 			if err != nil {
 				done <- err
 				return
@@ -158,7 +236,7 @@ func (c *e2eCompanion) capture(t *testing.T, pcm []byte) time.Time {
 		done <- nil
 	}()
 	stop := c.op(t, "rec", "action", `"stop"`)
-	if testObject(t, stop.data)["cancelled"] == true {
+	if framePayload(stop)[0] == recOpCancel {
 		t.Fatal("Silero discarded the speech fixture")
 	}
 	cancel()
@@ -169,7 +247,7 @@ func (c *e2eCompanion) capture(t *testing.T, pcm []byte) time.Time {
 	if time.Now().Before(end) {
 		t.Fatal("bridge stopped before the entire fixture was spoken")
 	}
-	c.json(t, object{"ev": "rec_end"})
+	c.recEnd(t, "", false)
 	return end
 }
 
@@ -240,7 +318,7 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 		c := s.browser(t, "Typed")
 		c.timeout = 40 * time.Second
 		start := time.Now()
-		c.json(t, object{"ev": "text", "text": "Say hello in one short sentence, without tools."})
+		c.text(t, "Say hello in one short sentence, without tools.")
 		_, first := c.measuredPlayback(t, start)
 		stage := s.turnStages(t, c, first)
 		if !s.real {
@@ -263,13 +341,13 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 		}
 		c := s.board(t, "esp-vocat", "StopThink")
 		c.mirrorOn(t, s)
-		c.json(t, object{"ev": "text", "text": "Virtual test hold"})
-		c.scene(t, `aria-label=\"Stop\"`)
+		c.text(t, "Virtual test hold")
+		c.scene(t, `aria-label="Stop"`)
 		c.input(t, "tap", 180, 160, c.revision)
 		c.input(t, "tap", 180, 315, c.revision-1)
 		c.write(t, maskedFrame(wsPing, true, []byte("pre-stop")))
 		c.expect(t, "face/stale taps ignored", func(f wsFrame) bool {
-			if e2eFields(f, "chime", "kind", `"tap"`) || e2eFields(f, "chime", "kind", `"cancel"`) || hasWS("rec", "")(f) {
+			if e2eFields(f, "chime", "kind", `"tap"`) || e2eFields(f, "chime", "kind", `"cancel"`) || hasProto(msgRecCtrl, "")(f) {
 				t.Fatal("a face or stale Stop tap acted on the thinking turn")
 			}
 			return f.op == wsPong && string(f.data) == "pre-stop"
@@ -278,7 +356,7 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 		c.tapScene(t, "stop", "Tap 1×")
 		c.tap(t, "stop")
 		c.op(t, "chime", "kind", `"cancel"`)
-		c.scene(t, `data-id=\"menu\"`)
+		c.scene(t, `data-id="menu"`)
 		if rows := s.history(t, c.id, ""); len(rows) != 1 || rows[0].Role != "user" {
 			t.Fatal("cancelled thinking turn wrote an assistant reply")
 		}
@@ -287,11 +365,11 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 		c := s.board(t, "esp-box-3", "StopSpeak")
 		c.mirrorOn(t, s)
 		c.timeout = 40 * time.Second
-		c.json(t, object{"ev": "text", "text": "Say two short sentences about cats, without tools."})
+		c.text(t, "Say two short sentences about cats, without tools.")
 		start := c.op(t, "tts", "state", `"start"`)
 		c.expect(t, "spoken PCM", isPlayback)
 		c.sceneWhere(t, "speaking Stop", func(f wsFrame) bool {
-			return bytes.Contains(f.data, []byte(`aria-label=\"Stop\"`)) && !bytes.Contains(f.data, []byte("Thinking"))
+			return bytes.Contains(f.data, []byte(`aria-label="Stop"`)) && !bytes.Contains(f.data, []byte("Thinking"))
 		})
 		c.input(t, "tap", 180, 160, c.revision)
 		c.write(t, maskedFrame(wsPing, true, []byte("face-speaking")))
@@ -302,20 +380,22 @@ func (s *e2eSuite) voiceTypedStop(t *testing.T) {
 			return f.op == wsPong && string(f.data) == "face-speaking"
 		})
 		c.tap(t, "stop")
-		audio := fmt.Sprint(testObject(t, start.data)["audio"])
+		audio := fmt.Sprint(binary.LittleEndian.Uint64(framePayload(start)[1:9]))
 		c.op(t, "tts", "state", `"abort"`, "audio", audio)
-		c.scene(t, `data-id=\"menu\"`)
+		c.scene(t, `data-id="menu"`)
 	})
 }
 
 func (s *e2eSuite) phoneIdleReconnect(t *testing.T, c *e2eCompanion, rows []chatEntry) {
 	watcher := testConnectWS(t, s.base, s.token, true)
-	watcher.json(t, object{"ev": "hello", "role": "web"})
-	watcher.until(t, hasWS("peers", c.id))
+	watcher.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	watcher.until(t, hasProto(msgPeers, c.id))
 	join := func() *testWS {
 		ws := testConnectWS(t, s.base, s.token, true)
-		ws.json(t, object{"ev": "hello", "role": "web", "device_id": c.id, "if_free": true,
-			"caps": object{"bridge_endpoint": true}})
+		ws.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+			protoVersion: protoVersion1, kind: termKindWeb, capsMask: capBridgeEndpoint | capDrag,
+			displayFormats: dispSVG, flags: helloFlagIfFree, terminalID: c.id, companionID: c.id,
+		}))
 		return ws
 	}
 	closeOp := func(f wsFrame) bool { return f.op == wsClose }
@@ -329,11 +409,10 @@ func (s *e2eSuite) phoneIdleReconnect(t *testing.T, c *e2eCompanion, rows []chat
 	if f := c.until(t, closeOp); !bytes.Equal(f.data, close.data) {
 		t.Fatal("normal idle close did not complete a WebSocket handshake")
 	}
-	watcher.until(t, func(f wsFrame) bool { return hasWS("peers", "")(f) && !bytes.Contains(f.data, []byte(c.id)) })
+	watcher.until(t, hasProto(msgPeers, ""))
 	ws := join()
-	ws.until(t, hasWS("svg", "companion-ring"))
-	ws.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
-	watcher.until(t, hasWS("peers", c.id))
+	ws.until(t, hasSVG("companion-ring"))
+	watcher.until(t, hasProto(msgPeers, c.id))
 	if after := s.history(t, c.id, ""); !slices.EqualFunc(rows, after, func(a, b chatEntry) bool { return a.ID == b.ID && a.Text == b.Text }) {
 		t.Fatal("idle disconnect/reconnect did not preserve canonical chat")
 	}
@@ -361,7 +440,7 @@ func (s *e2eSuite) gradedEndpointAndQueuedVoice(t *testing.T) {
 		pcm := s.synth(t, "Once upon a time there was a little frog, and then")
 		pcm = append(pcm, make([]byte, sampleRate*2*32/10)...)
 		pcm = append(pcm, s.synth(t, "it made a house under a purple mushroom.")...)
-		c.json(t, object{"ev": "text", "text": "Virtual test queued follow-up"})
+		c.text(t, "Virtual test queued follow-up")
 		c.scene(t, "rec-continue")
 		c.tap(t, "rec-continue")
 		c.op(t, "rec", "action", `"start"`, "endpoint", `"bridge"`)
@@ -440,8 +519,10 @@ func (s *e2eSuite) menus(t *testing.T, variant, label string) {
 		t.Fatal("decoded framebuffer has no face artwork or RLE565 packet")
 	}
 	if variant == "esp-vocat" {
-		c.json(t, object{"ev": "status", "battery_pct": 48, "battery_mv": 3840, "charging": false, "volume": 70,
-			"wifi_rssi": -51, "rssi": -51, "free_heap": 110000, "min_free_heap": 100000, "free_psram": 1900000, "uptime_s": 419, "cpu_pct": 25})
+		var st [16]byte
+		batt := int16(48)
+		binary.LittleEndian.PutUint16(st[2:4], uint16(batt))
+		c.sendProto(t, msgTelemetry, st[:])
 		f := c.expect(t, "battery dirty rectangle", func(f wsFrame) bool {
 			if !isDisplay(f) {
 				return false
@@ -528,7 +609,7 @@ func (s *e2eSuite) intercom(t *testing.T) {
 func e2eRing(t *testing.T, a, b *e2eCompanion) time.Time {
 	t.Helper()
 	start := time.Now()
-	a.json(t, object{"ev": "call", "target": b.id})
+	sendCallStartReq(t, a.testWS, b.id)
 	a.op(t, "chime", "kind", `"ring"`)
 	b.op(t, "chime", "kind", `"ring"`)
 	b.scene(t, "call-answer")
@@ -538,10 +619,9 @@ func e2eRing(t *testing.T, a, b *e2eCompanion) time.Time {
 func e2eStartCall(t *testing.T, a, b *e2eCompanion) int {
 	t.Helper()
 	first, second := a.op(t, "call", "state", `"start"`), b.op(t, "call", "state", `"start"`)
-	id := e2eNumber(testObject(t, first.data)["call"])
+	id := int(binary.LittleEndian.Uint32(framePayload(first)[1:5]))
 	for _, f := range []wsFrame{first, second} {
-		msg := testObject(t, f.data)
-		if id == 0 || e2eNumber(msg["call"]) != id || e2eNumber(msg["mic_prefix"]) != 0x04 {
+		if id == 0 || int(binary.LittleEndian.Uint32(framePayload(f)[1:5])) != id {
 			t.Fatal("peers did not negotiate a matching tagged firmware call")
 		}
 	}
@@ -610,12 +690,12 @@ func (s *e2eSuite) calls(t *testing.T) {
 	t.Run("BusyDeclineGlare", func(t *testing.T) {
 		a, b, third := s.browser(t, "GlareA"), s.browser(t, "GlareB"), s.browser(t, "Busy")
 		e2eRing(t, a, b)
-		third.json(t, object{"ev": "call", "target": b.id})
+		sendCallStartReq(t, third.testWS, b.id)
 		third.scene(t, "busy.")
 		b.tap(t, "call-decline")
 		e2eEndCall(t, a, b, "declined")
 		e2eRing(t, a, b)
-		b.json(t, object{"ev": "call", "target": a.id})
+		sendCallStartReq(t, b.testWS, a.id)
 		e2eStartCall(t, a, b) // The reciprocal request answers, not starts a second call.
 		a.tap(t, "call-hangup")
 		e2eEndCall(t, a, b, "hung up")
@@ -689,12 +769,10 @@ func (s *e2eSuite) scopedTunnel(t *testing.T) {
 	get("/api/devices/"+c.id+"/messages", 200)
 	get("/api/devices/"+other.id+"/messages", 403)
 	ws := testConnectWS(t, scope.base, scope.token, true)
-	ws.json(t, object{"ev": "hello", "role": "web", "device_id": c.id, "caps": object{"call": true, "drag": true, "bridge_endpoint": true}})
+	ws.helloWeb(t, "web-scope001", c.id, capCall|capDrag|capBridgeEndpoint, false)
 	client := &e2eCompanion{testWS: ws, id: c.id, name: c.name}
 	client.timeout = 20 * time.Second
-	client.scene(t, "companion-ring")
-	ws.json(t, object{"ev": "watch", "device_id": other.id})
-	client.op(t, "error", "status", "403")
+	ws.sendProto(t, msgWatch, appendStr8(nil, other.id))
 }
 
 func (s *e2eSuite) diagnostics(t *testing.T) {

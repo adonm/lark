@@ -34,7 +34,7 @@ func (h *wsHub) callPeer(d *wsTerminal) *wsTerminal {
 }
 
 func (h *wsHub) canCall(d *wsTerminal, companionID string) bool {
-	p := h.audioTerminal(companionID)
+	p := h.voiceOwner(companionID)
 	return d.caps.Call && p != nil && p != d && h.active(p) && p.caps.Call
 }
 
@@ -82,7 +82,7 @@ func (h *wsHub) ringCall(caller *wsTerminal, peerCompanionID string, limit time.
 		return problem(409, "Caller is not connected.")
 	}
 	key := strings.ToLower(peerCompanionID)
-	callee := h.audioTerminal(key)
+	callee := h.voiceOwner(key)
 	now := time.Now()
 	if caller.companionID != "" {
 		if r := h.parentRefresh(caller.companionID, now); r != "" {
@@ -147,11 +147,11 @@ func (h *wsHub) ringCall(caller *wsTerminal, peerCompanionID string, limit time.
 func (h *wsHub) mcpCall(from, to string) (object, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	caller := h.audioTerminal(from)
+	caller := h.voiceOwner(from)
 	if caller == nil {
 		return nil, problem(409, "Caller is not connected.")
 	}
-	if callee := h.audioTerminal(to); callee == nil {
+	if callee := h.voiceOwner(to); callee == nil {
 		return nil, problem(409, "Recipient is not connected.")
 	}
 	if err := h.ringCall(caller, to, callRingLimit); err != nil {
@@ -198,7 +198,7 @@ func (h *wsHub) mcpHangup(id string, expected *uint64) (object, []object) {
 		}
 	}
 	if d == nil {
-		d = h.audioTerminal(id)
+		d = h.voiceOwner(id)
 	}
 	skip := func(reason string) (object, []object) {
 		return nil, []object{deliveryReceipt("hangup", id, reason)}
@@ -273,6 +273,7 @@ func (h *wsHub) answerCall(callee *wsTerminal) {
 	if h.parentRefresh(callee.companionID, now) != "" || h.parentRefresh(caller.companionID, now) != "" {
 		return
 	}
+	h.takeVoiceOwnership(callee)
 	caller.callCancel()
 	caller.callCancel = nil
 	logCall("answer", caller, callee, "", 0)
@@ -393,10 +394,18 @@ func (h *wsHub) relayCallPCMBytes(d *wsTerminal, pcm []byte) {
 	c.outMu.Lock()
 	defer c.outMu.Unlock()
 	if c.ctx.Err() == nil && len(c.out) < min(6, cap(c.out)) {
-		packet := make([]byte, len(pcm)+1)
-		packet[0] = pcmPrefix
-		copy(packet[1:], pcm)
-		c.out <- wsFrame{wsBinary, packet}
+		for len(pcm) > 0 {
+			chunk := min(rtpPCMBytes, len(pcm))
+			var rtp [rtpPacketBytes]byte
+			seq := p.callRTPSeq
+			p.callRTPSeq++
+			ts := p.callRTPTS
+			p.callRTPTS += uint32(chunk / 2)
+			n := encodeRTPPacket(rtp[:], rtpPTCallDown, seq, ts, 0, pcm[:chunk])
+			pkt := packProtoPacket(msgMedia, uint16(c.txSeq.Add(1)-1), rtp[:n])
+			c.out <- wsFrame{wsBinary, pkt}
+			pcm = pcm[chunk:]
+		}
 		d.callFramesOut++
 	}
 }

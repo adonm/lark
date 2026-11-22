@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"image"
 	"log"
 	"maps"
@@ -17,18 +18,6 @@ import (
 
 const idleSleep = 120 * time.Second
 
-type wsCaps struct {
-	WakeWord       *bool `json:"wake_word,omitempty"`
-	PanelSleep     *bool `json:"panel_sleep,omitempty"`
-	PointerRev     *bool `json:"pointer_rev,omitempty"`
-	BridgeEndpoint *bool `json:"bridge_endpoint,omitempty"`
-	Battery        *bool `json:"battery,omitempty"`
-	HeadPads       *bool `json:"head_pads,omitempty"`
-	Call           *bool `json:"call,omitempty"`
-	CallPCM        *bool `json:"call_pcm,omitempty"`
-	Drag           *bool `json:"drag,omitempty"`
-}
-
 type terminalCaps struct {
 	WakeWord       bool `json:"wake_word,omitempty"`
 	PanelSleep     bool `json:"panel_sleep,omitempty"`
@@ -39,26 +28,6 @@ type terminalCaps struct {
 	Call           bool `json:"call"`
 	CallPCM        bool `json:"call_pcm,omitempty"`
 	Drag           bool `json:"drag"`
-}
-
-func helloCaps(ev wsEvent) terminalCaps {
-	value := func(flag *bool, fallback bool) bool {
-		if flag != nil {
-			return *flag
-		}
-		return fallback
-	}
-	return terminalCaps{
-		WakeWord:       value(ev.Caps.WakeWord, false),
-		PanelSleep:     value(ev.Caps.PanelSleep, false),
-		PointerRev:     value(ev.Caps.PointerRev, false),
-		BridgeEndpoint: value(ev.Caps.BridgeEndpoint, false),
-		Battery:        value(ev.Caps.Battery, false),
-		HeadPads:       value(ev.Caps.HeadPads, false),
-		Call:           value(ev.Caps.Call, false),
-		CallPCM:        value(ev.Caps.Call, false) && value(ev.Caps.CallPCM, false),
-		Drag:           value(ev.Caps.Drag, true),
-	}
 }
 
 type wsStatus struct {
@@ -84,17 +53,22 @@ type wsStatus struct {
 
 type wsTerminal struct {
 	client      *wsClient
-	id          string
-	key         string
-	kind        string // "hardware" or "web"
-	companionID string
-	ip          string
-	port        int
-	lastSeen    int64
-	firmware    string
-	screen      screenGeometry
-	board       string
-	caps        terminalCaps
+	id             string
+	key            string
+	kind           string // "hardware" or "web"
+	protoKind      uint8
+	companionID    string
+	ip             string
+	port           int
+	lastSeen       int64
+	firmware       string
+	screen         screenGeometry
+	displayFormats uint8
+	frameCodecs    uint8
+	board          string
+	caps           terminalCaps
+	resumeToken    [resumeTokenLen]byte
+	hasResumeToken bool
 	voice       string
 	announcing  bool
 	companion   companionState
@@ -108,7 +82,7 @@ type wsTerminal struct {
 	frame       *diagFrame
 	svg         svgScreen
 	grade       atomic.Uint32 // App workers read the board's grade without the hub lock.
-	svgWire     wsFrame
+	svgWire     []byte
 	displayApp  *appInstance
 	encoder     frameEncoder
 	renderGen   uint64
@@ -149,6 +123,8 @@ type wsTerminal struct {
 	callSecond                  time.Duration
 	callCancel                  context.CancelFunc
 	callFramesIn, callFramesOut uint64
+	callRTPSeq                  uint16
+	callRTPTS                   uint32
 
 	recording     deviceCapture
 	recSession    uint16
@@ -169,7 +145,7 @@ type wsTerminal struct {
 	audioUntil time.Time
 }
 
-func (d *wsTerminal) virtual() bool { return d.kind == "web" || d.client.role == "web" }
+func (d *wsTerminal) virtual() bool { return d.kind == "web" || d.client.kind == "web" }
 
 func (c *wsClient) ping(now time.Time) wsFrame {
 	c.pingMu.Lock()
@@ -240,7 +216,7 @@ func (h *wsHub) onlineTerminals() map[string]peerDisplay {
 	return out
 }
 
-func (h *wsHub) peerFrame(scoped bool) wsFrame {
+func (h *wsHub) peerPayload(scoped bool, seq uint32) []byte {
 	online := h.onlineTerminals()
 	list := make([]peerDisplay, 0, len(h.storedPeers)+len(online))
 	if !scoped {
@@ -254,7 +230,6 @@ func (h *wsHub) peerFrame(scoped bool) wsFrame {
 		list = append(list, p)
 	}
 	slices.SortFunc(list, func(a, b peerDisplay) int { return strings.Compare(a.id, b.id) })
-	terminals := make([]object, 0, len(list))
 	compOnline := make(map[string]bool)
 	compCaps := make(map[string]terminalCaps)
 	for _, p := range list {
@@ -266,59 +241,85 @@ func (h *wsHub) peerFrame(scoped bool) wsFrame {
 				compCaps[p.companionID] = c
 			}
 		}
+	}
+	b := make([]byte, 0, 256)
+	b = binary.LittleEndian.AppendUint32(b, seq)
+	var sc byte
+	if scoped {
+		sc = 1
+	}
+	b = append(b, sc)
+	b = binary.LittleEndian.AppendUint16(b, uint16(len(h.storedCompanions)))
+	for _, c := range h.storedCompanions {
+		b = appendStr8(b, c.ID)
+		b = appendStr8(b, c.Name)
+		var cfg, on, callCap byte
+		if c.Configured {
+			cfg = 1
+		}
+		if compOnline[c.ID] {
+			on = 1
+		}
+		if compCaps[c.ID].Call {
+			callCap = 1
+		}
+		b = append(b, cfg)
+		b = appendStr8(b, c.FaceBG)
+		b = appendStr8(b, c.MarkColor)
+		b = appendStr8(b, c.AccentColor)
 		if scoped {
-			continue
+			b = appendStr16(b, "")
+			b = appendStr8(b, "")
+		} else {
+			b = appendStr16(b, c.Personality)
+			b = appendStr8(b, h.b.voices.resolve(c.Voice, companionTheme(c.Name)))
 		}
-		entry := object{
-			"id":           p.id,
-			"kind":         p.kind,
-			"companion_id": p.companionID,
-			"online":       p.online,
-			"ws":           p.online,
-			"auto_volume":  p.auto,
-		}
-		if p.kind == "hardware" {
-			entry["ip"] = p.ip
-			entry["port"] = p.port
-			entry["last_seen"] = p.lastSeen
+		b = append(b, on, callCap)
+	}
+	if scoped {
+		b = binary.LittleEndian.AppendUint16(b, 0)
+		return b
+	}
+	b = binary.LittleEndian.AppendUint16(b, uint16(len(list)))
+	for _, p := range list {
+		b = appendStr8(b, p.id)
+		var kind, on, auto byte
+		if p.kind == "web" {
+			kind = 1
 		}
 		if p.online {
-			entry["firmware"] = p.firmware
-			entry["caps"] = p.caps
+			on = 1
 		}
-		terminals = append(terminals, entry)
+		if p.auto {
+			auto = 1
+		}
+		b = append(b, kind)
+		b = appendStr8(b, p.companionID)
+		b = append(b, on, auto)
+		if p.kind == "hardware" {
+			b = appendStr8(b, p.ip)
+			b = binary.LittleEndian.AppendUint16(b, uint16(p.port))
+			b = binary.LittleEndian.AppendUint64(b, uint64(p.lastSeen))
+		} else {
+			b = appendStr8(b, "")
+			b = binary.LittleEndian.AppendUint16(b, 0)
+			b = binary.LittleEndian.AppendUint64(b, 0)
+		}
+		if p.online {
+			b = appendStr8(b, p.firmware)
+			b = binary.LittleEndian.AppendUint32(b, capsMaskFromCaps(p.caps))
+		} else {
+			b = appendStr8(b, "")
+			b = binary.LittleEndian.AppendUint32(b, 0)
+		}
 	}
-	companions := make([]object, 0, len(h.storedCompanions))
-	for _, c := range h.storedCompanions {
-		if scoped {
-			companions = append(companions, object{
-				"id":     c.ID,
-				"name":   c.Name,
-				"online": compOnline[c.ID],
-				"caps":   compCaps[c.ID],
-			})
-			continue
-		}
-		entry := object{
-			"id":           c.ID,
-			"name":         c.Name,
-			"configured":   c.Configured,
-			"face_bg":      c.FaceBG,
-			"mark_color":   c.MarkColor,
-			"accent_color": c.AccentColor,
-			"personality":  c.Personality,
-			"voice":        h.b.voices.resolve(c.Voice, companionTheme(c.Name)),
-			"online":       compOnline[c.ID],
-		}
-		companions = append(companions, entry)
-	}
-	return textFrame(object{"op": "peers", "companions": companions, "terminals": terminals})
+	return b
 }
 
 func (h *wsHub) broadcastPeers() {
 	h.broadcastPeerFrames()
 	for c := range h.clients {
-		if c.role == "web" && c.scope == nil {
+		if (c.kind == "web" || c.kind == "watcher") && c.scope == nil {
 			h.refreshNeeded = true
 			if !h.refreshing {
 				h.refreshing = true
@@ -329,10 +330,10 @@ func (h *wsHub) broadcastPeers() {
 	}
 }
 
-func (c *wsClient) pushPeers(f wsFrame) {
-	if !bytes.Equal(c.lastPeers.data, f.data) {
-		c.lastPeers = f
-		c.enqueue(f)
+func (c *wsClient) pushPeers(pkt []byte) {
+	if !bytes.Equal(c.lastPeers, pkt) {
+		c.lastPeers = pkt
+		c.enqueueProto(msgPeers, pkt)
 	}
 }
 
@@ -369,21 +370,24 @@ func (h *wsHub) refreshStoredPeers() {
 
 func (h *wsHub) broadcastPeerFrames() {
 	if len(h.clients) == 0 {
-		h.peers = ""
+		h.peersKey = ""
 		return
 	}
-	f := h.peerFrame(false)
-	if string(f.data) != h.peers {
-		h.peers = string(f.data)
-		var scoped wsFrame
+	f := h.peerPayload(false, 0)
+	// Compare ignoring the 4-byte seq prefix so we only bump seq on actual changes.
+	if string(f[4:]) != h.peersKey {
+		h.peersKey = string(f[4:])
+		seq := h.nextSeq()
+		binary.LittleEndian.PutUint32(f[0:4], seq)
+		var scoped []byte
 		for c := range h.clients {
 			switch {
-			case c.role != "web" || c.terminal != nil && c.terminal.announcing:
+			case (c.kind != "web" && c.kind != "watcher") || c.terminal != nil && c.terminal.announcing:
 			case c.scope == nil:
 				c.pushPeers(f)
 			default:
-				if scoped.data == nil {
-					scoped = h.peerFrame(true)
+				if scoped == nil {
+					scoped = h.peerPayload(true, seq)
 				}
 				c.pushPeers(scoped)
 			}
@@ -416,17 +420,13 @@ func (h *wsHub) publishCompanion(id string, companion companionState, clearView 
 		}
 		h.render(d, now, true)
 	}
-	f := companionFrame(id, companion, companion.Voice)
+	pkt := encodeCompanionMsg(h.nextSeq(), id, companion.Name, companion.Voice, companion.FaceBG, companion.MarkColor, companion.AccentColor)
 	for c := range h.clients {
-		if c.role == "web" && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
-			c.enqueue(f)
+		if (c.kind == "web" || c.kind == "watcher") && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
+			c.enqueueProto(msgCompanion, pkt)
 		}
 	}
 	h.broadcastPeers()
-}
-
-func companionFrame(id string, companion companionState, voice string) wsFrame {
-	return textFrame(object{"op": "companion", "companion_id": id, "name": companion.Name, "companion": companion.companionLook, "voice": voice})
 }
 
 func (h *wsHub) registerHardwareTerminal(termID, hintName, ip string, port int, now time.Time) (terminalRecord, error) {
@@ -440,6 +440,23 @@ func (h *wsHub) registerHardwareTerminal(termID, hintName, ip string, port int, 
 			return terminalRecord{}, err
 		}
 		return t, nil
+	}
+	if hintName != "" {
+		if comp, ok := h.b.companionByID(strings.ToLower(hintName)); ok {
+			t := terminalRecord{
+				ID:          termID,
+				Kind:        "hardware",
+				CompanionID: comp.ID,
+				IP:          ip,
+				Port:        port,
+				LastSeen:    now.Unix(),
+				CreatedAt:   now.UTC().Format(time.RFC3339Nano),
+			}
+			if err := h.b.terminals.save(t.ID, t, false); err != nil {
+				return terminalRecord{}, err
+			}
+			return t, nil
+		}
 	}
 	c := blankCompanion()
 	if hintName != "" && hintName != c.Name && !strings.EqualFold(hintName, termID) && characterRE.MatchString(hintName) {
@@ -527,107 +544,150 @@ func (h *wsHub) registerWebTerminal(termID, compID string, scope *companionState
 	return t, nil
 }
 
-func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
-	if ev.Role == "device" && ev.Proto < 2 {
-		c.enqueue(textFrame(object{"op": "error", "status": 426, "error": "Device firmware upgrade required: WebSocket protocol 2 or newer"}))
-		return
+func (h *wsHub) sendSnapshotState(d *wsTerminal) {
+	c := d.client
+	if d.companionID != "" {
+		if d.virtual() {
+			c.enqueueProto(msgCompanion, encodeCompanionMsg(h.nextSeq(), d.companionID, d.companion.Name, d.voice, d.companion.FaceBG, d.companion.MarkColor, d.companion.AccentColor))
+		}
+		if st, ok := h.companionStatuses[d.companionID]; ok {
+			c.enqueueProto(msgStatus, encodeStatus(st.seq, st.state, st.progress, st.kind, st.text))
+		} else {
+			c.enqueueProto(msgStatus, encodeStatus(h.nextSeq(), statusIdle, 0, promptNone, ""))
+		}
+		if owner := h.voiceOwner(d.companionID); owner != nil {
+			c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(h.nextSeq(), d.companionID, owner.id))
+		}
+		if p := h.prompts[d.companionID]; p != nil {
+			c.enqueueProto(msgPrompt, encodePrompt(p.seq, p.kind, p.id, p.text, p.options))
+		}
 	}
-	termID := strings.ToLower(strings.TrimSpace(ev.TerminalID))
-	if termID == "" {
-		termID = strings.ToLower(strings.TrimSpace(ev.DeviceID))
+	h.pushVolume(d, false, true)
+	h.pushPower(d, d.brightness(), true)
+	if d.parentReason != "" {
+		h.pushProto(d, msgEvent, encodeEventMsg(h.nextSeq(), eventParentPolicy, d.companionID, string(d.parentReason), parentMessage(d.parentReason)), true)
 	}
-	if ev.Role != "device" && ev.Role != "web" {
-		return
+}
+
+func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
+	if ev.protoVersion != protoVersion1 {
+		c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "protocol version mismatch"))
+		return false
 	}
-	if ev.Role == "web" && c.scope == nil && termID == "" {
+	termID := strings.ToLower(strings.TrimSpace(ev.terminalID))
+	if ev.kind == termKindWeb && c.scope == nil && termID == "" {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if h.closed || c.ctx.Err() != nil {
-			return
+			return false
 		}
-		c.role = "web"
-		c.pushPeers(h.peerFrame(false))
+		c.kind = "watcher"
+		seq := h.nextSeq()
+		tok := newResumeToken()
+		c.enqueueProto(msgWelcome, encodeWelcome(0, 0, 0, protoMaxPayload, resumeWindowMS, seq, tok, "", ""))
+		c.pushPeers(h.peerPayload(false, seq))
 		h.broadcastPeers()
-		return
+		return true
 	}
+
+	kindStr := "web"
+	clientKind := "web"
 	screen, board := roundScreen, ""
-	kind := "web"
+	dispFmt := ev.displayFormats
+	if dispFmt == 0 {
+		if ev.kind == termKindHardware {
+			dispFmt = dispRGB565
+		} else {
+			dispFmt = dispSVG
+		}
+	}
+	frameCodecs := ev.frameCodecs
+	if frameCodecs == 0 && dispFmt&dispRGB565 != 0 {
+		frameCodecs = codecBitAll
+	}
 	var ip string
 	var port int
-	if ev.Role == "device" {
-		kind = "hardware"
+	if ev.kind == termKindHardware {
+		kindStr = "hardware"
+		clientKind = "hardware"
 		if !terminalIDRE.MatchString(termID) || webTerminalID.MatchString(termID) {
-			return
+			c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid hardware terminal ID"))
+			return false
 		}
 		board = "esp-vocat"
-		if ev.Board != "" {
-			board = ev.Board
+		if ev.board != "" {
+			board = ev.board
 		}
 		if board == "esp-box-3" {
 			screen = screenGeometry{320, 240, "rect"}
 		}
-		if ev.Width != nil {
-			screen.width = *ev.Width
+		if ev.width > 0 {
+			screen.width = int(ev.width)
 		}
-		if ev.Height != nil {
-			screen.height = *ev.Height
+		if ev.height > 0 {
+			screen.height = int(ev.height)
 		}
-		if ev.Shape != "" {
-			screen.shape = ev.Shape
+		if ev.shape == shapeRect {
+			screen.shape = "rect"
+		} else if ev.shape == shapeRound {
+			screen.shape = "round"
 		}
-		// Bound native frames by the v2 maximum (360×360 RGB565).
 		if screen.width < 1 || screen.width > screenSize || screen.height < 1 || screen.height > screenSize ||
-			screen.shape != "round" && screen.shape != "rect" || board != "esp-vocat" && board != "esp-box-3" {
-			c.enqueue(textFrame(object{"op": "error", "status": 400, "error": "Invalid display capabilities"}))
-			return
+			screen.shape != "round" && screen.shape != "rect" || board != "esp-vocat" && board != "esp-box-3" ||
+			dispFmt&(dispRGB565|dispSVG) == 0 {
+			c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid display capabilities"))
+			return false
 		}
 		host, _, _ := net.SplitHostPort(c.remoteAddr().String())
 		if addr, err := netip.ParseAddr(host); err == nil {
 			host = addr.Unmap().String()
 		}
 		ip, port = host, 80
-		if ev.Port != nil {
-			if *ev.Port < 1 || *ev.Port > 65535 {
-				c.enqueue(textFrame(object{"op": "error", "status": 400, "error": "Invalid device port"}))
-				return
-			}
-			port = *ev.Port
-		}
+	} else if ev.kind != termKindWeb {
+		c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "unknown terminal kind"))
+		return false
 	}
+
 	h.b.companionMu.Lock()
-	defer h.b.companionMu.Unlock()
 	var rec terminalRecord
 	var err error
-	if kind == "hardware" {
-		rec, err = h.registerHardwareTerminal(termID, strings.TrimSpace(ev.Character), ip, port, now)
+	if kindStr == "hardware" {
+		rec, err = h.registerHardwareTerminal(termID, strings.TrimSpace(ev.companionID), ip, port, now)
 	} else {
-		rec, err = h.registerWebTerminal(termID, ev.CompanionID, c.scope, now)
+		rec, err = h.registerWebTerminal(termID, ev.companionID, c.scope, now)
 	}
+	h.b.companionMu.Unlock()
 	if err != nil {
-		status := 502
-		if api, ok := err.(*apiError); ok {
-			status = api.status
+		reason := rejectBadCaps
+		if api, ok := err.(*apiError); ok && api.status == 404 {
+			reason = rejectUnknownTerminal
 		}
-		c.enqueue(textFrame(object{"op": "error", "status": status, "error": err.Error()}))
-		return
+		c.enqueueProto(msgReject, encodeReject(reason, err.Error()))
+		return false
 	}
+
 	d := &wsTerminal{
-		client:      c,
-		id:          rec.ID,
-		key:         rec.ID,
-		kind:        kind,
-		companionID: rec.CompanionID,
-		ip:          rec.IP,
-		port:        rec.Port,
-		lastSeen:    rec.LastSeen,
-		firmware:    shortText(ev.Firmware, 24, false),
-		screen:      screen,
-		board:       board,
-		caps:        helloCaps(ev),
-		pct:         -1,
-		last:        now,
-		moodAt:      now,
-		announcing:  true,
+		client:         c,
+		id:             rec.ID,
+		key:            rec.ID,
+		kind:           kindStr,
+		protoKind:      ev.kind,
+		companionID:    rec.CompanionID,
+		ip:             rec.IP,
+		port:           rec.Port,
+		lastSeen:       rec.LastSeen,
+		firmware:       shortText(ev.firmware, 24, false),
+		screen:         screen,
+		displayFormats: dispFmt,
+		frameCodecs:    frameCodecs,
+		board:          board,
+		caps:           helloCapsFromMask(ev.capsMask),
+		pct:            -1,
+		last:           now,
+		moodAt:         now,
+		announcing:     true,
+		resumeToken:    newResumeToken(),
+		hasResumeToken: true,
 	}
 	if d.companionID != "" {
 		d.companion = h.b.companionFor(d.companionID)
@@ -637,16 +697,17 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
 	d.autoVol, d.vol = h.b.volumePrefs(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
-	d.status(ev.wsStatus)
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed || c.ctx.Err() != nil {
-		return
+		return false
 	}
 	if old := h.terminals[d.key]; old != nil {
-		if ev.Role == "web" && ev.IfFree && h.active(old) {
+		if ev.kind == termKindWeb && ev.flags&helloFlagIfFree != 0 && h.active(old) {
+			c.enqueueProto(msgReject, encodeReject(rejectOccupied, "terminal occupied"))
 			c.stop(wsCompanionOccupied)
-			return
+			return false
 		}
 		if old.virtual() {
 			old.client.stop(wsCompanionOccupied)
@@ -660,62 +721,80 @@ func (h *wsHub) hello(c *wsClient, ev wsEvent, now time.Time) {
 		h.stopPlayback(old, true)
 		d.rev = old.rev
 	}
-	h.terminals[d.key], c.terminal, c.role = d, d, ev.Role
-	if ev.Role == "device" {
-		c.enqueue(textFrame(object{"op": "hello_ok"}))
+	h.terminals[d.key], c.terminal, c.kind = d, d, clientKind
+	if d.companionID != "" && h.voiceOwners[d.companionID] == "" {
+		h.voiceOwners[d.companionID] = d.id
 	}
+	var wFlags uint8
+	if h.bridgeEndpoint(d) {
+		wFlags |= 1
+	}
+	var udpPort uint16
+	var ssrc uint32
+	if c.native != nil {
+		udpPort = c.native.server.udpPort
+		ssrc = c.native.ssrc
+	}
+	snapSeq := h.nextSeq()
+	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
 	if d.companionID == "" || h.parentRefresh(d.companionID, now) == "" {
 		h.render(d, now, true)
+	} else {
+		h.announce(d)
 	}
+	return true
 }
 
-func (h *wsHub) helloNative(nc *nativeClient, ev nativeHello, now time.Time) bool {
-	c := nc.client
-	termID := strings.ToLower(strings.TrimSpace(ev.deviceID))
-	if !terminalIDRE.MatchString(termID) || webTerminalID.MatchString(termID) {
+func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool {
+	if r.protoVersion != protoVersion1 {
+		c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "protocol version mismatch"))
 		return false
 	}
-	board := "esp-vocat"
-	if ev.board != "" {
-		board = ev.board
-	}
-	screen := roundScreen
-	if board == "esp-box-3" {
-		screen = screenGeometry{320, 240, "rect"}
-	}
-	if ev.width > 0 {
-		screen.width = int(ev.width)
-	}
-	if ev.height > 0 {
-		screen.height = int(ev.height)
-	}
-	if screen.width < 1 || screen.width > screenSize || screen.height < 1 || screen.height > screenSize ||
-		(board != "esp-vocat" && board != "esp-box-3") {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || c.ctx.Err() != nil {
 		return false
 	}
-	h.b.companionMu.Lock()
-	defer h.b.companionMu.Unlock()
-	rec, err := h.registerHardwareTerminal(termID, "", nc.remoteIP.String(), 80, now)
-	if err != nil {
+	h.pruneResumes(now)
+	entry, ok := h.resumes[r.resumeToken]
+	if !ok || !strings.EqualFold(entry.terminalID, strings.TrimSpace(r.terminalID)) {
+		c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "resume token expired or unknown"))
 		return false
+	}
+	delete(h.resumes, r.resumeToken)
+	rec, exists := h.b.terminalByID(entry.terminalID)
+	compID := entry.companionID
+	if exists {
+		compID = rec.CompanionID
+	}
+	kindStr := "web"
+	clientKind := "web"
+	if entry.kind == termKindHardware {
+		kindStr = "hardware"
+		clientKind = "hardware"
 	}
 	d := &wsTerminal{
-		client:      c,
-		id:          rec.ID,
-		key:         rec.ID,
-		kind:        "hardware",
-		companionID: rec.CompanionID,
-		ip:          rec.IP,
-		port:        rec.Port,
-		lastSeen:    rec.LastSeen,
-		firmware:    shortText(ev.firmware, 24, false),
-		screen:      screen,
-		board:       board,
-		caps:        helloCapsFromMask(ev.capsMask),
-		pct:         -1,
-		last:        now,
-		moodAt:      now,
-		announcing:  true,
+		client:         c,
+		id:             entry.terminalID,
+		key:            entry.terminalID,
+		kind:           kindStr,
+		protoKind:      entry.kind,
+		companionID:    compID,
+		ip:             rec.IP,
+		port:           rec.Port,
+		lastSeen:       now.Unix(),
+		firmware:       entry.firmware,
+		screen:         entry.screen,
+		displayFormats: entry.displayFormats,
+		frameCodecs:    entry.frameCodecs,
+		board:          entry.board,
+		caps:           entry.caps,
+		pct:            -1,
+		last:           now,
+		moodAt:         now,
+		announcing:     true,
+		resumeToken:    newResumeToken(),
+		hasResumeToken: true,
 	}
 	if d.companionID != "" {
 		d.companion = h.b.companionFor(d.companionID)
@@ -726,11 +805,6 @@ func (h *wsHub) helloNative(nc *nativeClient, ev nativeHello, now time.Time) boo
 	d.autoVol, d.vol = h.b.volumePrefs(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed || c.ctx.Err() != nil {
-		return false
-	}
 	if old := h.terminals[d.key]; old != nil {
 		if old.virtual() {
 			old.client.stop(wsCompanionOccupied)
@@ -744,14 +818,30 @@ func (h *wsHub) helloNative(nc *nativeClient, ev nativeHello, now time.Time) boo
 		h.stopPlayback(old, true)
 		d.rev = old.rev
 	}
-	h.terminals[d.key], c.terminal, c.role = d, d, "device"
-	var flags uint16
-	if h.bridgeEndpoint(d) {
-		flags |= helloFlagBridgeEP
+	h.terminals[d.key], c.terminal, c.kind = d, d, clientKind
+	if d.companionID != "" {
+		if entry.hadVoiceOwner {
+			h.voiceOwners[d.companionID] = d.id
+		} else if h.voiceOwners[d.companionID] == "" {
+			h.voiceOwners[d.companionID] = d.id
+		}
 	}
-	nc.enqueue(msgHelloOK, encodeHelloOK(nc.server.udpPort, flags, nc.ssrc, nc.ssrc))
+	var wFlags uint8
+	if h.bridgeEndpoint(d) {
+		wFlags |= 1
+	}
+	var udpPort uint16
+	var ssrc uint32
+	if c.native != nil {
+		udpPort = c.native.server.udpPort
+		ssrc = c.native.ssrc
+	}
+	snapSeq := h.nextSeq()
+	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
 	if d.companionID == "" || h.parentRefresh(d.companionID, now) == "" {
 		h.render(d, now, true)
+	} else {
+		h.announce(d)
 	}
 	return true
 }
@@ -759,22 +849,10 @@ func (h *wsHub) helloNative(nc *nativeClient, ev nativeHello, now time.Time) boo
 func (h *wsHub) announce(d *wsTerminal) {
 	d.announcing = false
 	c := d.client
-	if c.role == "web" {
-		if d.companionID != "" {
-			c.enqueue(companionFrame(d.companionID, d.companion, d.voice))
-		}
-		if h.bridgeEndpoint(d) {
-			h.pushWS(d, object{"op": "capabilities", "bridge_endpoint": true}, false)
-		}
-	}
-	h.pushVolume(d, false, true)
-	h.pushPower(d, d.brightness(), true)
-	if d.parentReason != "" {
-		h.pushWS(d, parentFrame(d), true)
-	}
+	h.sendSnapshotState(d)
 	h.broadcastPeers()
-	if c.role == "web" {
-		c.pushPeers(h.peerFrame(c.scope != nil))
+	if c.kind == "web" {
+		c.pushPeers(h.peerPayload(c.scope != nil, h.nextSeq()))
 	}
 }
 
@@ -864,7 +942,7 @@ func (h *wsHub) companionPose(d *wsTerminal, now time.Time, mood string) compani
 }
 
 func (h *wsHub) frameGrade(d *wsTerminal, now time.Time) gradeKey {
-	if !h.atmosphere || d.client.role != "device" {
+	if !h.atmosphere || d.virtual() {
 		return gradeDay
 	}
 	var loc *time.Location
@@ -908,9 +986,6 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	changed := mood != d.pose.mood
 	if changed {
 		d.moodAt = now
-	}
-	if changed && d.virtual() {
-		h.pushWS(d, object{"op": "mode", "mode": mood}, false)
 	}
 	pose := h.companionPose(d, now, mood)
 	d.pose = pose
@@ -1001,10 +1076,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 	defer h.mu.Unlock()
 	for d.renderNext != nil && h.active(d) {
 		r, gen, prev, rev := *d.renderNext, d.renderGen, d.svg, d.rev+1
-		web := d.client.role == "web"
+		wantRGB := d.displayFormats&dispRGB565 != 0
+		wantSVG := d.displayFormats&dispSVG != 0
+		codecs := d.frameCodecs
 		oldScene, pointerRev := d.scene, d.caps.PointerRev
 		var geometry screenGeometry
-		if d.client.role == "device" {
+		if wantRGB {
 			geometry = d.screen
 		}
 		d.renderNext = nil
@@ -1045,9 +1122,10 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				screen, err = screens.buildGraded(screen.raw, true, geometry, r.grade)
 			}
 		}
-		var svgWire, native wsFrame
+		var svgWire []byte
+		var native wsFrame
 		var rawBytes int
-		interactionChanged := pointerRev && !web &&
+		interactionChanged := pointerRev && wantRGB &&
 			(r.view.call != oldScene.call || !maps.Equal(r.view.actions, oldScene.actions) || !slices.Equal(screen.hits, prev.hits))
 		if err == nil && (r.full && r.app == nil || screen.source != prev.source || screen.grade != prev.grade || interactionChanged) {
 			start := time.Now()
@@ -1058,12 +1136,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					rect = image.Rect(0, 0, 1, 1)
 				}
 				if !rect.Empty() {
-					native = d.encoder.encode(screen.fb, nil, rect, rev, geometry.width)
+					native = d.encoder.encodeWithCodecs(screen.fb, nil, rect, rev, geometry.width, codecs)
 					rawBytes = 12 + rect.Dx()*rect.Dy()*2
 				}
 			}
 			screen.render += time.Since(start)
-			svgWire = textFrame(object{"op": "svg", "terminal_id": d.id, "companion_id": d.companionID, "rev": rev, "svg": screen.source})
+			svgWire = encodeFrameSVG(uint32(rev), d.id, d.companionID, screen.source)
 		}
 
 		h.mu.Lock()
@@ -1076,16 +1154,17 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		}
 		d.scene, d.displayApp, d.svg = r.view, r.app, screen
 		h.sig.notify()
-		if svgWire.data == nil {
+		if svgWire == nil {
 			continue
 		}
 		d.rev, d.svgWire = rev, svgWire
-		if web {
-			d.client.enqueue(svgWire)
+		if wantSVG {
+			d.client.enqueueProto(msgFrameSVG, svgWire)
 			r.trace.measure(diagRender, screen.render)
-			h.trackFrame(d, screen.render, len(svgWire.data), len(screen.source), "svg")
-		} else if native.data != nil {
-			d.client.enqueue(native)
+			h.trackFrame(d, screen.render, len(svgWire), len(screen.source), "svg")
+		}
+		if wantRGB && native.data != nil {
+			d.client.enqueueProto(msgFrame, native.data)
 			d.nativeRev = uint16(rev)
 			r.trace.measure(diagRender, screen.render)
 			codec := "RGB565"
@@ -1101,7 +1180,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		}
 		for c := range h.clients {
 			if c.watch == d.companionID && d.companionID != "" || c.watch == d.key {
-				c.enqueue(svgWire)
+				c.enqueueProto(msgFrameSVG, svgWire)
 			}
 		}
 		if d.announcing {
@@ -1172,7 +1251,7 @@ func (h *wsHub) animate(ctx context.Context) {
 				if !h.active(d) {
 					continue
 				}
-				if checkGrade && d.client.role == "device" && !(d.asleep && d.caps.PanelSleep) &&
+				if checkGrade && !d.virtual() && !(d.asleep && d.caps.PanelSleep) &&
 					d.svg.grade != h.frameGrade(d, now) {
 					h.render(d, now, false)
 				}
@@ -1196,7 +1275,7 @@ func (h *wsHub) animate(ctx context.Context) {
 				case !d.asleep && !d.busy && !d.recording.active() && !d.ttsStarted && !d.awaitAck && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
 					h.render(d, now, false)
-				case d.asleep && d.caps.PanelSleep && d.client.role == "device":
+				case d.asleep && d.caps.PanelSleep && !d.virtual():
 					// The battery board's panel is off; skip idle animation traffic.
 				case d.drawer == "stats" && !d.asleep && now.Sub(d.statsAt) >= diagInterval:
 					h.render(d, now, false)

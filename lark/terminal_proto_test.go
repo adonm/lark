@@ -37,39 +37,40 @@ func dialNativeDevice(t *testing.T, srv *terminalServer, id, token string, caps 
 	t.Cleanup(func() { udpConn.Close() })
 	localUDPPort := uint16(udpConn.LocalAddr().(*net.UDPAddr).Port)
 
-	board := "esp-vocat"
-	fw := "1.0.0-test"
-	var hello bytes.Buffer
-	_ = binary.Write(&hello, binary.LittleEndian, caps)
-	_ = binary.Write(&hello, binary.LittleEndian, uint16(360))
-	_ = binary.Write(&hello, binary.LittleEndian, uint16(360))
-	_ = binary.Write(&hello, binary.LittleEndian, localUDPPort)
-	hello.WriteByte(byte(len(id)))
-	hello.WriteByte(byte(len(board)))
-	hello.WriteByte(byte(len(fw)))
-	hello.WriteByte(byte(len(token)))
-	hello.WriteString(id)
-	hello.WriteString(board)
-	hello.WriteString(fw)
-	hello.WriteString(token)
-
 	nc := &testNativeClient{
 		t:       t,
 		conn:    conn,
 		udpConn: udpConn,
 		udpPort: localUDPPort,
 	}
-	nc.send(msgHello, hello.Bytes())
+	nc.send(msgHello, encodeTerminalHello(terminalHello{
+		protoVersion:   protoVersion1,
+		kind:           termKindHardware,
+		capsMask:       caps,
+		displayFormats: dispRGB565,
+		frameCodecs:    codecBitAll,
+		width:          360,
+		height:         360,
+		shape:          shapeRound,
+		udpPort:        localUDPPort,
+		terminalID:     id,
+		board:          "esp-vocat",
+		firmware:       "0.12.0-test",
+		token:          token,
+	}))
 
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	mType, _, payload, err := readProtoFrame(conn)
 	if err != nil {
 		return nil, nil
 	}
-	if mType != msgHelloOK || len(payload) < 12 {
-		t.Fatalf("expected MSG_HELLO_OK, got type=0x%02x len=%d", mType, len(payload))
+	if mType == msgReject {
+		return nil, payload
 	}
-	srvPort := binary.LittleEndian.Uint16(payload[0:2])
+	if mType != msgWelcome || len(payload) < 38 {
+		t.Fatalf("expected WELCOME, got type=0x%02x len=%d", mType, len(payload))
+	}
+	srvPort := binary.LittleEndian.Uint16(payload[2:4])
 	nc.ssrc = binary.LittleEndian.Uint32(payload[4:8])
 	nc.srvAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srvPort)}
 	return nc, payload
@@ -148,8 +149,8 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 	// Valid handshake returns MSG_HELLO_OK and initial MSG_FRAME.
 	caps := capBattery | capCall | capCallPCM | capDrag | capPointerRev | capBridgeEndpoint | capPanelSleep | capWakeWord
 	nc, okPayload := dialNativeDevice(t, srv, "lark-nat1", "unit", caps)
-	if nc == nil || nc.ssrc == 0 || binary.LittleEndian.Uint16(okPayload[0:2]) != srv.udpPort {
-		t.Fatal("invalid MSG_HELLO_OK")
+	if nc == nil || nc.ssrc == 0 || binary.LittleEndian.Uint16(okPayload[2:4]) != srv.udpPort {
+		t.Fatal("invalid WELCOME")
 	}
 	frame := nc.readUntil(msgFrame)
 	if len(frame) < 12 || frame[0] != frameTag {
@@ -182,7 +183,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	st[5] = 23
 	binary.LittleEndian.PutUint32(st[8:12], 512000)
 	binary.LittleEndian.PutUint32(st[12:16], 42)
-	nc.send(msgStatus, st[:])
+	nc.send(msgTelemetry, st[:])
 
 	// Send MSG_POINTER (tap) -> triggers MSG_REC_CTRL start
 	var ptr [8]byte
@@ -192,13 +193,13 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	binary.LittleEndian.PutUint16(ptr[6:8], revLo)
 	nc.send(msgPointer, ptr[:])
 	recCtrl := nc.readUntil(msgRecCtrl)
-	if len(recCtrl) != 4 || recCtrl[0] != recOpStart {
+	if len(recCtrl) < 5 || recCtrl[0] != recOpStart {
 		t.Fatalf("expected MSG_REC_CTRL start, got %v", recCtrl)
 	}
 
 	// Cancel recording cleanly
-	nc.send(msgRecStart, encodeRecCtrl(0, 0, binary.LittleEndian.Uint16(recCtrl[2:4])))
-	nc.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 0, 1})
+	nc.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0})
+	nc.send(msgRecEnd, []byte{recCtrl[2], recCtrl[3], 1, 0})
 	chime := nc.readUntil(msgChime)
 	if len(chime) != 1 || chime[0] != chimeCancel {
 		t.Fatalf("expected MSG_CHIME cancel, got %v", chime)
@@ -209,7 +210,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	dev := b.ws.terminals["lark-nat2"]
 	if dev == nil || dev.telemetry.Battery == nil || *dev.telemetry.Battery != 88 || *dev.telemetry.WiFi != -52 {
 		b.ws.mu.Unlock()
-		t.Fatal("MSG_STATUS telemetry was not applied")
+		t.Fatal("MSG_TELEMETRY was not applied")
 	}
 	b.ws.setSleeping(dev, true)
 	b.ws.pushVolume(dev, true, false)
@@ -221,15 +222,15 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	b.ws.mu.Unlock()
 
 	pwr := nc.readUntil(msgPower)
-	if len(pwr) != 1 || pwr[0] != 1 {
-		t.Fatalf("expected MSG_POWER sleep=1, got %v", pwr)
+	if len(pwr) != 1 || pwr[0] != 12 {
+		t.Fatalf("expected MSG_POWER brightness=12, got %v", pwr)
 	}
 	vol := nc.readUntil(msgVolume)
-	if len(vol) != 2 || vol[1] != 1 {
+	if len(vol) < 3 || vol[1] != 1 {
 		t.Fatalf("expected MSG_VOLUME with persist=1, got %v", vol)
 	}
 	ttsStart := nc.readUntil(msgTTSCtrl)
-	if len(ttsStart) < 3 || ttsStart[0] != ttsOpStart {
+	if len(ttsStart) < 9 || ttsStart[0] != ttsOpStart {
 		t.Fatalf("expected MSG_TTS_CTRL start, got %v", ttsStart)
 	}
 	ttsPCM := nc.readUntil(msgTTSPCM)
@@ -237,10 +238,11 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 		t.Fatal("MSG_TTS_PCM payload mismatch")
 	}
 	ttsEnd := nc.readUntil(msgTTSCtrl)
-	if len(ttsEnd) < 3 || ttsEnd[0] != ttsOpEnd {
+	if len(ttsEnd) < 9 || ttsEnd[0] != ttsOpEnd {
 		t.Fatalf("expected MSG_TTS_CTRL end, got %v", ttsEnd)
 	}
-	nc.send(msgTTSAck, append([]byte{0, ttsStart[1]}, ttsStart[2:]...))
+	audioID := binary.LittleEndian.Uint64(ttsStart[1:9])
+	nc.send(msgTTSAck, encodeTTSAck(false, audioID))
 }
 
 func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
@@ -282,7 +284,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	binary.LittleEndian.PutUint16(ptr[6:8], revLo)
 	nat.send(msgPointer, ptr[:])
 	recCtrl := nat.readUntil(msgRecCtrl)
-	nat.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0, 0})
+	nat.send(msgRecStart, []byte{recCtrl[2], recCtrl[3], 0})
 	nat.send(msgPing, []byte{1, 2, 3, 4})
 	nat.readUntil(msgPong)
 
@@ -311,27 +313,31 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	b.ws.mu.Unlock()
 
 	nat.readUntil(msgChime)
-	web.until(t, hasWS("chime", `"kind":"ring"`))
-	web.until(t, hasWS("svg", "call-answer"))
+	web.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeRing
+	})
+	web.until(t, hasSVG("call-answer"))
 	tapCallControl(t, web, "call-answer")
 
 	callStart := nat.readUntil(msgCallCtrl)
-	if len(callStart) < 3 || callStart[0] != callOpStart {
+	if len(callStart) < 5 || callStart[0] != callOpStart {
 		t.Fatalf("expected MSG_CALL_CTRL start, got %v", callStart)
 	}
-	web.until(t, hasWS("call", `"state":"start"`))
-	web.until(t, hasWS("svg", "call-hangup"))
+	web.until(t, callCtrlMatch(callOpStart, ""))
+	web.until(t, hasSVG("call-hangup"))
 
-	// Native -> Browser WS (20 ms RTP -> WS binary)
+	// Native -> Browser WS (20 ms RTP -> WS MEDIA RTP)
 	upSample := bytes.Repeat([]byte{0x11, 0x22}, rtpSamples)
 	nat.sendRTP(rtpPTCallUp, upSample)
-	if got := web.until(t, isPlayback); !bytes.Equal(got.data[1:], upSample) {
+	if got := web.until(t, hasProto(msgMedia, "")); !bytes.Equal(framePayload(got)[rtpHeaderSize:], upSample) {
 		t.Fatal("native -> web call PCM mismatch")
 	}
 
-	// Browser WS -> Native (40 ms WS binary -> 2x 20 ms UDP RTP)
+	// Browser WS -> Native (2x 20 ms WS MEDIA RTP -> 2x 20 ms UDP RTP)
 	downSample := bytes.Repeat([]byte{0x33, 0x44}, callPCMBytes/2)
-	web.write(t, maskedFrame(wsBinary, true, append([]byte{callMicPrefix}, downSample...)))
+	web.sendRTP(t, rtpPTCallUp, 1, 320, 1, downSample[:rtpPCMBytes])
+	web.sendRTP(t, rtpPTCallUp, 2, 640, 1, downSample[rtpPCMBytes:])
 	p1 := nat.readRTP(rtpPTCallDown)
 	p2 := nat.readRTP(rtpPTCallDown)
 	if !bytes.Equal(append(p1, p2...), downSample) {
@@ -341,10 +347,10 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	// End call cleanly
 	tapCallControl(t, web, "call-hangup")
 	callEnd := nat.readUntil(msgCallCtrl)
-	if len(callEnd) < 3 || callEnd[0] != callOpEnd {
+	if len(callEnd) < 5 || callEnd[0] != callOpEnd {
 		t.Fatalf("expected MSG_CALL_CTRL end, got %v", callEnd)
 	}
-	web.until(t, hasWS("call", `"reason":"hung up"`))
+	web.until(t, callCtrlMatch(callOpEnd, "hung up"))
 }
 
 func TestNativeUDPEndpointCopyRace(t *testing.T) {

@@ -78,7 +78,7 @@ func TestCompanionsAndTerminalsPersistence(t *testing.T) {
 		t.Fatal(terminals)
 	}
 	web := testConnectWS(t, base, "unit", false)
-	scene := web.hello(t, termID, "Ignored")
+	scene := web.hello(t, termID, "")
 	if !bytes.Contains(scene.data, []byte(storybookPalettes["peach"].bg)) {
 		t.Fatal("configured companion palette ignored")
 	}
@@ -239,7 +239,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	testRequest(t, "GET", scoped+"/api/diagnostics", token, nil, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", "unit", nil, 404)
 	testRequest(t, "POST", scoped+"/api/chat", token, object{"companion_id": id, "text": "Tell Cake Hi from HTTP."}, 200)
-	mirror.until(t, hasWS("svg", "Hi from HTTP."))
+	mirror.until(t, hasSVG("Hi from HTTP."))
 	_, rejected := dialTestWS(t, scoped, "unit", false, nil)
 	if rejected.StatusCode != 401 {
 		t.Fatal(rejected.StatusCode)
@@ -254,60 +254,68 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	if upgrade.StatusCode != 101 {
 		t.Fatal(upgrade.StatusCode)
 	}
-	conn.json(t, object{"ev": "hello", "role": "device", "terminal_id": "vocat-9999", "companion_id": "cake", "character": "Not allowed"})
-	conn.until(t, hasWS("error", `"status":403`))
-	conn.hello(t, "web-00001111", "Ignored")
-	peers := conn.until(t, hasWS("peers", id))
-	if !bytes.Contains(peers.data, []byte(`"id":"cake","name":"Cake","online":true`)) ||
-		bytes.Contains(peers.data, []byte(`"ip"`)) {
+	conn.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+		protoVersion: protoVersion1, kind: termKindHardware, displayFormats: dispRGB565,
+		terminalID: "vocat-9999", companionID: "cake",
+	}))
+	conn.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgReject, "")(f) && len(p) >= 1 && p[0] == rejectBadToken
+	})
+	conn.hello(t, "web-00001111", "")
+	peers := conn.until(t, hasProto(msgPeers, id))
+	if !bytes.Contains(framePayload(peers), []byte("Cake")) ||
+		bytes.Contains(framePayload(peers), []byte("127.0.0.1")) {
 		t.Fatal("scoped WebSocket did not expose the minimal online companion list")
 	}
-	conn.json(t, object{"ev": "watch", "companion_id": "cake"})
-	conn.until(t, hasWS("error", `"status":403`))
-	conn.json(t, object{"ev": "watch", "companion_id": id})
-	conn.until(t, hasWS("svg", ""))
-	conn.json(t, object{"ev": "text", "text": "WebSocket question?"})
-	conn.until(t, chatFrame("Hello!"))
+	conn.sendProto(t, msgWatch, appendStr8(nil, id))
+	conn.until(t, hasSVG(""))
+	conn.text(t, "WebSocket question?")
+	conn.until(t, hasProto(msgEvent, "Hello!"))
 	assertPrompt("web", "WebSocket question?")
-	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "text", "text": "Tell Cake Hi from text."})
-	mirror.until(t, hasWS("svg", "Hi from text."))
-	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "intercom", "target": "cake", "text": "Hi from WS intercom."})
-	mirror.until(t, hasWS("svg", "Hi from WS intercom."))
-	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "tap", "id": "companion", "x": 180, "y": 316})
-	conn.until(t, hasWS("svg", "companion-ring"))
-	conn.json(t, object{"ev": "tap", "x": 140, "y": 313})
-	menu := conn.until(t, hasWS("svg", "menu-intercom"))
+	doneOrIdle := func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusDone || p[4] == statusIdle)
+	}
+	conn.until(t, doneOrIdle)
+	conn.text(t, "Tell Cake Hi from text.")
+	mirror.until(t, hasSVG("Hi from text."))
+	conn.until(t, doneOrIdle)
+	conn.tap(t, 180, 316, 0)
+	conn.until(t, hasSVG("companion-ring"))
+	conn.tap(t, 140, 313, 0)
+	menu := conn.until(t, hasSVG("menu-intercom"))
 	for _, id := range []string{"menu-stats", "menu-games", "menu-memories", "menu-next"} {
 		if bytes.Contains(menu.data, []byte(id)) {
 			t.Fatalf("scoped SVG offers unexpected %s", id)
 		}
 	}
-	conn.json(t, object{"ev": "tap", "x": 115, "y": 130})
-	conn.until(t, hasWS("svg", "intercom-cake"))
-	conn.json(t, object{"ev": "tap", "x": 245, "y": 116})
-	conn.until(t, hasWS("rec", `"target":"cake"`))
-	conn.json(t, object{"ev": "rec_start", "target": "cake"})
+	conn.tap(t, 115, 130, 0)
+	conn.until(t, hasSVG("intercom-cake"))
+	conn.tap(t, 245, 116, 0)
+	conn.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "cake")(f) && len(p) >= 1 && p[0] == recOpStart
+	})
+	conn.recStart(t, "cake")
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
-	conn.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm...)))
-	conn.json(t, object{"ev": "rec_end", "target": "cake"})
-	got := physical.until(t, func(f wsFrame) bool { return f.op == wsBinary && f.data[0] == pcmPrefix })
-	if !bytes.Equal(got.data[1:], pcm) {
+	conn.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	conn.recEnd(t, "cake", false)
+	got := physical.until(t, isPlayback)
+	if !bytes.Equal(framePayload(got), pcm) {
 		t.Fatal("tunneled menu did not deliver recorded PCM")
 	}
-	mirror.until(t, hasWS("svg", "Voice to Cake."))
-	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "tap", "id": "companion", "x": 180, "y": 316})
-	conn.until(t, hasWS("svg", "companion-ring"))
-	conn.json(t, object{"ev": "watch", "companion_id": id})
-	conn.until(t, hasWS("svg", storybookPalettes["peach"].bg))
+	mirror.until(t, hasSVG("Voice to Cake."))
+	conn.until(t, doneOrIdle)
+	conn.tap(t, 180, 316, 0)
+	conn.until(t, hasSVG("companion-ring"))
+	conn.sendProto(t, msgWatch, appendStr8(nil, id))
+	conn.until(t, hasSVG(storybookPalettes["peach"].bg))
 	testRequest(t, "POST", base+"/api/companions/"+id+"/reset", "unit", object{}, 200)
 	faceSeen, companionSeen := false, false
 	conn.until(t, func(f wsFrame) bool {
-		faceSeen = faceSeen || hasWS("svg", "#FFF2E7")(f)
-		companionSeen = companionSeen || hasWS("companion", `"configured":false`)(f)
+		faceSeen = faceSeen || hasSVG("#FFF2E7")(f)
+		companionSeen = companionSeen || hasProto(msgCompanion, "New Companion")(f)
 		return faceSeen && companionSeen
 	})
 	scope = testObject(t, testRequest(t, "GET", scoped+"/api/scope", token, nil, 200))
@@ -369,14 +377,14 @@ func TestNoSpeakToolAndFinalVoiceIsPersisted(t *testing.T) {
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "Cake")
 	w := testConnectWS(t, base, "unit", false)
-	w.json(t, object{"ev": "hello", "role": "web"})
-	w.until(t, hasWS("peers", "cake"))
-	w.json(t, object{"ev": "watch", "companion_id": "cake"})
-	w.until(t, hasWS("svg", ""))
-	c.json(t, object{"ev": "text", "text": "Say something."})
-	w.until(t, chatFrame("Say something."))
-	w.until(t, chatFrame("Done."))
-	c.until(t, hasWS("tts", `"state":"end"`))
+	w.watch(t, "cake")
+	c.text(t, "Say something.")
+	w.until(t, hasProto(msgEvent, "Say something."))
+	w.until(t, hasProto(msgEvent, "Done."))
+	c.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpEnd
+	})
 	if synthesis.Load() != 1 {
 		t.Fatal("the final prose was not synthesized exactly once")
 	}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -387,28 +388,37 @@ func TestLive(t *testing.T) {
 		viewer.watch(t, id)
 		input, _ := json.Marshal(object{"text": liveVoicePrompt})
 		recording, _ := iso.read(t, "/api/tts", input, jsonType, nil, 200)
-		board.json(t, object{"ev": "rec_start"})
-		for offset := 0; offset < len(recording); offset += pcmPacket {
-			chunk := recording[offset:min(offset+pcmPacket, len(recording))]
-			board.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, chunk...)))
+		board.recStart(t, "")
+		var seq uint16
+		for offset := 0; offset < len(recording); offset += rtpPCMBytes {
+			chunk := recording[offset:min(offset+rtpPCMBytes, len(recording))]
+			seq++
+			board.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*rtpSamples, 1, chunk)
 		}
-		board.json(t, object{"ev": "rec_end"})
-		board.until(t, hasWS("chime", `"kind":"think"`))
-		board.until(t, hasWS("tts", `"state":"start"`))
+		board.recEnd(t, "", false)
+		board.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeThink
+		})
+		board.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
+		})
 		var spoken []byte
 		end := board.until(t, func(f wsFrame) bool {
 			if isPlayback(f) {
-				spoken = append(spoken, f.data[1:]...)
+				spoken = append(spoken, framePayload(f)...)
 			}
-			return hasWS("tts", `"state":"end"`)(f)
+			p := framePayload(f)
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 		})
 		if !livePCMOK(spoken) {
 			t.Fatal("voice turn did not return playable PCM")
 		}
-		board.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
+		board.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 		board.write(t, maskedFrame(wsClose, true, wsCloseFrame(1000).data))
 		board.until(t, func(f wsFrame) bool { return f.op == wsClose })
-		viewer.until(t, hasWS("peers", `"ws":false`))
+		viewer.until(t, hasProto(msgPeers, ""))
 		entries := liveJSON[struct{ Messages []chatEntry }](t, iso, "/api/devices/"+id+"/messages", nil, nil, "", nil).Messages
 		if len(entries) != 2 || entries[0].Source != "voice" || !strings.Contains(strings.ToLower(entries[0].Text), "right triangle") {
 			t.Fatal("voice question and answer not in canonical history")
@@ -438,11 +448,12 @@ func TestLive(t *testing.T) {
 		board.helloV2(t, id, "LiveVoice")
 		viewer = testConnectWS(t, iso.base, iso.token, true)
 		viewer.watch(t, id)
-		board.json(t, object{"ev": "text", "text": liveQuotaPrompt})
-		viewer.until(t, hasWS("svg", "Try again"))
+		board.text(t, liveQuotaPrompt)
+		viewer.until(t, hasSVG("Try again"))
 		board.write(t, maskedFrame(wsPing, true, nil))
 		board.until(t, func(f wsFrame) bool {
-			if hasWS("tts", `"state":"start"`)(f) || isPlayback(f) {
+			p := framePayload(f)
+			if (hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart) || isPlayback(f) {
 				t.Fatal("model rejection unexpectedly started audio")
 			}
 			return f.op == wsPong

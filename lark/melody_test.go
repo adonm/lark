@@ -42,19 +42,24 @@ func TestWSMelody(t *testing.T) {
 	pcm, _ := synthesizeMelody(notes)
 	check := func() {
 		t.Helper()
-		start := c.until(t, hasWS("tts", `"state":"start"`))
-		audio := testObject(t, start.data)["audio"]
+		start := c.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStart
+		})
+		audio := binary.LittleEndian.Uint64(framePayload(start)[1:9])
 		var got []byte
 		end := c.until(t, func(f wsFrame) bool {
-			if f.op == wsBinary && len(f.data) > 1 && f.data[0] == pcmPrefix {
-				got = append(got, f.data[1:]...)
+			if isPlayback(f) {
+				got = append(got, framePayload(f)...)
 			}
-			return hasWS("tts", `"state":"end"`)(f)
+			p := framePayload(f)
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 		})
-		if testObject(t, end.data)["audio"] != audio || !bytes.Equal(got, pcm) {
+		endAudio := binary.LittleEndian.Uint64(framePayload(end)[1:9])
+		if endAudio != audio || !bytes.Equal(got, pcm) {
 			t.Fatalf("bad melody playback (%d bytes)", len(got))
 		}
-		c.json(t, object{"ev": "tts_ack", "state": "done", "audio": audio})
+		c.sendProto(t, msgTTSAck, encodeTTSAck(false, audio))
 	}
 	toolTest(t, base, "emit", object{"to": id}, true)
 	toolTest(t, base, "emit", object{"to": id, "notes": notes}, false)

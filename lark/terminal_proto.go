@@ -5,39 +5,81 @@ import (
 	"errors"
 	"io"
 	"math"
-	"strconv"
 )
 
 const (
 	protoMagic      uint8  = 0x4C
+	protoVersion1   uint8  = 1
 	protoHeaderSize        = 8
 	protoMaxPayload uint32 = 320 * 1024
+	resumeTokenLen         = 16
+	resumeWindowMS  uint32 = 30000
 	defaultDevPort         = "8766"
 	frameTag        byte   = 3
 
-	// Device -> Bridge TCP message types
-	msgHello      uint8 = 0x01
-	msgStatus     uint8 = 0x02
-	msgPointer    uint8 = 0x03
-	msgWakeWord   uint8 = 0x04
-	msgRecStart   uint8 = 0x05
-	msgRecEnd     uint8 = 0x06
-	msgTTSAck     uint8 = 0x07
-	msgCallFailed uint8 = 0x08
-	msgPing       uint8 = 0x09
-	msgPong       uint8 = 0x0A
+	// Terminal -> Lark message types
+	msgHello       uint8 = 0x01
+	msgResume      uint8 = 0x02
+	msgTelemetry   uint8 = 0x03
+	msgPointer     uint8 = 0x04
+	msgWakeWord    uint8 = 0x05
+	msgRecStart    uint8 = 0x06
+	msgRecEnd      uint8 = 0x07
+	msgTTSAck      uint8 = 0x08
+	msgCallReq     uint8 = 0x09
+	msgMedia       uint8 = 0x0A
+	msgTextInput   uint8 = 0x0B
+	msgPromptReply uint8 = 0x0C
+	msgWatch       uint8 = 0x0D
+	msgSetVolume   uint8 = 0x0E
+	msgPing        uint8 = 0x0F
+	msgPong        uint8 = 0x10
 
-	// Bridge -> Device TCP message types
-	msgHelloOK      uint8 = 0x81
-	msgFrame        uint8 = 0x82
-	msgWakeWordCtrl uint8 = 0x83
-	msgRecCtrl      uint8 = 0x84
-	msgTTSCtrl      uint8 = 0x85
-	msgTTSPCM       uint8 = 0x86
-	msgCallCtrl     uint8 = 0x87
-	msgChime        uint8 = 0x88
-	msgPower        uint8 = 0x89
-	msgVolume       uint8 = 0x8A
+	// Lark -> Terminal message types
+	msgWelcome      uint8 = 0x81
+	msgReject       uint8 = 0x82
+	msgFrame        uint8 = 0x83
+	msgFrameSVG     uint8 = 0x84
+	msgWakeWordCtrl uint8 = 0x85
+	msgRecCtrl      uint8 = 0x86
+	msgTTSCtrl      uint8 = 0x87
+	msgTTSPCM       uint8 = 0x88
+	msgCallCtrl     uint8 = 0x89
+	msgChime        uint8 = 0x8A
+	msgPower        uint8 = 0x8B
+	msgVolume       uint8 = 0x8C
+	msgStatus       uint8 = 0x8D
+	msgVoiceOwner   uint8 = 0x8E
+	msgPrompt       uint8 = 0x8F
+	msgPromptEnded  uint8 = 0x90
+	msgCompanion    uint8 = 0x91
+	msgPeers        uint8 = 0x92
+	msgEvent        uint8 = 0x93
+
+	// Terminal kind
+	termKindHardware uint8 = 0
+	termKindWeb      uint8 = 1
+
+	// Display formats
+	dispRGB565 uint8 = 1 << 0
+	dispSVG    uint8 = 1 << 1
+
+	// Frame codecs
+	codecBitRaw    uint8 = 1 << 0
+	codecBitRLE565 uint8 = 1 << 1
+	codecBitLZ4    uint8 = 1 << 2
+	codecBitJPEG   uint8 = 1 << 3
+	codecBitAll    uint8 = codecBitRaw | codecBitRLE565 | codecBitLZ4 | codecBitJPEG
+
+	// Screen shape
+	shapeRound uint8 = 0
+	shapeRect  uint8 = 1
+
+	// Hello flags
+	helloFlagIfFree uint8 = 1 << 0
+
+	// Welcome flags
+	welcomeFlagBridgeEP uint8 = 1 << 0
 
 	// Capability bits
 	capBattery        uint32 = 1 << 0
@@ -49,6 +91,28 @@ const (
 	capBridgeEndpoint uint32 = 1 << 6
 	capPanelSleep     uint32 = 1 << 7
 	capWakeWord       uint32 = 1 << 8
+
+	// Reject reasons
+	rejectBadToken        uint8 = 1
+	rejectBadVersion      uint8 = 2
+	rejectUnknownTerminal uint8 = 3
+	rejectFull            uint8 = 4
+	rejectOccupied        uint8 = 5
+	rejectBadCaps         uint8 = 6
+
+	// Status states
+	statusIdle      uint8 = 0
+	statusListening uint8 = 1
+	statusThinking  uint8 = 2
+	statusSpeaking  uint8 = 3
+	statusBlocked   uint8 = 4
+	statusDone      uint8 = 5
+	statusError     uint8 = 6
+
+	// Prompt / status kinds
+	promptNone       uint8 = 0
+	promptPermission uint8 = 1
+	promptQuestion   uint8 = 2
 
 	// Pointer kinds
 	ptrTap  uint8 = 0
@@ -80,367 +144,28 @@ const (
 	chimeIntercom uint8 = 3
 	chimeRing     uint8 = 4
 
-	helloFlagBridgeEP uint16 = 1 << 0
-	statusFlagSleep   uint8  = 1 << 0
+	// Event kinds
+	eventSavedApps       uint8 = 1
+	eventTimers          uint8 = 2
+	eventChat            uint8 = 3
+	eventHistoryArchived uint8 = 4
+	eventParentPolicy    uint8 = 5
 
 	// RTP constants
-	rtpVersionByte uint8  = 0x80
-	rtpHeaderSize         = 12
-	rtpSamples            = 320
-	rtpPCMBytes           = rtpSamples * 2
-	rtpPacketBytes        = rtpHeaderSize + rtpPCMBytes
-	rtpPTRecPCM    uint8  = 96
-	rtpPTCallUp    uint8  = 97
-	rtpPTCallDown  uint8  = 98
+	rtpVersionByte uint8 = 0x80
+	rtpHeaderSize        = 12
+	rtpSamples           = 320
+	rtpPCMBytes          = rtpSamples * 2
+	rtpPacketBytes       = rtpHeaderSize + rtpPCMBytes
+	rtpPTRecPCM    uint8 = 96
+	rtpPTCallUp    uint8 = 97
+	rtpPTCallDown  uint8 = 98
 )
 
 var (
 	errProtoMagic = errors.New("invalid protocol magic")
 	errProtoSize  = errors.New("protocol payload exceeds limit")
 	errProtoShort = errors.New("short protocol payload")
-)
-
-type nativeHello struct {
-	capsMask uint32
-	width    uint16
-	height   uint16
-	udpPort  uint16
-	deviceID string
-	board    string
-	firmware string
-	token    string
-}
-
-func packProtoPacket(msgType uint8, seq uint16, payload []byte) []byte {
-	pkt := make([]byte, protoHeaderSize+len(payload))
-	pkt[0] = protoMagic
-	pkt[1] = msgType
-	binary.LittleEndian.PutUint16(pkt[2:4], seq)
-	binary.LittleEndian.PutUint32(pkt[4:8], uint32(len(payload)))
-	copy(pkt[protoHeaderSize:], payload)
-	return pkt
-}
-
-func readProtoFrame(r io.Reader) (msgType uint8, seq uint16, payload []byte, err error) {
-	var hdr [protoHeaderSize]byte
-	if _, err = io.ReadFull(r, hdr[:]); err != nil {
-		return 0, 0, nil, err
-	}
-	if hdr[0] != protoMagic {
-		return 0, 0, nil, errProtoMagic
-	}
-	msgType = hdr[1]
-	seq = binary.LittleEndian.Uint16(hdr[2:4])
-	length := binary.LittleEndian.Uint32(hdr[4:8])
-	if length > protoMaxPayload {
-		return 0, 0, nil, errProtoSize
-	}
-	if length > 0 {
-		payload = make([]byte, length)
-		if _, err = io.ReadFull(r, payload); err != nil {
-			return 0, 0, nil, err
-		}
-	}
-	return msgType, seq, payload, nil
-}
-
-func parseNativeHello(b []byte) (nativeHello, error) {
-	if len(b) < 14 {
-		return nativeHello{}, errProtoShort
-	}
-	h := nativeHello{
-		capsMask: binary.LittleEndian.Uint32(b[0:4]),
-		width:    binary.LittleEndian.Uint16(b[4:6]),
-		height:   binary.LittleEndian.Uint16(b[6:8]),
-		udpPort:  binary.LittleEndian.Uint16(b[8:10]),
-	}
-	idLen, boardLen, fwLen, tokLen := int(b[10]), int(b[11]), int(b[12]), int(b[13])
-	need := 14 + idLen + boardLen + fwLen + tokLen
-	if len(b) < need {
-		return nativeHello{}, errProtoShort
-	}
-	off := 14
-	h.deviceID = string(b[off : off+idLen])
-	off += idLen
-	h.board = string(b[off : off+boardLen])
-	off += boardLen
-	h.firmware = string(b[off : off+fwLen])
-	off += fwLen
-	h.token = string(b[off : off+tokLen])
-	return h, nil
-}
-
-func helloCapsFromMask(mask uint32) terminalCaps {
-	call := mask&capCall != 0
-	return terminalCaps{
-		Battery:        mask&capBattery != 0,
-		HeadPads:       mask&capHeadPads != 0,
-		Call:           call,
-		CallPCM:        call && mask&capCallPCM != 0,
-		Drag:           mask&capDrag != 0,
-		PointerRev:     mask&capPointerRev != 0,
-		BridgeEndpoint: mask&capBridgeEndpoint != 0,
-		PanelSleep:     mask&capPanelSleep != 0,
-		WakeWord:       mask&capWakeWord != 0,
-	}
-}
-
-func encodeHelloOK(udpPort, flags uint16, ssrc, sessionID uint32) []byte {
-	var b [12]byte
-	binary.LittleEndian.PutUint16(b[0:2], udpPort)
-	binary.LittleEndian.PutUint16(b[2:4], flags)
-	binary.LittleEndian.PutUint32(b[4:8], ssrc)
-	binary.LittleEndian.PutUint32(b[8:12], sessionID)
-	return b[:]
-}
-
-func parseNativeStatus(b []byte) (wsStatus, bool) {
-	if len(b) < 16 {
-		return wsStatus{}, false
-	}
-	rssi := int(int16(binary.LittleEndian.Uint16(b[0:2])))
-	batt := int(int16(binary.LittleEndian.Uint16(b[2:4])))
-	charging := b[4] != 0
-	cpu := float64(b[5])
-	freeHeap := uint64(binary.LittleEndian.Uint32(b[8:12]))
-	uptime := uint64(binary.LittleEndian.Uint32(b[12:16]))
-	var battPtr *int
-	if batt >= 0 {
-		battPtr = new(batt)
-	}
-	return wsStatus{
-		WiFi:     new(rssi),
-		Battery:  battPtr,
-		Charge:   new(charging),
-		CPU:      new(math.Min(100, cpu)),
-		FreeHeap: new(freeHeap),
-		Uptime:   new(uptime),
-	}, true
-}
-
-func parseNativePointer(b []byte) (evName string, x, y int, rev uint16, ok bool) {
-	if len(b) < 8 {
-		return "", 0, 0, 0, false
-	}
-	switch b[0] {
-	case ptrTap:
-		evName = "tap"
-	case ptrDrag:
-		evName = "drag"
-	case ptrUp:
-		evName = "up"
-	default:
-		return "", 0, 0, 0, false
-	}
-	x = int(binary.LittleEndian.Uint16(b[2:4]))
-	y = int(binary.LittleEndian.Uint16(b[4:6]))
-	rev = binary.LittleEndian.Uint16(b[6:8])
-	return evName, x, y, rev, true
-}
-
-func parseNativeRecStart(b []byte) (session uint16, target uint8, ok bool) {
-	if len(b) < 4 {
-		return 0, 0, false
-	}
-	return binary.LittleEndian.Uint16(b[0:2]), b[2], true
-}
-
-func parseNativeRecEnd(b []byte) (session uint16, target uint8, cancelled bool, ok bool) {
-	if len(b) < 4 {
-		return 0, 0, false, false
-	}
-	return binary.LittleEndian.Uint16(b[0:2]), b[2], b[3] != 0, true
-}
-
-func parseNativeTTSAck(b []byte) (aborted bool, audioID uint64, ok bool) {
-	if len(b) < 2 {
-		return false, 0, false
-	}
-	idLen := int(b[1])
-	if len(b) < 2+idLen || idLen == 0 {
-		return false, 0, false
-	}
-	id, err := strconv.ParseUint(string(b[2:2+idLen]), 10, 64)
-	if err != nil {
-		return false, 0, false
-	}
-	return b[0] != 0, id, true
-}
-
-func parseNativeCallFailed(b []byte) (callID uint32, ok bool) {
-	if len(b) < 1 {
-		return 0, false
-	}
-	idLen := int(b[0])
-	if len(b) < 1+idLen || idLen == 0 {
-		return 0, false
-	}
-	id, err := strconv.ParseUint(string(b[1:1+idLen]), 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	return uint32(id), true
-}
-
-func encodeRecCtrl(op, target uint8, session uint16) []byte {
-	var b [4]byte
-	b[0] = op
-	b[1] = target
-	binary.LittleEndian.PutUint16(b[2:4], session)
-	return b[:]
-}
-
-func encodeIDCtrl(op uint8, id uint64) []byte {
-	s := strconv.FormatUint(id, 10)
-	b := make([]byte, 2+len(s))
-	b[0] = op
-	b[1] = uint8(len(s))
-	copy(b[2:], s)
-	return b
-}
-
-func encodeChimePayload(kind string) (byte, bool) {
-	switch kind {
-	case "tap":
-		return chimeTap, true
-	case "think":
-		return chimeThink, true
-	case "cancel":
-		return chimeCancel, true
-	case "intercom", "celebrate":
-		return chimeIntercom, true
-	case "ring":
-		return chimeRing, true
-	default:
-		return 0, false
-	}
-}
-
-func encodePowerPayload(brightness int) byte {
-	switch brightness {
-	case 85:
-		return 0
-	case 12:
-		return 1
-	case 20:
-		return 2
-	default:
-		if brightness < 12 {
-			return 1
-		}
-		if brightness > 85 {
-			return 85
-		}
-		return byte(brightness)
-	}
-}
-
-func encodeRTPPacket(dst []byte, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) int {
-	dst[0] = rtpVersionByte
-	dst[1] = pt & 0x7F
-	binary.BigEndian.PutUint16(dst[2:4], seq)
-	binary.BigEndian.PutUint32(dst[4:8], ts)
-	binary.BigEndian.PutUint32(dst[8:12], ssrc)
-	copy(dst[rtpHeaderSize:], pcm)
-	return rtpHeaderSize + len(pcm)
-}
-
-func decodeRTPHeader(pkt []byte) (pt uint8, seq uint16, ts, ssrc uint32, ok bool) {
-	if len(pkt) < rtpHeaderSize || pkt[0] != rtpVersionByte {
-		return 0, 0, 0, 0, false
-	}
-	return pkt[1] & 0x7F,
-		binary.BigEndian.Uint16(pkt[2:4]),
-		binary.BigEndian.Uint32(pkt[4:8]),
-		binary.BigEndian.Uint32(pkt[8:12]),
-		true
-}
-
-// Unified terminal protocol v1 constants and codecs.
-const (
-	protoVersion1 uint8  = 1
-	resumeTokenLen       = 16
-	resumeWindowMS       = 30000
-
-	// Terminal -> Lark v1 message types
-	tMsgHello       uint8 = 0x01
-	tMsgResume      uint8 = 0x02
-	tMsgTelemetry   uint8 = 0x03
-	tMsgPointer     uint8 = 0x04
-	tMsgWakeWord    uint8 = 0x05
-	tMsgRecStart    uint8 = 0x06
-	tMsgRecEnd      uint8 = 0x07
-	tMsgTTSAck      uint8 = 0x08
-	tMsgCallReq     uint8 = 0x09
-	tMsgMedia       uint8 = 0x0A
-	tMsgTextInput   uint8 = 0x0B
-	tMsgPromptReply uint8 = 0x0C
-	tMsgWatch       uint8 = 0x0D
-	tMsgSetVolume   uint8 = 0x0E
-	tMsgPing        uint8 = 0x0F
-	tMsgPong        uint8 = 0x10
-
-	// Lark -> Terminal v1 message types
-	tMsgWelcome      uint8 = 0x81
-	tMsgReject       uint8 = 0x82
-	tMsgFrame        uint8 = 0x83
-	tMsgFrameSVG     uint8 = 0x84
-	tMsgWakeWordCtrl uint8 = 0x85
-	tMsgRecCtrl      uint8 = 0x86
-	tMsgTTSCtrl      uint8 = 0x87
-	tMsgTTSPCM       uint8 = 0x88
-	tMsgCallCtrl     uint8 = 0x89
-	tMsgChime        uint8 = 0x8A
-	tMsgPower        uint8 = 0x8B
-	tMsgVolume       uint8 = 0x8C
-	tMsgStatus       uint8 = 0x8D
-	tMsgVoiceOwner   uint8 = 0x8E
-	tMsgPrompt       uint8 = 0x8F
-	tMsgPromptEnded  uint8 = 0x90
-	tMsgCompanion    uint8 = 0x91
-	tMsgPeers        uint8 = 0x92
-	tMsgEvent        uint8 = 0x93
-
-	termKindHardware uint8 = 0
-	termKindWeb      uint8 = 1
-
-	dispRGB565 uint8 = 1 << 0
-	dispSVG    uint8 = 1 << 1
-
-	codecBitRaw    uint8 = 1 << 0
-	codecBitRLE565 uint8 = 1 << 1
-	codecBitLZ4    uint8 = 1 << 2
-	codecBitJPEG   uint8 = 1 << 3
-
-	shapeRound uint8 = 0
-	shapeRect  uint8 = 1
-
-	helloFlagIfFree uint8 = 1 << 0
-
-	rejectBadToken        uint8 = 1
-	rejectBadVersion      uint8 = 2
-	rejectUnknownTerminal uint8 = 3
-	rejectFull            uint8 = 4
-	rejectOccupied        uint8 = 5
-	rejectBadCaps         uint8 = 6
-
-	statusIdle      uint8 = 0
-	statusListening uint8 = 1
-	statusThinking  uint8 = 2
-	statusSpeaking  uint8 = 3
-	statusBlocked   uint8 = 4
-	statusDone      uint8 = 5
-	statusError     uint8 = 6
-
-	promptNone       uint8 = 0
-	promptPermission uint8 = 1
-	promptQuestion   uint8 = 2
-
-	eventSavedApps       uint8 = 1
-	eventTimers          uint8 = 2
-	eventChat            uint8 = 3
-	eventHistoryArchived uint8 = 4
-	eventParentPolicy    uint8 = 5
 )
 
 type terminalHello struct {
@@ -466,6 +191,50 @@ type terminalResume struct {
 	resumeToken  [resumeTokenLen]byte
 	lastSeq      uint32
 	terminalID   string
+}
+
+func packProtoPacket(msgType uint8, seq uint16, payload []byte) []byte {
+	pkt := make([]byte, protoHeaderSize+len(payload))
+	pkt[0] = protoMagic
+	pkt[1] = msgType
+	binary.LittleEndian.PutUint16(pkt[2:4], seq)
+	binary.LittleEndian.PutUint32(pkt[4:8], uint32(len(payload)))
+	copy(pkt[protoHeaderSize:], payload)
+	return pkt
+}
+
+func unpackProtoPacket(b []byte) (msgType uint8, seq uint16, payload []byte, ok bool) {
+	if len(b) < protoHeaderSize || b[0] != protoMagic {
+		return 0, 0, nil, false
+	}
+	length := binary.LittleEndian.Uint32(b[4:8])
+	if length > protoMaxPayload || len(b) < protoHeaderSize+int(length) {
+		return 0, 0, nil, false
+	}
+	return b[1], binary.LittleEndian.Uint16(b[2:4]), b[protoHeaderSize : protoHeaderSize+int(length)], true
+}
+
+func readProtoFrame(r io.Reader) (msgType uint8, seq uint16, payload []byte, err error) {
+	var hdr [protoHeaderSize]byte
+	if _, err = io.ReadFull(r, hdr[:]); err != nil {
+		return 0, 0, nil, err
+	}
+	if hdr[0] != protoMagic {
+		return 0, 0, nil, errProtoMagic
+	}
+	msgType = hdr[1]
+	seq = binary.LittleEndian.Uint16(hdr[2:4])
+	length := binary.LittleEndian.Uint32(hdr[4:8])
+	if length > protoMaxPayload {
+		return 0, 0, nil, errProtoSize
+	}
+	if length > 0 {
+		payload = make([]byte, length)
+		if _, err = io.ReadFull(r, payload); err != nil {
+			return 0, 0, nil, err
+		}
+	}
+	return msgType, seq, payload, nil
 }
 
 func appendStr8(dst []byte, s string) []byte {
@@ -541,6 +310,29 @@ func parseTerminalHello(b []byte) (terminalHello, error) {
 	return h, nil
 }
 
+func encodeTerminalHello(h terminalHello) []byte {
+	tidLen := min(len(h.terminalID), 255)
+	cidLen := min(len(h.companionID), 255)
+	bdLen := min(len(h.board), 255)
+	fwLen := min(len(h.firmware), 255)
+	tokLen := min(len(h.token), 255)
+	b := make([]byte, 0, 21+tidLen+cidLen+bdLen+fwLen+tokLen)
+	b = append(b, h.protoVersion, h.kind)
+	b = binary.LittleEndian.AppendUint32(b, h.capsMask)
+	b = append(b, h.displayFormats, h.frameCodecs)
+	b = binary.LittleEndian.AppendUint16(b, h.width)
+	b = binary.LittleEndian.AppendUint16(b, h.height)
+	b = append(b, h.shape, h.flags)
+	b = binary.LittleEndian.AppendUint16(b, h.udpPort)
+	b = append(b, byte(tidLen), byte(cidLen), byte(bdLen), byte(fwLen), byte(tokLen))
+	b = append(b, h.terminalID[:tidLen]...)
+	b = append(b, h.companionID[:cidLen]...)
+	b = append(b, h.board[:bdLen]...)
+	b = append(b, h.firmware[:fwLen]...)
+	b = append(b, h.token[:tokLen]...)
+	return b
+}
+
 func parseTerminalResume(b []byte) (terminalResume, error) {
 	if len(b) < 22 {
 		return terminalResume{}, errProtoShort
@@ -555,6 +347,61 @@ func parseTerminalResume(b []byte) (terminalResume, error) {
 	}
 	r.terminalID = string(b[22 : 22+idLen])
 	return r, nil
+}
+
+func encodeTerminalResume(protoVer uint8, token [resumeTokenLen]byte, lastSeq uint32, terminalID string) []byte {
+	b := make([]byte, 0, 22+len(terminalID))
+	b = append(b, protoVer)
+	b = append(b, token[:]...)
+	b = binary.LittleEndian.AppendUint32(b, lastSeq)
+	return appendStr8(b, terminalID)
+}
+
+func helloCapsFromMask(mask uint32) terminalCaps {
+	call := mask&capCall != 0
+	return terminalCaps{
+		Battery:        mask&capBattery != 0,
+		HeadPads:       mask&capHeadPads != 0,
+		Call:           call,
+		CallPCM:        call && mask&capCallPCM != 0,
+		Drag:           mask&capDrag != 0,
+		PointerRev:     mask&capPointerRev != 0,
+		BridgeEndpoint: mask&capBridgeEndpoint != 0,
+		PanelSleep:     mask&capPanelSleep != 0,
+		WakeWord:       mask&capWakeWord != 0,
+	}
+}
+
+func capsMaskFromCaps(c terminalCaps) uint32 {
+	var m uint32
+	if c.Battery {
+		m |= capBattery
+	}
+	if c.HeadPads {
+		m |= capHeadPads
+	}
+	if c.Call {
+		m |= capCall
+	}
+	if c.CallPCM {
+		m |= capCallPCM
+	}
+	if c.Drag {
+		m |= capDrag
+	}
+	if c.PointerRev {
+		m |= capPointerRev
+	}
+	if c.BridgeEndpoint {
+		m |= capBridgeEndpoint
+	}
+	if c.PanelSleep {
+		m |= capPanelSleep
+	}
+	if c.WakeWord {
+		m |= capWakeWord
+	}
+	return m
 }
 
 func encodeWelcome(flags uint8, udpPort uint16, ssrc, maxMsgBytes, resumeWinMS, seq uint32, token [resumeTokenLen]byte, terminalID, companionID string) []byte {
@@ -580,6 +427,129 @@ func encodeReject(reason uint8, message string) []byte {
 	return appendStr8(b, message)
 }
 
+func parseTelemetry(b []byte) (wsStatus, bool) {
+	if len(b) < 16 {
+		return wsStatus{}, false
+	}
+	rssi := int(int16(binary.LittleEndian.Uint16(b[0:2])))
+	batt := int(int16(binary.LittleEndian.Uint16(b[2:4])))
+	charging := b[4] != 0
+	cpu := float64(b[5])
+	freeHeap := uint64(binary.LittleEndian.Uint32(b[8:12]))
+	uptime := uint64(binary.LittleEndian.Uint32(b[12:16]))
+	var battPtr *int
+	if batt >= 0 {
+		battPtr = new(batt)
+	}
+	return wsStatus{
+		WiFi:     new(rssi),
+		Battery:  battPtr,
+		Charge:   new(charging),
+		CPU:      new(math.Min(100, cpu)),
+		FreeHeap: new(freeHeap),
+		Uptime:   new(uptime),
+	}, true
+}
+
+func parsePointer(b []byte) (evName string, x, y int, rev uint16, ok bool) {
+	if len(b) < 8 {
+		return "", 0, 0, 0, false
+	}
+	switch b[0] {
+	case ptrTap:
+		evName = "tap"
+	case ptrDrag:
+		evName = "drag"
+	case ptrUp:
+		evName = "up"
+	default:
+		return "", 0, 0, 0, false
+	}
+	x = int(binary.LittleEndian.Uint16(b[2:4]))
+	y = int(binary.LittleEndian.Uint16(b[4:6]))
+	rev = binary.LittleEndian.Uint16(b[6:8])
+	return evName, x, y, rev, true
+}
+
+func encodePointer(kind uint8, x, y, revLo uint16) []byte {
+	var b [8]byte
+	b[0] = kind
+	binary.LittleEndian.PutUint16(b[2:4], x)
+	binary.LittleEndian.PutUint16(b[4:6], y)
+	binary.LittleEndian.PutUint16(b[6:8], revLo)
+	return b[:]
+}
+
+func parseRecStart(b []byte) (session uint16, target string, ok bool) {
+	if len(b) < 3 {
+		return 0, "", false
+	}
+	off := 2
+	target, ok = readStr8(b, &off)
+	return binary.LittleEndian.Uint16(b[0:2]), target, ok
+}
+
+func parseRecEnd(b []byte) (session uint16, cancelled bool, target string, ok bool) {
+	if len(b) < 4 {
+		return 0, false, "", false
+	}
+	off := 3
+	target, ok = readStr8(b, &off)
+	return binary.LittleEndian.Uint16(b[0:2]), b[2] != 0, target, ok
+}
+
+func parseTTSAck(b []byte) (aborted bool, audioID uint64, ok bool) {
+	if len(b) < 9 {
+		return false, 0, false
+	}
+	return b[0] != 0, binary.LittleEndian.Uint64(b[1:9]), true
+}
+
+func encodeTTSAck(aborted bool, audioID uint64) []byte {
+	var b [9]byte
+	if aborted {
+		b[0] = 1
+	}
+	binary.LittleEndian.PutUint64(b[1:9], audioID)
+	return b[:]
+}
+
+func parseCallReq(b []byte) (action uint8, callID uint32, target string, ok bool) {
+	if len(b) < 6 {
+		return 0, 0, "", false
+	}
+	off := 5
+	target, ok = readStr8(b, &off)
+	return b[0], binary.LittleEndian.Uint32(b[1:5]), target, ok
+}
+
+func parseTextInput(b []byte) (string, bool) {
+	off := 0
+	return readStr16(b, &off)
+}
+
+func parsePromptReply(b []byte) (id, choice string, ok bool) {
+	off := 0
+	id, ok = readStr8(b, &off)
+	if !ok {
+		return "", "", false
+	}
+	choice, ok = readStr8(b, &off)
+	return id, choice, ok
+}
+
+func parseWatch(b []byte) (string, bool) {
+	off := 0
+	return readStr8(b, &off)
+}
+
+func parseSetVolume(b []byte) (auto bool, level int, ok bool) {
+	if len(b) < 2 {
+		return false, 0, false
+	}
+	return b[0] != 0, int(b[1]), true
+}
+
 func encodeFrameSVG(rev uint32, terminalID, companionID, svg string) []byte {
 	tidLen := min(len(terminalID), 255)
 	cidLen := min(len(companionID), 255)
@@ -590,6 +560,69 @@ func encodeFrameSVG(rev uint32, terminalID, companionID, svg string) []byte {
 	b = append(b, terminalID[:tidLen]...)
 	b = append(b, companionID[:cidLen]...)
 	return append(b, svg...)
+}
+
+func encodeWakeWordCtrl(enabled bool, terminalID, companionID string) []byte {
+	var en byte
+	if enabled {
+		en = 1
+	}
+	b := make([]byte, 0, 3+len(terminalID)+len(companionID))
+	b = append(b, en)
+	b = appendStr8(b, terminalID)
+	return appendStr8(b, companionID)
+}
+
+func encodeRecCtrl(op, flags uint8, session uint16, target string) []byte {
+	b := make([]byte, 0, 5+len(target))
+	b = append(b, op, flags)
+	b = binary.LittleEndian.AppendUint16(b, session)
+	return appendStr8(b, target)
+}
+
+func encodeTTSCtrl(op uint8, audioID uint64) []byte {
+	var b [9]byte
+	b[0] = op
+	binary.LittleEndian.PutUint64(b[1:9], audioID)
+	return b[:]
+}
+
+func encodeCallCtrl(op uint8, callID uint32, reason string) []byte {
+	b := make([]byte, 0, 6+len(reason))
+	b = append(b, op)
+	b = binary.LittleEndian.AppendUint32(b, callID)
+	return appendStr8(b, reason)
+}
+
+func encodeChimePayload(kind string) (byte, bool) {
+	switch kind {
+	case "tap":
+		return chimeTap, true
+	case "think":
+		return chimeThink, true
+	case "cancel":
+		return chimeCancel, true
+	case "intercom", "celebrate":
+		return chimeIntercom, true
+	case "ring":
+		return chimeRing, true
+	default:
+		return 0, false
+	}
+}
+
+func encodeVolumeMsg(level int, persist, auto bool, terminalID, companionID string) []byte {
+	var p, a byte
+	if persist {
+		p = 1
+	}
+	if auto {
+		a = 1
+	}
+	b := make([]byte, 0, 5+len(terminalID)+len(companionID))
+	b = append(b, byte(min(100, max(0, level))), p, a)
+	b = appendStr8(b, terminalID)
+	return appendStr8(b, companionID)
 }
 
 func encodeStatus(seq uint32, state, progress, kind uint8, text string) []byte {
@@ -644,4 +677,25 @@ func encodeEventMsg(seq uint32, kind uint8, companionID, arg1, arg2 string) []by
 	b = appendStr8(b, companionID)
 	b = appendStr8(b, arg1)
 	return appendStr16(b, arg2)
+}
+
+func encodeRTPPacket(dst []byte, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) int {
+	dst[0] = rtpVersionByte
+	dst[1] = pt & 0x7F
+	binary.BigEndian.PutUint16(dst[2:4], seq)
+	binary.BigEndian.PutUint32(dst[4:8], ts)
+	binary.BigEndian.PutUint32(dst[8:12], ssrc)
+	copy(dst[rtpHeaderSize:], pcm)
+	return rtpHeaderSize + len(pcm)
+}
+
+func decodeRTPHeader(pkt []byte) (pt uint8, seq uint16, ts, ssrc uint32, ok bool) {
+	if len(pkt) < rtpHeaderSize || pkt[0] != rtpVersionByte {
+		return 0, 0, 0, 0, false
+	}
+	return pkt[1] & 0x7F,
+		binary.BigEndian.Uint16(pkt[2:4]),
+		binary.BigEndian.Uint32(pkt[4:8]),
+		binary.BigEndian.Uint32(pkt[8:12]),
+		true
 }

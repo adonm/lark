@@ -518,13 +518,10 @@ func (h *wsHub) chime(d *wsTerminal, kind string) bool {
 	if kind == "celebrate" {
 		kind = "intercom" // Existing firmware's happy tone.
 	}
-	if d.client.native != nil {
-		if code, ok := encodeChimePayload(kind); ok {
-			return d.client.native.enqueue(msgChime, []byte{code})
-		}
-		return false
+	if code, ok := encodeChimePayload(kind); ok {
+		return d.client.enqueueProto(msgChime, []byte{code})
 	}
-	return d.client.enqueue(textFrame(object{"op": "chime", "kind": kind}))
+	return false
 }
 
 func deliveryReceipt(action, id, reason string) object {
@@ -536,7 +533,7 @@ func deliveryReceipt(action, id, reason string) object {
 }
 
 func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
-	d := h.audioTerminal(companionID)
+	d := h.voiceOwner(companionID)
 	if d == nil {
 		return nil, "not_connected"
 	}

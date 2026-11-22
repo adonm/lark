@@ -168,7 +168,7 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 			if b.ws != nil {
 				b.ws.mu.Lock()
 				compTerminals := b.ws.terminalsFor(c.ID)
-				best := b.ws.audioTerminal(c.ID)
+				best := b.ws.voiceOwner(c.ID)
 				canCall := false
 				var callSnap object
 				var lastAppErr object
@@ -305,7 +305,7 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 		}
 		if b.ws != nil {
 			b.ws.mu.Lock()
-			if t := b.ws.audioTerminal(companionID); t != nil {
+			if t := b.ws.voiceOwner(companionID); t != nil {
 				termID = t.id
 			}
 			b.ws.mu.Unlock()

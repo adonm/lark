@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -159,11 +160,12 @@ func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatE
 }
 
 func (h *wsHub) broadcastChat(id string, entry chatEntry) {
-	f := textFrame(object{"type": "chat", "companion_id": id, "entry": entry})
+	raw, _ := json.Marshal(entry)
+	pkt := encodeEventMsg(h.nextSeq(), eventChat, id, "", string(raw))
 	key := strings.ToLower(id)
 	for c := range h.clients {
 		if c.watch == key || c.terminal != nil && c.terminal.companionID == key && c.terminal.virtual() {
-			c.enqueue(f)
+			c.enqueueProto(msgEvent, pkt)
 		}
 	}
 }
@@ -242,7 +244,7 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 			b.ws.mu.Unlock()
 			return nil, r.err()
 		}
-		if t := b.ws.audioTerminal(key); t != nil {
+		if t := b.ws.voiceOwner(key); t != nil {
 			if b.oc == nil && minutes == 0 {
 				b.ws.mu.Unlock()
 				return nil, problem(503, "Chat unavailable")
@@ -372,10 +374,10 @@ func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, ar
 
 func (h *wsHub) historyArchived(id string) {
 	key := strings.ToLower(id)
-	f := textFrame(object{"op": "history_archived", "companion_id": id})
+	pkt := encodeEventMsg(h.nextSeq(), eventHistoryArchived, id, "", "")
 	for c := range h.clients {
-		if c.role == "web" && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
-			c.enqueue(f)
+		if (c.kind == "web" || c.kind == "watcher") && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
+			c.enqueueProto(msgEvent, pkt)
 		}
 	}
 }

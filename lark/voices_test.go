@@ -185,22 +185,37 @@ func TestMenuVoicePicker(t *testing.T) {
 	c.hello(t, termID, "Cake")
 	web := testConnectWS(t, base, "unit", true)
 	web.watch(t, id)
-	web.json(t, object{"ev": "tap", "id": "menu"})
-	web.until(t, hasWS("svg", "menu-next"))
-	web.json(t, object{"ev": "tap", "id": "menu-next"})
-	web.until(t, hasWS("svg", "Heart"))
-	web.json(t, object{"ev": "tap", "id": "menu-voice"})
-	web.until(t, hasWS("svg", "voice-george"))
+	web.tap(t, 180, 316, 0)
+	web.until(t, hasSVG("menu-next"))
+	web.tap(t, 248, 294, 0)
+	p2 := web.until(t, hasSVG("Heart"))
+	_, p2svg := decodeFrameSVG(p2)
+	vx, vy, ok := hitCenter(p2svg, "menu-voice")
+	if !ok {
+		t.Fatal("missing menu-voice hit")
+	}
+	web.tap(t, vx, vy, 0)
+	page := web.until(t, hasSVG("voice-george"))
 	for _, voice := range []int{1, 2, 3, 0} {
 		choice := voiceCatalog[voice]
-		web.json(t, object{"ev": "tap", "id": "voice-" + strings.ToLower(choice.Name)})
-		web.until(t, hasWS("svg", menuWarning))
+		_, svg := decodeFrameSVG(page)
+		x, y, ok := hitCenter(svg, "voice-"+strings.ToLower(choice.Name))
+		if !ok {
+			t.Fatalf("missing hit for %s", choice.Name)
+		}
+		web.tap(t, x, y, 0)
+		page = web.until(t, hasSVG(menuWarning))
 		if reloaded := companionVoiceStore(b.db, heartVoice); reloaded.get(id, "cake") != choice.ID {
 			t.Errorf("voice picker did not persist %s", choice.ID)
 		}
 	}
-	web.json(t, object{"ev": "tap", "id": "menu-back"})
-	web.until(t, hasWS("svg", "menu-voice"))
+	_, lastSVG := decodeFrameSVG(page)
+	bx, by, ok := hitCenter(lastSVG, "menu-back")
+	if !ok {
+		t.Fatal("missing menu-back hit")
+	}
+	web.tap(t, bx, by, 0)
+	web.until(t, hasSVG("menu-voice"))
 	testRequest(t, "POST", base+"/api/companions/"+id+"/voice", "unit", object{"voice": "af_bella"}, 200)
-	web.until(t, hasWS("svg", "Bella"))
+	web.until(t, hasSVG("Bella"))
 }

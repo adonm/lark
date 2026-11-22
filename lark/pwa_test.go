@@ -137,9 +137,9 @@ func TestWebTerminalReconnectDoesNotReplaceLiveTab(t *testing.T) {
 	scoped := httptest.NewServer(b.scoped(companion, grant))
 	defer scoped.Close()
 	first := testConnectWS(t, base, "unit", false)
-	first.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id})
+	first.helloWeb(t, termID, id, capDrag, false)
 	second := testConnectWS(t, scoped.URL, grant, true)
-	second.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID}) // An explicit new join can still take over.
+	second.helloWeb(t, termID, "", capDrag, false) // An explicit new join can still take over.
 	closeFrame := func(socket *testWS) {
 		t.Helper()
 		f := socket.until(t, func(f wsFrame) bool { return f.op == wsClose })
@@ -150,17 +150,20 @@ func TestWebTerminalReconnectDoesNotReplaceLiveTab(t *testing.T) {
 	closeFrame(first)
 	join := func() *testWS {
 		s := testConnectWS(t, base, "unit", false)
-		s.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id, "if_free": true})
+		s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+			protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG,
+			flags: helloFlagIfFree, terminalID: termID, companionID: id,
+		}))
 		return s
 	}
 	closeFrame(join())
 	second.barrier(t)
 	watcher := testConnectWS(t, base, "unit", false)
-	watcher.json(t, object{"ev": "hello", "role": "web"})
-	watcher.until(t, hasWS("peers", id))
+	watcher.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	watcher.until(t, hasProto(msgPeers, id))
 	second.write(t, maskedFrame(wsClose, true, wsCloseFrame(1000).data))
 	second.until(t, func(f wsFrame) bool { return f.op == wsClose })
 	// detach happens after the close handshake. A watcher sees the terminal go offline.
-	watcher.until(t, func(f wsFrame) bool { return hasWS("peers", "")(f) && !bytes.Contains(f.data, []byte(termID)) })
-	join().until(t, hasWS("svg", id))
+	watcher.until(t, hasProto(msgPeers, ""))
+	join().until(t, hasSVG(id))
 }

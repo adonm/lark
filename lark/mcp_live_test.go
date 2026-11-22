@@ -70,8 +70,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 		testRequest(t, http.MethodDelete, c.base+"/api/companions/"+id, c.token, nil, http.StatusNoContent)
 	}()
 	sock := testConnectWS(t, c.base, c.token, true)
-	sock.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id})
-	sock.until(t, hasWS("svg", "companion-ring"))
+	sock.helloWeb(t, termID, id, capDrag, false)
 	api := liveOpenCode(t, client, home, config)
 	type serverInfo struct {
 		Name   string

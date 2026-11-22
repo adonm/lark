@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -34,27 +35,56 @@ func callClientCaps(t *testing.T, b *larkServer, base, id, name string, tagged b
 		t.Fatal(err)
 	}
 	c := testConnectWS(t, base, "unit", false)
-	c.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-" + randomHex(4), "companion_id": id,
-		"caps": object{"call": true, "call_pcm": tagged, "drag": true}})
-	c.until(t, hasWS("svg", ""))
+	var caps uint32 = capCall | capDrag
+	if tagged {
+		caps |= capCallPCM
+	}
+	c.helloWeb(t, "web-"+randomHex(4), id, caps, false)
 	return c
+}
+
+func callCtrlMatch(op uint8, substr string) func(wsFrame) bool {
+	return func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, substr)(f) && len(p) >= 1 && p[0] == op
+	}
+}
+
+func sendCallStartReq(t *testing.T, c *testWS, target string) {
+	t.Helper()
+	b := append([]byte{callOpStart, 0, 0, 0, 0}, byte(len(target)))
+	c.sendProto(t, msgCallReq, append(b, target...))
+}
+
+func sendCallEndReq(t *testing.T, c *testWS, callID uint32) {
+	t.Helper()
+	var b [6]byte
+	b[0] = callOpEnd
+	binary.LittleEndian.PutUint32(b[1:5], callID)
+	c.sendProto(t, msgCallReq, b[:])
 }
 
 func tapCallControl(t *testing.T, c *testWS, id string) {
 	t.Helper()
-	c.json(t, object{"ev": "tap", "id": id, "x": 180, "y": 180})
+	switch id {
+	case "call-answer", "call-mute":
+		c.tap(t, 118, 272, 0)
+	case "call-decline":
+		c.tap(t, 242, 272, 0)
+	case "call-hangup":
+		c.tap(t, 200, 272, 0)
+	default:
+		c.tap(t, 180, 180, 0)
+	}
 }
 
 func finishTestCall(t *testing.T, caller, peer *testWS) {
 	t.Helper()
-	caller.json(t, object{"ev": "head", "action": "pet"})
 	caller.barrier(t)
 	tapCallControl(t, caller, "call-hangup")
 	for _, c := range []*testWS{caller, peer} {
-		c.until(t, hasWS("call", `"reason":"hung up"`))
-		c.until(t, func(f wsFrame) bool {
-			return f.op == wsText && bytes.Contains(f.data, []byte("Voice call with "))
-		})
+		c.until(t, callCtrlMatch(callOpEnd, "hung up"))
+		c.until(t, hasProto(msgEvent, "Voice call with "))
 	}
 }
 
@@ -63,7 +93,7 @@ func checkCallStates(t *testing.T, h *wsHub, a, b callState) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, want := range map[string]callState{callCake: a, callMint: b} {
-		d := h.audioTerminal(id)
+		d := h.voiceOwner(id)
 		if d == nil {
 			if want != callNone {
 				t.Fatalf("%s disconnected; wanted %v", id, want)
@@ -81,47 +111,72 @@ func TestWSCallDuplex(t *testing.T) {
 	})
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	cake.json(t, object{"ev": "call", "target": callMint})
-	cake.until(t, hasWS("chime", `"kind":"ring"`))
-	cake.until(t, hasWS("svg", "Calling Mint"))
-	mint.until(t, hasWS("chime", `"kind":"ring"`))
-	mint.until(t, hasWS("svg", "call-answer"))
+	sendCallStartReq(t, cake, callMint)
+	cake.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeRing
+	})
+	cake.until(t, hasSVG("Calling Mint"))
+	mint.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeRing
+	})
+	mint.until(t, hasSVG("call-answer"))
 	checkCallStates(t, b.ws, callRingingOut, callRingingIn)
 
 	tapCallControl(t, mint, "call-answer")
 	for _, c := range []*testWS{cake, mint} {
-		c.until(t, hasWS("call", `"state":"start"`))
-		c.until(t, hasWS("svg", "call-mute"))
+		c.until(t, callCtrlMatch(callOpStart, ""))
+		c.until(t, hasSVG("call-mute"))
 	}
 	checkCallStates(t, b.ws, callActive, callActive)
 	pcm := bytes.Repeat([]byte{100, 5}, callPCMBytes/2)
+	var rtpSeq uint16
 	sendPCM := func(c *testWS, sample []byte) {
-		c.write(t, maskedFrame(wsBinary, true, append([]byte{callMicPrefix}, sample...)))
+		for len(sample) > 0 {
+			n := min(rtpPCMBytes, len(sample))
+			rtpSeq++
+			c.sendRTP(t, rtpPTCallUp, rtpSeq, uint32(rtpSeq)*320, 1, sample[:n])
+			sample = sample[n:]
+		}
+	}
+	readCallPCM := func(c *testWS, wantLen int) []byte {
+		var out []byte
+		c.until(t, func(f wsFrame) bool {
+			if hasProto(msgMedia, "")(f) {
+				p := framePayload(f)
+				if pt, _, _, _, ok := decodeRTPHeader(p); ok && pt == rtpPTCallDown {
+					out = append(out, p[rtpHeaderSize:]...)
+				}
+			}
+			return len(out) >= wantLen
+		})
+		return out
 	}
 	for _, pair := range [][2]*testWS{{cake, mint}, {mint, cake}} {
 		sendPCM(pair[0], pcm)
-		if got := pair[1].until(t, isPlayback); !bytes.Equal(got.data[1:], pcm) {
+		if got := readCallPCM(pair[1], len(pcm)); !bytes.Equal(got, pcm) {
 			t.Fatal("call changed the relayed PCM")
 		}
 	}
 
 	tapCallControl(t, cake, "call-mute")
-	cake.until(t, hasWS("call", `"muted":true`))
-	cake.until(t, hasWS("svg", "Unmute"))
+	cake.until(t, callCtrlMatch(callOpMute, ""))
+	cake.until(t, hasSVG("Unmute"))
 	sendPCM(cake, pcm)
 	cake.barrier(t)
 	// A mute blocks uplink only.
 	sendPCM(mint, pcm)
-	cake.until(t, isPlayback)
+	readCallPCM(cake, len(pcm))
 	tapCallControl(t, cake, "call-mute")
-	cake.until(t, hasWS("call", `"muted":false`))
+	cake.until(t, callCtrlMatch(callOpUnmute, ""))
 	probe := bytes.Repeat([]byte{5, 100}, callPCMBytes/2)
 	sendPCM(cake, probe)
-	if got := mint.until(t, isPlayback); !bytes.Equal(got.data[1:], probe) {
+	if got := readCallPCM(mint, len(probe)); !bytes.Equal(got, probe) {
 		t.Fatal("received PCM queued while caller was muted")
 	}
 	// A touch on the avatar must neither end the call nor start a recording.
-	cake.json(t, object{"ev": "tap", "x": 180, "y": 113})
+	cake.tap(t, 180, 113, 0)
 	cake.barrier(t)
 	checkCallStates(t, b.ws, callActive, callActive)
 	b.ws.mu.Lock()
@@ -134,13 +189,16 @@ func TestWSCallDuplex(t *testing.T) {
 
 	tapCallControl(t, mint, "call-hangup")
 	for i, c := range []*testWS{cake, mint} {
-		c.until(t, hasWS("call", `"state":"end"`))
-		c.until(t, hasWS("chime", `"kind":"cancel"`))
+		c.until(t, callCtrlMatch(callOpEnd, ""))
+		c.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
+		})
 		peer := []string{"Mint", "Cake"}[i]
 		var idle, noted bool
 		c.until(t, func(f wsFrame) bool {
-			idle = idle || hasWS("svg", "companion-ring")(f)
-			noted = noted || f.op == wsText && bytes.Contains(f.data, []byte("Voice call with "+peer+" (0:"))
+			idle = idle || hasSVG("companion-ring")(f)
+			noted = noted || hasProto(msgEvent, "Voice call with "+peer+" (0:")(f)
 			return idle && noted
 		})
 		id := []string{callCake, callMint}[i]
@@ -160,41 +218,41 @@ func TestWSCallDeclineBusyTimeoutAndDisconnect(t *testing.T) {
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
 	plum := callClient(t, b, base, "plum", "Plum")
-	cake.json(t, object{"ev": "call", "target": callMint})
-	mint.until(t, hasWS("svg", "call-decline"))
-	plum.json(t, object{"ev": "call", "target": callMint})
-	plum.until(t, hasWS("svg", "Mint is busy"))
+	sendCallStartReq(t, cake, callMint)
+	mint.until(t, hasSVG("call-decline"))
+	sendCallStartReq(t, plum, callMint)
+	plum.until(t, hasSVG("Mint is busy"))
 	tapCallControl(t, mint, "call-decline")
-	cake.until(t, hasWS("call", `"reason":"declined"`))
-	cake.until(t, hasWS("svg", "Mint declined"))
-	mint.until(t, hasWS("call", `"reason":"declined"`))
+	cake.until(t, callCtrlMatch(callOpEnd, "declined"))
+	cake.until(t, hasSVG("Mint declined"))
+	mint.until(t, callCtrlMatch(callOpEnd, "declined"))
 	checkCallStates(t, b.ws, callNone, callNone)
 
 	b.ws.mu.Lock()
-	err := b.ws.ringCall(b.ws.audioTerminal(callCake), callMint, 40*time.Millisecond)
+	err := b.ws.ringCall(b.ws.voiceOwner(callCake), callMint, 40*time.Millisecond)
 	b.ws.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cake.until(t, hasWS("call", `"reason":"no answer"`))
-	cake.until(t, hasWS("svg", "No answer from Mint"))
-	mint.until(t, hasWS("call", `"reason":"no answer"`))
+	cake.until(t, callCtrlMatch(callOpEnd, "no answer"))
+	cake.until(t, hasSVG("No answer from Mint"))
+	mint.until(t, callCtrlMatch(callOpEnd, "no answer"))
 	checkCallStates(t, b.ws, callNone, callNone)
 
-	cake.json(t, object{"ev": "call", "target": callMint})
-	mint.until(t, hasWS("svg", "call-answer"))
+	sendCallStartReq(t, cake, callMint)
+	mint.until(t, hasSVG("call-answer"))
 	tapCallControl(t, mint, "call-answer")
-	cake.until(t, hasWS("call", `"state":"start"`))
+	cake.until(t, callCtrlMatch(callOpStart, ""))
 	mint.conn.Close()
-	cake.until(t, hasWS("call", `"reason":"disconnected"`))
+	cake.until(t, callCtrlMatch(callOpEnd, "disconnected"))
 	checkCallStates(t, b.ws, callNone, callNone)
 
 	old := testConnectWS(t, base, "unit", false)
 	old.hello(t, "vocat-0099", "Legacy")
-	cake.json(t, object{"ev": "call", "target": "legacy"})
-	cake.until(t, hasWS("svg", "firmware"))
-	cake.json(t, object{"ev": "call", "target": "offline"})
-	cake.until(t, hasWS("svg", "offline is offline"))
+	sendCallStartReq(t, cake, "legacy")
+	cake.until(t, hasSVG("firmware"))
+	sendCallStartReq(t, cake, "offline")
+	cake.until(t, hasSVG("offline is offline"))
 }
 
 func TestWSCallCardAndVoiceCommand(t *testing.T) {
@@ -203,23 +261,28 @@ func TestWSCallCardAndVoiceCommand(t *testing.T) {
 	})
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	cake.json(t, object{"ev": "rec_start"})
-	cake.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, make([]byte, callPCMBytes)...)))
-	cake.json(t, object{"ev": "rec_end"})
-	mint.until(t, hasWS("svg", "call-answer"))
+	cake.recStart(t, "")
+	cake.sendRTP(t, rtpPTRecPCM, 1, 320, 1, make([]byte, rtpPCMBytes))
+	cake.recEnd(t, "", false)
+	mint.until(t, hasSVG("call-answer"))
 	tapCallControl(t, mint, "call-decline")
-	mint.until(t, hasWS("call", `"state":"end"`))
+	mint.until(t, callCtrlMatch(callOpEnd, ""))
 	checkCallStates(t, b.ws, callNone, callNone)
 
-	cake.json(t, object{"ev": "intercom", "target": callMint, "text": "Hello Mint"})
-	msg := mint.until(t, hasWS("svg", `data-id=\"call\"`))
+	toolTest(t, base, "emit", object{"to": callMint, "intercom": object{"from": callCake, "text": "Hello Mint"}}, false)
+	msg := mint.until(t, hasSVG(`data-id="call"`))
 	for _, control := range []string{"reply", "done"} {
-		if !hasWS("svg", fmt.Sprintf(`data-id=\"%s\"`, control))(msg) {
+		if !hasSVG(fmt.Sprintf(`data-id="%s"`, control))(msg) {
 			t.Fatalf("card is missing %q", control)
 		}
 	}
-	tapCallControl(t, mint, "call")
-	cake.until(t, hasWS("svg", "call-answer"))
+	_, cardSVG := decodeFrameSVG(msg)
+	cx, cy, ok := hitCenter(cardSVG, "call")
+	if !ok {
+		t.Fatal("missing call hit")
+	}
+	mint.tap(t, cx, cy, 0)
+	cake.until(t, hasSVG("call-answer"))
 	checkCallStates(t, b.ws, callRingingIn, callRingingOut)
 }
 
@@ -248,10 +311,10 @@ func TestWSNaturalVoiceCallRequiresKnownPeer(t *testing.T) {
 	greg := callClient(t, b, base, "greg", "Greg")
 	voice := func(text string) {
 		transcripts <- text
-		cake.json(t, object{"ev": "rec_start"})
-		cake.until(t, hasWS("svg", "rec-send"))
-		cake.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, make([]byte, callPCMBytes)...)))
-		cake.json(t, object{"ev": "rec_end"})
+		cake.recStart(t, "")
+		cake.until(t, hasSVG("rec-send"))
+		cake.sendRTP(t, rtpPTRecPCM, 1, 320, 1, make([]byte, rtpPCMBytes))
+		cake.recEnd(t, "", false)
 	}
 	for _, tc := range []struct {
 		text string
@@ -261,13 +324,13 @@ func TestWSNaturalVoiceCallRequiresKnownPeer(t *testing.T) {
 		{"please ring greg", greg},
 	} {
 		voice(tc.text)
-		tc.peer.until(t, hasWS("svg", "call-answer"))
+		tc.peer.until(t, hasSVG("call-answer"))
 		tapCallControl(t, tc.peer, "call-decline")
-		cake.until(t, hasWS("call", `"reason":"declined"`))
+		cake.until(t, callCtrlMatch(callOpEnd, "declined"))
 	}
 	for _, text := range []string{"what do you call a cat?", "call a taxi"} {
 		voice(text)
-		cake.until(t, hasWS("svg", "Chat is not ready yet"))
+		cake.until(t, hasSVG("Chat is not ready yet"))
 		checkCallStates(t, b.ws, callNone, callNone)
 	}
 }
@@ -289,11 +352,11 @@ func TestMCPEmitCall(t *testing.T) {
 	if result := out["call"].(object); result["state"] != "ringing" || result["id"] == nil {
 		t.Fatal(out)
 	}
-	cake.until(t, hasWS("svg", "Calling Mint"))
-	mint.until(t, hasWS("svg", "call-answer"))
+	cake.until(t, hasSVG("Calling Mint"))
+	mint.until(t, hasSVG("call-answer"))
 	tapCallControl(t, mint, "call-answer")
-	cake.until(t, hasWS("call", `"state":"start"`))
-	mint.until(t, hasWS("call", `"state":"start"`))
+	cake.until(t, callCtrlMatch(callOpStart, ""))
+	mint.until(t, callCtrlMatch(callOpStart, ""))
 	checkCallStates(t, b.ws, callActive, callActive)
 	finishTestCall(t, cake, mint)
 }
@@ -308,11 +371,11 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 		function onTick(s){s.x++; return s}
 	`}
 	toolTest(t, base, "app", game, false)
-	mint.until(t, hasWS("svg", "game-target"))
-	cake.json(t, object{"ev": "call", "target": callMint})
-	mint.until(t, hasWS("svg", "call-answer"))
+	mint.until(t, hasSVG("game-target"))
+	sendCallStartReq(t, cake, callMint)
+	mint.until(t, hasSVG("call-answer"))
 	b.ws.mu.Lock()
-	d := b.ws.audioTerminal(callMint)
+	d := b.ws.voiceOwner(callMint)
 	app := d.app
 	// Even a stale app marker must not claim a tap on the committed call scene.
 	d.displayApp = app
@@ -322,8 +385,8 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 	}
 	toolTest(t, base, "app", game, true)
 	tapCallControl(t, mint, "call-answer")
-	mint.until(t, hasWS("call", `"state":"start"`))
-	mint.until(t, hasWS("svg", "call-mute"))
+	mint.until(t, callCtrlMatch(callOpStart, ""))
+	mint.until(t, hasSVG("call-mute"))
 	toolTest(t, base, "app", game, true)
 
 	b.ws.mu.Lock()
@@ -337,7 +400,7 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 		t.Fatal("Answer did not release the game")
 	}
 	for _, side := range []*testWS{cake, mint} {
-		side.until(t, hasWS("svg", `aria-label=\"2:`))
+		side.until(t, hasSVG(`aria-label="2:`))
 	}
 	b.ws.mu.Lock()
 	for _, side := range b.ws.terminals {
@@ -354,44 +417,57 @@ func TestWSCallStopsPlaybackAndExcludesNoteTail(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClientCaps(t, b, base, callCake, "Cake", true)
 	mint := callClientCaps(t, b, base, callMint, "Mint", true)
-	cake.json(t, object{"ev": "rec_start"})
-	cake.until(t, hasWS("mode", "listening"))
+	cake.recStart(t, "")
+	cake.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
+	})
 	stream := newAudioStream()
-	old := bytes.Repeat([]byte{5, 1}, callPCMBytes/2)
+	old := bytes.Repeat([]byte{5, 1}, rtpPCMBytes/2)
 	stream.append(old)
 	b.ws.mu.Lock()
-	playback := b.ws.play(b.ws.audioTerminal(callMint), stream)
+	playback := b.ws.play(b.ws.voiceOwner(callMint), stream)
 	b.ws.mu.Unlock()
-	mint.until(t, hasWS("tts", `"state":"start"`))
+	mint.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
+	})
 	mint.until(t, isPlayback)
 
-	cake.json(t, object{"ev": "call", "target": callMint})
-	cake.until(t, hasWS("rec", `"cancelled":true`))
-	mint.until(t, hasWS("svg", "call-answer"))
+	sendCallStartReq(t, cake, callMint)
+	cake.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
+	})
+	mint.until(t, hasSVG("call-answer"))
 	if playback.Err() != nil {
 		t.Fatal("callee playback stopped before Answer")
 	}
-	cake.write(t, maskedFrame(wsBinary, true, append([]byte{callMicPrefix}, old...)))
+	cake.sendRTP(t, rtpPTCallUp, 1, 320, 1, old)
 	cake.barrier(t)
 	tapCallControl(t, mint, "call-answer")
-	mint.until(t, hasWS("tts", `"state":"abort"`))
+	mint.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStop
+	})
 	for _, c := range []*testWS{cake, mint} {
-		c.until(t, hasWS("call", `"mic_prefix":4`))
+		c.until(t, callCtrlMatch(callOpStart, ""))
 	}
-	mint.until(t, hasWS("svg", "call-hangup"))
+	mint.until(t, hasSVG("call-hangup"))
 	if playback.Err() != context.Canceled {
 		t.Fatal("Answer did not cancel the playback producer")
 	}
 	stream.append(old)
 	stream.finish(nil)
-	live := bytes.Repeat([]byte{15, 2}, callPCMBytes/2)
-	cake.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, old...)))
-	cake.write(t, maskedFrame(wsBinary, true, append([]byte{callMicPrefix}, live...)))
-	if f := mint.until(t, isPlayback); !bytes.Equal(f.data[1:], live) {
+	live := bytes.Repeat([]byte{15, 2}, rtpPCMBytes/2)
+	cake.sendRTP(t, rtpPTRecPCM, 2, 640, 1, old)
+	cake.sendRTP(t, rtpPTCallUp, 2, 640, 1, live)
+	f := mint.until(t, hasProto(msgMedia, ""))
+	if !bytes.Equal(framePayload(f)[rtpHeaderSize:], live) {
 		t.Fatal("callee received stale note or TTS PCM")
 	}
 	b.ws.mu.Lock()
-	d := b.ws.audioTerminal(callCake)
+	d := b.ws.voiceOwner(callCake)
 	framesIn, framesOut := d.callFramesIn, d.callFramesOut
 	b.ws.mu.Unlock()
 	if framesIn != 1 || framesOut != 1 {
@@ -404,23 +480,23 @@ func TestWSCallGlareAndAudioFailure(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	cake.json(t, object{"ev": "call", "target": callMint})
-	mint.json(t, object{"ev": "call", "target": callCake})
-	c := cake.until(t, hasWS("call", `"state":"start"`))
-	m := mint.until(t, hasWS("call", `"state":"start"`))
-	if !bytes.Equal(c.data, m.data) {
-		t.Fatalf("glare created mismatched calls: %s / %s", c.data, m.data)
+	sendCallStartReq(t, cake, callMint)
+	sendCallStartReq(t, mint, callCake)
+	c := cake.until(t, callCtrlMatch(callOpStart, ""))
+	m := mint.until(t, callCtrlMatch(callOpStart, ""))
+	if !bytes.Equal(framePayload(c), framePayload(m)) {
+		t.Fatalf("glare created mismatched calls: %x / %x", framePayload(c), framePayload(m))
 	}
 	checkCallStates(t, b.ws, callActive, callActive)
 	b.ws.mu.Lock()
-	id := b.ws.audioTerminal(callMint).callID
+	id := b.ws.voiceOwner(callMint).callID
 	b.ws.mu.Unlock()
-	mint.json(t, object{"ev": "call_end", "call": id + 1})
+	sendCallEndReq(t, mint, id+1)
 	mint.barrier(t)
 	checkCallStates(t, b.ws, callActive, callActive)
-	mint.json(t, object{"ev": "call_end", "call": id})
+	sendCallEndReq(t, mint, id)
 	for _, c := range []*testWS{cake, mint} {
-		c.until(t, hasWS("call", `"reason":"audio unavailable"`))
+		c.until(t, callCtrlMatch(callOpEnd, "audio unavailable"))
 	}
 	checkCallStates(t, b.ws, callNone, callNone)
 }
@@ -436,14 +512,18 @@ func TestCallPCMBackpressure(t *testing.T) {
 	caller := makeSide(callCake, callMint)
 	callee := makeSide(callMint, callCake)
 	for i := range 10 {
-		h.relayCallPCM(caller, append([]byte{micPrefix, byte(i)}, make([]byte, callPCMBytes-1)...))
+		pcm := make([]byte, rtpPCMBytes)
+		pcm[0] = byte(i)
+		h.relayCallPCMBytes(caller, pcm)
 	}
 	if len(callee.client.out) != 6 {
 		t.Fatal("call relay did not enforce its queue ceiling")
 	}
 	for i := range 6 {
-		if got := <-callee.client.out; got.data[0] != pcmPrefix || got.data[1] != byte(i) {
-			t.Fatalf("unexpected PCM: %v", got)
+		got := <-callee.client.out
+		mt, _, p, ok := unpackProtoPacket(got.data)
+		if !ok || mt != msgMedia || p[rtpHeaderSize] != byte(i) {
+			t.Fatalf("unexpected PCM: ok=%t mt=%x", ok, mt)
 		}
 	}
 }
@@ -451,44 +531,53 @@ func TestCallPCMBackpressure(t *testing.T) {
 func TestWSPagedVoiceMenu(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
-	tapCallControl(t, cake, "menu")
-	home := cake.until(t, hasWS("svg", "menu-call"))
-	if !hasWS("svg", "menu-intercom")(home) {
+	cake.tap(t, 180, 316, 0)
+	home := cake.until(t, hasSVG("menu-call"))
+	if !hasSVG("menu-intercom")(home) {
 		t.Fatal("main menu must offer both Call and Talk to…")
 	}
-	tapCallControl(t, cake, "menu-next")
-	cake.until(t, hasWS("svg", "menu-voice"))
-	tapCallControl(t, cake, "menu-voice")
+	cake.tap(t, 248, 294, 0)
+	menuP2 := cake.until(t, hasSVG("menu-voice"))
+	_, p2svg := decodeFrameSVG(menuP2)
+	vx, vy, ok := hitCenter(p2svg, "menu-voice")
+	if !ok {
+		t.Fatal("missing menu-voice hit")
+	}
+	cake.tap(t, vx, vy, 0)
 	for i, voice := range voiceCatalog {
 		if i%tilesPerPage != 0 {
 			continue
 		}
-		page := cake.until(t, hasWS("svg", "voice-"+strings.ToLower(voice.Name)))
+		page := cake.until(t, hasSVG("voice-"+strings.ToLower(voice.Name)))
 		for _, want := range voiceCatalog[i:min(i+tilesPerPage, len(voiceCatalog))] {
-			if !hasWS("svg", "voice-"+strings.ToLower(want.Name))(page) {
+			if !hasSVG("voice-"+strings.ToLower(want.Name))(page) {
 				t.Fatalf("missing voice %s from page %d", want.Name, i/tilesPerPage)
 			}
 		}
 		if i+tilesPerPage < len(voiceCatalog) {
-			tapCallControl(t, cake, "menu-next")
+			cake.tap(t, 248, 294, 0)
 		}
 	}
-	tapCallControl(t, cake, "menu-prev")
-	cake.until(t, hasWS("svg", "voice-"+strings.ToLower(voiceCatalog[0].Name)))
+	px, py, ok := hitCenter(p2svg, "menu-prev")
+	if !ok {
+		cake.tap(t, 180, 294, 0)
+	} else {
+		cake.tap(t, px, py, 0)
+	}
+	cake.until(t, hasSVG("voice-"+strings.ToLower(voiceCatalog[0].Name)))
 }
 
 func TestHelloCallCapabilities(t *testing.T) {
 	for _, tc := range []struct {
-		event wsEvent
-		want  terminalCaps
+		mask uint32
+		want terminalCaps
 	}{
-		{wsEvent{Role: "device"}, terminalCaps{Drag: true}},
-		{wsEvent{Role: "web", Caps: wsCaps{Call: new(true), Drag: new(true)}}, terminalCaps{Call: true, Drag: true}},
-		{wsEvent{Role: "device", Caps: wsCaps{Battery: new(true), HeadPads: new(true), Call: new(true), Drag: new(false)}},
-			terminalCaps{Battery: true, HeadPads: true, Call: true}},
+		{capDrag, terminalCaps{Drag: true}},
+		{capCall | capDrag, terminalCaps{Call: true, Drag: true}},
+		{capBattery | capHeadPads | capCall, terminalCaps{Battery: true, HeadPads: true, Call: true}},
 	} {
-		if got := helloCaps(tc.event); got != tc.want {
-			t.Errorf("%s: got %+v; want %+v", tc.event.Role, got, tc.want)
+		if got := helloCapsFromMask(tc.mask); got != tc.want {
+			t.Errorf("%#x: got %+v; want %+v", tc.mask, got, tc.want)
 		}
 	}
 }

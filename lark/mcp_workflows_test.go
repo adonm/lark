@@ -75,9 +75,12 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 		d["call"].(object)["direction"] != "incoming" || d["call"].(object)["state"] != "ringing" {
 		t.Fatal(d)
 	}
-	mint.until(t, hasWS("svg", "call-answer"))
+	mint.until(t, hasSVG("call-answer"))
 	tapCallControl(t, mint, "call-answer")
-	mint.until(t, hasWS("call", `"state":"start"`))
+	mint.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpStart
+	})
 	if c := device(callCake)["call"].(object); c["id"] != callID || c["state"] != "connected" || c["started_at"] == nil {
 		t.Fatal(c)
 	}
@@ -107,8 +110,14 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 	if c := hangup["call"].(object); c["state"] != "ended" || c["id"] != callID || len(hangup["receipts"].([]any)) != 2 {
 		t.Fatal(hangup)
 	}
-	cake.until(t, hasWS("call", `"state":"end"`))
-	mint.until(t, hasWS("call", `"state":"end"`))
+	cake.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpEnd
+	})
+	mint.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpEnd
+	})
 	if device(callCake)["call"] != nil || device(callMint)["call"] != nil {
 		t.Fatal("hangup left one participant in the call")
 	}

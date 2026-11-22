@@ -16,9 +16,9 @@ import (
 func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &larkServer{root: t.Context()}
-		c := &wsClient{role: "web", ctx: t.Context(), out: make(chan wsFrame, 8)}
-		d := &wsTerminal{client: c, key: "web-a1000000", id: "web-a1000000", kind: "web", companionID: "cake", screen: roundScreen, companion: blankCompanion()}
-		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}}
+		c := &wsClient{kind: "web", ctx: t.Context(), out: make(chan wsFrame, 8)}
+		d := &wsTerminal{client: c, key: "web-a1000000", id: "web-a1000000", kind: "web", displayFormats: dispSVG, companionID: "cake", screen: roundScreen, companion: blankCompanion()}
+		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}, voiceOwners: map[string]string{}, companionStatuses: map[string]companionStatusState{}, prompts: map[string]*activePrompt{}, resumes: map[[resumeTokenLen]byte]*resumeEntry{}}
 		const code = `function init() { return {color: "red"}; }
 			function render(s) { return '<svg><rect width="360" height="360" fill="' + s.color + '"/></svg>'; }
 			function onTap(s) { waitForTest(); s.color = "lime"; chime("tap"); }`
@@ -62,7 +62,7 @@ func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 		}
 		for len(c.out) > 0 {
 			f := <-c.out
-			if hasWS("chime", `"kind":"tap"`)(f) || hasWS("svg", "lime")(f) {
+			if hasProto(msgChime, "")(f) || hasSVG("lime")(f) {
 				t.Fatal("exited app's effects escaped", string(f.data))
 			}
 		}
@@ -71,11 +71,8 @@ func TestAppVMLeavesHubUnlockedAndCannotPublishAfterExit(t *testing.T) {
 
 func (s *testWS) helloV2(t *testing.T, id, cat string) wsFrame {
 	t.Helper()
-	s.json(t, object{"ev": "hello", "role": "device", "device_id": id, "character": cat, "firmware": "0.8.0", "proto": 2})
-	return s.until(t, isDisplay)
+	return s.helloHardware(t, id, cat, capBattery|capDrag)
 }
-
-func isDisplay(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 0 && f.data[0] == 0x03 }
 
 func TestAppSandboxAndErrors(t *testing.T) {
 	players := []appPlayer{{"lark-test", "Cake", 0}}
@@ -125,9 +122,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 		t.Fatalf("first frame not full: %v", r)
 	}
 	web := testConnectWS(t, base, "unit", true)
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "companion-ring"))
+	web.watch(t, id)
 	const code = `app={
 	init(ctx){ return {n:storeGet("score") ?? 0,x:100}; },
 	render(s,p){ return '<svg viewBox="0 0 360 360"><rect width="360" height="360" fill="black"/><circle data-id="monster" cx="'+s.x+'" cy="180" r="30" fill="lime"/><text x="180" y="100" fill="white">Score '+s.n+' / saved '+(storeGet("score") ?? 0)+'</text></svg>'; },
@@ -140,12 +135,12 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 	}
 	f := device.until(t, isDisplay)
 	decodeDisplay(t, f)
-	web.until(t, hasWS("svg", "Score 0"))
-	web.until(t, hasWS("svg", `cx=\"150\"`))
+	web.until(t, hasSVG("Score 0"))
+	web.until(t, hasSVG(`cx="150"`))
 	// Trust hardware coordinates, not an ID claimed by a client.
-	device.json(t, object{"ev": "tap", "x": 150, "y": 180, "id": "not-the-monster"})
-	device.until(t, func(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 1 && f.data[0] == pcmPrefix })
-	web.until(t, hasWS("svg", "Score 1"))
+	device.tap(t, 150, 180, 0)
+	device.until(t, isPlayback)
+	web.until(t, hasSVG("Score 1"))
 	a := stateMe(t, base, id)["active_app"].(object)
 	if a["ticks_left"] != json.Number("0") || a["state"].(object)["n"] != json.Number("1") {
 		t.Fatal(a)
@@ -154,8 +149,8 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 	if mem["value"] != json.Number("1") {
 		t.Fatal(mem)
 	}
-	device.json(t, object{"ev": "tap", "x": 180, "y": 318})
-	web.until(t, hasWS("svg", "companion-ring"))
+	device.tap(t, 180, 318, 0)
+	web.until(t, hasSVG("companion-ring"))
 	if a := stateMe(t, base, id)["active_app"]; a != nil {
 		t.Fatal(a)
 	}
@@ -163,7 +158,7 @@ func TestWhackAMonsterOnV2Board(t *testing.T) {
 		t.Fatalf("saved %+v (%v)", app, err)
 	}
 	testRequest(t, "POST", base+"/api/apps/run", "unit", object{"companion_id": id, "name": "monster"}, 200)
-	web.until(t, hasWS("svg", "Score 1 / saved 1"))
+	web.until(t, hasSVG("Score 1 / saved 1"))
 	if got := testObject(t, testRequest(t, "DELETE", base+"/api/apps/monster", "unit", nil, 409)); got["error"] != "saved app is running: monster" {
 		t.Fatal(got)
 	}
@@ -179,22 +174,20 @@ func TestBrowserAppDragAndUp(t *testing.T) {
 	const id = "cake"
 	board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	board.helloV2(t, "vocat-0002", "Cake")
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "companion-ring"))
+	web.watch(t, id)
 	const code = `
 	function init(){ return {text:"Ready"}; }
 	function render(s){ return '<svg><circle data-id="thumb" cx="180" cy="180" r="20"/><text x="50" y="90">'+s.text+'</text></svg>'; }
 	function onDrag(s,p,id,x,y){ s.text="Drag "+p.index+" "+id+" "+x+","+y; }
 	function onUp(s,p,id,x,y){ storeSet("end",x); return {text:s.text+" Up "+id+" "+storeGet("end")+","+y}; }`
 	toolTest(t, base, "app", object{"companions": id, "code": code, "save_as": "slider"}, false)
-	web.until(t, hasWS("svg", "Ready"))
-	web.json(t, object{"ev": "drag", "id": "thumb", "x": 210, "y": 170})
-	web.until(t, hasWS("svg", "Drag 0 thumb 210,170"))
-	web.json(t, object{"ev": "up", "id": "thumb", "x": 220, "y": 171})
-	web.until(t, hasWS("svg", "Drag 0 thumb 210,170 Up thumb 220,171"))
+	web.until(t, hasSVG("Ready"))
+	board.sendProto(t, msgPointer, encodePointer(ptrDrag, 180, 180, 0))
+	web.until(t, hasSVG("Drag 0 thumb 180,180"))
+	board.sendProto(t, msgPointer, encodePointer(ptrUp, 190, 181, 0))
+	web.until(t, hasSVG("Drag 0 thumb 180,180 Up thumb 190,181"))
 	mem := memoryScope(t, base, "app:slider")["end"].(object)
-	if mem["value"] != json.Number("220") {
+	if mem["value"] != json.Number("190") {
 		t.Fatal(mem)
 	}
 }
@@ -248,10 +241,25 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			b, base := wsHarness(t, nil)
 			const id = "cake"
 			board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
-			board.json(t, object{"ev": "hello", "role": "device", "terminal_id": "vocat-0003", "character": "Cake", "proto": 2,
-				"board": tc.board, "width": tc.width, "height": tc.height, "shape": tc.shape})
+			shape := shapeRound
+			if tc.shape == "rect" {
+				shape = shapeRect
+			}
+			board.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+				protoVersion:   protoVersion1,
+				kind:           termKindHardware,
+				capsMask:       capDrag,
+				displayFormats: dispRGB565,
+				frameCodecs:    codecBitAll,
+				width:          uint16(tc.width),
+				height:         uint16(tc.height),
+				shape:          shape,
+				terminalID:     "vocat-0003",
+				companionID:    "Cake",
+				board:          tc.board,
+				firmware:       "0.12.0",
+			}))
 			board.until(t, isDisplay)
-			web.json(t, object{"ev": "hello", "role": "web"})
 			web.watch(t, id)
 			const code = `
 			function init(){ return {text:"Ready"}; }
@@ -261,22 +269,22 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			function onUp(s,p,id,x,y){ s.text+=" Up "+id+" "+x+","+y; }
 			function onTap(s){ s.text="Tapped"; }`
 			toolTest(t, base, "app", object{"companions": id, "code": code}, false)
-			web.until(t, hasWS("svg", "Ready"))
+			web.until(t, hasSVG("Ready"))
 
-			send := func(kind string, p image.Point) {
-				board.json(t, object{"ev": kind, "id": "not-the-track", "x": p.X, "y": p.Y})
+			send := func(kind uint8, p image.Point) {
+				board.sendProto(t, msgPointer, encodePointer(kind, uint16(p.X), uint16(p.Y), 0))
 			}
 			b.ws.mu.Lock()
-			d := b.ws.audioTerminal(id)
+			d := b.ws.voiceOwner(id)
 			before := d.last
 			b.ws.mu.Unlock()
-			send("drag", tc.drag)
-			web.until(t, hasWS("svg", "Drag track 150,168"))
+			send(ptrDrag, tc.drag)
+			web.until(t, hasSVG("Drag track 150,168"))
 			b.ws.mu.Lock()
 			dragged := d.last
 			b.ws.mu.Unlock()
-			send("up", tc.up)
-			web.until(t, hasWS("svg", "Drag track 150,168 Up track 210,192"))
+			send(ptrUp, tc.up)
+			web.until(t, hasSVG("Drag track 150,168 Up track 210,192"))
 			b.ws.mu.Lock()
 			released := d.last
 			b.ws.setSleeping(d, true)
@@ -286,9 +294,12 @@ func TestNativeAppDragAndUp(t *testing.T) {
 				t.Fatal("pointer gestures did not refresh activity")
 			}
 
-			send("drag", tc.drag)
-			send("up", tc.up)
-			board.until(t, hasWS("power", `"brightness":12`))
+			send(ptrDrag, tc.drag)
+			send(ptrUp, tc.up)
+			board.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
+			})
 			board.barrier(t)
 			b.ws.mu.Lock()
 			asleep, last := d.asleep, d.last
@@ -296,12 +307,15 @@ func TestNativeAppDragAndUp(t *testing.T) {
 			if !asleep || last != released {
 				t.Fatal("trailing gestures woke a sleeping device")
 			}
-			web.until(t, hasWS("svg", "companion-ring"))
-			send("tap", tc.up)
-			board.until(t, hasWS("power", `"brightness":85`))
-			web.until(t, hasWS("svg", "Drag track 150,168 Up track 210,192"))
-			send("tap", tc.up)
-			web.until(t, hasWS("svg", "Tapped"))
+			web.until(t, hasSVG("companion-ring"))
+			send(ptrTap, tc.up)
+			board.until(t, func(f wsFrame) bool {
+				p := framePayload(f)
+				return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
+			})
+			web.until(t, hasSVG("Drag track 150,168 Up track 210,192"))
+			send(ptrTap, tc.up)
+			web.until(t, hasSVG("Tapped"))
 		})
 	}
 }
@@ -314,8 +328,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 	}
 	board, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
 	board.helloV2(t, "vocat-0004", "Cake")
-	web.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-cafe0000", "companion_id": webID})
-	web.until(t, hasWS("svg", ""))
+	web.helloWeb(t, "web-cafe0000", webID, capDrag, false)
 	ids := []string{boardID, webID}
 	toolTest(t, base, "app", object{"companions": ids, "state_patch": object{"color": "red"}}, true)
 
@@ -333,9 +346,9 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 		t.Fatal(start)
 	}
 	decodeDisplay(t, board.until(t, isDisplay))
-	web.until(t, hasWS("svg", "Player 1 taps 0"))
-	web.json(t, object{"ev": "tap", "id": "p1", "x": 180, "y": 180})
-	web.until(t, hasWS("svg", "Player 1 taps 1"))
+	web.until(t, hasSVG("Player 1 taps 0"))
+	web.tap(t, 180, 180, 0)
+	web.until(t, hasSVG("Player 1 taps 1"))
 	decodeDisplay(t, board.until(t, isDisplay))
 
 	bad := toolTest(t, base, "app", object{"companions": ids, "state_patch": object{"color": "bad"}}, true)
@@ -354,7 +367,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 	if !slices.Contains(pixels, uint16(0x07e0)) {
 		t.Fatal("board frame did not update to green")
 	}
-	wire := web.until(t, hasWS("svg", "#00FF00"))
+	wire := web.until(t, hasSVG("#00FF00"))
 	if !bytes.Contains(wire.data, []byte("Player 1 taps 1")) {
 		t.Fatal("patch restarted player VM")
 	}
@@ -373,7 +386,7 @@ func TestAppStatePatchAcrossPlayers(t *testing.T) {
 		t.Fatal(got)
 	}
 	toolTest(t, base, "app", object{"companions": webID, "exit": true}, false)
-	web.until(t, hasWS("svg", "companion-ring"))
+	web.until(t, hasSVG("companion-ring"))
 	toolTest(t, base, "app", object{"delete_saved": "players"}, false)
 	saved := toolTest(t, base, "state", object{"include": []string{"apps"}}, false)
 	if len(saved["apps"].(object)) != 0 {
@@ -399,15 +412,23 @@ func TestAppAndEmitNamedSFX(t *testing.T) {
 		t.Helper()
 		var got []byte
 		frame := dev.until(t, func(f wsFrame) bool {
-			if f.op == wsBinary && len(f.data) > 1 && f.data[0] == pcmPrefix {
-				got = append(got, f.data[1:]...)
+			if f.op != wsBinary {
+				return false
 			}
-			return hasWS("tts", `"state":"end"`)(f)
+			mt, _, p, ok := unpackProtoPacket(f.data)
+			if !ok {
+				return false
+			}
+			if mt == msgTTSPCM {
+				got = append(got, p...)
+			}
+			return mt == msgTTSCtrl && len(p) >= 9 && p[0] == ttsOpEnd
 		})
 		if !bytes.Equal(got, want) {
 			t.Fatalf("sent %d PCM bytes, want %d matching bytes", len(got), len(want))
 		}
-		dev.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, frame.data)["audio"]})
+		audioID := binary.LittleEndian.Uint64(framePayload(frame)[1:9])
+		dev.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	}
 	for _, name := range []string{"boing", "pop", "win", "buzz", "ding", "whoosh"} {
 		t.Run(name, func(t *testing.T) {
@@ -425,7 +446,7 @@ func TestAppAndEmitNamedSFX(t *testing.T) {
 			}
 			toolTest(t, base, "emit", object{"to": id, "sfx": name}, false)
 			expectAudio(t, pcm)
-			dev.json(t, object{"ev": "tap", "x": 180, "y": 180})
+			dev.tap(t, 180, 180, 0)
 			expectAudio(t, pcm)
 		})
 	}
@@ -457,7 +478,7 @@ func TestAppSFXChimeAndUnknownSoundKeepGameRunning(t *testing.T) {
 		t.Fatal(out)
 	}
 	board.until(t, isDisplay)
-	tap := func() { board.json(t, object{"ev": "tap", "x": 180, "y": 180}) }
+	tap := func() { board.tap(t, 180, 180, 0) }
 	checkLevel := func(want json.Number) {
 		t.Helper()
 		active, _ := stateMe(t, base, id)["active_app"].(object)
@@ -467,13 +488,16 @@ func TestAppSFXChimeAndUnknownSoundKeepGameRunning(t *testing.T) {
 		}
 	}
 	tap()
-	board.until(t, hasWS("chime", `"kind":"tap"`))
+	board.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
+	})
 	board.until(t, isDisplay)
 	checkLevel("2")
 
 	tap()
 	board.until(t, func(f wsFrame) bool {
-		if hasWS("chime", "")(f) || isPlayback(f) {
+		if hasProto(msgChime, "")(f) || isPlayback(f) {
 			t.Fatalf("unknown sound should be silent: %q", f.data)
 		}
 		return isDisplay(f)
@@ -493,7 +517,7 @@ func TestAppExitAcceptsBothControlIDs(t *testing.T) {
 			t.Fatalf("custom exit should suppress the injected pill: %v", hits)
 		}
 		board.until(t, isDisplay)
-		board.json(t, object{"ev": "tap", "x": 180, "y": 302})
+		board.tap(t, 180, 302, 0)
 		board.until(t, isDisplay)
 		if stateMe(t, base, id)["active_app"] != nil {
 			t.Fatal("app remained active after exit tap")
@@ -506,7 +530,23 @@ func TestAppLaunchReportsLayoutWarnings(t *testing.T) {
 	const roundID, rectID = "cake", "mint"
 	for _, dev := range []struct{ id, name, board string }{{"vocat-0008", "Cake", "esp-vocat"}, {"box3-0008", "Mint", "esp-box-3"}} {
 		c := testConnectWS(t, base, "unit", false)
-		c.json(t, object{"ev": "hello", "role": "device", "terminal_id": dev.id, "character": dev.name, "proto": 2, "board": dev.board})
+		w, h, sh := uint16(360), uint16(360), shapeRound
+		if dev.board == "esp-box-3" {
+			w, h, sh = 320, 240, shapeRect
+		}
+		c.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
+			protoVersion:   protoVersion1,
+			kind:           termKindHardware,
+			displayFormats: dispRGB565,
+			frameCodecs:    codecBitAll,
+			width:          w,
+			height:         h,
+			shape:          sh,
+			terminalID:     dev.id,
+			companionID:    dev.name,
+			board:          dev.board,
+			firmware:       "0.12.0",
+		}))
 		c.until(t, isDisplay)
 	}
 	const svg = `<svg><rect data-id="next" x="150" y="270" width="60" height="25"/>
@@ -573,12 +613,12 @@ func TestAppSaveDoesNotCommitStaleLaunch(t *testing.T) {
 			waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > before })
 			if change == "disconnected" {
 				b.ws.mu.Lock()
-				termID := b.ws.audioTerminal(id).id
+				termID := b.ws.voiceOwner(id).id
 				b.ws.mu.Unlock()
 				b.ws.disconnectTerminal(termID)
 			} else {
 				b.ws.mu.Lock()
-				b.ws.clearView(b.ws.audioTerminal(id))
+				b.ws.clearView(b.ws.voiceOwner(id))
 				b.ws.mu.Unlock()
 			}
 			if err := conn.Close(); err != nil {
@@ -611,8 +651,8 @@ func TestAppStoreEffectsRollBackOnWriteFailure(t *testing.T) {
 	}
 	toolTest(t, base, "app", object{"companions": id, "code": code, "save_as": "full"}, false)
 	dev.until(t, isDisplay)
-	dev.json(t, object{"ev": "tap", "x": 180, "y": 180})
-	dev.until(t, hasWS("error", `Could not save app key \"overflow\"`))
+	dev.tap(t, 180, 180, 0)
+	dev.until(t, hasProto(msgStatus, `Could not save app key "overflow"`))
 	if a := stateMe(t, base, id)["active_app"]; a != nil {
 		t.Fatal("app stayed active after a failed write")
 	}
@@ -688,26 +728,28 @@ func TestSVGDirtyFrameMatchesBrowserAndExit(t *testing.T) {
 	if first != image.Rect(0, 0, 360, 360) {
 		t.Fatal(first)
 	}
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "device_id": id})
-	web.until(t, hasWS("svg", "companion-ring"))
+	web.watch(t, id)
 	const svg = `<svg viewBox="0 0 360 360"><rect width="360" height="360" fill="#122234"/><rect data-id="tile" x="179" y="179" width="2" height="2" fill="#123456"/></svg>`
 	run := func(raw string) {
 		t.Helper()
 		toolTest(t, base, "app", object{"companions": id, "svg": raw}, false)
-		wire := web.until(t, hasWS("svg", "tile"))
-		o := testObject(t, wire.data)
-		rect, rev, p := decodeDisplay(t, board.until(t, isDisplay))
-		if o["rev"] != json.Number("2") && o["rev"] != json.Number("3") {
-			t.Fatal(o["rev"])
+		wire := web.until(t, hasSVG("tile"))
+		p := framePayload(wire)
+		svgRev := binary.LittleEndian.Uint32(p[0:4])
+		tidLen, cidLen := int(p[4]), int(p[5])
+		svgLen := int(binary.LittleEndian.Uint32(p[6:10]))
+		svgSrc := string(p[10+tidLen+cidLen : 10+tidLen+cidLen+svgLen])
+		rect, rev, pix := decodeDisplay(t, board.until(t, isDisplay))
+		if svgRev != 2 && svgRev != 3 {
+			t.Fatal(svgRev)
 		}
 		if raw != svg && rect != image.Rect(179, 179, 181, 181) {
 			t.Fatalf("dirty bounds %v, rev=%d", rect, rev)
 		}
 		for y := rect.Min.Y; y < rect.Max.Y; y++ {
-			copy(initial[y*360+rect.Min.X:], p[(y-rect.Min.Y)*rect.Dx():(y-rect.Min.Y+1)*rect.Dx()])
+			copy(initial[y*360+rect.Min.X:], pix[(y-rect.Min.Y)*rect.Dx():(y-rect.Min.Y+1)*rect.Dx()])
 		}
-		fb, _, err := renderSVG(str(o["svg"]))
+		fb, _, err := renderSVG(svgSrc)
 		if err != nil || !slices.Equal(initial, fb[:]) {
 			t.Fatalf("browser SVG and device framebuffer disagree: %v", err)
 		}

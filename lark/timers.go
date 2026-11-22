@@ -451,10 +451,10 @@ func (b *larkServer) timerUpdate(id string) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		key := strings.ToLower(id)
-		frame := textFrame(object{"type": "timers", "companion_id": id})
+		pkt := encodeEventMsg(h.nextSeq(), eventTimers, id, "", "")
 		for c := range h.clients {
 			if c.watch == key || c.terminal != nil && c.terminal.companionID == key && c.terminal.virtual() {
-				c.enqueue(frame)
+				c.enqueueProto(msgEvent, pkt)
 			}
 		}
 	}
@@ -490,7 +490,7 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 			b.chat(t.CompanionID, entry, true)
 		}()
 	}
-	d := h.audioTerminal(key)
+	d := h.voiceOwner(key)
 	if d != nil && d.callState == callNone {
 		if t.AppName != "" {
 			defer func() {

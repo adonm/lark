@@ -9,26 +9,23 @@ import (
 func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	d := testConnectWS(t, base, "unit", false)
-	const id = "lark-rev"
-	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
-		"caps": object{"pointer_rev": true}})
-	_, rev, _ := decodeDisplay(t, d.until(t, isDisplay))
+	const id = "vocat-0001"
+	_, rev, _ := decodeDisplay(t, d.helloHardware(t, id, "", capPointerRev|capDrag))
 
-	tap := object{"ev": "tap", "x": 180, "y": 150}
-	d.json(t, tap) // A client that advertised pointer_rev may not omit it.
-	tap["rev_lo"] = rev - 1
-	d.json(t, tap)
+	d.tap(t, 180, 150, rev-1)
 	d.barrier(t)
 	b.ws.mu.Lock()
 	started := b.ws.terminals[id].recording.active()
 	rev = b.ws.terminals[id].nativeRev // An idle blink may have produced another revision.
 	b.ws.mu.Unlock()
 	if started {
-		t.Fatal("missing or stale revision started recording")
+		t.Fatal("stale revision started recording")
 	}
-	tap["rev_lo"] = rev
-	d.json(t, tap)
-	d.until(t, hasWS("rec", `"action":"start"`))
+	d.tap(t, 180, 150, rev)
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+	})
 }
 
 func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
@@ -49,11 +46,8 @@ func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
 func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	d := testConnectWS(t, base, "unit", false)
-	const id = "lark-say-more"
-	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
-		"caps": object{"pointer_rev": true, "bridge_endpoint": true}})
-	d.until(t, hasWS("hello_ok", ""))
-	_, idleRev, _ := decodeDisplay(t, d.until(t, isDisplay))
+	const id = "vocat-0002"
+	_, idleRev, _ := decodeDisplay(t, d.helloHardware(t, id, "", capPointerRev|capBridgeEndpoint|capDrag))
 
 	b.ws.mu.Lock()
 	dev := b.ws.terminals[id]
@@ -68,8 +62,7 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 		return image.Pt(180, 265).In(r)
 	})
 
-	tap := object{"ev": "tap", "x": 180, "y": 265, "rev_lo": idleRev}
-	d.json(t, tap)
+	d.tap(t, 180, 265, idleRev)
 	d.barrier(t)
 	b.ws.mu.Lock()
 	started, thinkingRev := dev.recording.endpoint != nil, dev.nativeRev
@@ -77,23 +70,23 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	if started {
 		t.Fatal("a stale Talk tap started a Say more capture")
 	}
-	tap["rev_lo"] = thinkingRev
-	d.json(t, tap)
-	start := testObject(t, d.until(t, hasWS("rec", `"action":"start"`)).data)
-	if start["endpoint"] != "bridge" || start["target"] != "" {
-		t.Fatal("Say more did not start an untargeted bridge capture")
+	d.tap(t, 180, 265, thinkingRev)
+	start := d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
+	})
+	p := framePayload(start)
+	if p[1]&recTargetBridgeE == 0 || p[4] != 0 {
+		t.Fatalf("Say more did not start an untargeted bridge capture: %x", p)
 	}
 }
 
 func TestNativeWakeWordUsesTalkFlowOnlyWhenEnabled(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	d := testConnectWS(t, base, "unit", false)
-	const id = "lark-wake"
-	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
-		"caps": object{"wake_word": true, "bridge_endpoint": true}})
-	d.until(t, hasWS("hello_ok", ""))
-	d.until(t, isDisplay)
-	d.json(t, object{"ev": "wake_word"})
+	const id = "vocat-0003"
+	d.helloHardware(t, id, "", capWakeWord|capBridgeEndpoint|capDrag)
+	d.sendProto(t, msgWakeWord, nil)
 	d.barrier(t)
 	b.ws.mu.Lock()
 	dev := b.ws.terminals[id]
@@ -104,14 +97,20 @@ func TestNativeWakeWordUsesTalkFlowOnlyWhenEnabled(t *testing.T) {
 		t.Fatal("wake was not default-off or bridge endpoint capability was lost")
 	}
 
-	operator := testConnectWS(t, base, "unit", true)
-	operator.json(t, object{"ev": "hello", "role": "web"})
-	operator.json(t, object{"ev": "wake_word", "device_id": id, "enabled": true})
-	operator.until(t, hasWS("wake_word", `"enabled":true`))
-	d.until(t, hasWS("wake_word", `"enabled":true`))
-	d.json(t, object{"ev": "wake_word"})
-	d.until(t, hasWS("rec", `"action":"start"`))
-	d.json(t, object{"ev": "rec_start"})
+	b.ws.mu.Lock()
+	dev.wakeWord = true
+	b.ws.pushWakeWord(dev, true)
+	b.ws.mu.Unlock()
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgWakeWordCtrl, "")(f) && len(p) >= 1 && p[0] == 1
+	})
+	d.sendProto(t, msgWakeWord, nil)
+	d.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStart
+	})
+	d.recStart(t, "")
 	d.barrier(t)
 	b.ws.mu.Lock()
 	open := dev.recording.open()

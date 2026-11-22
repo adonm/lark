@@ -32,7 +32,7 @@ func TestAppTemplatesHitCoordinates(t *testing.T) {
 				if err := spec.setTemplate(tc.template, data); err != nil {
 					t.Fatal(err)
 				}
-				d := &wsTerminal{screen: geometry, client: &wsClient{role: "device"}}
+				d := &wsTerminal{kind: "hardware", screen: geometry, client: &wsClient{kind: "hardware"}}
 				a, views, err := initApp(spec, []appPlayer{{id: "board"}}, nil, []*wsTerminal{d}, nil, buildScreen)
 				if err != nil {
 					t.Fatal(err)
@@ -127,12 +127,12 @@ func TestAppTemplateSaveAndMemoryRefresh(t *testing.T) {
 		t.Fatal(out)
 	}
 	board.until(t, isDisplay)
-	board.json(t, object{"ev": "tap", "x": 236, "y": 62})
+	board.tap(t, 236, 62, 0)
 	board.until(t, isDisplay)
 	if a := stateMe(t, base, "reader")["active_app"].(object); a["state"].(object)["page"] != json.Number("1") {
 		t.Fatal(a)
 	}
-	board.json(t, object{"ev": "tap", "x": 180, "y": 320})
+	board.tap(t, 180, 320, 0)
 	board.until(t, isDisplay)
 	if a := stateMe(t, base, "reader")["active_app"]; a != nil {
 		t.Fatal(a)
@@ -162,8 +162,11 @@ func TestAppTemplateCountdownRearmsAfterFinish(t *testing.T) {
 		if a["ticks_left"] != json.Number("0") {
 			t.Fatal("idle timer scheduled ticks", a)
 		}
-		board.json(t, object{"ev": "tap", "x": 180, "y": 250})
-		board.until(t, hasWS("chime", `"kind":"intercom"`)) // Celebrate at zero.
+		board.tap(t, 180, 250, 0)
+		board.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
+		}) // Celebrate at zero.
 		board.until(t, isDisplay)
 		a = stateMe(t, base, "cake")["active_app"].(object)
 		s := a["state"].(object)

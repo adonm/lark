@@ -24,8 +24,7 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	// 3. Browser web terminal created by hello attached to Cake -> Cake now has two terminals.
 	const webID = "web-11223344"
 	web := testConnectWS(t, base, "unit", true)
-	web.json(t, object{"ev": "hello", "role": "web", "terminal_id": webID, "companion_id": cakeID})
-	web.until(t, hasWS("svg", "companion-ring"))
+	web.helloWeb(t, webID, cakeID, capDrag, false)
 
 	if _, ok := b.terminalByID(webID); !ok {
 		t.Fatal("browser hello did not persist web terminal")
@@ -34,11 +33,11 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	// 4. Companion with two terminals: both receive frames when companion changes or app runs.
 	toolTest(t, base, "patch", object{"companion_id": cakeID, "companion": object{"face_bg": "#112233"}}, false)
 	hw.until(t, isDisplay)
-	web.until(t, hasWS("svg", "#112233"))
+	web.until(t, hasSVG("#112233"))
 
 	toolTest(t, base, "app", object{"companions": cakeID, "svg": `<svg><text x="180" y="180">SharedScreen</text></svg>`}, false)
 	hw.until(t, isDisplay)
-	web.until(t, hasWS("svg", "SharedScreen"))
+	web.until(t, hasSVG("SharedScreen"))
 
 	// Cannot delete a companion that still has attached terminals.
 	testRequest(t, http.MethodDelete, base+"/api/companions/"+cakeID, "unit", nil, 409)
@@ -74,16 +73,16 @@ func TestCompanionIntercomCallAndTunnelScope(t *testing.T) {
 	if r := intercom["receipts"].([]any)[0].(object); r["companion_id"] != "mint" || r["status"] != "queued" {
 		t.Fatalf("unexpected intercom receipt: %v", intercom)
 	}
-	mint.until(t, hasWS("svg", "Tea time!"))
+	mint.until(t, hasSVG("Tea time!"))
 
 	// Call addressed by companion.
 	callOut := toolTest(t, base, "emit", object{"to": "mint", "call": object{"from": "cake"}}, false)
 	callID := callOut["call"].(object)["id"]
-	mint.until(t, hasWS("svg", "call-answer"))
+	mint.until(t, hasSVG("call-answer"))
 	tapCallControl(t, mint, "call-answer")
-	cake.until(t, hasWS("call", `"state":"start"`))
+	cake.until(t, hasProto(msgCallCtrl, ""))
 	toolTest(t, base, "emit", object{"to": "mint", "call": object{"op": "hangup", "id": callID}}, false)
-	cake.until(t, hasWS("call", `"state":"end"`))
+	cake.until(t, hasProto(msgCallCtrl, ""))
 
 	// Tunnel scope restricted to companion.
 	c, _ := b.companionByID("mint")

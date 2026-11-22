@@ -279,7 +279,7 @@ func (h *wsHub) applyParent(d *wsTerminal, r parentReason, now time.Time) {
 		d.last, d.asleep = now, false
 	}
 	h.pushPower(d, d.brightness(), true)
-	h.pushWS(d, parentFrame(d), true)
+	h.pushProto(d, msgEvent, encodeEventMsg(h.nextSeq(), eventParentPolicy, d.companionID, string(d.parentReason), parentMessage(d.parentReason)), true)
 	if d.caps.WakeWord {
 		h.pushWakeWord(d, r == "" && d.wakeWord)
 	}
@@ -290,12 +290,12 @@ func (h *wsHub) applyParent(d *wsTerminal, r parentReason, now time.Time) {
 	}
 }
 
-func parentFrame(d *wsTerminal) object {
-	f := object{"op": "parent_policy", "companion_id": d.companionID, "reason": d.parentReason, "message": ""}
-	if d.parentReason != "" {
-		_, f["message"] = d.parentReason.notice()
+func parentMessage(reason parentReason) string {
+	if reason == "" {
+		return ""
 	}
-	return f
+	_, msg := reason.notice()
+	return msg
 }
 
 func (h *wsHub) parentFinishActivity(key string, now time.Time) {

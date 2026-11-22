@@ -9,66 +9,80 @@ import (
 	"time"
 )
 
-func (h *wsHub) handle(c *wsClient, ev wsEvent) {
+func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	h.mu.Lock()
 	if h.closed || c.ctx.Err() != nil {
 		h.mu.Unlock()
 		return
 	}
-	if c.scope != nil && ev.CompanionID != "" && !strings.EqualFold(ev.CompanionID, c.scope.ID) {
+	now := time.Now()
+	if c.kind == "" {
 		h.mu.Unlock()
-		c.enqueue(textFrame(object{"op": "error", "status": 403, "error": "Companion out of scope"}))
+		switch msgType {
+		case msgHello:
+			hello, err := parseTerminalHello(payload)
+			if err != nil {
+				c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid hello"))
+				return
+			}
+			if c.scope != nil && hello.companionID != "" && !strings.EqualFold(hello.companionID, c.scope.ID) {
+				c.enqueueProto(msgReject, encodeReject(rejectBadToken, "companion out of scope"))
+				return
+			}
+			h.handleHello(c, hello, now)
+		case msgResume:
+			res, err := parseTerminalResume(payload)
+			if err != nil {
+				c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid resume"))
+				return
+			}
+			h.handleResume(c, res, now)
+		default:
+			c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "expected hello or resume"))
+		}
 		return
 	}
-	now := time.Now()
-	if c.role == "" {
+	if msgType == msgMedia {
 		h.mu.Unlock()
-		if ev.Event == "hello" {
-			h.hello(c, ev, now)
-		}
+		h.handleRTPPacket(c, payload)
 		return
 	}
 	defer h.mu.Unlock()
 	d := c.terminal
 	if d == nil {
-		if ev.Event == "wake_word" && c.role == "web" && c.scope == nil && ev.Enabled != nil {
-			tid := strings.ToLower(ev.TerminalID)
-			if tid == "" {
-				tid = strings.ToLower(ev.DeviceID)
+		if msgType == msgWatch && c.kind == "watcher" {
+			watchID, ok := parseWatch(payload)
+			if !ok {
+				return
 			}
-			if target := h.terminals[tid]; target != nil && h.active(target) && target.caps.WakeWord &&
-				target.client.role == "device" {
-				target.wakeWord = *ev.Enabled
-				enabled := (target.companionID == "" || h.parentRefresh(target.companionID, now) == "") && target.wakeWord
-				h.pushWakeWord(target, enabled)
-				c.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "terminal_id": target.id}))
-			}
-			return
-		}
-		if ev.Event == "watch" && c.role == "web" {
-			watchID := strings.ToLower(ev.CompanionID)
-			if watchID == "" {
-				watchID = strings.ToLower(ev.TerminalID)
-			}
-			if watchID == "" {
-				watchID = strings.ToLower(ev.DeviceID)
-			}
+			watchID = strings.ToLower(strings.TrimSpace(watchID))
 			if watchID == "" {
 				c.watch = ""
 				return
 			}
-			c.watch = watchID
-			d := h.terminals[c.watch]
-			if d == nil || !h.active(d) {
-				d = h.audioTerminal(c.watch)
+			if c.scope != nil && !strings.EqualFold(watchID, c.scope.ID) {
+				return
 			}
-			if d != nil && h.active(d) {
-				if d.svgWire.data != nil {
-					c.enqueue(d.svgWire)
+			c.watch = watchID
+			target := h.terminals[c.watch]
+			if target == nil || !h.active(target) {
+				target = h.voiceOwner(c.watch)
+			}
+			if target != nil && h.active(target) {
+				if target.svgWire != nil {
+					c.enqueueProto(msgFrameSVG, target.svgWire)
 				}
-				c.enqueue(textFrame(d.volumeFrame(false)))
-				c.enqueue(textFrame(object{"op": "power", "brightness": d.brightness()}))
-				c.enqueue(textFrame(parentFrame(d)))
+				c.enqueueProto(msgVolume, encodeVolumeMsg(target.vol, false, target.autoVol, target.id, target.companionID))
+				c.enqueueProto(msgPower, []byte{byte(target.brightness())})
+				if st, ok := h.companionStatuses[target.companionID]; ok {
+					c.enqueueProto(msgStatus, encodeStatus(st.seq, st.state, st.progress, st.kind, st.text))
+				}
+				if owner := h.voiceOwner(target.companionID); owner != nil {
+					c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(h.nextSeq(), target.companionID, owner.id))
+				}
+				if target.parentReason != "" {
+					c.enqueueProto(msgEvent, encodeEventMsg(h.nextSeq(), eventParentPolicy, target.companionID, string(target.parentReason), parentMessage(target.parentReason)))
+				}
 			} else {
 				c.watch = ""
 			}
@@ -76,50 +90,44 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		}
 		d = h.terminals[c.watch]
 		if d == nil || !h.active(d) {
-			d = h.audioTerminal(c.watch)
+			d = h.voiceOwner(c.watch)
 		}
-		if ev.Event == "text" {
-			if ev.TerminalID != "" {
-				d = h.terminals[strings.ToLower(ev.TerminalID)]
-			} else if ev.CompanionID != "" {
-				d = h.audioTerminal(strings.ToLower(ev.CompanionID))
-			} else if ev.DeviceID != "" {
-				d = h.terminals[strings.ToLower(ev.DeviceID)]
-			}
-		}
-		if ev.Event != "tap" && ev.Event != "drag" && ev.Event != "up" && ev.Event != "text" {
+		if msgType != msgPointer && msgType != msgTextInput && msgType != msgPromptReply {
 			return
 		}
 	}
 	if d == nil || !h.active(d) {
 		return
 	}
-	if c.scope != nil && ev.Event == "watch" && strings.EqualFold(ev.CompanionID, c.scope.ID) {
-		if d.svgWire.data != nil {
-			c.enqueue(d.svgWire)
+	if c.scope != nil && msgType == msgWatch {
+		if watchID, ok := parseWatch(payload); ok && strings.EqualFold(watchID, c.scope.ID) && d.svgWire != nil {
+			c.enqueueProto(msgFrameSVG, d.svgWire)
 		}
 		return
 	}
-	native := c.role == "device"
+
+	native := c.kind == "hardware"
 	if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
-		switch ev.Event {
-		case "status", "tts_ack", "rec_end":
-		case "rec_start", "rec_request":
+		switch msgType {
+		case msgTelemetry, msgTTSAck, msgRecEnd:
+		case msgRecStart:
 			h.pushRecStop(d, "", true)
 			return
 		default:
-			if native && ev.Event == "tap" {
-				h.pushPower(d, d.brightness(), false)
+			if native && msgType == msgPointer {
+				if evName, _, _, _, ok := parsePointer(payload); ok && evName == "tap" {
+					h.pushPower(d, d.brightness(), false)
+				}
 			}
 			return
 		}
 	}
 	if d.callState != callNone {
-		switch ev.Event {
-		case "status", "tap", "call", "call_end", "tts_ack":
-		case "rec_start":
+		switch msgType {
+		case msgTelemetry, msgPointer, msgCallReq, msgTTSAck:
+		case msgRecStart:
 			return
-		case "rec_end":
+		case msgRecEnd:
 			d.recording.receivedEnd()
 			d.recording.clear()
 			return
@@ -127,93 +135,123 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 			return
 		}
 	}
-	switch ev.Event {
-	case "wake_word":
+	switch msgType {
+	case msgWakeWord:
+		h.clearDoneOrErrorStatus(d)
+		h.takeVoiceOwnership(d)
 		if native && d.caps.WakeWord && d.wakeWord && !d.recording.active() && !d.busy && !d.ttsStarted && !d.awaitAck {
 			h.startRecording(d, "", now, true)
 		}
-	case "status":
-		d.status(ev.wsStatus)
-		if d.drawer != "stats" {
-			h.render(d, now, false)
+	case msgTelemetry:
+		if st, ok := parseTelemetry(payload); ok {
+			d.status(st)
+			if d.drawer != "stats" {
+				h.render(d, now, false)
+			}
 		}
-	case "tap":
-		h.pointer(d, ev, now, native)
-	case "drag", "up":
-		if d.caps.Drag && (native || c.role == "web") && d.displayApp != nil && d.app == d.displayApp && !d.asleep {
-			h.pointer(d, ev, now, native)
+	case msgPointer:
+		evName, x, y, rev, ok := parsePointer(payload)
+		if !ok {
+			return
 		}
-	case "call":
-		if target, ok := recordTarget(ev.Target); ok && target != "" && c.terminal == d {
-			h.startCall(d, target)
+		h.clearDoneOrErrorStatus(d)
+		if evName == "tap" {
+			h.pointer(d, evName, x, y, rev, now, native)
+		} else if d.caps.Drag && (native || c.kind == "web") && d.displayApp != nil && d.app == d.displayApp && !d.asleep {
+			h.pointer(d, evName, x, y, rev, now, native)
 		}
-	case "call_end":
-		if c.terminal == d && ev.Call != 0 && d.callID == ev.Call {
+	case msgCallReq:
+		action, callID, target, ok := parseCallReq(payload)
+		if !ok || c.terminal != d {
+			return
+		}
+		h.clearDoneOrErrorStatus(d)
+		if action == callOpStart {
+			if tgt, ok := recordTarget(target); ok && tgt != "" {
+				h.takeVoiceOwnership(d)
+				h.startCall(d, tgt)
+			}
+		} else if action == callOpEnd && callID != 0 && d.callID == callID {
 			h.endCall(d, "audio unavailable")
 		}
-	case "rec_start":
-		if target, ok := recordTarget(ev.Target); ok && d.recording.acceptsStart() {
-			if d.recording.active() {
-				d.recording.acknowledge()
-			} else {
-				h.startRecording(d, target, now, false)
+	case msgRecStart:
+		_, target, ok := parseRecStart(payload)
+		if !ok {
+			return
+		}
+		h.clearDoneOrErrorStatus(d)
+		if tgt, ok := recordTarget(target); ok {
+			if c.terminal == d {
+				h.takeVoiceOwnership(d)
+			}
+			if c.kind == "web" && c.terminal == d && h.bridgeEndpoint(d) && !d.recording.active() && tgt == "" {
+				h.startRecording(d, tgt, now, true)
+			} else if d.recording.acceptsStart() {
+				if d.recording.active() {
+					d.recording.acknowledge()
+				} else {
+					h.startRecording(d, tgt, now, false)
+				}
 			}
 		}
-	case "rec_request": // A virtual web cat uses the same bridge-owned handshake as a board.
-		if c.role == "web" && c.terminal == d && h.bridgeEndpoint(d) && !d.recording.active() {
-			if target, ok := recordTarget(ev.Target); ok && target == "" {
-				h.startRecording(d, target, now, true)
-			}
+	case msgRecEnd:
+		_, cancelled, target, ok := parseRecEnd(payload)
+		if !ok {
+			return
 		}
-	case "rec_end":
 		d.recording.receivedEnd()
 		if d.recording.active() {
-			h.endRecording(d, ev, now)
+			h.endRecording(d, target, cancelled, now)
 		}
-	case "text":
-		text := strings.TrimSpace(ev.Text)
+	case msgTextInput:
+		raw, ok := parseTextInput(payload)
+		if !ok {
+			return
+		}
+		h.clearDoneOrErrorStatus(d)
+		text := strings.TrimSpace(raw)
 		if text != "" && len(text) <= 4096 {
 			h.startTurn(d, now, false, "typed", func(ctx context.Context, id uint64) {
 				h.runTurn(ctx, d, id, text, "typed", nil)
 			})
 		}
-	case "intercom":
-		target, ok := recordTarget(ev.Target)
-		text := strings.TrimSpace(ev.Text)
-		if ok && target != "" && text != "" && len(text) <= 4096 {
-			h.startTurn(d, now, false, "intercom", func(ctx context.Context, id uint64) {
-				others, err := h.peerSnapshot(d.companionID)
-				if err != nil || ctx.Err() != nil {
-					h.turnError(d, id, "Could not find nearby companions.")
-					return
-				}
-				h.sendIntercom(ctx, d, id, others, target, text, nil)
-			})
-		}
-	case "tts_ack":
-		if ev.Audio == 0 || ev.Audio != d.audio {
+	case msgPromptReply:
+		id, choice, ok := parsePromptReply(payload)
+		if !ok || d.companionID == "" {
 			return
 		}
-		if ev.State == "interrupted" && (d.ttsStarted || d.awaitAck) {
+		h.resolvePrompt(d.companionID, id, choice)
+	case msgSetVolume:
+		auto, level, ok := parseSetVolume(payload)
+		if !ok || c.terminal != d {
+			return
+		}
+		_ = h.setVolume(c.ctx, d, auto, level, "")
+	case msgTTSAck:
+		aborted, audioID, ok := parseTTSAck(payload)
+		if !ok || audioID == 0 || audioID != d.audio {
+			return
+		}
+		if aborted && (d.ttsStarted || d.awaitAck) {
 			h.stopPlayback(d, false)
 			h.playbackDone(d, now)
-		} else if ev.State == "done" && d.awaitAck {
+		} else if !aborted && d.awaitAck {
 			d.ttsStarted = false
 			h.playbackDone(d, now)
 		}
 	}
 }
 
-func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
+func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now time.Time, native bool) {
 	width, height := screenSize, screenSize
 	if native {
 		width, height = d.screen.width, d.screen.height
 	}
-	if ev.X < 0 || ev.X >= width || ev.Y < 0 || ev.Y >= height || len(ev.ID) > 64 {
+	if x < 0 || x >= width || y < 0 || y >= height {
 		return
 	}
 	if native {
-		ev.X, ev.Y = d.screen.inverseTap(ev.X, ev.Y)
+		x, y = d.screen.inverseTap(x, y)
 	}
 	wasAsleep := d.asleep
 	h.wake(d, now)
@@ -221,17 +259,13 @@ func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
 		h.render(d, now, false)
 		return
 	}
-	inside := d.screen.shape != "round" || inScreenCircle(ev.X, ev.Y)
+	inside := d.screen.shape != "round" || inScreenCircle(x, y)
 	key := ""
-	if ev.ID == "" || native {
-		if inside {
-			key = hitID(d.svg.hits, ev.X, ev.Y)
-		}
-	} else if slices.ContainsFunc(d.svg.hits, func(hit hitBox) bool { return hit.id == ev.ID }) {
-		key = ev.ID
+	if inside {
+		key = hitID(d.svg.hits, x, y)
 	}
 	a := d.scene.actions[key]
-	if native && !d.acceptPointerRevision(a.kind, ev.RevLo) {
+	if native && !d.acceptPointerRevision(a.kind, &rev) {
 		return
 	}
 	if d.callState != callNone {
@@ -253,7 +287,7 @@ func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
 	if d.displayApp != nil {
 		if d.app == d.displayApp {
 			if i := slices.Index(d.app.terminals, d); i >= 0 {
-				h.updateApp(d.app, appEvent{kind: ev.Event, i: i, id: key, x: ev.X, y: ev.Y, now: now})
+				h.updateApp(d.app, appEvent{kind: evName, i: i, id: key, x: x, y: y, now: now})
 			}
 		}
 		return
@@ -328,7 +362,7 @@ func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
 		}
 	case "vol-auto", "vol-minus", "vol-plus":
 		if err := h.setVolume(d.client.ctx, d, false, 0, a.kind); err != nil && h.active(d) {
-			h.pushWS(d, object{"op": "error", "status": 502, "error": err.Error()}, true)
+			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
 		}
 	case "listen", "reply":
 		if key == "companion-ring" && (d.busy || d.ttsStarted || d.awaitAck) {
@@ -340,6 +374,7 @@ func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
 			h.startRecording(d, a.value, now, true)
 		}
 	case "call-peer":
+		h.takeVoiceOwnership(d)
 		h.startCall(d, a.value)
 	}
 }
@@ -348,8 +383,11 @@ func (d *wsTerminal) acceptPointerRevision(action string, rev *uint16) bool {
 	switch action {
 	case "stop", "rec-cancel", "rec-send", "rec-continue", "listen", "reply", "call-peer",
 		"call-answer", "call-decline", "call-hangup", "call-mute", "build-cancel":
+		if !d.caps.PointerRev {
+			return true
+		}
 		if rev == nil {
-			return !d.caps.PointerRev
+			return false
 		}
 		return *rev == d.nativeRev
 	default:

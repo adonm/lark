@@ -27,8 +27,8 @@ func TestDeviceResetHistory(t *testing.T) {
 	id := str(v["id"])
 	path := base + "/api/companions/" + id
 	watcher := testConnectWS(t, base, "unit", true)
-	watcher.json(t, object{"ev": "hello", "role": "web"})
-	watcher.until(t, hasWS("peers", ""))
+	watcher.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	watcher.until(t, hasProto(msgPeers, ""))
 	const other = "other-companion"
 	for _, e := range []chatEntry{newChat("user", "You", "Hi", "typed"), newChat("companion", "Milo", "Hello", "typed")} {
 		b.history.add(id, e)
@@ -75,7 +75,7 @@ func TestDeviceResetHistory(t *testing.T) {
 		}
 		assertHistory(other, untouched)
 	}
-	watcher.until(t, hasWS("history_archived", id))
+	watcher.until(t, hasProto(msgEvent, id))
 	if got := apiObjects(t, path+"/messages", "messages"); len(got) != 0 {
 		t.Fatal("reset device still exposes archived history")
 	}

@@ -15,7 +15,7 @@ func TestMCPSaveCurrentAndUpdateWithoutRelaunch(t *testing.T) {
 	toolTest(t, base, "app", object{"companions": id, "template": "reader",
 		"data": object{"pages": []string{"One", "Two"}}}, false)
 	board.until(t, isDisplay)
-	board.json(t, object{"ev": "tap", "x": 236, "y": 62})
+	board.tap(t, 236, 62, 0)
 	board.until(t, isDisplay)
 	save := toolTest(t, base, "app", object{"companions": id, "save_current": object{"name": "copy", "title": "Copy"}}, false)
 	saved := save["saved"].(object)
@@ -43,7 +43,7 @@ func TestMCPSaveCurrentAndUpdateWithoutRelaunch(t *testing.T) {
 	}
 	toolTest(t, base, "app", object{"companions": id, "load": "copy"}, false)
 	board.until(t, isDisplay)
-	board.json(t, object{"ev": "tap", "x": 180, "y": 320})
+	board.tap(t, 180, 320, 0)
 	board.until(t, isDisplay)
 	toolTest(t, base, "app", object{"companions": id, "save_current": object{"name": "missing"}}, true)
 }
@@ -58,8 +58,8 @@ func TestMCPDeviceLastAppError(t *testing.T) {
 		function onTap(){throw new Error("oops")}`
 	toolTest(t, base, "app", object{"companions": id, "title": "Broken", "code": code}, false)
 	board.until(t, isDisplay)
-	board.json(t, object{"ev": "tap", "x": 180, "y": 160})
-	board.until(t, hasWS("error", "oops"))
+	board.tap(t, 180, 160, 0)
+	board.until(t, hasProto(msgStatus, "oops"))
 	me := stateMe(t, base, id)
 	got := me["companion"].(object)["last_app_error"].(object)
 	if me["active_app"] != nil || got["action"] != "tap" || got["name"] != "broken" || !strings.Contains(str(got["error"]), "oops") {

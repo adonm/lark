@@ -117,7 +117,7 @@ func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsTerminal, turn ui
 
 func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	h.mu.Lock()
-	d := h.audioTerminal(job.device)
+	d := h.voiceOwner(job.device)
 	if d == nil || !h.active(d) || h.parentRefresh(d.companionID, time.Now()) != "" ||
 		d.announcing || d.busy || d.queuedVoice != nil || d.recording.active() || d.callState != callNone ||
 		d.stopAudio != nil || d.awaitAck || d.asleep || d.drawer != "" || d.card != nil && d.card.build != job.id {

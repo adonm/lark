@@ -70,16 +70,16 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		t.Fatal(got)
 	}
 	dev := testConnectWS(t, base, "unit", false)
-	dev.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id})
-	f := dev.until(t, hasWS("svg", "Say hi to meet me!"))
+	dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG, terminalID: termID, companionID: id}))
+	f := dev.until(t, hasSVG("Say hi to meet me!"))
 	if strings.Contains(string(f.data), "#F59E0B") {
 		t.Fatal("starter face did not show its setup cue")
 	}
 	web := testConnectWS(t, base, "unit", true)
-	web.json(t, object{"ev": "hello", "role": "web"})
-	web.until(t, hasWS("peers", id))
-	web.json(t, object{"ev": "watch", "companion_id": id})
-	web.until(t, hasWS("svg", "Say hi to meet me!"))
+	web.sendProto(t, msgHello, encodeTerminalHello(terminalHello{protoVersion: protoVersion1, kind: termKindWeb, displayFormats: dispSVG}))
+	web.until(t, hasProto(msgPeers, id))
+	web.sendProto(t, msgWatch, appendStr8(nil, id))
+	web.until(t, hasSVG("Say hi to meet me!"))
 	for _, fields := range []object{
 		{"face_bg": "navy"}, {"voice": "unknown"}, {"name": strings.Repeat("x", 41)},
 		{"personality": strings.Repeat("x", 161)}, {"configured": "false"},
@@ -103,14 +103,14 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		t.Fatal("unexpected configured companion", cosmo)
 	}
 	expectValue(t, title, "Lark: Cosmo ("+id+")")
-	frame := dev.until(t, hasWS("svg", "#172344"))
-	if !hasWS("svg", "#C0FFEE")(frame) || !hasWS("svg", "#1A1926")(frame) {
+	frame := dev.until(t, hasSVG("#172344"))
+	if !hasSVG("#C0FFEE")(frame) || !hasSVG("#1A1926")(frame) {
 		t.Fatal("live companion lost an extra or an animated eye")
 	}
 	faceSeen, companionSeen := false, false
 	web.until(t, func(f wsFrame) bool {
-		faceSeen = faceSeen || hasWS("svg", "#172344")(f)
-		companionSeen = companionSeen || hasWS("companion", `"name":"Cosmo"`)(f)
+		faceSeen = faceSeen || hasSVG("#172344")(f)
+		companionSeen = companionSeen || hasProto(msgCompanion, "Cosmo")(f)
 		return faceSeen && companionSeen
 	})
 	list := apiObjects(t, base+"/api/companions", "companions")
@@ -125,7 +125,7 @@ func TestCompanionToolAndLiveFace(t *testing.T) {
 		t.Fatal("reset_blank left configured state", c)
 	}
 	expectValue(t, title, "Lark: New Companion ("+id+")")
-	dev.until(t, hasWS("svg", "Say hi to meet me!"))
+	dev.until(t, hasSVG("Say hi to meet me!"))
 	testRequest(t, "DELETE", base+"/api/companions/"+id, "unit", nil, 409)
 	post("/api/terminals/"+termID+"/detach", object{}, 200)
 	testRequest(t, "DELETE", base+"/api/companions/"+id, "unit", nil, 204)
@@ -155,7 +155,7 @@ func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
 	dev.hello(t, str(term["id"]), "")
 	toolTest(t, base, "app", object{"companions": id, "svg": `<svg><text x="180" y="180">Party</text></svg>`}, false)
 	testRequest(t, "POST", base+"/api/companions/"+id+"/reset", "unit", object{}, 200)
-	dev.until(t, hasWS("svg", "Say hi to meet me!"))
+	dev.until(t, hasSVG("Say hi to meet me!"))
 	s := stateMe(t, base, id)
 	if s["active_app"] != nil {
 		t.Fatal("reset did not close app", s)
@@ -239,8 +239,11 @@ func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 	const termID = "vocat-33d8"
 	const id = "cake"
 	dev := testConnectWS(t, base, "unit", false)
-	dev.json(t, object{"ev": "hello", "role": "device", "terminal_id": termID, "character": "Cake", "proto": 2})
-	dev.until(t, hasWS("volume", `"level":55`))
+	dev.helloHardware(t, termID, "Cake", capDrag)
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 55
+	})
 	before := stateMe(t, base, id)
 	look := before["companion"].(object)
 	term := before["terminals"].([]any)[0].(object)
@@ -255,7 +258,10 @@ func TestCakeFaceSVGEditAndSleep(t *testing.T) {
 	if result["terminal"].(object)["sleeping"] != true {
 		t.Fatal("combined patch did not set sleep", result)
 	}
-	dev.until(t, hasWS("power", `"brightness":12`))
+	dev.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
+	})
 	toolTest(t, base, "patch", object{"companion_id": id, "companion": update}, false)
 	after := stateMe(t, base, id)
 	look = after["companion"].(object)

@@ -1,17 +1,60 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
+var lastMenuSVG = map[*testWS]string{}
+
+func decodeFrameSVG(f wsFrame) (uint32, string) {
+	p := framePayload(f)
+	if len(p) < 10 {
+		return 0, ""
+	}
+	rev := binary.LittleEndian.Uint32(p[0:4])
+	tidLen, cidLen := int(p[4]), int(p[5])
+	svgLen := int(binary.LittleEndian.Uint32(p[6:10]))
+	off := 10 + tidLen + cidLen
+	if off+svgLen > len(p) {
+		return 0, ""
+	}
+	return rev, string(p[off : off+svgLen])
+}
+
+func hitCenter(svg, id string) (int, int, bool) {
+	if id == "menu" && svg == "" {
+		return 180, 316, true
+	}
+	re := regexp.MustCompile(`data-id="` + regexp.QuoteMeta(id) + `"[^>]*data-lark-hit="(\d+) (\d+) (\d+) (\d+)"`)
+	m := re.FindStringSubmatch(svg)
+	if m == nil {
+		re2 := regexp.MustCompile(`data-lark-hit="(\d+) (\d+) (\d+) (\d+)"[^>]*data-id="` + regexp.QuoteMeta(id) + `"`)
+		m = re2.FindStringSubmatch(svg)
+	}
+	if m == nil {
+		if id == "menu" {
+			return 180, 316, true
+		}
+		return 0, 0, false
+	}
+	x1, _ := strconv.Atoi(m[1])
+	y1, _ := strconv.Atoi(m[2])
+	x2, _ := strconv.Atoi(m[3])
+	y2, _ := strconv.Atoi(m[4])
+	return (x1 + x2) / 2, (y1 + y2) / 2, true
+}
+
 func menuFrame(t *testing.T, c *testWS, want ...string) string {
 	t.Helper()
-	frame := c.until(t, hasWS("svg", want[0]))
-	svg := str(testObject(t, frame.data)["svg"])
+	frame := c.until(t, hasSVG(want[0]))
+	_, svg := decodeFrameSVG(frame)
+	lastMenuSVG[c] = svg
 	for _, text := range want {
 		if !strings.Contains(svg, text) {
 			t.Errorf("missing %q on screen", text)
@@ -22,7 +65,11 @@ func menuFrame(t *testing.T, c *testWS, want ...string) string {
 
 func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 	t.Helper()
-	c.json(t, object{"ev": "tap", "id": id})
+	x, y, ok := hitCenter(lastMenuSVG[c], id)
+	if !ok {
+		t.Fatalf("control %q not found in SVG", id)
+	}
+	c.tap(t, x, y, 0)
 	return menuFrame(t, c, want...)
 }
 
@@ -88,12 +135,9 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 	tapMenu(t, web, "menu-next", "Arcade 5", "menu-prev")
 
 	// A native coordinate, not a web control ID, launches the game.
-	board.json(t, object{"ev": "tap", "x": 246, "y": 125})
-	ready := web.until(t, hasWS("svg", "Ready to play"))
-	wantRev, err := strconv.Atoi(fmt.Sprint(testObject(t, ready.data)["rev"]))
-	if err != nil {
-		t.Fatal(err)
-	}
+	board.tap(t, 246, 125, 0)
+	ready := web.until(t, hasSVG("Ready to play"))
+	wantRev, _ := decodeFrameSVG(ready)
 	board.until(t, func(f wsFrame) bool {
 		if !isDisplay(f) {
 			return false
@@ -101,7 +145,7 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 		_, rev, _ := decodeDisplay(t, f)
 		return rev == uint16(wantRev)
 	})
-	board.json(t, object{"ev": "tap", "x": 180, "y": 180})
+	board.tap(t, 180, 180, 0)
 	menuFrame(t, web, "Playing on board", exitNode)
 }
 
@@ -210,12 +254,17 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 		}
 		defer conn.Close()
 		wait := b.db.readDB().Stats().WaitCount
-		web.json(t, object{"ev": "tap", "id": control})
+		x, y, ok := hitCenter(lastMenuSVG[web], control)
+		if !ok {
+			t.Fatalf("control %q not found", control)
+		}
+		web.tap(t, x, y, 0)
 		waitPool(t, func() bool { return b.db.readDB().Stats().WaitCount > wait })
 		if control == "game-0" {
-			board.json(t, object{"ev": "tap", "x": 180, "y": 316}) // Leave Games while the app is still loading.
+			board.tap(t, 180, 316, 0) // Leave Games while the app is still loading.
 		} else {
-			board.json(t, object{"ev": "status", "battery_pct": 80})
+			var st [16]byte
+			board.sendProto(t, msgTelemetry, st[:])
 		}
 		board.barrier(t) // The device event must be handled before the connection is returned.
 		if err := conn.Close(); err != nil {
