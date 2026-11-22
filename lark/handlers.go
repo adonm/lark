@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strconv"
 	"strings"
@@ -92,6 +93,31 @@ func (b *larkServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if path == "/mcp" {
 		b.serveMCP(w, r)
+		return
+	}
+	if strings.HasPrefix(path, "/debug/pprof") {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			sendError(w, problem(404, "Not found"))
+			return
+		}
+		if !tokenHeaderMatches(r.Header, "Token", b.token) {
+			sendError(w, problem(401, "Unauthorized"))
+			return
+		}
+		switch path {
+		case "/debug/pprof/cmdline":
+			pprof.Cmdline(w, r)
+		case "/debug/pprof/profile":
+			pprof.Profile(w, r)
+		case "/debug/pprof/symbol":
+			pprof.Symbol(w, r)
+		case "/debug/pprof/trace":
+			pprof.Trace(w, r)
+		default:
+			pprof.Index(w, r)
+		}
 		return
 	}
 	if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/ota/") {

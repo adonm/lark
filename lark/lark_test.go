@@ -265,6 +265,27 @@ func TestBridgeAuthAndBody(t *testing.T) {
 			}
 		}
 	}
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	req.RemoteAddr = "192.168.1.50:12345"
+	req.Header.Set("X-Lark-Token", "correct")
+	res := httptest.NewRecorder()
+	b.ServeHTTP(res, req)
+	if res.Code != 404 {
+		t.Fatalf("/debug/pprof/ from non-loopback returned HTTP %d", res.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	res = httptest.NewRecorder()
+	b.ServeHTTP(res, req)
+	if res.Code != 401 {
+		t.Fatalf("/debug/pprof/ without token returned HTTP %d", res.Code)
+	}
+	req.Header.Set("X-Lark-Token", "correct")
+	res = httptest.NewRecorder()
+	b.ServeHTTP(res, req)
+	if res.Code != 200 {
+		t.Fatalf("/debug/pprof/ on loopback with token returned HTTP %d", res.Code)
+	}
 }
 
 func TestOpenCodeStreamingAndFallback(t *testing.T) {
