@@ -11,9 +11,12 @@ oc_root=$data/opencode
 env_file=$config/lark/lark.env
 pin_gpu=false
 models_only=false
+library=false
 usage() {
-    printf '%s\n' 'Usage: setup-host.sh [--gpu-index INDEX]' \
+    printf '%s\n' 'Usage: setup-host.sh [--gpu-index INDEX] [--library]' \
         '       setup-host.sh --models-only  # Kokoro and Silero; no service changes' \
+        '--library downloads and indexes the local text library in the background' \
+        '(~80 GB; needs space under ~/.local/share/lark/library).' \
         'Run vulkaninfo --summary to find the intended Vulkan GPU index.'
 }
 while (($#)); do
@@ -22,12 +25,13 @@ while (($#)); do
             [[ ${2-} =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
             pin_gpu=$2; shift 2 ;;
         --models-only:*) models_only=true; shift ;;
+        --library:*) library=true; shift ;;
         -h:*|--help:*) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
 done
 
-if "$models_only" && [[ $pin_gpu != false ]]; then
+if "$models_only" && { [[ $pin_gpu != false ]] || "$library"; }; then
     usage >&2
     exit 2
 fi
@@ -177,7 +181,7 @@ trap 'rm -f -- "$build_tmp"; rm -rf -- "$stt_stage"' EXIT
     export CGO_LDFLAGS="\"-L$stt_stage/native/lib\" -Wl,-rpath,\$ORIGIN/lib${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
     "$GO_BIN" mod download github.com/k2-fsa/sherpa-onnx-go-linux
     "$GO_BIN" mod verify
-    "$GO_BIN" build -tags parakeet -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$build_tmp" .
+    "$GO_BIN" build -tags parakeet,sqlite_fts5 -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$build_tmp" .
     case $("$GO_BIN" env GOARCH) in
         amd64) native=x86_64-unknown-linux-gnu ;;
         arm64) native=aarch64-unknown-linux-gnu ;;
@@ -361,6 +365,26 @@ for provider in sorted({primary, fallback}):
         except (OSError, ValueError, subprocess.SubprocessError):
             sys.exit("Could not import the configured providers' OpenCode credentials")
 PY
+
+if "$library"; then
+    mkdir -p -- "$data/library"
+    avail_kb=$(df -Pk -- "$data" | awk 'NR==2 {print $4}')
+    if [[ -z $avail_kb || $avail_kb -lt 104857600 ]]; then
+        printf 'The local library needs about 100 GB free under %s.\n' "$data/library" >&2
+        exit 1
+    fi
+    if systemctl --user is-active --quiet lark-library.service; then
+        printf 'Library download/index already running: systemctl --user status lark-library\n'
+    else
+        systemctl --user reset-failed lark-library.service 2>/dev/null || true
+        systemd-run --user --collect --unit=lark-library --working-directory="$REPO_DIR" \
+            -p StandardOutput=append:"$data/library/setup.log" \
+            -p StandardError=append:"$data/library/setup.log" \
+            "$lark_bin" library --download --build
+        printf 'Library download/index started. Progress: %s\n' "$data/library/setup.log"
+        printf 'Check status with: systemctl --user status lark-library\n'
+    fi
+fi
 
 printf '%s\n' 'Default voices: Heart (af_heart); Mint uses Fable (bm_fable).'
 printf '%s\n' 'Lark MCP includes control for volume and sleep on connected devices.'

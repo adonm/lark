@@ -25,7 +25,7 @@ node --test config/opencode/*.test.mjs lark/webxdc/panel/*.test.mjs lark/webxdc/
     "$GO_BIN" mod verify
     # No Vulkan toolchain, weights or GPU are needed for the offline suite.
     "$GO_BIN" vet ./...
-    "$GO_BIN" test -race ./...
+    "$GO_BIN" test -race -tags sqlite_fts5 ./...
 )
 
 host_tests=$(mktemp -d "${TMPDIR:-/tmp}/lark-check.XXXXXXXX")
@@ -91,7 +91,7 @@ if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
         test_bin="$host_tests/lark"
         CGO_CFLAGS="\"-I$native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}" \
         CGO_LDFLAGS="\"-L$native/lib\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" \
-            "$GO_BIN" build -tags parakeet -o "$test_bin" .
+            "$GO_BIN" build -tags parakeet,sqlite_fts5 -o "$test_bin" .
         case "$1" in
             --live)
                 LARK_TEST_BIN="$test_bin" LARK_E2E_MODE=stub "$GO_BIN" test -tags=live -v -count=1 -run '^TestVirtualE2E$' . ;;
@@ -103,11 +103,14 @@ if [[ ${1-} == --live || ${1-} == --e2e-real || ${1-} == --deployed ]]; then
         esac
     )
 elif [[ ${1-} == --real-model ]]; then
-    (cd lark && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
+    (cd lark && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
 elif [[ ${1-} == --qa ]]; then
-    (cd lark && "$GO_BIN" test -tags=live -v -count=1 -run '^TestQASimSuite$' .)
+    (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestQASimSuite$' .)
+    if [[ ${LARK_QA_LIBRARY-} == 1 ]]; then
+        (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestQALocalLibraryBehaviour$' .)
+    fi
 elif [[ ${1-} == --qa-hw ]]; then
-    (cd lark && LARK_QA_HW=1 "$GO_BIN" test -tags=live -v -count=1 -run '^(TestQASimSuite|TestQAHardwareSuite)$' .)
+    (cd lark && LARK_QA_HW=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^(TestQASimSuite|TestQAHardwareSuite)$' .)
 elif [[ ${1-} == --panel-ui ]]; then
     # Headless-Chromium DOM tests for the webxdc panel. Dev-only and slower
     # than the fast path; never required for a plain ./scripts/check.sh.

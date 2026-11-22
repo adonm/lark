@@ -35,6 +35,17 @@ LEGACY_MODELS = {
     "deep": "opencode-go/glm-5.3#high",
 }
 LEGACY_FALLBACK = "opencode-go/glm-5.3-flash#low"
+DEEP_SYSTEM = (
+    "Research and draft for a voice companion. Use the local library for grounded facts: "
+    "search first, read bounded sections, never paste long text. Keep answers short and plain, "
+    "with no Markdown or formal citations. For stories, import a fitting local text and retell "
+    "it at kid length."
+)
+DEEP_PERMISSIONS = [
+    {"action": "*", "resource": "*", "effect": "deny"},
+    {"action": "lark_*", "resource": "*", "effect": "allow"},
+    {"action": "websearch", "resource": "*", "effect": "allow"},
+]
 
 
 def migrate(path):
@@ -58,6 +69,20 @@ def migrate(path):
     put(path, (json.dumps(current, indent=2) + "\n").encode())
 
 
+def ensure_deep_guidance(path):
+    """Add the local-library guidance without overwriting user selections."""
+    try:
+        current = json.loads(path.read_text())
+        deep = current.setdefault("agents", {}).setdefault("deep", {})
+    except (OSError, ValueError, TypeError, AttributeError):
+        return
+    before = json.dumps(current, sort_keys=True)
+    deep.setdefault("system", DEEP_SYSTEM)
+    deep.setdefault("permissions", DEEP_PERMISSIONS)
+    if json.dumps(current, sort_keys=True) != before:
+        put(path, (json.dumps(current, indent=2) + "\n").encode())
+
+
 router = directory / package
 router.mkdir(mode=0o700, parents=True, exist_ok=True)
 put(router / "index.js", source.read_bytes())
@@ -72,6 +97,8 @@ if not config.exists():
                 "model": DEEP_MODEL,
                 "mode": "subagent",
                 "description": "Delegate hard tasks: multi-step plans, stories, deep questions, or complex reasoning.",
+                "system": DEEP_SYSTEM,
+                "permissions": DEEP_PERMISSIONS,
             },
         },
         "plugins": [{"package": package, "options": {"fallback": FALLBACK_MODEL}}],
@@ -79,3 +106,4 @@ if not config.exists():
     put(config, (json.dumps(update, indent=2) + "\n").encode())
 else:
     migrate(config)
+ensure_deep_guidance(config)
