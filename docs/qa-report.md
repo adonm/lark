@@ -21,7 +21,7 @@
 ---
 
 Date: 2026-11-23  
-Target: `main` (`6f444c9`..`35ec120`), firmware `0.19.0` (`vocat-33d8`, `vocat-2cac`, `box3-b324`)
+Target: `main` (`e75a20a`..`34830e0`), firmware `0.19.0` (`vocat-33d8`, `vocat-2cac`, `box3-b324`)
 
 ## Panel v4: naming, history, and voice selection
 
@@ -41,9 +41,18 @@ The panel keeps the header design, but the app was still branded "Lark Control" 
 
 ### Tests
 
-- `./scripts/check.sh --panel-ui`: headless-Chromium DOM suite (8 tests, ~6 s) that serves `lark/webxdc/panel/` and drives a fake `webxdc` update stream. Covers header/portrait/state, Say + feedback + ack, listen pills, volume sliders, story progress/Continue/Start over, history rows/paging/filters/search, voice pressed state, keyboard tab navigation, labels, and both regressions above. Screenshots: `/tmp/opencode/panel/`.
+- `./scripts/check.sh --panel-ui`: headless-Chromium DOM suite (8 tests, ~6.5 s suite / 8.4 s wall) that serves `lark/webxdc/panel/` and drives a fake `webxdc` update stream. Covers header/portrait/state, Say + feedback + ack, listen pills, volume sliders, story progress/Continue/Start over, history rows/paging/filters/search, voice pressed state, keyboard tab navigation, labels, and both regressions above. Screenshots: `/tmp/opencode/panel/`.
 - Go: `TestWebxdcPanelDoesNotEchoOwnUpdates` (fails before the guard), `TestWebxdcPanelVoiceInAckAndState`, `TestWebxdcPanelHistoryPaginationAcrossLiveState`, and the panel XDC packaging test now asserts manifest name and portrait icon. The Playwright shim delivers a panel's own updates back to its listener, as Delta Chat does.
 - Playwright tests are dev-only; plain `./scripts/check.sh` still runs only `codec.test.mjs` and the other fast Node tests.
+
+### Verification (2026-11-23)
+
+- `./scripts/check.sh`: 53.3 s, pass (one `TestEndpointWebSendCancelAndAuto` i/o timeout when the Go race suite and the browser suite were run concurrently; passes alone and in the sequential suite).
+- `./scripts/check.sh --qa`: 10.9 s, `TestQASimSuite` pass.
+- `./scripts/check.sh --panel-ui`: 8.4 s, 8/8 pass.
+- `go vet -tags=live` + `go test -tags=live -run '^$'`: compile pass.
+- `TestQADeltaChatLive` (live QA companion + temporary Delta Chat account): 55.2 s, pass. v4.1 panel arrived named `qa-dc`; `/panel` resent it and deleted the previous message for everyone; `set_voice` ack/state carried the new voice; one history request produced one response across a later `sync`; say/private/help/stories/story/voice-note/unknown-command and sim unpair all passed. QA companion and account removed afterwards.
+- Deployed greg's chat: old 708k-update panel and the interim v4 message were deleted for everyone; the v4.1 panel has a single portrait state update. The account DB keeps the freed pages (11 GB file, ~5 GB freelist) until a future VACUUM/compaction.
 
 ## Latency Investigation (`sim` vs bench)
 
