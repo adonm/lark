@@ -647,7 +647,13 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 		}
 		name := strings.ToLower(strings.TrimSpace(ct.DisplayName))
 		alt := strings.ToLower(strings.TrimSpace(ct.Name))
-		if (isPeer && peerID == targetLower) || name == targetLower || alt == targetLower {
+		peerName := ""
+		if isPeer && s.b != nil {
+			if pc, ok := s.b.companionByID(peerID); ok {
+				peerName = strings.ToLower(strings.TrimSpace(pc.Name))
+			}
+		}
+		if (isPeer && (peerID == targetLower || peerName == targetLower)) || name == targetLower || alt == targetLower {
 			matched = append(matched, ct)
 		}
 	}

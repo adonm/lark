@@ -1268,3 +1268,27 @@ func TestDeltaChatStoryImportAndExport(t *testing.T) {
 		t.Fatalf("missing expected sends: list=%v twee=%v xdc=%v", sawList, sawTwee, sawXDC)
 	}
 }
+
+func TestDCIntercomMatchesRenamedPeer(t *testing.T) {
+	b, _, stub := dcTestHarness(t)
+	qa1, err := b.createCompanion(t.Context(), object{"id": "qa1", "name": "qa1", "form": "cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	qa2, err := b.createCompanion(t.Context(), object{"id": "qa2", "name": "Milo", "form": "owl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc := b.dc
+	stub.mu.Lock()
+	stub.contacts[qa1.DCAccountID][10] = deltachat.Contact{Id: 10, Address: stub.configs[qa2.DCAccountID]["addr"], DisplayName: "qa2", Name: "qa2", IsVerified: true}
+	stub.mu.Unlock()
+
+	sentTo, err := dc.sendIntercom(t.Context(), "qa1", "Milo", "Hello Milo!", nil)
+	if err != nil {
+		t.Fatalf("sendIntercom failed for renamed peer: %v", err)
+	}
+	if len(sentTo) != 1 || sentTo[0] != "qa2" {
+		t.Fatalf("sentTo = %v, want [qa2]", sentTo)
+	}
+}
