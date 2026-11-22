@@ -332,6 +332,8 @@ func embedQRSvg(qrSVG string, x, y, size int) string {
 	}
 	attrs := qrSVG[start+4 : start+endTag]
 	inner := qrSVG[start+endTag+1 : closeIdx]
+	inner = strings.ReplaceAll(inner, `style="fill:#000000"`, `fill="#000000"`)
+	inner = strings.ReplaceAll(inner, `style="fill:#ffffff"`, `fill="#ffffff"`)
 	vb := `viewBox="0 0 100 100"`
 	if i := strings.Index(attrs, `viewBox="`); i >= 0 {
 		if j := strings.IndexByte(attrs[i+9:], '"'); j >= 0 {
@@ -347,8 +349,8 @@ func pairScene(name, qrSVG string) sceneView {
 		title = "Pair " + truncate(name, 16)
 	}
 	s := menuScene(title)
-	if embedded := embedQRSvg(qrSVG, 94, 80, 172); embedded != "" {
-		s.art += svgRect(86, 72, 188, 188, 14, "#FFFFFF", "none", 0) + embedded
+	if embedded := embedQRSvg(qrSVG, 94, 88, 172); embedded != "" {
+		s.art += svgRect(88, 82, 184, 184, 14, "#FFFFFF", "none", 0) + embedded
 	} else {
 		menuEmpty(&s, "Pairing unavailable")
 	}
