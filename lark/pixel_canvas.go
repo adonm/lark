@@ -49,6 +49,10 @@ func pixelSpecForGeometry(g screenGeometry) pixelDisplaySpec {
 	return pixelSpecVoCat
 }
 
+// Layout principles (floristry):
+//   - Focal flower: one primary element per screen; secondary chrome stays quieter in size, weight, or contrast.
+//   - Greenery: consistent margins and gutters from a 2/4/8 logical-px spacing scale; keep round screens inside the safe square.
+//   - Odd numbers: prefer 3 or 5 items per row/page and 3 emphasis tiers; turn the vase and verify every screen on both geometries.
 type pixelCanvas struct {
 	w, h int
 	img  *image.RGBA
