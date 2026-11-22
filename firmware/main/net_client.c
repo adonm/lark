@@ -458,7 +458,8 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         } else if (ctrl.op == LARK_REC_START) {
             uint8_t target = ctrl.flags & LARK_REC_TARGET_INTERCOM;
             bool bridge_ep = (ctrl.flags & LARK_REC_TARGET_BRIDGE_EP) != 0;
-            if (!media_record_start(ctrl.session, target, bridge_ep)) {
+            bool listen = (ctrl.flags & LARK_REC_TARGET_LISTEN) != 0;
+            if (!media_record_start(ctrl.session, target, bridge_ep, listen)) {
                 enqueue_session((input_t){
                     .kind = REJECT_RECORD,
                     .session = session,

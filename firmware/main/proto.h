@@ -123,6 +123,7 @@ enum {
     LARK_REC_START = 1,
     LARK_REC_CANCEL = 2,
     LARK_REC_TARGET_INTERCOM = 1u << 0,
+    LARK_REC_TARGET_LISTEN = 1u << 6,
     LARK_REC_TARGET_BRIDGE_EP = 1u << 7,
 };
 

@@ -28,6 +28,7 @@ typedef struct {
     uint8_t target;
     audio_tone_t tone;
     bool bridge_endpoint;
+    bool listen;
 } job_t;
 
 static QueueHandle_t jobs;
@@ -87,7 +88,7 @@ void media_link_lost(void)
     media_interrupt();
 }
 
-bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoint)
+bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoint, bool listen)
 {
     if (!jobs) return false;
     job_t job = {
@@ -96,6 +97,7 @@ bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoi
         .rec_session = rec_session,
         .target = target,
         .bridge_endpoint = bridge_endpoint,
+        .listen = listen,
     };
     xSemaphoreTake(lock, portMAX_DELAY);
     bool accepted = !recording && submit(&job);
@@ -203,9 +205,11 @@ static void record(job_t *job)
     bool started = !atomic_load(&cancel_recording) && net_client_rec_start(job->session, job->rec_session, job->target);
     bool cancelled = true;
     if (started) {
-        audio_tone(AUDIO_START_TONE, capture_cancelled, NULL);
+        if (!job->listen) {
+            audio_tone(AUDIO_START_TONE, capture_cancelled, NULL);
+        }
         if (!capture_cancelled(NULL)) {
-            esp_err_t err = audio_record_stream(job->bridge_endpoint, stop_capture, upload_pcm, job);
+            esp_err_t err = audio_record_stream(job->bridge_endpoint, job->listen, stop_capture, upload_pcm, job);
             cancelled = err != ESP_OK || capture_cancelled(NULL);
         }
     }

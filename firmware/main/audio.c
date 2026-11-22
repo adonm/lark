@@ -14,6 +14,7 @@
 
 enum {
     CHANNELS = 2, FRAMES = AUDIO_10MS, MAX_FRAMES = AUDIO_RATE * AUDIO_MAX_SECONDS,
+    LISTEN_MAX_FRAMES = AUDIO_RATE * AUDIO_LISTEN_MAX_SECONDS,
     FADE = AUDIO_RATE / 200, DMA_TAIL = 6 * 240, CHIME_FRAMES = AUDIO_RATE / 10,
 };
 
@@ -199,15 +200,16 @@ void audio_tone(audio_tone_t tone, bool (*stop_requested)(const void *), const v
     }
 }
 
-esp_err_t audio_record_stream(bool bridge_endpoint, bool (*stop_requested)(void), audio_capture_sink_t sink, void *ctx)
+esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, bool (*stop_requested)(void), audio_capture_sink_t sink, void *ctx)
 {
     _Static_assert(AUDIO_RECORD_CHUNK_SAMPLES % FRAMES == 0, "Chunk must contain whole VAD frames");
     int16_t mono[FRAMES];
     ESP_RETURN_ON_ERROR(audio_drain_input(), TAG, "Prepare recording");
 
     size_t samples = 0, pending = 0;
+    size_t max_frames = listen ? LISTEN_MAX_FRAMES : MAX_FRAMES;
     vad_t vad = { 0 };
-    while (samples < MAX_FRAMES && !stop_requested()) {
+    while (samples < max_frames && !stop_requested()) {
         ESP_RETURN_ON_ERROR(audio_read_10ms(mono), TAG, "Read mic");
         // Both BSPs leave ES7210 mic selection at MIC1 and MIC2 (two Philips slots, not TDM).
         uint64_t sum = 0;
@@ -216,8 +218,9 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool (*stop_requested)(void)
             recording[pending++] = sample;
             sum += sample * sample;
         }
-        vad_result_t result = bridge_endpoint ? (vad_bridge_watchdog(&vad, sum / FRAMES) ? VAD_SEND : VAD_CONTINUE)
-                                              : vad_update(&vad, sum / FRAMES);
+        vad_result_t result = listen ? VAD_CONTINUE
+                                     : bridge_endpoint ? (vad_bridge_watchdog(&vad, sum / FRAMES) ? VAD_SEND : VAD_CONTINUE)
+                                                       : vad_update(&vad, sum / FRAMES);
         if (result == VAD_NO_SPEECH && !stop_requested()) {
             return ESP_ERR_NOT_FOUND;
         }
