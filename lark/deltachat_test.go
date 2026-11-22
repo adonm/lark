@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 )
@@ -406,4 +407,209 @@ func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 	}
 	stub.mu.Unlock()
 	_ = httptest.NewServer
+}
+
+func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
+	b, base, stub := dcTestHarness(t)
+	var spoken []string
+	var spokenMu sync.Mutex
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				spokenMu.Lock()
+				spoken = append(spoken, req.voice+":"+req.text)
+				spokenMu.Unlock()
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev1 := testConnectWS(t, base, "unit", false)
+	dev1.hello(t, "box3-0001", "greg")
+	dev2 := testConnectWS(t, base, "unit", false)
+	dev2.hello(t, "vocat-0002", "greg")
+	patchControl(t, base, "greg", object{"sleep": true})
+
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "Dinner's ready", ViewType: deltachat.ViewtypeText}
+	stub.mu.Unlock()
+
+	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
+
+	for _, dev := range []*testWS{dev1, dev2} {
+		dev.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
+		})
+		dev.until(t, func(f wsFrame) bool {
+			p := framePayload(f)
+			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
+		})
+	}
+	waitSVG(t, b.ws, "box3-0001", "From Mum")
+	waitSVG(t, b.ws, "vocat-0002", "From Mum")
+
+	spokenMu.Lock()
+	gotSpoken := slices.Clone(spoken)
+	spokenMu.Unlock()
+	wantSpeech := b.voiceFor("greg") + ":Message from Mum: Dinner's ready"
+	if len(gotSpoken) != 1 || gotSpoken[0] != wantSpeech {
+		t.Fatalf("spoken = %v, want [%q] (remote reply must not be spoken aloud)", gotSpoken, wantSpeech)
+	}
+	stub.mu.Lock()
+	if len(stub.sent) != 1 || stub.sent[0].chatID != 200 || *stub.sent[0].data.Text != "Hello Alice!" {
+		t.Fatalf("unexpected DC reply: %+v", stub.sent)
+	}
+	stub.mu.Unlock()
+}
+
+func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
+	b, base, stub := dcTestHarness(t)
+	ttsCh := make(chan string, 4)
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				ttsCh <- req.text
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-0003", "greg")
+
+	b.ws.mu.Lock()
+	term := b.ws.terminals["box3-0003"]
+	b.ws.mu.Unlock()
+
+	turnDone := make(chan struct{})
+	b.ws.startTurn(term, time.Now(), false, "voice", func(_ context.Context, id uint64) {
+		defer close(turnDone)
+		stub.mu.Lock()
+		stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+		stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+		stub.msgs[greg.DCAccountID][2] = deltachat.Message{Id: 2, ChatId: 200, FromId: 10, Text: "Bedtime soon", ViewType: deltachat.ViewtypeText}
+		stub.mu.Unlock()
+
+		b.dc.handleMessage(t.Context(), greg.DCAccountID, 2)
+		select {
+		case got := <-ttsCh:
+			t.Fatalf("TTS started during active voice turn: %q", got)
+		default:
+		}
+		b.ws.finishTurn(term, id, nil, nil)
+	})
+	<-turnDone
+
+	select {
+	case got := <-ttsCh:
+		if got != "Message from Mum: Bedtime soon" {
+			t.Fatalf("queued TTS = %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued DC message did not speak after voice turn ended")
+	}
+	waitSVG(t, b.ws, "box3-0003", "Bedtime soon")
+}
+
+func TestEmitSaySpeaksOnTerminal(t *testing.T) {
+	b, base, _ := dcTestHarness(t)
+	ttsCh := make(chan string, 4)
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				ttsCh <- req.text
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"}); err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-0004", "greg")
+
+	out := toolTest(t, base, "emit", object{"to": "greg", "say": "Dinner is ready!"}, false)
+	if out["said"] != true {
+		t.Fatalf("emit say = %+v", out)
+	}
+	select {
+	case got := <-ttsCh:
+		if got != "Dinner is ready!" {
+			t.Fatalf("emit say TTS = %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("emit say did not trigger TTS")
+	}
+}
+
+func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
+	b, base, stub := dcTestHarness(t)
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.mu.Unlock()
+
+	dev := testConnectWS(t, base, "unit", false)
+	dev.hello(t, "box3-0005", "greg")
+
+	b.ws.mu.Lock()
+	term := b.ws.terminals["box3-0005"]
+	b.ws.mu.Unlock()
+
+	done := make(chan struct{})
+	b.ws.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
+		defer close(done)
+		b.ws.runTurn(ctx, term, id, "tell Mum OK", "voice", nil)
+	})
+	<-done
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.sent) != 1 || stub.sent[0].accID != greg.DCAccountID || *stub.sent[0].data.Text != "OK" {
+		t.Fatalf("tell Mum OK did not send DC message: %+v", stub.sent)
+	}
+	waitSVG(t, b.ws, "box3-0005", "Sent to Mum!")
 }

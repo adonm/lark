@@ -205,8 +205,8 @@ var mcpTools = func() []object {
 				"template": enum(templateNames()...), "data": appTemplateSchema(""),
 				"save_current": schema(object{"name": text, "title": text}, "name"),
 				"load":         text, "save_as": text, "delete_saved": text, "initial_state": jsonObject, "state_patch": jsonObject, "tick_ms": number, "max_ticks": number, "exit": flag})),
-		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), or play notes/effects on terminals.",
-			schema(object{"to": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
+		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), speak aloud on a companion's terminals (say), or play notes/effects on terminals.",
+			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
 	}
 }()
@@ -373,6 +373,23 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 		out["intercom"] = r
 		receipts = append(receipts, delivered...)
 	}
+	if raw, ok := args["say"]; ok {
+		sayText, err := spokenText(str(raw))
+		if err != nil {
+			return nil, err
+		}
+		delivered, err := b.emitSay(ctx, to, sayText, kind)
+		if err != nil {
+			return nil, err
+		}
+		receipts = append(receipts, delivered...)
+		out["said"] = slices.ContainsFunc(delivered, func(receipt object) bool { return receipt["status"] == "queued" })
+		if audioField == "chime" || audioField == "sfx" {
+			// Chime/sfx was already delivered alongside speech.
+			audioField = ""
+			out["played"] = out["said"]
+		}
+	}
 	if audioField != "" {
 		delivered, err := b.emitSignal(to, audioField, kind, pcm)
 		if err != nil {
@@ -495,6 +512,39 @@ func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
 		return nil, "not_connected"
 	}
 	return d, ""
+}
+
+func (b *larkServer) emitSay(ctx context.Context, id, text, chime string) ([]object, error) {
+	if b.ws == nil {
+		return nil, problem(503, "Terminal hub unavailable")
+	}
+	ids := []string{id}
+	if id == "all" {
+		list, err := b.peerSnapshot("")
+		if err != nil {
+			return nil, err
+		}
+		ids = make([]string, 0, len(list))
+		for _, p := range list {
+			ids = append(ids, p.ID)
+		}
+	}
+	receipts := make([]object, 0, len(ids))
+	for _, cid := range ids {
+		delivered := b.ws.deliverNotice(ctx, terminalNotice{
+			recipientIDs: []string{cid},
+			speakText:    text,
+			voice:        b.voiceFor(cid),
+			chime:        chime,
+			showCard:     false,
+		})
+		if len(delivered) == 0 {
+			receipts = append(receipts, deliveryReceipt("say", cid, "not_connected"))
+		} else {
+			receipts = append(receipts, deliveryReceipt("say", cid, ""))
+		}
+	}
+	return receipts, nil
 }
 
 func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, error) {

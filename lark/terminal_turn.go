@@ -22,6 +22,10 @@ func recordTarget(s string) (string, bool) {
 	return s, s == "" || targetRE.MatchString(s)
 }
 
+func (d *wsTerminal) noticeBusy() bool {
+	return d.busy || d.recording.active() || d.queuedVoice != nil || d.stopAudio != nil || d.awaitAck
+}
+
 func (h *wsHub) bridgeEndpoint(d *wsTerminal) bool {
 	return h.b.endpoint != nil && d.caps.BridgeEndpoint
 }
@@ -174,7 +178,9 @@ func (h *wsHub) endRecording(d *wsTerminal, reqTarget string, cancelled bool, no
 		}
 		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
 		h.wake(d, now)
-		h.render(d, now, false)
+		if !h.maybeStartNoticeLocked(d, now) {
+			h.render(d, now, false)
+		}
 		return
 	}
 	d.measureAmbient(pcm)
@@ -299,6 +305,10 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 		} else if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
 			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
 		}
+	}
+	if h.maybeStartNoticeLocked(d, now) {
+		d.trace = nil
+		return
 	}
 	h.render(d, now, false)
 	d.trace = nil
@@ -526,7 +536,10 @@ func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace,
 			d.cancel()
 			d.cancel = nil
 		}
-		h.maybeStartVoice(d, time.Now())
+		now := time.Now()
+		if !h.maybeStartVoice(d, now) {
+			h.maybeStartNoticeLocked(d, now)
+		}
 	}()
 	return ctx
 }
@@ -677,7 +690,7 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time) {
 			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
 		}
 	}
-	if !h.maybeStartVoice(d, now) {
+	if !h.maybeStartVoice(d, now) && !h.maybeStartNoticeLocked(d, now) {
 		h.render(d, now, false)
 	}
 }
@@ -706,72 +719,176 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 	return connected
 }
 
+type queuedNotice struct {
+	view   *sceneView
+	chime  string
+	voice  string
+	intro  string
+	text   string
+	stream *AudioStream
+	trace  *turnTrace
+}
+
+type terminalNotice struct {
+	recipientIDs []string
+	sender       companionState
+	text         string
+	speakText    string
+	intro        string
+	voice        string
+	pcm          []byte
+	chime        string
+	showCard     bool
+	trace        *turnTrace
+}
+
 func (h *wsHub) deliverOnline(ctx context.Context, sender companionState, recipients []companionTarget, voice, text string, pcm []byte) []wsReceipt {
-	h.mu.Lock()
-	var connected []*wsTerminal
+	ids := make([]string, 0, len(recipients))
 	for _, p := range recipients {
-		if d := h.voiceOwner(p.ID); d != nil {
-			connected = append(connected, d)
-		}
+		ids = append(ids, p.ID)
 	}
-	h.mu.Unlock()
-	if len(connected) == 0 || len(pcm) > maxPeerPCM {
+	intro := "Message from " + sender.Name + "!"
+	if pcm != nil {
+		intro = "From " + sender.Name + "!"
+	}
+	return h.deliverNotice(ctx, terminalNotice{
+		recipientIDs: ids,
+		sender:       sender,
+		text:         text,
+		speakText:    text,
+		intro:        intro,
+		voice:        voice,
+		pcm:          pcm,
+		chime:        "intercom",
+		showCard:     true,
+		trace:        traceFrom(ctx),
+	})
+}
+
+func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt {
+	if h == nil || h.b == nil || len(n.recipientIDs) == 0 || len(n.pcm) > maxPeerPCM {
 		return nil
 	}
-	text = shortText(text, maxMessage, true)
-	stream := newAudioStream()
-	if pcm != nil {
-		intro := h.b.clips.peek(voice, "From "+sender.Name+"!")
-		if len(intro)+len(pcm) <= maxPeerPCM && intro != nil {
-			stream.append(intro)
-		}
-		stream.append(NormalizeVoicePCM(pcm))
-		stream.finish(nil)
+	text := shortText(n.text, maxMessage, true)
+	speakText := shortText(n.speakText, maxMessage, true)
+	var view *sceneView
+	if n.showCard {
+		v := (intercomCard{n.sender, text}).scene()
+		view = &v
 	}
-	receipts := make([]wsReceipt, 0, len(connected))
+	var pcmStream *AudioStream
+	if n.pcm != nil {
+		pcmStream = newAudioStream()
+		if n.intro != "" {
+			if intro := h.b.clips.peek(n.voice, n.intro); intro != nil && len(intro)+len(n.pcm) <= maxPeerPCM {
+				pcmStream.append(intro)
+			}
+		}
+		pcmStream.append(NormalizeVoicePCM(n.pcm))
+		pcmStream.finish(nil)
+	}
+
 	h.mu.Lock()
-	now := time.Now()
 	if ctx.Err() != nil {
 		h.mu.Unlock()
 		return nil
 	}
-	for _, d := range connected {
-		if !h.active(d) {
-			continue
-		}
-		view := (intercomCard{sender, text}).scene()
-		h.cancelTurn(d, "intercom")
-		h.stopPlayback(d, true)
-		if d.recording.active() {
-			h.pushRecStop(d, d.recording.target, false)
-			d.recording.clear()
-		}
-		d.drawer, d.pending = "", nil
-		if d.app != nil {
-			d.card = &view
-		} else {
-			d.view, d.card = &view, nil
-		}
-		h.wake(d, now)
-		h.render(d, now, false)
-		h.pushChime(d, "intercom")
-		if d.client.ctx.Err() == nil {
-			receipts = append(receipts, wsReceipt{d, &view})
-			if pcm != nil {
-				h.playTraced(d, stream, traceFrom(ctx), time.Time{})
-			} else {
-				h.play(d, stream)
+	now := time.Now()
+	var targets []*wsTerminal
+	seen := make(map[*wsTerminal]bool)
+	for _, id := range n.recipientIDs {
+		for _, d := range h.terminalsFor(id) {
+			if h.active(d) && !seen[d] {
+				seen[d] = true
+				targets = append(targets, d)
 			}
 		}
 	}
+	if len(targets) == 0 {
+		h.mu.Unlock()
+		return nil
+	}
+	var immediateStream *AudioStream
+	if pcmStream == nil && (speakText != "" || n.intro != "") {
+		immediateStream = newAudioStream()
+	}
+	receipts := make([]wsReceipt, 0, len(targets))
+	startedImmediate := false
+	for _, d := range targets {
+		stream := pcmStream
+		if stream == nil {
+			stream = immediateStream
+		}
+		q := queuedNotice{
+			view:   view,
+			chime:  n.chime,
+			voice:  n.voice,
+			intro:  n.intro,
+			text:   speakText,
+			stream: stream,
+			trace:  n.trace,
+		}
+		if d.noticeBusy() {
+			// Queued notices synthesize their own stream when drained so they don't race or expire.
+			if pcmStream == nil {
+				q.stream = nil
+			}
+			d.queuedNotices = append(d.queuedNotices, q)
+		} else {
+			h.deliverNoticeNowLocked(d, now, q)
+			if stream == immediateStream && immediateStream != nil {
+				startedImmediate = true
+			}
+		}
+		receipts = append(receipts, wsReceipt{d, view})
+	}
 	h.mu.Unlock()
-	if pcm == nil && len(receipts) > 0 {
-		go h.speakIntercom(stream, sender, voice, text)
+	if startedImmediate {
+		go h.speakNotice(immediateStream, n.voice, n.intro, speakText)
 	}
 	return receipts
 }
 
-func (h *wsHub) speakIntercom(stream *AudioStream, sender companionState, voice, text string) {
+func (h *wsHub) deliverNoticeNowLocked(d *wsTerminal, now time.Time, q queuedNotice) {
+	d.drawer, d.pending = "", nil
+	if q.view != nil {
+		if d.app != nil {
+			d.card = q.view
+		} else {
+			d.view, d.card = q.view, nil
+		}
+	}
+	h.wake(d, now)
+	h.render(d, now, false)
+	if q.chime != "" {
+		h.pushChime(d, q.chime)
+	}
+	if q.stream != nil && d.client.ctx.Err() == nil {
+		if q.trace != nil {
+			h.playTraced(d, q.stream, q.trace, time.Time{})
+		} else {
+			h.play(d, q.stream)
+		}
+	}
+}
+
+func (h *wsHub) maybeStartNoticeLocked(d *wsTerminal, now time.Time) bool {
+	if len(d.queuedNotices) == 0 || d.noticeBusy() || !h.active(d) {
+		return false
+	}
+	q := d.queuedNotices[0]
+	d.queuedNotices = d.queuedNotices[1:]
+	if q.stream == nil && (q.text != "" || q.intro != "") {
+		q.stream = newAudioStream()
+		h.deliverNoticeNowLocked(d, now, q)
+		go h.speakNotice(q.stream, q.voice, q.intro, q.text)
+		return true
+	}
+	h.deliverNoticeNowLocked(d, now, q)
+	return true
+}
+
+func (h *wsHub) speakNotice(stream *AudioStream, voice, introText, text string) {
 	w := h.b.worker
 	if w == nil || !w.ready.Load() {
 		stream.finish(nil) // The card is still delivered when TTS is unavailable.
@@ -779,9 +896,10 @@ func (h *wsHub) speakIntercom(stream *AudioStream, sender companionState, voice,
 	}
 	ctx, cancel := context.WithTimeout(h.b.root, ttsWait)
 	defer cancel()
-	intro, _ := h.b.clips.get(ctx, w, voice, "Message from "+sender.Name+"!")
-	if len(intro) > 0 {
-		stream.append(intro)
+	if introText != "" {
+		if intro, _ := h.b.clips.get(ctx, w, voice, introText); len(intro) > 0 {
+			stream.append(intro)
+		}
 	}
 	for _, s := range SplitSentences(text) {
 		pcm, err := w.synthesize(ctx, voice, s)

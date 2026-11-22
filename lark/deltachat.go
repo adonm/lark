@@ -687,9 +687,19 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 
 	s.b.chat(companionID, newChat("user", senderName, text, "deltachat"), true)
 	if s.b.ws != nil {
-		s.b.ws.mu.Lock()
-		s.b.ws.setCompanionStatus(companionID, statusThinking, 0, promptNone, "")
-		s.b.ws.mu.Unlock()
+		cardSender := blankCompanion()
+		cardSender.ID = senderName
+		cardSender.Name = senderName
+		s.b.ws.deliverNotice(ctx, terminalNotice{
+			recipientIDs: []string{companionID},
+			sender:       cardSender,
+			text:         text,
+			speakText:    "Message from " + senderName + ": " + text,
+			voice:        s.b.voiceFor(companionID),
+			chime:        "intercom",
+			showCard:     true,
+			trace:        traceFrom(turnCtx),
+		})
 	}
 
 	prompt := fmt.Sprintf("[%s (%s) · deltachat · from %s · now: %s]\n%s", who.Name, companionID, senderName, formatLocalTimeIn(time.Now(), s.b.location()), text)
@@ -697,11 +707,6 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		return who.Name, prompt
 	}, turnStream{}, "deltachat", nil, nil)
 	if err != nil {
-		if s.b.ws != nil {
-			s.b.ws.mu.Lock()
-			s.b.ws.setCompanionStatus(companionID, statusError, 0, promptNone, "Could not reply")
-			s.b.ws.mu.Unlock()
-		}
 		return
 	}
 	reply := strings.TrimSpace(fenced.ReplaceAllString(raw, ""))
@@ -709,20 +714,6 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		reply = "Done."
 	}
 	s.b.chat(companionID, newChat("companion", who.Name, reply, "deltachat"), true)
-
-	if s.b.ws != nil {
-		s.b.ws.mu.Lock()
-		s.b.ws.setCompanionStatus(companionID, statusIdle, 0, promptNone, "")
-		view := noticeScene(senderName, shortText(reply, maxMessage, true))
-		now := time.Now()
-		for _, d := range s.b.ws.terminalsFor(companionID) {
-			if !d.busy && !d.recording.active() && !d.asleep {
-				d.card = &view
-				s.b.ws.render(d, now, false)
-			}
-		}
-		s.b.ws.mu.Unlock()
-	}
 
 	outMsg := deltachat.MessageData{Text: &reply}
 	var opusPath string
@@ -773,36 +764,22 @@ func (h *wsHub) deliverDCIntercom(ctx context.Context, sender companionState, re
 	if h == nil || h.b == nil {
 		return
 	}
-	if len(pcm) == 0 && text != "" && h.b.worker != nil && h.b.worker.ready.Load() {
-		if clean, err := spokenText(text); err == nil {
-			pcm, _ = h.b.worker.synthesize(ctx, h.b.voiceFor(sender.ID), clean)
-		}
+	intro := "Message from " + sender.Name + "!"
+	if pcm != nil {
+		intro = "From " + sender.Name + "!"
 	}
-	h.mu.Lock()
-	d := h.voiceOwner(recipientID)
-	if d == nil || !h.active(d) {
-		h.mu.Unlock()
-		return
-	}
-	view := (intercomCard{sender, text}).scene()
-	h.cancelTurn(d, "intercom")
-	h.stopPlayback(d, true)
-	if d.recording.active() {
-		h.pushRecStop(d, d.recording.target, false)
-		d.recording.clear()
-	}
-	now := time.Now()
-	d.drawer, d.card, d.pending = "", &view, nil
-	h.wake(d, now)
-	h.chime(d, "intercom")
-	h.render(d, now, false)
-	if len(pcm) > 0 {
-		stream := newAudioStream()
-		stream.append(NormalizeVoicePCM(pcm))
-		stream.finish(nil)
-		h.play(d, stream)
-	}
-	h.mu.Unlock()
+	h.deliverNotice(ctx, terminalNotice{
+		recipientIDs: []string{recipientID},
+		sender:       sender,
+		text:         text,
+		speakText:    text,
+		intro:        intro,
+		voice:        h.b.voiceFor(sender.ID),
+		pcm:          pcm,
+		chime:        "intercom",
+		showCard:     true,
+		trace:        traceFrom(ctx),
+	})
 	if text != "" {
 		h.b.chat(recipientID, newChat("intercom", sender.Name, text, "intercom"), true)
 	}

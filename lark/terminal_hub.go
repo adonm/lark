@@ -109,6 +109,7 @@ type wsTerminal struct {
 	recording     deviceCapture
 	recSession    uint16
 	queuedVoice   *endpointCapture
+	queuedNotices []queuedNotice
 	turn          uint64
 	trace         *turnTrace
 	cancel        context.CancelFunc
