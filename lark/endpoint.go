@@ -15,20 +15,23 @@ import (
 )
 
 const (
-	endpointFrame       = 20 * time.Millisecond
-	endpointBytes       = sampleRate / 50 * 2
-	endpointLimit       = 60 * time.Second
-	endpointIdle        = 6 * time.Second
-	endpointQuiet       = 400 * time.Millisecond
-	endpointCap         = 1200 * time.Millisecond
-	endpointProbeEvery  = 250 * time.Millisecond
-	endpointProbeWindow = 8 * sampleRate * 2 // last <= 8 s
-	vadTail             = 320 * time.Millisecond
-	speechEnergyRatio   = 0.20
+	endpointFrame = 20 * time.Millisecond
+	endpointBytes = sampleRate / 50 * 2
+	endpointLimit = 60 * time.Second
+	endpointIdle  = 6 * time.Second
+	endpointQuiet = 400 * time.Millisecond
+	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
+	// call overlaps the remaining quiet window instead of racing the commit.
+	endpointSpecQuiet           = 250 * time.Millisecond
+	endpointCap                 = 1200 * time.Millisecond
+	endpointProbeEvery          = 250 * time.Millisecond
+	endpointProbeWindow         = 8 * sampleRate * 2 // last <= 8 s
+	vadTail                     = 320 * time.Millisecond
+	speechEnergyRatio           = 0.20
 	smartTurnThreshold          = float32(0.90)
 	smartTurnSpeculateThreshold = float32(0.40)
-	sileroModel         = "silero_vad_v5.onnx"
-	sileroSHA256        = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
+	sileroModel                 = "silero_vad_v5.onnx"
+	sileroSHA256                = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
 )
 
 // The native model is configured locally; do not download anything at startup.

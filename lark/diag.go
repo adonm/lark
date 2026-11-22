@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,6 +37,7 @@ const (
 	diagSTTQueue
 	diagSTTRun
 	diagResample
+	diagSpecFirst
 	diagMetricCount
 )
 
@@ -46,6 +48,7 @@ var diagMetricNames = [diagMetricCount]string{
 	"speech_end_to_commit_ms",
 	"prompt_prep_ms", "prompt_submit_ms",
 	"vad_queue_ms", "stt_queue_ms", "stt_run_ms", "resample_ms",
+	"spec_first_ms",
 }
 
 const diagInterval = 2 * time.Second
@@ -138,6 +141,24 @@ type diagnostics struct {
 	turns   diagRing[*diagTurn]
 	system  diagSystem
 	refresh diagSchemaRefresh
+	spec    diagSpec
+}
+
+// Speculation counters are cumulative because the bench and QA suites need an
+// abort rate even when debug logging is off.
+type diagSpec struct {
+	started, hit, abortWords, abortSpeech, abortMismatch, abortOther atomic.Int64
+	overlapMS                                                        atomic.Int64 // commits: summed spec lead time
+}
+
+type diagSpecReport struct {
+	Started       int64   `json:"started"`
+	Hit           int64   `json:"hit"`
+	AbortWords    int64   `json:"abort_words"`
+	AbortSpeech   int64   `json:"abort_speech"`
+	AbortMismatch int64   `json:"abort_mismatch"`
+	AbortOther    int64   `json:"abort_other"`
+	OverlapAvgMS  float64 `json:"overlap_avg_ms"`
 }
 
 type turnTrace struct {
@@ -190,6 +211,15 @@ func (t *turnTrace) measure(metric diagMetric, elapsed time.Duration) {
 	}
 	t.d.mu.Unlock()
 	t.d.sig.notify()
+}
+
+// specFirst records time-to-first-sentence for a speculative call. It is not
+// part of a turn trace because the call starts before the turn commits.
+func (d *diagnostics) specFirst(elapsed time.Duration) {
+	d.mu.Lock()
+	d.metrics[diagSpecFirst].add(milliseconds(elapsed), 32)
+	d.mu.Unlock()
+	d.sig.notify()
 }
 
 func (t *turnTrace) audioEnqueued(at time.Time) {
@@ -276,12 +306,13 @@ type diagSystem struct {
 }
 
 type diagReport struct {
-	Generated time.Time              `json:"generated_at"`
-	Latency   map[string]diagSummary `json:"latency"`
-	Turns     []diagTurn             `json:"recent_turns"`
-	Terminals []diagTerminal         `json:"terminals"`
-	SVGCache  diagCache              `json:"svg_cache"`
-	Refresh   diagSchemaRefresh      `json:"mcp_contract_refresh"`
+	Generated   time.Time              `json:"generated_at"`
+	Latency     map[string]diagSummary `json:"latency"`
+	Turns       []diagTurn             `json:"recent_turns"`
+	Terminals   []diagTerminal         `json:"terminals"`
+	SVGCache    diagCache              `json:"svg_cache"`
+	Refresh     diagSchemaRefresh      `json:"mcp_contract_refresh"`
+	Speculation diagSpecReport         `json:"speculation"`
 	diagSystem
 }
 
@@ -295,6 +326,17 @@ func (b *larkServer) diagnosticReport() diagReport {
 	b.diag.mu.Lock()
 	out.diagSystem = b.diag.system
 	out.Refresh = b.diag.refresh
+	out.Speculation = diagSpecReport{
+		Started:       b.diag.spec.started.Load(),
+		Hit:           b.diag.spec.hit.Load(),
+		AbortWords:    b.diag.spec.abortWords.Load(),
+		AbortSpeech:   b.diag.spec.abortSpeech.Load(),
+		AbortMismatch: b.diag.spec.abortMismatch.Load(),
+		AbortOther:    b.diag.spec.abortOther.Load(),
+	}
+	if hits := b.diag.spec.hit.Load(); hits > 0 {
+		out.Speculation.OverlapAvgMS = float64(b.diag.spec.overlapMS.Load()) / float64(hits)
+	}
 	if out.Refresh.State == "" {
 		out.Refresh.State = "not_started"
 	}
