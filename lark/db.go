@@ -37,7 +37,7 @@ func sqliteDSN(path string, writer bool) string {
 
 var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '', listen_seconds INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS terminals (id TEXT PRIMARY KEY, kind TEXT NOT NULL, companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL, ip TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
 	`CREATE TABLE IF NOT EXISTS sessions (companion_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,

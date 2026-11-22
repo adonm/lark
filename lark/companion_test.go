@@ -164,3 +164,32 @@ func TestCompanionFormAndPortraitPrompt(t *testing.T) {
 		t.Fatalf("portraitPrompt missing form: %s", prompt)
 	}
 }
+
+func TestCompanionListenSeconds(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
+		"name": "Greg",
+		"form": "an old chameleon",
+	}, 201))
+	id := str(created["id"])
+	me := stateMe(t, base, id)
+	if got := me["companion"].(object)["listen_seconds"]; got != json.Number("0") {
+		t.Fatalf("default listen_seconds = %v, want 0", got)
+	}
+	res := toolTest(t, base, "patch", object{
+		"companion_id": id,
+		"companion":    object{"listen_seconds": 60},
+	}, false)
+	if got := res["companion"].(object)["listen_seconds"]; got != json.Number("60") {
+		t.Fatalf("patched listen_seconds = %v, want 60", got)
+	}
+	me = stateMe(t, base, id)
+	if got := me["companion"].(object)["listen_seconds"]; got != json.Number("60") {
+		t.Fatalf("state me.companion.listen_seconds = %v, want 60", got)
+	}
+	for _, bad := range []any{-1, 301, 12.5, "60"} {
+		if _, err := updateCompanion(b.companionFor(id), object{"listen_seconds": bad}, b.voices); err == nil {
+			t.Fatalf("expected error for listen_seconds=%v", bad)
+		}
+	}
+}

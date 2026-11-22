@@ -151,15 +151,16 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 		}
 		if strings.EqualFold(c.ID, id) {
 			compObj := object{
-				"id":          c.ID,
-				"name":        c.Name,
-				"configured":  c.Configured,
-				"personality": c.Personality,
-				"form":        c.Form,
-				"voice":       entry["voice"],
-				"portrait_id": c.PortraitID,
-				"online":      entry["online"],
-				"dormant":     entry["dormant"],
+				"id":             c.ID,
+				"name":           c.Name,
+				"configured":     c.Configured,
+				"personality":    c.Personality,
+				"form":           c.Form,
+				"voice":          entry["voice"],
+				"portrait_id":    c.PortraitID,
+				"listen_seconds": c.ListenSeconds,
+				"online":         entry["online"],
+				"dormant":        entry["dormant"],
 			}
 			var activeApp any
 			termList := []object{}

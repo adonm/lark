@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -23,10 +24,11 @@ type companionLook struct {
 type companionState struct {
 	ID string `json:"id,omitempty"`
 	companionLook
-	Voice       string `json:"voice"`
-	PortraitID  string `json:"portrait_id,omitempty"`
-	UpdatedAt   int64  `json:"updated_at,omitempty"`
-	DCAccountID uint32 `json:"dc_account_id,omitempty"`
+	Voice         string `json:"voice"`
+	PortraitID    string `json:"portrait_id,omitempty"`
+	UpdatedAt     int64  `json:"updated_at,omitempty"`
+	DCAccountID   uint32 `json:"dc_account_id,omitempty"`
+	ListenSeconds int    `json:"listen_seconds"`
 }
 
 func blankCompanion() companionState {
@@ -46,12 +48,12 @@ func validCompanionID(id string) bool {
 	return len(id) >= 1 && len(id) <= 64 && companionSlugRE.MatchString(id)
 }
 
-const companionColumns = `id,name,configured,personality,voice,updated_at,dc_account_id,form,portrait_id`
+const companionColumns = `id,name,configured,personality,voice,updated_at,dc_account_id,form,portrait_id,listen_seconds`
 
 func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured int
-	err := row.Scan(&c.ID, &c.Name, &configured, &c.Personality, &c.Voice, &c.UpdatedAt, &c.DCAccountID, &c.Form, &c.PortraitID)
+	err := row.Scan(&c.ID, &c.Name, &configured, &c.Personality, &c.Voice, &c.UpdatedAt, &c.DCAccountID, &c.Form, &c.PortraitID, &c.ListenSeconds)
 	c.Configured = configured != 0
 	c.Voice = storedVoice(c.Voice)
 	return c, err
@@ -59,13 +61,13 @@ func readCompanionRow(row rowScanner) (companionState, error) {
 
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
 	id = strings.ToLower(id)
-	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?)
+	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,
 		personality=excluded.personality,voice=excluded.voice,
 		updated_at=max(companions.updated_at+1,excluded.updated_at),
 		dc_account_id=CASE WHEN excluded.dc_account_id>0 THEN excluded.dc_account_id ELSE companions.dc_account_id END,
-		form=excluded.form,portrait_id=excluded.portrait_id`,
-		id, c.Name, c.Configured, c.Personality, c.Voice, time.Now().UnixMilli(), c.DCAccountID, c.Form, c.PortraitID)
+		form=excluded.form,portrait_id=excluded.portrait_id,listen_seconds=excluded.listen_seconds`,
+		id, c.Name, c.Configured, c.Personality, c.Voice, time.Now().UnixMilli(), c.DCAccountID, c.Form, c.PortraitID, c.ListenSeconds)
 	return err
 }
 
@@ -165,16 +167,17 @@ func (b *larkServer) companionEntry(c companionState, full bool) object {
 		termEntries = append(termEntries, te)
 	}
 	entry := object{
-		"id":          c.ID,
-		"name":        c.Name,
-		"configured":  c.Configured,
-		"personality": c.Personality,
-		"form":        c.Form,
-		"voice":       voice,
-		"online":      online,
-		"dormant":     len(termEntries) == 0,
-		"terminals":   termEntries,
-		"updated_at":  c.UpdatedAt,
+		"id":             c.ID,
+		"name":           c.Name,
+		"configured":     c.Configured,
+		"personality":    c.Personality,
+		"form":           c.Form,
+		"voice":          voice,
+		"listen_seconds": c.ListenSeconds,
+		"online":         online,
+		"dormant":        len(termEntries) == 0,
+		"terminals":      termEntries,
+		"updated_at":     c.UpdatedAt,
 	}
 	if c.PortraitID != "" {
 		entry["portrait_id"] = c.PortraitID
@@ -231,6 +234,12 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 				return c, problem(400, "Unsupported voice")
 			}
 			c.Voice = str(val)
+		case "listen_seconds":
+			secs, ok := companionInt(val)
+			if !ok || secs < 0 || secs > 300 {
+				return c, problem(400, "Expected listen_seconds between 0 and 300")
+			}
+			c.ListenSeconds = secs
 		case "configured", "companion_id", "op", "id":
 		default:
 			return c, problem(400, "Unknown companion field "+key)
@@ -239,6 +248,28 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 	var err error
 	c.Configured, err = companionBool(args, "configured", c.Configured || editLook)
 	return c, err
+}
+
+func companionInt(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		if float64(int(v)) != v {
+			return 0, false
+		}
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 func companionBool(args object, key string, fallback bool) (bool, error) {
