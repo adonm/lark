@@ -429,9 +429,6 @@ func (h *wsHub) statsRows(d *wsTerminal) []menuRow {
 		rows = append(rows, menuRow{"Battery", fmt.Sprintf("%d%%%s", d.pct, ch)})
 	}
 	rows = append(rows, menuRow{"Voice", voiceName(d.voice)})
-	if h.b != nil && h.b.weather != nil {
-		rows = append(rows, menuRow{"Weather", h.b.weather.kind().String()})
-	}
 	return rows
 }
 

@@ -118,7 +118,7 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 			img  *image.RGBA
 		}{
 			{"home", renderPixelHome(spec, nil, nil, gradeDay, "listening", "")},
-			{"home-listen-win", renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, "listening", "", true)},
+			{"home-listen-win", renderPixelHomeListen(spec, nil, nil, gradeDay, "listening", "", true)},
 			{"home-hint", renderPixelHome(spec, nil, nil, gradeDay, "", "")},
 			{"home-caption", renderPixelHome(spec, nil, nil, gradeDay, "speaking", "Message from Mum: dinner's ready")},
 			{"menu", renderPixelMenu(spec, 0, th)},
@@ -251,13 +251,9 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		save(spec.name+"-home-listening",
 			renderPixelHome(spec, gregBG, poses[0], gradeDay, "listening", ""))
 		save(spec.name+"-home-listen-win",
-			renderPixelHomeListen(spec, gregBG, poses[0], gradeDay, weatherClear, "listening", "", true))
+			renderPixelHomeListen(spec, gregBG, poses[0], gradeDay, "listening", "", true))
 		save(spec.name+"-home-caption",
 			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", "Message from Mum: dinner's ready"))
-		save(spec.name+"-home-cloudy",
-			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherCloudy, "", ""))
-		save(spec.name+"-home-rain",
-			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherRain, "", ""))
 		save(spec.name+"-menu-p1", renderPixelMenu(spec, 0, th))
 		if spec.round {
 			save(spec.name+"-menu-p2", renderPixelMenu(spec, 1, th))

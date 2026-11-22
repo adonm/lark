@@ -229,12 +229,10 @@ settings = {
 }
 if not re.search(r"^LARK_CHATMAIL_RELAY=", old, re.M):
     settings["LARK_CHATMAIL_RELAY"] = "nine.testrun.org"
-if not re.search(r"^LARK_LOCATION=", old, re.M):
-    settings["LARK_LOCATION"] = "Perth, Australia"
 if sys.argv[2] != "false":
     settings["GGML_VK_VISIBLE_DEVICES"] = sys.argv[2]
 kept = [line for line in old.splitlines(keepends=True)
-        if line.strip().partition("=")[0].rstrip() not in settings.keys() | {"LARK_STT", "LARK_SILERO_VAD_MODEL", "LARK_OPENCODE_PAIR_PORT"}]
+        if line.strip().partition("=")[0].rstrip() not in settings.keys() | {"LARK_STT", "LARK_SILERO_VAD_MODEL", "LARK_OPENCODE_PAIR_PORT", "LARK_LOCATION"}]
 text = "".join(kept)
 if text and not text.endswith("\n"):
     text += "\n"

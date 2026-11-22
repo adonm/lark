@@ -633,7 +633,6 @@ type renderRequest struct {
 	app          *appInstance
 	screen       svgScreen
 	grade        gradeKey
-	weather      weatherKind
 	drawer       string
 	menuPage     int
 	autoVol      bool
@@ -713,15 +712,10 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	}
 	pose := h.companionPose(d, now, mood)
 	d.pose = pose
-	wx := weatherClear
-	if h.b != nil && h.b.weather != nil {
-		wx = h.b.weather.kind()
-	}
 	r := renderRequest{
 		full:         full || d.renderNext != nil && d.renderNext.full,
 		trace:        d.trace,
 		grade:        h.frameGrade(d, now),
-		weather:      wx,
 		companion:    new(d.companion),
 		pose:         pose,
 		listenWindow: d.recording.active() && d.recording.listen,
@@ -875,7 +869,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				case "listening", "speaking", "thinking":
 					status = r.pose.mood
 				}
-				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, r.weather, status, "", r.listenWindow)
+				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, status, "", r.listenWindow)
 				switch {
 				case status == "listening" && r.listenWindow:
 					hits = []hitBox{{id: "listen-stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
@@ -1056,24 +1050,6 @@ func (d *wsTerminal) brightness() int {
 		return 12
 	}
 	return 85
-}
-
-func (h *wsHub) renderWeatherChange() {
-	if h == nil {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closed {
-		return
-	}
-	now := time.Now()
-	for _, d := range h.terminals {
-		if !h.active(d) || d.asleep || d.drawer != "" || d.app != nil || d.view != nil || d.card != nil {
-			continue
-		}
-		h.render(d, now, false)
-	}
 }
 
 func (h *wsHub) animate(ctx context.Context) {

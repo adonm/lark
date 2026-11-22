@@ -385,8 +385,8 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 
 func TestListenModeCountdownIndicator(t *testing.T) {
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
-		idle := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, "", "", false)
-		listen := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, "listening", "", true)
+		idle := renderPixelHomeListen(spec, nil, nil, gradeDay, "", "", false)
+		listen := renderPixelHomeListen(spec, nil, nil, gradeDay, "listening", "", true)
 		if idle.Bounds() != listen.Bounds() {
 			t.Fatalf("unexpected bounds mismatch for %dx%d", spec.logicalW, spec.logicalH)
 		}

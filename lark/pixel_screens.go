@@ -143,14 +143,10 @@ func pixelHomeMenuButtonRect(spec pixelDisplaySpec) image.Rectangle {
 }
 
 func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, caption string) *image.RGBA {
-	return renderPixelHomeWeather(spec, bg, poseImg, grade, weatherClear, status, caption)
+	return renderPixelHomeListen(spec, bg, poseImg, grade, status, caption, false)
 }
 
-func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, status string, caption string) *image.RGBA {
-	return renderPixelHomeListen(spec, bg, poseImg, grade, weather, status, caption, false)
-}
-
-func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, status string, caption string, listenWindow bool) *image.RGBA {
+func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, caption string, listenWindow bool) *image.RGBA {
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
 	blitCenteredBG(c, bg)
 	if poseImg != nil {
@@ -163,8 +159,7 @@ func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade
 		c.blit(px, py, poseImg)
 	}
 
-	// Grade and weather apply only to the world + companion, never the UI panels or text.
-	applyWeatherEffects(c, weather)
+	// Grade applies only to the world + companion, never the UI panels or text.
 	c.applyLUT(grade)
 
 	var texts []pixelTextOp
