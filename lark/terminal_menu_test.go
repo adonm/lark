@@ -259,3 +259,31 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 		})
 	}
 }
+
+func TestIntercomMenuPagingRoundScreen(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	dev := testConnectWS(t, base, "unit", false)
+	dev.helloV2(t, "vocat-intercom-page", "Cake")
+	p1 := testConnectWS(t, base, "unit", false)
+	p1.helloV2(t, "vocat-peer1", "Mint")
+	p2 := testConnectWS(t, base, "unit", false)
+	p2.helloV2(t, "vocat-peer2", "George")
+
+	b.ws.mu.Lock()
+	d := b.ws.terminals["vocat-intercom-page"]
+	d.drawer = drawerIntercom
+	d.menuPage = 1
+	b.ws.render(d, time.Now(), false)
+	b.ws.mu.Unlock()
+
+	svg := waitSVG(t, b.ws, "vocat-intercom-page", "peer-mint")
+	if !strings.Contains(svg, "peer-mint") {
+		t.Fatalf("expected peer-mint on page 1 of round intercom menu, got %s", svg)
+	}
+	b.ws.mu.Lock()
+	page := d.menuPage
+	b.ws.mu.Unlock()
+	if page != 1 {
+		t.Fatalf("d.menuPage = %d, want 1", page)
+	}
+}

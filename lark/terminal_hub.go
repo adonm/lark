@@ -802,7 +802,11 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 			}
 			slices.SortFunc(choices, func(a, b menuPeer) int { return strings.Compare(a.id, b.id) })
 			choices = append([]menuPeer{{"all", "Everyone"}}, choices...)
-			d.menuPage = clampMenuPage(d.menuPage, len(choices), tilesPerPage)
+			perPage := 2
+			if d.screen.shape == "rect" {
+				perPage = 3
+			}
+			d.menuPage = clampMenuPage(d.menuPage, len(choices), perPage)
 			r.menuPage = d.menuPage
 			r.peers = choices
 		case drawerStats:
