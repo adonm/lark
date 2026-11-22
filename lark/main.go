@@ -264,7 +264,7 @@ func productionDB(path string) bool {
 
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: lark <command> [args]")
-	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, ota, mcp")
+	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, sim, ota, mcp")
 }
 
 func main() {
@@ -287,6 +287,10 @@ func main() {
 	case "ota":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		err = runOTA(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		cancel()
+	case "sim":
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		err = runSim(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 		cancel()
 	case "mcp":
 		if len(os.Args) > 2 {
