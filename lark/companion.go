@@ -619,23 +619,6 @@ func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path s
 		}
 		return b.voiceAPI(r, strings.ToLower(id))
 	}
-	if id, ok := strings.CutSuffix(rest, "/dc/qr"); ok && r.Method == http.MethodGet {
-		id = strings.ToLower(id)
-		if !validCompanionID(id) {
-			return nil, problem(400, "Invalid companion ID")
-		}
-		if _, ok := b.companionByID(id); !ok {
-			return nil, problem(404, "Companion not found")
-		}
-		if b.dc == nil {
-			return nil, problem(503, "Delta Chat unavailable")
-		}
-		qr, err := b.dc.pairInvite(id)
-		if err != nil {
-			return nil, problem(502, "Cannot generate pairing QR")
-		}
-		return object{"qr": qr}, nil
-	}
 	if id, ok := strings.CutSuffix(rest, "/dc"); ok && r.Method == http.MethodGet {
 		id = strings.ToLower(id)
 		if !validCompanionID(id) {
