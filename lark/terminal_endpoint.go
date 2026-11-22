@@ -28,8 +28,9 @@ type endpointCapture struct {
 	listening chan struct{}
 	deadline  *time.Timer // Hub owns and stops the wall-clock watchdog.
 	commitAt  time.Time   // Hub writes before closing stop.
-	listen    bool
-	replyTo   string
+	listen      bool
+	replyTo     string
+	companionID string
 }
 
 type micPacket struct {
@@ -67,6 +68,7 @@ type captureResult struct {
 	hasEnd           bool
 	listen           bool
 	replyTo          string
+	spec             *specTurn
 }
 
 type pauseTranscript struct {
@@ -104,8 +106,9 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 		stop:      make(chan struct{}),
 		result:    make(chan captureResult, 1),
 		listening: make(chan struct{}),
-		listen:    d.recording.listen,
-		replyTo:   replyTo,
+		listen:      d.recording.listen,
+		replyTo:     replyTo,
+		companionID: d.companionID,
 	}
 	d.recording.endpoint = c
 	d.client.activeCapture.Store(c)
@@ -138,9 +141,15 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	var smartTurnCh <-chan float32
 	smartTurnCheckedAt := time.Duration(-1)
 	var smartTurnCommit bool
+	var lastSmartTurnProb float32 = -1
+	var spec *specTurn
+	specTriedText := ""
 	defer func() {
 		if probeCancel != nil {
 			probeCancel()
+		}
+		if spec != nil {
+			spec.abort()
 		}
 	}()
 	accept := func(result pauseTranscript) {
@@ -150,6 +159,14 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			if u.policy.observeProgress(result.at, result.text, result.windowed) {
 				smartTurnCommit = false
 				smartTurnCheckedAt = -1
+				lastSmartTurnProb = -1
+				if spec != nil {
+					if debugEndpoint {
+						log.Printf("endpoint speculate abort_words term=%s text=%q", d.id, result.text)
+					}
+					spec.abort()
+					spec = nil
+				}
 			}
 			cached = result
 		}
@@ -165,6 +182,13 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 		if u.policy.inVoice {
 			lastGateOpenLen = len(u.pcm)
 			end = packet.at
+			if spec != nil && len(u.pcm) > spec.audioLen {
+				if debugEndpoint {
+					log.Printf("endpoint speculate abort_speech term=%s", d.id)
+				}
+				spec.abort()
+				spec = nil
+			}
 		}
 	}
 	commit := func() {
@@ -201,6 +225,21 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 						result.endToCommit = c.commitAt.Sub(end)
 					}
 				}
+				if spec != nil {
+					if result.err != nil || len(result.pcm) == 0 || normalizeSpecText(result.text) != normalizeSpecText(spec.text) {
+						if debugEndpoint {
+							log.Printf("endpoint speculate abort_mismatch term=%s spec=%q final=%q", d.id, spec.text, result.text)
+						}
+						spec.abort()
+						spec = nil
+					} else {
+						if debugEndpoint {
+							log.Printf("endpoint speculate hit term=%s text=%q", d.id, result.text)
+						}
+						result.spec = spec
+						spec = nil
+					}
+				}
 				c.result <- result
 				return
 			}
@@ -217,6 +256,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			accept(result)
 		case prob := <-smartTurnCh:
 			smartTurnCh = nil
+			lastSmartTurnProb = prob
 			if debugEndpoint {
 				log.Printf("endpoint smart_turn term=%s prob=%.3f incomplete=%v at=%v lastWordAt=%v",
 					d.id, prob, u.policy.incomplete, pcmDuration(len(u.pcm)), u.policy.lastWordAt)
@@ -301,6 +341,18 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 					ch <- prob
 				}()
 			}
+			if spec == nil && !c.listen && c.companionID != "" && h.b != nil && h.b.oc != nil &&
+				h.b.endpoint.smartTurn != nil && vad != nil && u.policy.hasWords && !u.policy.incomplete &&
+				at-u.policy.lastWordAt >= endpointQuiet &&
+				cached.err == nil && cached.text != "" && !cached.windowed &&
+				lastGateOpenLen <= cached.audioLen && cached.text != specTriedText &&
+				smartTurnCheckedAt == u.policy.lastWordAt && smartTurnCh == nil && lastSmartTurnProb >= smartTurnSpeculateThreshold {
+				specTriedText = cached.text
+				spec = h.b.startSpeculate(c.companionID, cached.text, len(u.pcm), "voice", turnChannel{replyTo: c.replyTo})
+				if debugEndpoint && spec != nil {
+					log.Printf("endpoint speculate start term=%s prob=%.3f text=%q", d.id, lastSmartTurnProb, cached.text)
+				}
+			}
 		}
 	}
 }
@@ -376,7 +428,7 @@ func (h *wsHub) maybeStartVoice(d *wsTerminal, now time.Time) bool {
 			h.finishTurn(d, id, nil, nil)
 			return
 		}
-		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{replyTo: result.replyTo})
+		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{replyTo: result.replyTo, spec: result.spec})
 	})
 	return true
 }

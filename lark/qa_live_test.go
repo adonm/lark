@@ -184,7 +184,7 @@ func TestQADeltaChatLive(t *testing.T) {
 	}
 
 	waitMsg(25*time.Second, func(m deltachat.Message) bool {
-		return m.ViewType == deltachat.ViewtypeText && strings.Contains(m.Text, "ready")
+		return m.ViewType == deltachat.ViewtypeText && strings.Contains(m.Text, "/help")
 	})
 	panel := waitMsg(15*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeWebxdc

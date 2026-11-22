@@ -15,9 +15,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chatmail/rpc-client-go/v2/deltachat"
 )
 
 func testRequest(t *testing.T, method, url, token string, data any, want int) []byte {
@@ -416,5 +419,70 @@ func TestMCPStdioForwards(t *testing.T) {
 	}
 	if !got["initialize"] || !got["ping"] {
 		t.Fatal(out.String())
+	}
+}
+
+func TestDeltaChatUsesPrimaryModelAndAllowsTaskSubagent(t *testing.T) {
+	settings := openCodeSettings("lark")
+	if !slices.Contains(settings.Permissions, ocPermission{"task", "*", "allow"}) {
+		t.Fatalf("lark permissions missing task allow: %+v", settings.Permissions)
+	}
+	stub := newStubDCRPC()
+	var models []ocModel
+	var mu sync.Mutex
+	b, _ := wsHarness(t, func(b *larkServer, dir string) {
+		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
+				_, _ = w.Write([]byte(`{"data":{"id":"ses-dc-model"}}`))
+			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc-model/model":
+				var body struct{ Model ocModel }
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				mu.Lock()
+				models = append(models, body.Model)
+				mu.Unlock()
+				w.WriteHeader(204)
+			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc-model/prompt":
+				var body struct{ Model ocModel }
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				mu.Lock()
+				models = append(models, body.Model)
+				mu.Unlock()
+				_, _ = w.Write([]byte(`{"data":{"id":"msg-1"}}`))
+			case r.Method == http.MethodPost && r.URL.Path == "/api/experimental/session/ses-dc-model/wait":
+				w.WriteHeader(204)
+			case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses-dc-model/message":
+				_, _ = w.Write([]byte(`{"data":[{"id":"msg-2","type":"assistant","finish":"stop","content":[{"type":"text","text":"Primary reply!"}]},{"id":"msg-1","type":"user"}]}`))
+			default:
+				w.WriteHeader(404)
+			}
+		})
+		b.dc = newDCService(b, "", t.TempDir(), "nine.testrun.org")
+		b.dc.rpc = stub
+		b.dc.ready.Store(true)
+	})
+	cake, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub.mu.Lock()
+	stub.contacts[cake.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.chats[cake.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	stub.msgs[cake.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "Explain rainbows", ViewType: deltachat.ViewtypeText}
+	stub.mu.Unlock()
+
+	b.dc.handleMessage(t.Context(), cake.DCAccountID, 1)
+
+	mu.Lock()
+	gotModels := slices.Clone(models)
+	mu.Unlock()
+	if len(gotModels) == 0 || gotModels[0] != b.oc.settings.Model {
+		t.Fatalf("DC turn did not use primary model %+v: got %+v", b.oc.settings.Model, gotModels)
+	}
+	stub.mu.Lock()
+	sent := slices.Clone(stub.sent)
+	stub.mu.Unlock()
+	if len(sent) != 1 || *sent[0].data.Text != "Primary reply!" {
+		t.Fatalf("unexpected DC reply: %+v", sent)
 	}
 }

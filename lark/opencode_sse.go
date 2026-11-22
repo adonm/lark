@@ -225,6 +225,7 @@ type streamedText struct {
 	byOrdinal map[int]*strings.Builder
 	ordinal   int
 	havePart  bool
+	firstChunk bool
 }
 
 func (t *streamedText) add(delta string) []string {
@@ -246,7 +247,7 @@ func (t *streamedText) addEvent(event ocEvent) []string {
 	id := d.AssistantMessageID
 	if id != "" && id != t.messageID {
 		t.messageID = id
-		t.sentenceExtractor = sentenceExtractor{}
+		t.sentenceExtractor = sentenceExtractor{firstChunk: t.firstChunk}
 		clear(t.byOrdinal)
 		t.havePart = false
 	}
@@ -287,11 +288,16 @@ func (t *streamedText) addEvent(event ocEvent) []string {
 }
 
 type turnStream struct {
-	sentence func(string)
-	tool     func()
+	sentence   func(string)
+	tool       func()
+	firstChunk bool
 }
 
 func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, stream turnStream, source string, onChat func(chatEntry)) (string, error) {
+	return o.runTurnStreamingWithModel(ctx, sid, prompt, ocModel{}, stream, source, onChat)
+}
+
+func (o *openCode) runTurnStreamingWithModel(ctx context.Context, sid, prompt string, model ocModel, stream turnStream, source string, onChat func(chatEntry)) (string, error) {
 	start := time.Now()
 	trace := traceFrom(ctx)
 	defer func() { trace.measure(diagLLMTotal, time.Since(start)) }()
@@ -301,6 +307,9 @@ func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, str
 	defer unsubscribe()
 	path := "/api/session/" + sid
 	input := object{"text": prompt}
+	if model != (ocModel{}) {
+		input["model"] = model
+	}
 	if source != "" {
 		input["metadata"] = object{"larkSource": source}
 	}
@@ -390,7 +399,7 @@ func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, str
 		}
 		return reply, err
 	}
-	var streamed streamedText
+	streamed := streamedText{sentenceExtractor: sentenceExtractor{firstChunk: stream.firstChunk}, firstChunk: stream.firstChunk}
 	if trace != nil {
 		streamed.onFirst = func() { trace.measure(diagLLMFirst, time.Since(start)) }
 	}

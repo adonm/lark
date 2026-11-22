@@ -300,6 +300,8 @@ func dcTestHarness(t *testing.T) (*larkServer, string, *stubDCRPC) {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-dc"}}`))
+			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc/model":
+				w.WriteHeader(204)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc/prompt":
 				var in struct{ Text string }
 				_ = json.NewDecoder(r.Body).Decode(&in)

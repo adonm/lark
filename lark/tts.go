@@ -181,6 +181,15 @@ var thinkingFillers = []string{
 	"Let me see.",
 }
 
+var commonOpeners = []string{
+	"Sure!",
+	"Okay!",
+	"Hmm,",
+	"Good question!",
+	"Got it!",
+	"Of course!",
+}
+
 func (c *speechClips) peek(voice, text string) []byte {
 	c.mu.Lock()
 	item := c.clips[clipKey{voice, text}]
@@ -215,6 +224,12 @@ func (c *speechClips) warmFillers(ctx context.Context, w *synthWorker, voice str
 		return
 	}
 	for _, phrase := range thinkingFillers {
+		if ctx.Err() != nil {
+			return
+		}
+		_, _ = c.getWith(ctx, w.warm, voice, phrase)
+	}
+	for _, phrase := range commonOpeners {
 		if ctx.Err() != nil {
 			return
 		}
@@ -470,38 +485,70 @@ type speechTurn struct {
 	firstQueued time.Time // Published to the worker by the first queue send.
 }
 
-func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorker, voice string, onFirst func(*AudioStream)) *speechTurn {
+func splitCachedOpener(clips *speechClips, voice, text string) (pcm []byte, rest string, ok bool) {
+	if clips == nil || text == "" {
+		return nil, text, false
+	}
+	for _, opener := range commonOpeners {
+		if text == opener || strings.HasPrefix(text, opener+" ") {
+			if cached := clips.peek(voice, opener); len(cached) > 0 {
+				return cached, strings.TrimSpace(text[len(opener):]), true
+			}
+		}
+	}
+	return nil, text, false
+}
+
+func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorker, clips *speechClips, voice string, onFirst func(*AudioStream)) *speechTurn {
 	t := &speechTurn{stream: newAudioStream(), cancel: cancel, queue: make(chan speechItem, maxText)}
 	go func() {
 		defer cancel()
 		first := true
-		for item := range t.queue {
-			var pcm []byte
-			if len(item.pcm) > 0 {
-				pcm = item.pcm
-			} else {
-				at := t.firstQueued
-				if !first {
-					at = time.Now()
-				}
-				var err error
-				pcm, err = w.synthesizeQueued(ctx, voice, item.text, at)
-				if err != nil {
-					t.stream.finish(err)
-					return
-				}
-			}
+		emitPCM := func(pcm []byte) bool {
 			if !first {
 				pcm = append(make([]byte, sampleRate/5, sampleRate/5+len(pcm)), pcm...)
 			}
 			if !t.stream.append(pcm) {
 				t.stream.finish(errTTS)
-				return
+				return false
 			}
 			if first && onFirst != nil {
 				onFirst(t.stream)
 			}
 			first = false
+			return true
+		}
+		for item := range t.queue {
+			if len(item.pcm) > 0 {
+				if !emitPCM(item.pcm) {
+					return
+				}
+				continue
+			}
+			text := item.text
+			if first {
+				if openerPCM, rest, ok := splitCachedOpener(clips, voice, text); ok {
+					if !emitPCM(openerPCM) {
+						return
+					}
+					if rest == "" {
+						continue
+					}
+					text = rest
+				}
+			}
+			at := t.firstQueued
+			if !first {
+				at = time.Now()
+			}
+			pcm, err := w.synthesizeQueued(ctx, voice, text, at)
+			if err != nil {
+				t.stream.finish(err)
+				return
+			}
+			if !emitPCM(pcm) {
+				return
+			}
 		}
 		t.stream.finish(nil)
 	}()

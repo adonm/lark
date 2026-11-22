@@ -73,6 +73,24 @@ type ocModel struct {
 	Variant  string `json:"variant,omitempty"`
 }
 
+var defaultSmartModel = ocModel{Provider: "opencode", ID: "gemini-4-hydrogen", Variant: "low"}
+
+func parseModelSpec(spec string) ocModel {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return ocModel{}
+	}
+	prov, rest, ok := strings.Cut(spec, "/")
+	if !ok || prov == "" || rest == "" {
+		return ocModel{}
+	}
+	id, variant, _ := strings.Cut(rest, "#")
+	if id == "" {
+		return ocModel{}
+	}
+	return ocModel{Provider: prov, ID: id, Variant: variant}
+}
+
 type ocPermission struct {
 	Action   string `json:"action"`
 	Resource string `json:"resource"`
@@ -102,6 +120,8 @@ type openCode struct {
 	interrupts   map[string]bool
 	resets       map[string]*ocReset
 	verified     map[string]string
+	defaultModel ocModel
+	sessionModel map[string]ocModel
 	flushHistory func(string)
 }
 
@@ -115,8 +135,9 @@ func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, se
 		store:  sessionStore(db),
 		active: make(map[string]context.CancelFunc), activeSource: make(map[string]string),
 		interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
-		verified: make(map[string]string),
-		feed:     eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
+		verified:     make(map[string]string),
+		sessionModel: make(map[string]ocModel),
+		feed:         eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
 	o.feed.onConfigChange = func() { o.invalidateVerified() }
 	for i := range o.turns {
 		o.turns[i] = make(chan struct{}, 1)
@@ -458,7 +479,40 @@ func (o *openCode) configuredSettings(ctx context.Context) (ocSettings, error) {
 		return ocSettings{}, problem(502, "Set the Lark agent model in the OpenCode configuration")
 	}
 	settings.Model = agent.Model
+	o.mu.Lock()
+	o.defaultModel = settings.Model
+	o.mu.Unlock()
 	return settings, nil
+}
+
+func (o *openCode) ensureModel(ctx context.Context, sid string, model ocModel) error {
+	if model == (ocModel{}) {
+		o.mu.Lock()
+		model = o.defaultModel
+		if model == (ocModel{}) {
+			model = o.settings.Model
+		}
+		o.mu.Unlock()
+	}
+	if model == (ocModel{}) {
+		return nil
+	}
+	o.mu.Lock()
+	if o.sessionModel == nil {
+		o.sessionModel = make(map[string]ocModel)
+	}
+	current, ok := o.sessionModel[sid]
+	o.mu.Unlock()
+	if ok && current == model {
+		return nil
+	}
+	if err := o.jsonCall(ctx, http.MethodPost, "/api/session/"+sid+"/model", object{"model": model}, nil); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	o.sessionModel[sid] = model
+	o.mu.Unlock()
+	return nil
 }
 
 func (o *openCode) fastSession(ctx context.Context, device, character string, replace bool) (string, error) {
@@ -534,6 +588,9 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 			if o.verified != nil {
 				o.verified[device] = sid
 			}
+			if o.sessionModel != nil {
+				o.sessionModel[sid] = settings.Model
+			}
 			o.mu.Unlock()
 			return sid, nil
 		}
@@ -582,6 +639,9 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 	o.mu.Lock()
 	if o.verified != nil {
 		o.verified[device] = created.ID
+	}
+	if o.sessionModel != nil {
+		o.sessionModel[created.ID] = settings.Model
 	}
 	o.mu.Unlock()
 	return created.ID, nil
@@ -834,6 +894,10 @@ func (o *openCode) lockPrompt(ctx context.Context, device string) (context.Conte
 }
 
 func (o *openCode) askPrepared(ctx context.Context, device string, prepare func() (string, string), stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
+	return o.askPreparedWithModel(ctx, device, prepare, ocModel{}, stream, source, begin, onChat)
+}
+
+func (o *openCode) askPreparedWithModel(ctx context.Context, device string, prepare func() (string, string), model ocModel, stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
 	waiting := time.Now()
 	trace := traceFrom(ctx)
 	ctx, unlock, err := o.lockPrompt(ctx, device)
@@ -848,14 +912,21 @@ func (o *openCode) askPrepared(ctx context.Context, device string, prepare func(
 	if err != nil {
 		return "", "", err
 	}
+	if err := o.ensureModel(ctx, sid, model); err != nil {
+		o.invalidateVerified(device)
+		return "", "", err
+	}
 	if begin != nil {
 		finish := begin()
 		defer finish()
 	}
 	trace.measure(diagPromptPrep, time.Since(admitted))
-	reply, err = o.runTurnStreaming(ctx, sid, prompt, stream, source, onChat)
+	reply, err = o.runTurnStreamingWithModel(ctx, sid, prompt, model, stream, source, onChat)
 	if err != nil {
 		o.invalidateVerified(device)
+		o.mu.Lock()
+		delete(o.sessionModel, sid)
+		o.mu.Unlock()
 		o.requestInterrupt(device)
 	}
 	return reply, sid, err

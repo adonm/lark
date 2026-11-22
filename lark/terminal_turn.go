@@ -506,7 +506,7 @@ func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, te
 		h.turnError(d, id, "Chat is not ready yet.")
 		return
 	}
-	gen, err := h.b.generateReply(ctx, ctx, sender, text, turnOptions{source: source, channel: ch,
+	gen, err := h.b.generateReply(ctx, ctx, sender, text, turnOptions{source: source, channel: ch, spec: ch.spec,
 		publish: func(stream *AudioStream, start time.Time) { h.publish(d, id, ctx, stream, start) }})
 	if err != nil {
 		h.turnError(d, id, "Could not finish that turn.")

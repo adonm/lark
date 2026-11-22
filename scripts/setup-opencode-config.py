@@ -25,8 +25,9 @@ def put(path, content):
             Path(tmp.name).unlink(missing_ok=True)
 
 
-PRIMARY_MODEL = "opencode/claude-haiku-5-5#none"
-FALLBACK_MODEL = "opencode/gemini-3.8-flash#low"
+PRIMARY_MODEL = "opencode-go/deepseek-v4.1-flash#low"
+FALLBACK_MODEL = "opencode-go/glm-5.3-flash#low"
+DEEP_MODEL = "opencode-go/glm-5.3#high"
 
 router = directory / package
 router.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -36,7 +37,14 @@ if not config.exists():
         "$schema": "https://opencode.ai/config.json",
         "default_agent": "lark",
         "mcp": {"servers": {"lark": {"type": "local", "command": [str(bridge), "mcp"]}}},
-        "agents": {"lark": {"model": PRIMARY_MODEL}},
+        "agents": {
+            "lark": {"model": PRIMARY_MODEL},
+            "deep": {
+                "model": DEEP_MODEL,
+                "mode": "subagent",
+                "description": "Delegate hard tasks: multi-step plans, stories, deep questions, or complex reasoning.",
+            },
+        },
         "plugins": [{"package": package, "options": {"fallback": FALLBACK_MODEL}}],
     }
     put(config, (json.dumps(update, indent=2) + "\n").encode())

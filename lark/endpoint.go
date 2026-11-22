@@ -25,7 +25,8 @@ const (
 	endpointProbeWindow = 8 * sampleRate * 2 // last <= 8 s
 	vadTail             = 320 * time.Millisecond
 	speechEnergyRatio   = 0.20
-	smartTurnThreshold  = float32(0.90)
+	smartTurnThreshold          = float32(0.90)
+	smartTurnSpeculateThreshold = float32(0.40)
 	sileroModel         = "silero_vad_v5.onnx"
 	sileroSHA256        = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
 )

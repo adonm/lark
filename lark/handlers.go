@@ -292,12 +292,166 @@ type turnChannel struct {
 	senderKind string // "contact", "companion"
 	replyTo    string // Delta Chat sender name when replying in listening mode
 	private    bool
+	spec       *specTurn
 }
 
 type turnOptions struct {
 	source  string
 	channel turnChannel
 	publish func(*AudioStream, time.Time)
+	spec    *specTurn
+}
+
+type specTurn struct {
+	text     string
+	audioLen int
+	cancel   context.CancelFunc
+
+	mu        sync.Mutex
+	promoted  bool
+	aborted   bool
+	onSent    func(string)
+	onTool    func()
+	onChat    func(chatEntry)
+	sentences []string
+	entries   []chatEntry
+	usedTool  bool
+	done      chan specResult
+}
+
+type specResult struct {
+	reply string
+	sid   string
+	err   error
+}
+
+func normalizeSpecText(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimRight(s, ".!?,;:")
+}
+
+func (b *larkServer) startSpeculate(companionID, text string, audioLen int, source string, ch turnChannel) *specTurn {
+	if b == nil || b.oc == nil || companionID == "" || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if _, direct, err := b.intercomIntent(companionID, text); err != nil || direct != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(b.root, turnTimeout)
+	s := &specTurn{
+		text:     text,
+		audioLen: audioLen,
+		cancel:   cancel,
+		done:     make(chan specResult, 1),
+	}
+	go func() {
+		defer cancel()
+		stream := turnStream{
+			firstChunk: true,
+			sentence: func(sent string) {
+				s.mu.Lock()
+				if s.aborted {
+					s.mu.Unlock()
+					return
+				}
+				if s.promoted && s.onSent != nil {
+					fn := s.onSent
+					s.mu.Unlock()
+					fn(sent)
+					return
+				}
+				s.sentences = append(s.sentences, sent)
+				s.mu.Unlock()
+			},
+			tool: func() {
+				s.mu.Lock()
+				if s.aborted {
+					s.mu.Unlock()
+					return
+				}
+				if s.promoted && s.onTool != nil {
+					fn := s.onTool
+					s.mu.Unlock()
+					fn()
+					return
+				}
+				s.usedTool = true
+				s.mu.Unlock()
+			},
+		}
+		onChat := func(entry chatEntry) {
+			s.mu.Lock()
+			if s.aborted {
+				s.mu.Unlock()
+				return
+			}
+			if s.promoted && s.onChat != nil {
+				fn := s.onChat
+				s.mu.Unlock()
+				fn(entry)
+				return
+			}
+			s.entries = append(s.entries, entry)
+			s.mu.Unlock()
+		}
+		prepare := func() (string, string) {
+			companion := b.companionFor(companionID)
+			return companion.Name, b.turnPromptWithState(ctx, companionID, source, text, companion, ch, time.Now().In(b.location()))
+		}
+		reply, sid, err := b.oc.askPrepared(ctx, companionID, prepare, stream, source, nil, onChat)
+		s.done <- specResult{reply: reply, sid: sid, err: err}
+	}()
+	return s
+}
+
+func (s *specTurn) abort() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.aborted = true
+	s.onSent, s.onTool, s.onChat = nil, nil, nil
+	s.mu.Unlock()
+	s.cancel()
+}
+
+func (s *specTurn) promote(ctx context.Context, onSent func(string), onTool func(), onChat func(chatEntry)) specResult {
+	s.mu.Lock()
+	if s.aborted {
+		s.mu.Unlock()
+		return specResult{err: context.Canceled}
+	}
+	s.promoted = true
+	s.onSent = onSent
+	s.onTool = onTool
+	s.onChat = onChat
+	entries := s.entries
+	s.entries = nil
+	usedTool := s.usedTool
+	sentences := s.sentences
+	s.sentences = nil
+	s.mu.Unlock()
+
+	if onChat != nil {
+		for _, entry := range entries {
+			onChat(entry)
+		}
+	}
+	if usedTool && onTool != nil {
+		onTool()
+	}
+	if onSent != nil {
+		for _, sent := range sentences {
+			onSent(sent)
+		}
+	}
+	select {
+	case res := <-s.done:
+		return res
+	case <-ctx.Done():
+		s.abort()
+		return specResult{err: ctx.Err()}
+	}
 }
 
 func formatLocalTime(t time.Time) string {
@@ -456,7 +610,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 			deadline = time.Now().Add(turnTimeout)
 		}
 		audioCtx, cancel := context.WithDeadline(context.WithValue(audioBase, traceKey{}, traceFrom(ctx)), deadline)
-		return newSpeechTurn(audioCtx, cancel, b.worker, b.voiceFor(sender.ID), onFirst)
+		return newSpeechTurn(audioCtx, cancel, b.worker, &b.clips, b.voiceFor(sender.ID), onFirst)
 	}
 	var mu sync.Mutex
 	var eager *speechTurn
@@ -504,7 +658,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		ensureEager(start)
 		eager.send(clean)
 	}
-	pieces := turnStream{sentence: onSentence, tool: func() {
+	pieces := turnStream{firstChunk: true, sentence: onSentence, tool: func() {
 		mu.Lock()
 		defer mu.Unlock()
 		if eager != nil {
@@ -522,13 +676,20 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		companion := b.companionFor(sender.ID)
 		return companion.Name, b.turnPromptWithState(ctx, sender.ID, options.source, text, companion, options.channel, time.Now().In(b.location()))
 	}
-	raw, sid, err := b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source,
-		nil, func(entry chatEntry) {
-			if entry.Role == "assistant" {
-				entry.Sender = b.companionFor(sender.ID).Name
-			}
-			b.chat(sender.ID, entry, true)
-		})
+	onChat := func(entry chatEntry) {
+		if entry.Role == "assistant" {
+			entry.Sender = b.companionFor(sender.ID).Name
+		}
+		b.chat(sender.ID, entry, true)
+	}
+	var raw, sid string
+	var err error
+	if options.spec != nil {
+		res := options.spec.promote(ctx, onSentence, pieces.tool, onChat)
+		raw, sid, err = res.reply, res.sid, res.err
+	} else {
+		raw, sid, err = b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source, nil, onChat)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if err != nil {
@@ -543,7 +704,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
 	if speechErr == nil && (eager != nil || b.worker != nil && b.worker.ready.Load()) {
-		var ex sentenceExtractor
+		ex := sentenceExtractor{firstChunk: true}
 		final := append(ex.add(clean), ex.flush()...)
 		if eager == nil || !eager.completeAfter(preToolCount, final) {
 			drop(false) // Publishing its replacement invalidates the old generation.

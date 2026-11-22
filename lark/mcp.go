@@ -21,7 +21,7 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact Lark companion IDs. Read keyed snapshots with state, change companions/terminals/memory/timers with patch, manage interactive Twee stories with story, and send live audio with emit. Only final assistant prose is spoken."
+	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, emit=Delta Chat/say/audio. Only final prose is spoken."
 )
 
 type rpcRequest struct {
@@ -207,11 +207,11 @@ var mcpTools = func() []object {
 	memory := schema(object{"op": enum("set", "delete"), "scope": text, "key": text, "value": object{},
 		"expected_version": object{"type": "integer", "minimum": 0, "description": "Require this version; 0 means absent"}}, "scope", "key")
 	return []object{
-		tool("state", "Read live state by slice. companion_id adds me.companion, me.terminals and me.contacts.",
+		tool("state", "Read live state slice. companion_id adds me.companion, me.terminals, me.contacts.",
 			schema(object{"companion_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
 				"messages_limit": object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id")})),
-		tool("patch", "Change companions, terminals, timers, or memory. Companion looks always go through companion.portrait with form (Nano Banana pixel art + matching background). Memory batches are atomic. Companion defaults to update; create timers with in_seconds or at.",
+		tool("patch", "Update companion, terminal, timer, or atomic memory. Portraits use companion.portrait with form.",
 			schema(object{"companion_id": text,
 				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag}),
 				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "form": text,
@@ -219,9 +219,9 @@ var mcpTools = func() []object {
 					"listen_seconds": object{"type": "integer", "minimum": 0, "maximum": 300}}),
 				"memory": object{"anyOf": []object{memory, array(memory)}},
 				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag})})),
-		tool("story", "Create, update, get, or delete an interactive Twee 3 story. On write, validates links, reachability, non-ending dead ends, max 3 choices, and 600-char passage limit.",
+		tool("story", "Create, update, get, or delete a Twee 3 story (validates links, reachability, <=3 choices, <=600 chars).",
 			schema(object{"op": enum("create", "update", "delete", "get"), "id": text, "twee": object{"type": "string", "maxLength": 65536}, "author": text}, "op", "id")),
-		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), speak aloud on a companion's terminals (say), or play notes/effects on terminals.",
+		tool("emit", "Send Delta Chat intercom, speak aloud on terminals (say), or play notes/sfx/chime.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
 	}

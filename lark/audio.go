@@ -234,6 +234,7 @@ type sentenceExtractor struct {
 	ticks, seen       int
 	utf8Tail          string
 	hasLetter, halted bool
+	firstChunk        bool
 }
 
 func (s *sentenceExtractor) boundary(out []string) []string {
@@ -255,14 +256,20 @@ func (s *sentenceExtractor) boundary(out []string) []string {
 		if s.start != 0 {
 			return out
 		}
-		n := 0
-		for _, r := range text[s.start:] {
-			if alphaNum(r) {
-				n++
+		if s.firstChunk {
+			if len(strings.Fields(text[s.start:])) < 3 {
+				return out
 			}
-		}
-		if n < 24 {
-			return out
+		} else {
+			n := 0
+			for _, r := range text[s.start:] {
+				if alphaNum(r) {
+					n++
+				}
+			}
+			if n < 24 {
+				return out
+			}
 		}
 		s.clause = len(text)
 		out = append(out, strings.TrimSpace(text[s.start:]))
@@ -334,6 +341,17 @@ func (s *sentenceExtractor) add(delta string) (out []string) {
 		}
 		if unicode.IsSpace(r) {
 			out = s.boundary(out)
+			if s.firstChunk && s.start == 0 && s.hasLetter && s.text.Len() > 0 {
+				if len(strings.Fields(s.text.String())) >= 5 {
+					chunk := strings.TrimSpace(s.text.String())
+					if chunk != "" {
+						out = append(out, chunk)
+						s.start = s.text.Len()
+						s.clause = s.text.Len()
+						s.punct, s.closers = 0, false
+					}
+				}
+			}
 			s.space = s.text.Len() != 0
 			continue
 		}

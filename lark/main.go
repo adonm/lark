@@ -45,10 +45,14 @@ var tokenRE = regexp.MustCompile(`^[!-~]+$`)
 const larkListeningPrefix = "Lark listening on "
 
 func openCodeSettings(agent string) ocSettings {
-	s := ocSettings{Agent: agent, Permissions: []ocPermission{{"*", "*", "deny"}}}
+	s := ocSettings{
+		Agent:       agent,
+		Permissions: []ocPermission{{"*", "*", "deny"}},
+	}
 	if agent == "lark" {
 		s.Permissions = append(s.Permissions, ocPermission{"websearch", "*", "allow"},
-			ocPermission{"lark_*", "*", "allow"}, ocPermission{"execute", "*", "allow"})
+			ocPermission{"lark_*", "*", "allow"}, ocPermission{"execute", "*", "allow"},
+			ocPermission{"task", "*", "allow"})
 	}
 	return s
 }
