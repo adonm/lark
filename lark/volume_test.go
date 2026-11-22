@@ -98,7 +98,7 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 		}
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
-	board.swipeUp(t)
+	board.tapMenu(t)
 	svg := waitSVG(t, b.ws, id, "menu-next")
 	nx, ny, _ := hitCenter(svg, "menu-next")
 	tap(nx, ny)

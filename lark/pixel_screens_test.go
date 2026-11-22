@@ -117,10 +117,10 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 			name string
 			img  *image.RGBA
 		}{
-			{"home", renderPixelHome(spec, nil, nil, gradeDay, "listening", 0, "", false)},
-			{"home-listen-win", renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, 0, "listening", 0, "", false, 0.7)},
-			{"home-hint", renderPixelHome(spec, nil, nil, gradeDay, "", 0, "", true)},
-			{"home-caption", renderPixelHome(spec, nil, nil, gradeDay, "speaking", 0, "Message from Mum: dinner's ready", false)},
+			{"home", renderPixelHome(spec, nil, nil, gradeDay, "listening", "")},
+			{"home-listen-win", renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, "listening", "", true)},
+			{"home-hint", renderPixelHome(spec, nil, nil, gradeDay, "", "")},
+			{"home-caption", renderPixelHome(spec, nil, nil, gradeDay, "speaking", "Message from Mum: dinner's ready")},
 			{"menu", renderPixelMenu(spec, 0, th)},
 			{"more", moreImg},
 			{"voice-p1", voiceP1},
@@ -242,22 +242,22 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 		for _, g := range grades {
 			save(fmt.Sprintf("%s-home-%s-idle", spec.name, g.name),
-				renderPixelHome(spec, gregBG, poses[0], g.grade, "", 0, "", false))
+				renderPixelHome(spec, gregBG, poses[0], g.grade, "", ""))
 			save(fmt.Sprintf("%s-home-%s-talk", spec.name, g.name),
-				renderPixelHome(spec, gregBG, poses[2], g.grade, "speaking", 0, "", false))
+				renderPixelHome(spec, gregBG, poses[2], g.grade, "speaking", ""))
 		}
 		save(spec.name+"-home-hint",
-			renderPixelHome(spec, gregBG, poses[0], gradeDay, "", 0, "", true))
+			renderPixelHome(spec, gregBG, poses[0], gradeDay, "", ""))
 		save(spec.name+"-home-listening",
-			renderPixelHome(spec, gregBG, poses[0], gradeDay, "listening", 0, "", false))
+			renderPixelHome(spec, gregBG, poses[0], gradeDay, "listening", ""))
 		save(spec.name+"-home-listen-win",
-			renderPixelHomeListen(spec, gregBG, poses[0], gradeDay, weatherClear, 0, "listening", 0, "", false, 0.7))
+			renderPixelHomeListen(spec, gregBG, poses[0], gradeDay, weatherClear, "listening", "", true))
 		save(spec.name+"-home-caption",
-			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "Message from Mum: dinner's ready", false))
+			renderPixelHome(spec, nil, poses[0], gradeDay, "listening", "Message from Mum: dinner's ready"))
 		save(spec.name+"-home-cloudy",
-			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherCloudy, 5, "", 0, "", false))
+			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherCloudy, "", ""))
 		save(spec.name+"-home-rain",
-			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherRain, 5, "", 0, "", false))
+			renderPixelHomeWeather(spec, nil, poses[0], gradeDay, weatherRain, "", ""))
 		save(spec.name+"-menu-p1", renderPixelMenu(spec, 0, th))
 		if spec.round {
 			save(spec.name+"-menu-p2", renderPixelMenu(spec, 1, th))
@@ -320,15 +320,15 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		cBG, _ := loadBackgroundPNG(dir)
 		for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 			save(fmt.Sprintf("%s-home-%s-day", spec.name, comp.name),
-				renderPixelHome(spec, cBG, cPoses[0], gradeDay, "", 0, "", false))
+				renderPixelHome(spec, cBG, cPoses[0], gradeDay, "", ""))
 		}
 		if comp.name == "mint" {
-			save("vocat-mint-after", renderPixelHome(pixelSpecVoCat, cBG, cPoses[0], gradeDay, "", 0, "", false))
+			save("vocat-mint-after", renderPixelHome(pixelSpecVoCat, cBG, cPoses[0], gradeDay, "", ""))
 			if bf, err := os.Open(filepath.Join(outDir, "mint-pose-before.png")); err == nil {
 				if bImg, err := png.Decode(bf); err == nil {
 					bRGBA := image.NewRGBA(bImg.Bounds())
 					draw.Draw(bRGBA, bRGBA.Bounds(), bImg, bImg.Bounds().Min, draw.Src)
-					save("vocat-mint-before", renderPixelHome(pixelSpecVoCat, cBG, bRGBA, gradeDay, "", 0, "", false))
+					save("vocat-mint-before", renderPixelHome(pixelSpecVoCat, cBG, bRGBA, gradeDay, "", ""))
 				}
 				_ = bf.Close()
 			}

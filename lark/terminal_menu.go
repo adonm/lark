@@ -65,9 +65,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	case msgTelemetry:
 		if st, ok := parseTelemetry(payload); ok {
 			d.status(st)
-			if d.drawer != "stats" {
-				h.render(d, now, false)
-			}
 		}
 	case msgPointer:
 		evName, x, y, rev, ok := parsePointer(payload)
@@ -159,7 +156,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		return
 	}
 	if d.displayApp != nil {
-		d.swipeActive = false
 		if d.app == d.displayApp {
 			if i := slices.Index(d.app.terminals, d); i >= 0 {
 				h.updateApp(d.app, appEvent{kind: evName, i: i, id: key, x: x, y: y, now: now})
@@ -168,34 +164,8 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		return
 	}
 	if evName == "drag" || evName == "up" {
-		if d.drawer == "" && d.view == nil && d.card == nil && !d.recording.active() && !d.busy && !d.ttsStarted && !d.awaitAck {
-			if evName == "drag" {
-				if !d.swipeActive {
-					d.swipeActive = true
-					d.swipeStartX, d.swipeStartY = x, y
-				}
-			} else if d.swipeActive {
-				dy := d.swipeStartY - y
-				dx := x - d.swipeStartX
-				if dx < 0 {
-					dx = -dx
-				}
-				d.swipeActive = false
-				if dy >= 20 && dy >= dx {
-					h.chime(d, "tap")
-					d.bootHint = true
-					d.drawer, d.card, d.pending = drawerMenu, nil, nil
-					d.menuPage = 0
-					d.view = nil
-					h.render(d, now, false)
-				}
-			}
-		} else {
-			d.swipeActive = false
-		}
 		return
 	}
-	d.swipeActive = false
 	switch a.kind {
 	case "menu":
 		h.chime(d, "tap")

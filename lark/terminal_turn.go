@@ -84,7 +84,6 @@ func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
 	d.recording.listen = true
 	d.recording.listenSpan = span
 	d.recording.listenUntil = now.Add(span)
-	d.listenRenderAt = now
 	d.recSession++
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)

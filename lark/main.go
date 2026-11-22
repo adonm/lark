@@ -175,6 +175,7 @@ func run() error {
 	go b.dc.start(root)
 	defer b.dc.shutdown()
 	b.weather = newWeatherService(os.Getenv("LARK_LOCATION"), db)
+	b.weather.onChange = b.ws.renderWeatherChange
 	go b.weather.run(root)
 	var termSrv *terminalServer
 	if devicePort != 0 {

@@ -76,6 +76,7 @@ type weatherService struct {
 	forecastURL string
 	client      *http.Client
 	db          *larkDB
+	onChange    func()
 }
 
 func newWeatherService(location string, db *larkDB) *weatherService {
@@ -199,11 +200,17 @@ func (w *weatherService) pollOnce(ctx context.Context) error {
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		return err
 	}
+	nextKind := mapWMOCode(out.Current.WeatherCode)
 	w.mu.Lock()
+	changed := w.current != nextKind
 	w.lastCode = out.Current.WeatherCode
-	w.current = mapWMOCode(out.Current.WeatherCode)
+	w.current = nextKind
 	w.updatedAt = time.Now()
+	onChange := w.onChange
 	w.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
 	return nil
 }
 
@@ -239,16 +246,16 @@ var pxCloudPalette = map[string]imagecolor.RGBA{
 	"d": {170, 182, 198, 210},
 }
 
-// applyWeatherEffects applies a cheap weather grade and particle/sprite overlay
+// applyWeatherEffects applies a static weather tint (and static cloud badge for cloudy)
 // to the world/companion logical canvas. Never applied to UI panels or Pair QR.
-func applyWeatherEffects(c *pixelCanvas, kind weatherKind, tick int) {
+func applyWeatherEffects(c *pixelCanvas, kind weatherKind) {
 	if kind == weatherClear || c == nil {
 		return
 	}
 	pix := c.img.Pix
 	switch kind {
 	case weatherCloudy:
-		// Desaturating grade (35% toward luminance).
+		// Desaturating grade (35% toward luminance) + a single static cloud.
 		for i := 0; i < len(pix); i += 4 {
 			r, g, b := int(pix[i]), int(pix[i+1]), int(pix[i+2])
 			lum := (r*54 + g*183 + b*18) >> 8
@@ -256,14 +263,9 @@ func applyWeatherEffects(c *pixelCanvas, kind weatherKind, tick int) {
 			pix[i+1] = uint8((g*65 + lum*35) / 100)
 			pix[i+2] = uint8((b*65 + lum*35) / 100)
 		}
-		// Drifting cloud sprites near the top.
-		for i := range 2 {
-			cx := ((tick*2 + i*64) % (c.w + 24)) - 12
-			cy := 8 + i*10
-			c.blitSprite(cx, cy, pxCloudSprite, pxCloudPalette, 1)
-		}
+		c.blitSprite(c.w/4, 10, pxCloudSprite, pxCloudPalette, 1)
 	case weatherRain, weatherStorm:
-		// Cool blue-slate grade.
+		// Cool blue-slate static tint.
 		dark := 82
 		if kind == weatherStorm {
 			dark = 70
@@ -274,26 +276,6 @@ func applyWeatherEffects(c *pixelCanvas, kind weatherKind, tick int) {
 			pix[i+1] = uint8((g * (dark - 4)) / 100)
 			pix[i+2] = uint8(min(255, (b*(dark+10))/100+6))
 		}
-		// Storm flash on occasional ticks.
-		if kind == weatherStorm && tick%23 == 0 {
-			for i := 0; i < len(pix); i += 4 {
-				pix[i] = uint8(min(255, int(pix[i])+55))
-				pix[i+1] = uint8(min(255, int(pix[i+1])+58))
-				pix[i+2] = uint8(min(255, int(pix[i+2])+70))
-			}
-		}
-		dropCol := imagecolor.RGBA{185, 215, 245, 200}
-		count := 24
-		if kind == weatherStorm {
-			count = 36
-		}
-		for i := range count {
-			rx := (i*29 + tick*3) % c.w
-			ry := (i*19 + tick*7) % c.h
-			c.set(rx, ry, dropCol)
-			c.set(rx-1, ry+1, dropCol)
-			c.set(rx-1, ry+2, dropCol)
-		}
 	case weatherFog:
 		// Light pale haze.
 		for i := 0; i < len(pix); i += 4 {
@@ -302,20 +284,11 @@ func applyWeatherEffects(c *pixelCanvas, kind weatherKind, tick int) {
 			pix[i+2] = uint8((int(pix[i+2])*78 + 232*22) / 100)
 		}
 	case weatherSnow:
-		// Soft cool winter tint + falling snow particles.
+		// Soft cool winter tint.
 		for i := 0; i < len(pix); i += 4 {
 			pix[i] = uint8((int(pix[i])*90 + 210*10) / 100)
 			pix[i+1] = uint8((int(pix[i+1])*92 + 220*8) / 100)
 			pix[i+2] = uint8((int(pix[i+2])*94 + 240*6) / 100)
-		}
-		flake := imagecolor.RGBA{245, 250, 255, 220}
-		for i := range 22 {
-			sx := (i*31 + tick + (i%3)*(tick/2)) % c.w
-			sy := (i*17 + tick*3) % c.h
-			c.set(sx, sy, flake)
-			if i%3 == 0 {
-				c.set(sx+1, sy, flake)
-			}
 		}
 	}
 }

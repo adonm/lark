@@ -134,29 +134,37 @@ func blitCenteredBG(c *pixelCanvas, bg *image.RGBA) {
 	c.blit(ox, oy, bg)
 }
 
-func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, bobY int, caption string, showMenuHint bool) *image.RGBA {
-	return renderPixelHomeWeather(spec, bg, poseImg, grade, weatherClear, 0, status, bobY, caption, showMenuHint)
+func pixelHomeMenuButtonRect(spec pixelDisplaySpec) image.Rectangle {
+	btnW, btnH := 24, pixelNavHeight(spec)
+	if !spec.round {
+		btnW = 36
+	}
+	return image.Rect(spec.safe.Max.X-btnW, spec.safe.Max.Y-btnH, spec.safe.Max.X, spec.safe.Max.Y)
 }
 
-func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, tick int, status string, bobY int, caption string, showMenuHint bool) *image.RGBA {
-	return renderPixelHomeListen(spec, bg, poseImg, grade, weather, tick, status, bobY, caption, showMenuHint, -1)
+func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, status string, caption string) *image.RGBA {
+	return renderPixelHomeWeather(spec, bg, poseImg, grade, weatherClear, status, caption)
 }
 
-func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, tick int, status string, bobY int, caption string, showMenuHint bool, listenFrac float64) *image.RGBA {
+func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, status string, caption string) *image.RGBA {
+	return renderPixelHomeListen(spec, bg, poseImg, grade, weather, status, caption, false)
+}
+
+func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, status string, caption string, listenWindow bool) *image.RGBA {
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
 	blitCenteredBG(c, bg)
 	if poseImg != nil {
 		b := poseImg.Bounds()
 		px := (spec.logicalW - b.Dx()) / 2
-		py := spec.safe.Min.Y + 2 + bobY
+		py := spec.safe.Min.Y + 2
 		if caption != "" {
-			py = max(4, spec.safe.Min.Y-4) + bobY
+			py = max(4, spec.safe.Min.Y-4)
 		}
 		c.blit(px, py, poseImg)
 	}
 
 	// Grade and weather apply only to the world + companion, never the UI panels or text.
-	applyWeatherEffects(c, weather, tick)
+	applyWeatherEffects(c, weather)
 	c.applyLUT(grade)
 
 	var texts []pixelTextOp
@@ -193,20 +201,14 @@ func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade
 				text: line, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
 			})
 		}
-	} else if status == "listening" && listenFrac >= 0 {
-		barH := 3
+	} else if status == "listening" && listenWindow {
+		btnW, btnH := 56, pixelNavHeight(spec)
 		if !spec.round {
-			barH = 4
+			btnW = 68
 		}
-		barW := spec.safe.Dx()
-		bx := spec.safe.Min.X
-		by := spec.safe.Max.Y - barH
-		c.panel(bx, by, barW, barH, pxPanelBG, pxPanelBorder)
-		frac := max(0.0, min(1.0, listenFrac))
-		innerW := max(0, int(math.Round(float64(barW-2)*frac)))
-		if innerW > 0 {
-			c.rect(bx+1, by+1, innerW, barH-2, pxMint)
-		}
+		btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
+		c.panel(btn.Min.X, btn.Min.Y, btn.Dx(), btn.Dy(), pxPanelBG, pxMint)
+		texts = addCenteredText(texts, physicalRect(btn, s), "Listening", dogica.Regular, spec.bodyTextScale, pxMint)
 	} else if status == "listening" {
 		btnH := pixelNavHeight(spec)
 		y := spec.safe.Max.Y - btnH
@@ -226,14 +228,10 @@ func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade
 		btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
 		c.panel(btn.Min.X, btn.Min.Y, btn.Dx(), btn.Dy(), pxPanelBG, pxDanger)
 		texts = addCenteredText(texts, physicalRect(btn, s), "Stop", dogica.Regular, spec.bodyTextScale, pxDanger)
-	} else if showMenuHint {
-		btnW, btnH := 44, 14
-		if !spec.round {
-			btnW, btnH = 54, 18
-		}
-		btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
+	} else if status == "" {
+		btn := pixelHomeMenuButtonRect(spec)
 		c.panel(btn.Min.X, btn.Min.Y, btn.Dx(), btn.Dy(), pxPanelBG, pxPanelBorder)
-		texts = addCenteredText(texts, physicalRect(btn, s), "^ Menu", dogica.Regular, spec.bodyTextScale, pxInk)
+		texts = addCenteredText(texts, physicalRect(btn, s), "Menu", dogica.Regular, spec.bodyTextScale, pxInk)
 	}
 
 	return finishPixelScreen(c, spec, texts)

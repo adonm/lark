@@ -100,24 +100,18 @@ type wsTerminal struct {
 	menuData      *menuContent
 	menuHintUntil time.Time
 	bootHint      bool
-	swipeActive   bool
-	swipeStartX   int
-	swipeStartY   int
 	readingBook   *savedApp
 	readingPage   int
 	statsAt       time.Time
-	weatherAt     time.Time
-	weatherTick   int
 	rev       uint64
 	nativeRev uint16
 	pose      companionPose
 	moodAt    time.Time
 	last      time.Time
 	meter     time.Time
-	asleep         bool
-	wakeWord       bool
-	replyTo        string
-	listenRenderAt time.Time
+	asleep    bool
+	wakeWord  bool
+	replyTo   string
 
 	recording     deviceCapture
 	recSession    uint16
@@ -627,27 +621,25 @@ func (d *wsTerminal) voiceTheme() string {
 }
 
 type renderRequest struct {
-	view        sceneView
-	companion   *companionState
-	pose        companionPose
-	app         *appInstance
-	screen      svgScreen
-	grade       gradeKey
-	weather     weatherKind
-	weatherTick int
-	menuHint    bool
-	drawer      string
-	menuPage    int
-	autoVol     bool
-	vol         int
-	voice       string
-	peers       []menuPeer
-	statsRows   []menuRow
-	readingBook *savedApp
-	readingPage int
-	full        bool
-	listenFrac  float64
-	trace       *turnTrace
+	view         sceneView
+	companion    *companionState
+	pose         companionPose
+	app          *appInstance
+	screen       svgScreen
+	grade        gradeKey
+	weather      weatherKind
+	drawer       string
+	menuPage     int
+	autoVol      bool
+	vol          int
+	voice        string
+	peers        []menuPeer
+	statsRows    []menuRow
+	readingBook  *savedApp
+	readingPage  int
+	full         bool
+	listenWindow bool
+	trace        *turnTrace
 }
 
 func (h *wsHub) companionPose(d *wsTerminal, now time.Time, mood string) companionPose {
@@ -720,19 +712,13 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		wx = h.b.weather.kind()
 	}
 	r := renderRequest{
-		full:        full || d.renderNext != nil && d.renderNext.full,
-		trace:       d.trace,
-		grade:       h.frameGrade(d, now),
-		weather:     wx,
-		weatherTick: d.weatherTick,
-		menuHint:    !d.bootHint || now.Before(d.menuHintUntil),
-		companion:   new(d.companion),
-		pose:        pose,
-		listenFrac:  -1,
-	}
-	if d.recording.active() && d.recording.listen && d.recording.listenSpan > 0 {
-		rem := max(0, d.recording.listenUntil.Sub(now))
-		r.listenFrac = min(1.0, float64(rem)/float64(d.recording.listenSpan))
+		full:         full || d.renderNext != nil && d.renderNext.full,
+		trace:        d.trace,
+		grade:        h.frameGrade(d, now),
+		weather:      wx,
+		companion:    new(d.companion),
+		pose:         pose,
+		listenWindow: d.recording.active() && d.recording.listen,
 	}
 	d.grade.Store(uint32(r.grade))
 	switch {
@@ -799,11 +785,17 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 // A terminal has one frame builder and one replaceable pending request. A dirty
 // rectangle is always based on the last frame committed to that terminal's queue.
 func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
-	var bg *image.RGBA
-	var poses [4]*image.RGBA
-	loaded := false
 	if c != nil && c.PortraitID != "" && h != nil && h.b != nil && h.b.portraits != nil {
+		h.assetsMu.RLock()
+		cached, ok := h.assets[c.PortraitID]
+		h.assetsMu.RUnlock()
+		if ok {
+			return cached.bg, cached.poses, cached.theme
+		}
 		dir := filepath.Join(h.b.portraits.dir, c.PortraitID)
+		var bg *image.RGBA
+		var poses [4]*image.RGBA
+		loaded := false
 		if p, err := loadOrNormalizePoses(dir, pixelPortraitHeight); err == nil {
 			poses = p
 			loaded = true
@@ -811,12 +803,23 @@ func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA,
 		if b, err := loadBackgroundPNG(dir); err == nil {
 			bg = b
 		}
+		if !loaded {
+			poses = pixelPlaceholderPoses()
+		}
+		th := derivePixelTheme(bg, poses[:])
+		if loaded {
+			h.assetsMu.Lock()
+			if h.assets == nil {
+				h.assets = make(map[string]cachedAssets)
+			}
+			h.assets[c.PortraitID] = cachedAssets{bg: bg, poses: poses, theme: th}
+			h.assetsMu.Unlock()
+		}
+		return bg, poses, th
 	}
-	if !loaded {
-		poses = pixelPlaceholderPoses()
-	}
-	th := derivePixelTheme(bg, poses[:])
-	return bg, poses, th
+	poses := pixelPlaceholderPoses()
+	th := derivePixelTheme(nil, poses[:])
+	return nil, poses, th
 }
 
 func poseIndexForMood(pose companionPose) int {
@@ -824,16 +827,10 @@ func poseIndexForMood(pose companionPose) int {
 	case "sleepy":
 		return 1
 	case "speaking":
-		if pose.talkFrame%2 == 1 {
-			return 2
-		}
-		return 0
+		return 2
 	case "thinking":
 		return 3
 	default:
-		if pose.blinking {
-			return 1
-		}
 		return 0
 	}
 }
@@ -872,13 +869,9 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				case "listening", "speaking", "thinking":
 					status = r.pose.mood
 				}
-				bobY := 0
-				if r.pose.mood == "idle" && r.pose.bobFrame%2 == 1 {
-					bobY = 1
-				}
-				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, r.weather, r.weatherTick, status, bobY, "", r.menuHint, r.listenFrac)
+				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, r.weather, status, "", r.listenWindow)
 				switch {
-				case status == "listening" && r.listenFrac >= 0:
+				case status == "listening" && r.listenWindow:
 					hits = []hitBox{{id: "listen-stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
 					r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
 				case status == "listening":
@@ -899,7 +892,10 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
 				default:
 					hits = []hitBox{{id: "listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
-					r.view.actions = map[string]sceneAction{"listen": {"listen", ""}}
+					if status == "" {
+						hits = addLogicalHit(hits, spec, "menu", pixelHomeMenuButtonRect(spec))
+					}
+					r.view.actions = map[string]sceneAction{"listen": {"listen", ""}, "menu": {"menu", ""}}
 				}
 			}
 			if err == nil && img != nil {
@@ -1051,6 +1047,24 @@ func (d *wsTerminal) brightness() int {
 	return 85
 }
 
+func (h *wsHub) renderWeatherChange() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	now := time.Now()
+	for _, d := range h.terminals {
+		if !h.active(d) || d.asleep || d.drawer != "" || d.app != nil || d.view != nil || d.card != nil {
+			continue
+		}
+		h.render(d, now, false)
+	}
+}
+
 func (h *wsHub) animate(ctx context.Context) {
 	tick := time.NewTicker(40 * time.Millisecond)
 	defer tick.Stop()
@@ -1069,7 +1083,7 @@ func (h *wsHub) animate(ctx context.Context) {
 			now := time.Now()
 			checkGrade := h.atmosphere && !now.Before(nextGrade)
 			if checkGrade {
-				nextGrade = now.Truncate(time.Minute).Add(time.Minute)
+				nextGrade = now.Truncate(30 * time.Minute).Add(30 * time.Minute)
 			}
 			for _, d := range h.terminals {
 				if !h.active(d) {
@@ -1088,22 +1102,11 @@ func (h *wsHub) animate(ctx context.Context) {
 					h.setSleeping(d, true)
 					h.render(d, now, false)
 				case d.asleep && d.caps.PanelSleep && !d.virtual():
-					// The battery board's panel is off; skip idle animation traffic.
+					// The battery board's panel is off; skip idle updates.
 				case d.drawer == "stats" && !d.asleep && now.Sub(d.statsAt) >= diagInterval:
 					h.render(d, now, false)
 				case d.stopTapsExpired(now):
 					h.render(d, now, false)
-				case (d.drawer == "" || d.asleep) && (d.app == nil && d.view == nil || d.asleep || d.recording.active()):
-					if d.recording.active() && d.recording.listen && !d.asleep && d.drawer == "" && now.Sub(d.listenRenderAt) >= time.Second {
-						d.listenRenderAt = now
-						h.render(d, now, false)
-					} else if !d.asleep && d.drawer == "" && h.b != nil && h.b.weather != nil && h.b.weather.kind() != weatherClear && now.Sub(d.weatherAt) >= 400*time.Millisecond {
-						d.weatherAt = now
-						d.weatherTick++
-						h.render(d, now, false)
-					} else if h.companionPose(d, now, d.pose.mood) != d.pose {
-						h.render(d, now, false)
-					}
 				}
 			}
 			h.tickApps(now)

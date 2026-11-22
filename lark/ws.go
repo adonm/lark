@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"image"
 	"net"
 	"strings"
 	"sync"
@@ -80,6 +81,14 @@ type wsHub struct {
 	voiceOwners       map[string]string
 	companionStatuses map[string]companionStatusState
 	resumes           map[[resumeTokenLen]byte]*resumeEntry
+	assetsMu          sync.RWMutex
+	assets            map[string]cachedAssets
+}
+
+type cachedAssets struct {
+	bg    *image.RGBA
+	poses [4]*image.RGBA
+	theme pixelTheme
 }
 
 func newWSHub(b *larkServer, atmosphere bool) *wsHub {

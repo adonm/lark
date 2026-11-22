@@ -95,7 +95,7 @@ func TestWeatherEffectsModifyCanvas(t *testing.T) {
 		drawDefaultPixelBackground(base)
 		wx := newPixelCanvas(120, 120)
 		drawDefaultPixelBackground(wx)
-		applyWeatherEffects(wx, kind, 23)
+		applyWeatherEffects(wx, kind)
 		diff := 0
 		for i := 0; i < len(base.img.Pix); i += 4 {
 			if base.img.Pix[i] != wx.img.Pix[i] || base.img.Pix[i+1] != wx.img.Pix[i+1] || base.img.Pix[i+2] != wx.img.Pix[i+2] {

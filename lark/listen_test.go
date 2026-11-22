@@ -375,14 +375,13 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 
 func TestListenModeCountdownIndicator(t *testing.T) {
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
-		idle := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, 0, "", 0, "", false, -1)
-		half := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, 0, "listening", 0, "", false, 0.5)
-		full := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, 0, "listening", 0, "", false, 1.0)
-		if idle.Bounds() != half.Bounds() || half.Bounds() != full.Bounds() {
+		idle := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, "", "", false)
+		listen := renderPixelHomeListen(spec, nil, nil, gradeDay, weatherClear, "listening", "", true)
+		if idle.Bounds() != listen.Bounds() {
 			t.Fatalf("unexpected bounds mismatch for %dx%d", spec.logicalW, spec.logicalH)
 		}
-		if string(half.Pix) == string(full.Pix) {
-			t.Fatalf("countdown bar did not change between 50%% and 100%% for %dx%d", spec.logicalW, spec.logicalH)
+		if string(idle.Pix) == string(listen.Pix) {
+			t.Fatalf("listening indicator did not change from idle for %dx%d", spec.logicalW, spec.logicalH)
 		}
 	}
 }

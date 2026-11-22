@@ -87,10 +87,15 @@ func (s *testWS) up(t *testing.T, x, y int, rev uint16) {
 	s.sendProto(t, msgPointer, encodePointer(ptrUp, uint16(x), uint16(y), rev))
 }
 
-func (s *testWS) swipeUp(t *testing.T) {
+func (s *testWS) tapMenuSpec(t *testing.T, spec pixelDisplaySpec) {
 	t.Helper()
-	s.drag(t, 160, 180, 0)
-	s.up(t, 160, 100, 0)
+	btn := physicalRect(pixelHomeMenuButtonRect(spec), spec.artScale)
+	s.tap(t, (btn.Min.X+btn.Max.X)/2, (btn.Min.Y+btn.Max.Y)/2, 0)
+}
+
+func (s *testWS) tapMenu(t *testing.T) {
+	t.Helper()
+	s.tapMenuSpec(t, pixelSpecVoCat)
 }
 
 func (s *testWS) recStart(t *testing.T, target string) {

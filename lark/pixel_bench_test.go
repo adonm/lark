@@ -8,7 +8,7 @@ func BenchmarkRenderPixelHome(b *testing.B) {
 		b.Run(spec.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				_ = renderPixelHome(spec, nil, poses[0], gradeDay, "listening", 0, "", false)
+				_ = renderPixelHome(spec, nil, poses[0], gradeDay, "listening", "")
 			}
 		})
 	}

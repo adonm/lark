@@ -105,8 +105,8 @@ func TestAtmosphereGradesDifferInLuminanceAndHue(t *testing.T) {
 }
 
 func TestAtmosphereCache(t *testing.T) {
-	day := renderPixelHome(pixelSpecBox3, nil, nil, gradeDay, "", 0, "", false)
-	night := renderPixelHome(pixelSpecBox3, nil, nil, gradeNight, "", 0, "", false)
+	day := renderPixelHome(pixelSpecBox3, nil, nil, gradeDay, "", "")
+	night := renderPixelHome(pixelSpecBox3, nil, nil, gradeNight, "", "")
 	if day.Bounds() != night.Bounds() {
 		t.Fatalf("bounds mismatch: %v vs %v", day.Bounds(), night.Bounds())
 	}
@@ -128,7 +128,7 @@ func BenchmarkRenderAtmosphere(b *testing.B) {
 	}{{"day", gradeDay}, {"night", gradeNight}} {
 		b.Run(tc.name, func(b *testing.B) {
 			for range b.N {
-				_ = renderPixelHome(pixelSpecVoCat, nil, nil, tc.g, "", 0, "", false)
+				_ = renderPixelHome(pixelSpecVoCat, nil, nil, tc.g, "", "")
 			}
 		})
 	}

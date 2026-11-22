@@ -63,7 +63,7 @@ func menuFrame(t *testing.T, c *testWS, want ...string) string {
 func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 	t.Helper()
 	if id == "menu" {
-		c.swipeUp(t)
+		c.tapMenu(t)
 		return menuFrame(t, c, want...)
 	}
 	x, y, ok := hitCenter(lastMenuSVG[c], id)
@@ -256,35 +256,38 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	}
 }
 
-func TestHomeTapStartsRecordingAndSwipeUpOpensMenu(t *testing.T) {
+func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 	for _, tc := range []struct {
 		name, termID, board string
+		spec                pixelDisplaySpec
 		shape               uint8
 		w, h                uint16
 		tapX, tapY          int
 	}{
-		{"vocat", "vocat-tap1", "esp-vocat", shapeRound, 360, 360, 180, 180},
-		{"box3", "box3-tap1", "esp-box-3", shapeRect, 320, 240, 160, 120},
+		{"vocat", "vocat-tap1", "esp-vocat", pixelSpecVoCat, shapeRound, 360, 360, 180, 180},
+		{"box3", "box3-tap1", "esp-box-3", pixelSpecBox3, shapeRect, 320, 240, 160, 120},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
 			_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
 			dev := testConnectWS(t, base, "unit", false)
 			dev.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
-				protoVersion: protoVersion1, kind: termKindHardware, capsMask: capDrag | capBridgeEndpoint,
+				protoVersion: protoVersion1, kind: termKindHardware, capsMask: capDrag | capBridgeEndpoint | capPointerRev,
 				displayFormats: dispRGB565, frameCodecs: codecBitAll,
 				width: tc.w, height: tc.h, shape: tc.shape, terminalID: tc.termID, board: tc.board,
-				firmware: "0.15.0", token: "unit", companionID: "cake",
+				firmware: "0.16.0", token: "unit", companionID: "cake",
 			}))
 			dev.until(t, hasProto(msgWelcome, ""))
-			dev.until(t, isDisplay)
+			first := dev.until(t, isDisplay)
+			_, rev0, _ := decodeDisplay(t, first)
 
-			// Tap anywhere on Home starts recording.
-			dev.tap(t, tc.tapX, tc.tapY, 0)
+			// Tap anywhere outside Menu on Home starts recording.
+			dev.tap(t, tc.tapX, tc.tapY, rev0)
 			dev.until(t, func(f wsFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetListen == 0
 			})
+			dev.until(t, isDisplay)
 			b.ws.mu.Lock()
 			d := b.ws.terminals[tc.termID]
 			rec := d.recording.active()
@@ -302,16 +305,22 @@ func TestHomeTapStartsRecordingAndSwipeUpOpensMenu(t *testing.T) {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 			})
+			fIdle := dev.until(t, isDisplay)
+			_, revIdle, _ := decodeDisplay(t, fIdle)
 
-			// Swipe up on Home opens Menu without starting recording.
-			dev.swipeUp(t)
+			// Tap Menu button on Home opens Menu without starting recording.
+			btn := physicalRect(pixelHomeMenuButtonRect(tc.spec), tc.spec.artScale)
+			if btn.Dx() < 48 || btn.Dy() < 48 {
+				t.Fatalf("menu button %v smaller than 48px physical", btn)
+			}
+			dev.tap(t, (btn.Min.X+btn.Max.X)/2, (btn.Min.Y+btn.Max.Y)/2, revIdle)
 			waitSVG(t, b.ws, tc.termID, "menu-intercom")
 			b.ws.mu.Lock()
 			rec = d.recording.active()
 			drawer = d.drawer
 			b.ws.mu.Unlock()
 			if rec || drawer != drawerMenu {
-				t.Fatalf("swipe up: recording=%v drawer=%q, want false and %q", rec, drawer, drawerMenu)
+				t.Fatalf("menu tap: recording=%v drawer=%q, want false and %q", rec, drawer, drawerMenu)
 			}
 		})
 	}

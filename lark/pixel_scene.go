@@ -13,9 +13,6 @@ import (
 
 type companionPose struct {
 	mood        string
-	blinking    bool
-	bobFrame    int
-	talkFrame   int
 	battery     int
 	volume      int
 	charging    bool
@@ -25,17 +22,9 @@ type companionPose struct {
 }
 
 func poseFrame(now, moodAt, last time.Time, mood string, pct, vol int, charging, showMeter bool) companionPose {
-	elapsed := max(0, now.Sub(moodAt))
-	ms := int(elapsed.Milliseconds())
-	blinking := mood == "idle" && (ms%4200) < 160
-	bobFrame := (ms / 900) % 2
-	talkFrame := (ms / 180) % 2
-	_ = last
+	_, _, _ = now, moodAt, last
 	return companionPose{
 		mood:      mood,
-		blinking:  blinking,
-		bobFrame:  bobFrame,
-		talkFrame: talkFrame,
 		battery:   pct,
 		volume:    vol,
 		charging:  charging,

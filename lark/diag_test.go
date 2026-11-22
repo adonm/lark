@@ -142,7 +142,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		t.Fatalf("invalid device telemetry: %+v", d)
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
-	board.swipeUp(t)
+	board.tapMenuSpec(t, pixelSpecBox3)
 	svg := waitSVG(t, b.ws, id, "menu-more")
 	mx, my, ok := hitCenter(svg, "menu-more")
 	if !ok {

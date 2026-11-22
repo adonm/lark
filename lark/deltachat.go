@@ -336,7 +336,7 @@ func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
 	if !loaded {
 		poses = pixelPlaceholderPoses()
 	}
-	img := renderPixelHome(pixelSpecVoCat, bg, poses[0], gradeDay, "", 0, "", false)
+	img := renderPixelHome(pixelSpecVoCat, bg, poses[0], gradeDay, "", "")
 	return imageToPNG(img)
 }
 

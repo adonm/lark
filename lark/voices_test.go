@@ -169,7 +169,7 @@ func TestMenuVoicePicker(t *testing.T) {
 	const id = "cake"
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, termID, "Cake")
-	c.swipeUp(t)
+	c.tapMenu(t)
 	waitSVG(t, b.ws, termID, "menu-next")
 	c.tap(t, 248, 294, 0)
 	p2svg := waitSVG(t, b.ws, termID, "menu-voice")

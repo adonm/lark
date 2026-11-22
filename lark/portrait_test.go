@@ -308,8 +308,8 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	if err != nil || poses[0] == nil {
 		t.Fatalf("loadOrNormalizePoses: %v", err)
 	}
-	day := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeDay, "", 0, "", false)
-	night := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeNight, "", 0, "", false)
+	day := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeDay, "", "")
+	night := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeNight, "", "")
 	if day.RGBAAt(180, 180) == night.RGBAAt(180, 180) {
 		t.Fatal("portrait home was not graded")
 	}
