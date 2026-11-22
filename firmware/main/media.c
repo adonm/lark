@@ -18,7 +18,7 @@
 #include "wake_word.h"
 #include "net_client.h"
 
-enum { TTS_BYTES = 1024 * 1024, TTS_BLOCK = 1280 };
+enum { TTS_BYTES = 256 * 1024, TTS_BLOCK = 1280 };
 typedef enum { RECORD, STREAM, CHIME, WAKE_CONTROL } job_kind_t;
 typedef struct {
     job_kind_t kind;
@@ -39,7 +39,8 @@ static StaticStreamBuffer_t tts_control;
 // A queued STREAM job is a wakeup for the latest generation, not a second buffer owner.
 static struct {
     uint32_t serial, session, audio_id;
-    bool open, ended, queued;
+    atomic_bool open, ended;
+    bool queued;
 } stream;
 static atomic_bool recording, stop_recording, cancel_recording;
 static atomic_bool wake_enabled;
@@ -67,9 +68,9 @@ void media_set_wake_word(bool enabled)
 
 static void interrupt_locked(void)
 {
-    if (stream.open) {
+    if (atomic_load_explicit(&stream.open, memory_order_acquire)) {
         audio_stop_playback();
-        stream.open = false;
+        atomic_store_explicit(&stream.open, false, memory_order_release);
         xTaskNotifyGive(media_task);
         net_client_tts_ack(stream.session, stream.audio_id, true);
     }
@@ -129,14 +130,16 @@ bool media_tts_start(uint32_t audio_id)
     if (!jobs) return false;
     xSemaphoreTake(lock, portMAX_DELAY);
     uint32_t session = net_client_session();
-    bool accepted = session && !recording && !stream.open && xStreamBufferReset(tts) == pdPASS &&
+    bool open = atomic_load_explicit(&stream.open, memory_order_acquire);
+    bool accepted = session && !recording && !open && xStreamBufferReset(tts) == pdPASS &&
                     (stream.queued || submit(&(job_t){ .kind = STREAM }));
     if (accepted) {
         ++stream.serial;
         stream.session = session;
         stream.audio_id = audio_id;
-        stream.open = stream.queued = true;
-        stream.ended = false;
+        stream.queued = true;
+        atomic_store_explicit(&stream.ended, false, memory_order_release);
+        atomic_store_explicit(&stream.open, true, memory_order_release);
         atomic_store_explicit(&tts_await_first, true, memory_order_relaxed);
     }
     xSemaphoreGive(lock);
@@ -145,34 +148,29 @@ bool media_tts_start(uint32_t audio_id)
 
 void media_tts_end(void)
 {
-    xSemaphoreTake(lock, portMAX_DELAY);
-    if (stream.open) {
-        stream.ended = true;
+    if (atomic_load_explicit(&stream.open, memory_order_acquire)) {
+        atomic_store_explicit(&stream.ended, true, memory_order_release);
         xTaskNotifyGive(media_task);
     }
-    xSemaphoreGive(lock);
 }
 
 bool media_tts_pcm(const void *data, size_t bytes)
 {
-    xSemaphoreTake(lock, portMAX_DELAY);
-    bool accepted = false;
-    if (stream.open && !stream.ended) {
-        // The net_service task must not wait for speaker space; writes and reads
-        // only hold this lock for the short buffer copies, never codec I/O.
-        if (xStreamBufferSpacesAvailable(tts) >= bytes && xStreamBufferSend(tts, data, bytes, 0) == bytes) {
-            if (atomic_exchange_explicit(&tts_await_first, false, memory_order_relaxed)) {
-                atomic_store_explicit(&tts_first_byte_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
-            }
-            accepted = true;
-            xTaskNotifyGive(media_task);
-        } else {
-            atomic_fetch_add_explicit(&telemetry_io.audio_drops, 1, memory_order_relaxed);
-            interrupt_locked();
-        }
+    if (!atomic_load_explicit(&stream.open, memory_order_acquire) ||
+        atomic_load_explicit(&stream.ended, memory_order_acquire)) {
+        return false;
     }
-    xSemaphoreGive(lock);
-    return accepted;
+    // Single-producer/single-consumer StreamBuffer: lock-free between net_service and media.
+    if (xStreamBufferSpacesAvailable(tts) >= bytes && xStreamBufferSend(tts, data, bytes, 0) == bytes) {
+        if (atomic_exchange_explicit(&tts_await_first, false, memory_order_relaxed)) {
+            atomic_store_explicit(&tts_first_byte_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
+        }
+        xTaskNotifyGive(media_task);
+        return true;
+    }
+    atomic_fetch_add_explicit(&telemetry_io.audio_drops, 1, memory_order_relaxed);
+    media_interrupt();
+    return false;
 }
 
 void media_chime(audio_tone_t tone)
@@ -180,7 +178,7 @@ void media_chime(audio_tone_t tone)
     if (!jobs) return;
     xSemaphoreTake(lock, portMAX_DELAY);
     if (!recording) {
-        if (stream.open && tone == AUDIO_HAPPY_TONE) {
+        if (atomic_load_explicit(&stream.open, memory_order_acquire) && tone == AUDIO_HAPPY_TONE) {
             audio_request_chime();
         } else {
             submit(&(job_t){ .kind = CHIME, .tone = tone, .chime_epoch = chime_epoch });
@@ -210,15 +208,10 @@ static void record(job_t *job)
 {
     bool started = !atomic_load(&cancel_recording) && net_client_rec_start(job->session, job->rec_session, job->target);
     bool cancelled = true;
-    if (started) {
-        if (!job->listen) {
-            audio_tone(AUDIO_START_TONE, capture_cancelled, NULL);
-        }
-        if (!capture_cancelled(NULL)) {
-            esp_err_t err = audio_record_stream(job->bridge_endpoint, job->listen, net_client_rec_buf(),
-                                                stop_capture, upload_pcm, job);
-            cancelled = err != ESP_OK || capture_cancelled(NULL);
-        }
+    if (started && !capture_cancelled(NULL)) {
+        esp_err_t err = audio_record_stream(job->bridge_endpoint, job->listen, net_client_rec_buf(),
+                                            stop_capture, upload_pcm, job);
+        cancelled = err != ESP_OK || capture_cancelled(NULL);
     }
     xSemaphoreTake(lock, portMAX_DELAY);
     recording = false;
@@ -228,14 +221,14 @@ static void record(job_t *job)
 
 static bool owns_stream(uint32_t serial)
 {
-    return stream.open && stream.serial == serial;
+    return atomic_load_explicit(&stream.open, memory_order_acquire) && stream.serial == serial;
 }
 
 static void play(void)
 {
     xSemaphoreTake(lock, portMAX_DELAY);
     stream.queued = false;
-    bool open = stream.open;
+    bool open = atomic_load_explicit(&stream.open, memory_order_acquire);
     uint32_t serial = stream.serial;
     if (open) audio_stream_begin();
     xSemaphoreGive(lock);
@@ -246,12 +239,9 @@ static void play(void)
     esp_err_t err = ESP_OK;
     bool played = false, starved = false;
     while (err == ESP_OK) {
-        xSemaphoreTake(lock, portMAX_DELAY);
         bool owns = owns_stream(serial);
-        // Keep receive/reset serialized; waits and codec I/O must not hold this lock.
         size_t bytes = owns ? xStreamBufferReceive(tts, chunk, sizeof(chunk), 0) : 0;
-        bool done = !owns || (stream.ended && !bytes);
-        xSemaphoreGive(lock);
+        bool done = !owns || (atomic_load_explicit(&stream.ended, memory_order_acquire) && !bytes);
         if (done) break;
         if (bytes % sizeof(*chunk)) {
             err = ESP_ERR_INVALID_SIZE;
@@ -277,7 +267,7 @@ static void play(void)
     esp_err_t end = audio_stream_end();
     xSemaphoreTake(lock, portMAX_DELAY);
     if (owns_stream(serial)) {
-        stream.open = false;
+        atomic_store_explicit(&stream.open, false, memory_order_release);
         net_client_tts_ack(stream.session, stream.audio_id, err != ESP_OK || end != ESP_OK);
     }
     xSemaphoreGive(lock);

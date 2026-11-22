@@ -7,6 +7,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "nvs.h"
@@ -88,9 +89,11 @@ esp_err_t audio_read_10ms(int16_t pcm[AUDIO_10MS])
 esp_err_t audio_drain_input(void)
 {
     int16_t pcm[FRAMES];
-    // Drop buffered RX, including any frames containing the confirmation tone.
+    // Discard only stale frames already buffered in RX DMA without blocking for fresh ones.
     for (int i = 0; i < DMA_TAIL / FRAMES; ++i) {
+        int64_t t0 = esp_timer_get_time();
         ESP_RETURN_ON_ERROR(audio_read_10ms(pcm), TAG, "Drain mic DMA");
+        if (esp_timer_get_time() - t0 >= 3000) break;
     }
     return ESP_OK;
 }
@@ -194,14 +197,28 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
 {
     _Static_assert(AUDIO_RECORD_CHUNK_SAMPLES % FRAMES == 0, "Chunk must contain whole VAD frames");
     ESP_RETURN_ON_FALSE(chunk_buf, ESP_ERR_INVALID_ARG, TAG, "No record buffer");
-    ESP_RETURN_ON_ERROR(audio_drain_input(), TAG, "Prepare recording");
+
+    // Drain only already-buffered stale RX DMA frames (< 3 ms); keep the first fresh frame.
+    bool have_first = false;
+    for (int i = 0; i < 12; ++i) {
+        int64_t t0 = esp_timer_get_time();
+        ESP_RETURN_ON_ERROR(audio_read_10ms(chunk_buf), TAG, "Prepare recording");
+        if (esp_timer_get_time() - t0 >= 3000) {
+            have_first = true;
+            break;
+        }
+    }
 
     size_t samples = 0, pending = 0;
     size_t max_frames = listen ? LISTEN_MAX_FRAMES : MAX_FRAMES;
     vad_t vad = { 0 };
     while (samples < max_frames && !stop_requested()) {
         int16_t *dst = chunk_buf + pending;
-        ESP_RETURN_ON_ERROR(audio_read_10ms(dst), TAG, "Read mic");
+        if (have_first) {
+            have_first = false;
+        } else {
+            ESP_RETURN_ON_ERROR(audio_read_10ms(dst), TAG, "Read mic");
+        }
         uint64_t sum = 0;
         for (size_t i = 0; i < FRAMES; ++i) {
             int32_t sample = dst[i];
