@@ -341,10 +341,21 @@ func (d *wsTerminal) acceptPointerRevision(action string, rev *uint16) bool {
 		if rev == nil {
 			return false
 		}
-		return *rev == d.nativeRev
+		if !d.hasActionRev {
+			return *rev == d.nativeRev
+		}
+		return uint16(d.nativeRev-*rev) <= uint16(d.nativeRev-d.actionRev)
 	default:
 		return true
 	}
+}
+
+func hitsLayoutKey(hits []hitBox) string {
+	var b strings.Builder
+	for _, h := range hits {
+		fmt.Fprintf(&b, "%s:%d,%d,%d,%d;", h.id, h.x1, h.y1, h.x2, h.y2)
+	}
+	return b.String()
 }
 
 const stopTapWindow = 2500 * time.Millisecond

@@ -96,7 +96,10 @@ type wsTerminal struct {
 	storyPage     int
 	statsAt       time.Time
 	rev       uint64
-	nativeRev uint16
+	nativeRev     uint16
+	actionRev     uint16
+	hasActionRev  bool
+	actionHitsKey string
 	pose      companionPose
 	moodAt    time.Time
 	last      time.Time
@@ -1079,6 +1082,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			d.rev = rev
 			d.client.enqueueProto(msgFrame, native.data)
 			d.nativeRev = uint16(rev)
+			hk := hitsLayoutKey(screen.hits)
+			if !d.hasActionRev || hk != d.actionHitsKey {
+				d.actionHitsKey = hk
+				d.actionRev = d.nativeRev
+				d.hasActionRev = true
+			}
 			r.trace.measure(diagRender, screen.render)
 			codec := "RGB565"
 			switch native.data[9] {

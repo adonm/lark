@@ -81,3 +81,20 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
 	})
 }
+
+func TestAcceptPointerRevisionAllowsAnimationFrames(t *testing.T) {
+	d := wsTerminal{
+		caps:         terminalCaps{PointerRev: true},
+		nativeRev:    13,
+		actionRev:    10,
+		hasActionRev: true,
+	}
+	inFlight := uint16(12)
+	if !d.acceptPointerRevision("stop", &inFlight) {
+		t.Fatal("expected in-flight animation frame revision to be accepted for Stop")
+	}
+	stale := uint16(9)
+	if d.acceptPointerRevision("stop", &stale) {
+		t.Fatal("expected pre-action revision to be rejected for Stop")
+	}
+}
