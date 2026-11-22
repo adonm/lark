@@ -508,11 +508,22 @@ func (s *simTerminal) execLine(ctx context.Context, line string) (object, error)
 			return nil, errors.New("usage: tap-label <label>")
 		}
 		label := strings.Join(fields[1:], " ")
-		res, err := s.client.do(ctx, http.MethodGet, "/api/terminals/"+s.id+"/hits", nil)
-		if err != nil {
-			return nil, err
+		var res object
+		var x, y int
+		var matched string
+		var err error
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for {
+			res, err = s.client.do(ctx, http.MethodGet, "/api/terminals/"+s.id+"/hits", nil)
+			if err != nil {
+				return nil, err
+			}
+			x, y, matched, err = resolveHitLabel(res, label)
+			if err == nil || !time.Now().Before(deadline) {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		x, y, matched, err := resolveHitLabel(res, label)
 		if err != nil {
 			return nil, err
 		}
