@@ -225,6 +225,49 @@ func (u *utterance) add(pcm []byte, vad endpointVAD) {
 	}
 }
 
+const listenPreRollBytes = sampleRate * 2 * 400 / 1000
+
+func (u *utterance) addFor(pcm []byte, vad endpointVAD, listen bool) {
+	u.add(pcm, vad)
+	if listen && !u.policy.voiced && len(u.pcm) > listenPreRollBytes {
+		trim := len(u.pcm) - listenPreRollBytes
+		trim &^= 1
+		if trim > u.scan {
+			trim = u.scan
+		}
+		if trim > 0 {
+			copy(u.pcm, u.pcm[trim:])
+			u.pcm = u.pcm[:len(u.pcm)-trim]
+			u.scan -= trim
+		}
+	}
+}
+
+var fillerWords = map[string]bool{
+	"uh": true, "um": true, "umm": true, "er": true, "erm": true,
+	"ah": true, "eh": true, "oh": true, "hm": true, "hmm": true,
+	"mm": true, "mmm": true, "mhm": true, "huh": true,
+	"uh-huh": true, "mm-hmm": true,
+}
+
+func isFillerTranscript(s string) bool {
+	words := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(s)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '\''
+	})
+	if len(words) == 0 {
+		return true
+	}
+	if len(words) > 2 {
+		return false
+	}
+	for _, w := range words {
+		if !fillerWords[w] {
+			return false
+		}
+	}
+	return true
+}
+
 func pcmDuration(n int) time.Duration {
 	return time.Duration(n/2) * time.Second / sampleRate
 }

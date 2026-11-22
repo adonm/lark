@@ -375,7 +375,10 @@ func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, str
 			}
 		}
 		if err == nil && onChat != nil {
-			if entry := final.chat(source); entry.Text != "" || entry.ToolSummary != "" {
+			if entry := final.chat(source); (entry.Text != "" && !isSilentReply(entry.Text)) || entry.ToolSummary != "" {
+				if isSilentReply(entry.Text) {
+					entry.Text = ""
+				}
 				onChat(entry)
 			}
 		}

@@ -264,6 +264,7 @@ type turnChannel struct {
 	channel    string // "in_person", "deltachat", "timer"
 	sender     string
 	senderKind string // "contact", "companion"
+	replyTo    string // Delta Chat sender name when replying in listening mode
 }
 
 type turnOptions struct {
@@ -298,6 +299,8 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 		prefix = fmt.Sprintf("Delta Chat from %s (%s) · %s (%s)", sender, kind, companion.Name, companionID)
 	case ch.channel == "timer" || source == "timer":
 		prefix = fmt.Sprintf("Timer · %s (%s)", companion.Name, companionID)
+	case ch.replyTo != "":
+		prefix = fmt.Sprintf("In person at %s's device · replying to %s (Delta Chat) · %s (%s) · %s", companion.Name, ch.replyTo, companion.Name, companionID, source)
 	default:
 		prefix = fmt.Sprintf("In person at %s's device · %s (%s) · %s", companion.Name, companion.Name, companionID, source)
 	}
@@ -321,6 +324,12 @@ func turnPromptAt(companionID string, source, text string, companion companionSt
 
 func turnPromptChannelAt(companionID, source, text string, companion companionState, ch turnChannel, now time.Time) string {
 	return turnHeader(companionID, source, companion, ch, now) + "\n" + text
+}
+
+func isSilentReply(s string) bool {
+	t := strings.TrimSpace(s)
+	t = strings.TrimRight(t, ".!?")
+	return t == "" || strings.EqualFold(t, "[silent]")
 }
 
 // Play plain prose as soon as the first PCM is ready; reconcile against the
@@ -353,6 +362,9 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		published = false
 	}
 	onSentence := func(s string) {
+		if isSilentReply(s) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "[silent") {
+			return
+		}
 		start := time.Now()
 		clean, err := spokenText(s)
 		if err != nil || b.worker == nil || !b.worker.ready.Load() {
@@ -396,6 +408,10 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		return generatedReply{}, err
 	}
 	reply := strings.TrimSpace(fenced.ReplaceAllString(raw, ""))
+	if isSilentReply(reply) {
+		drop(true)
+		return generatedReply{"", sid, nil, time.Time{}}, nil
+	}
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
 	if speechErr == nil && (eager != nil || b.worker != nil && b.worker.ready.Load()) {
