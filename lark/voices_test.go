@@ -23,8 +23,7 @@ func TestTTSVoiceSelection(t *testing.T) {
 		{heartVoice, "en-us", 3}, {lilyVoice, "en-gb", 23}, {fableVoice, "en-gb", 25},
 		{"af_bella", "en-us", 2}, {"am_puck", "en-us", 18}, {"bm_george", "en-gb", 26},
 		{"bf_alice", "en-gb", 20}, {"bf_isabella", "en-gb", 22},
-		{"bf_emma", "en-gb", 23}, {"bm_lewis", "en-gb", 25},
-		{"", "en-us", 3}, {"unsupported", "en-us", 3},
+		{"", "en-us", 3},
 	} {
 		const text = "Café"
 		engine := fakeSpeechEngine(func(got string, voice voiceChoice, keepGoing func() bool) ([]float32, int) {
@@ -37,9 +36,18 @@ func TestTTSVoiceSelection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, bad := range []string{"bf_emma", "bm_lewis", "unsupported"} {
+		engine := fakeSpeechEngine(func(string, voiceChoice, func() bool) ([]float32, int) {
+			t.Fatalf("unknown voice %q should not reach engine", bad)
+			return nil, 0
+		})
+		if _, err := synthesizePCM(context.Background(), engine, bad, "Hello"); err == nil {
+			t.Errorf("unknown voice %q succeeded; want error", bad)
+		}
+	}
 }
 
-func TestRetiredVoicesRemainReadable(t *testing.T) {
+func TestUnknownStoredVoiceErrors(t *testing.T) {
 	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, "")
 	})
@@ -47,19 +55,18 @@ func TestRetiredVoicesRemainReadable(t *testing.T) {
 	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Legacy", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
-	for old, want := range map[string]string{
-		"bf_emma": lilyVoice, "bf_kelly": lilyVoice,
-		"bm_daniel": fableVoice, "bm_lewis": fableVoice, "retired": heartVoice,
-	} {
-		if _, err := b.db.Exec(`UPDATE companions SET voice=? WHERE id=?`, old, id); err != nil {
+	for _, bad := range []string{"bf_emma", "bf_kelly", "bm_daniel", "bm_lewis", "retired"} {
+		if _, err := b.db.Exec(`UPDATE companions SET voice=? WHERE id=?`, bad, id); err != nil {
 			t.Fatal(err)
 		}
-		if b.voices.allowed(old) || b.voices.get(id, "mint") != want || b.companionFor(id).Voice != want {
-			t.Errorf("%q did not resolve to %q", old, want)
+		if b.voices.allowed(bad) {
+			t.Errorf("%q unexpectedly allowed", bad)
 		}
-		var raw string
-		if err := b.db.QueryRow(`SELECT voice FROM companions WHERE id=?`, id).Scan(&raw); err != nil || raw != old {
-			t.Errorf("reading %q altered the stored voice to %q (%v)", old, raw, err)
+		if _, ok := b.companionByID(id); ok {
+			t.Errorf("companionByID(%q) succeeded with unknown stored voice %q", id, bad)
+		}
+		if _, err := b.allCompanions(t.Context()); err == nil {
+			t.Errorf("allCompanions succeeded with unknown stored voice %q", bad)
 		}
 	}
 }

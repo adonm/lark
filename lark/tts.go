@@ -54,9 +54,12 @@ func synthesizePCM(ctx context.Context, engine speechEngine, id, text string) ([
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	voice := voiceByID(storedVoice(id))
+	if id == "" {
+		id = heartVoice
+	}
+	voice := voiceByID(id)
 	if voice.ID == "" {
-		voice = voiceByID(heartVoice)
+		return nil, fmt.Errorf("unknown voice %q", id)
 	}
 	samples, rate := engine.generate(text, voice, func() bool { return ctx.Err() == nil })
 	if err := ctx.Err(); err != nil {

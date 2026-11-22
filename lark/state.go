@@ -59,27 +59,13 @@ func voiceByID(id string) voiceChoice {
 
 func voiceName(id string) string { return voiceByID(id).Name }
 
-func storedVoice(id string) string {
-	switch {
-	case id == "", voiceByID(id).ID != "":
-		return id
-	case strings.HasPrefix(id, "bf_"):
-		return lilyVoice
-	case strings.HasPrefix(id, "bm_"):
-		return fableVoice
-	default:
-		return heartVoice
-	}
-}
-
 type companionVoices struct {
 	db       *larkDB
 	fallback string
 }
 
 func companionVoiceStore(db *larkDB, fallback string) companionVoices {
-	fallback = storedVoice(fallback)
-	if fallback == "" {
+	if voiceByID(fallback).ID == "" {
 		fallback = heartVoice
 	}
 	return companionVoices{db: db, fallback: fallback}
@@ -109,7 +95,7 @@ func (v companionVoices) get(id, theme string) string {
 }
 
 func (v companionVoices) resolve(voice, theme string) string {
-	if voice := storedVoice(voice); voice != "" {
+	if voice != "" && voiceByID(voice).ID != "" {
 		return voice
 	}
 	return v.defaultFor(theme)

@@ -54,9 +54,14 @@ func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured int
 	err := row.Scan(&c.ID, &c.Name, &configured, &c.Personality, &c.Voice, &c.UpdatedAt, &c.DCAccountID, &c.Form, &c.PortraitID, &c.ListenSeconds)
+	if err != nil {
+		return c, err
+	}
 	c.Configured = configured != 0
-	c.Voice = storedVoice(c.Voice)
-	return c, err
+	if c.Voice != "" && voiceByID(c.Voice).ID == "" {
+		return c, fmt.Errorf("unknown stored voice %q for companion %s", c.Voice, c.ID)
+	}
+	return c, nil
 }
 
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
