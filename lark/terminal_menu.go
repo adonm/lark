@@ -494,7 +494,7 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, narrat
 			}
 			ry := listTop + i*(rowH+gapY)
 			id := fmt.Sprintf("story-%d", idx)
-			hits = addLogicalHit(hits, spec, id, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
+			hits = addLabeledHit(hits, spec, id, m.stories[idx].Title, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
 			acts[id] = sceneAction{"story-open", m.stories[idx].ID}
 		}
 		return img, hits, acts, nil

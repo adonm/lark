@@ -25,7 +25,7 @@ func inScreenCircle(x, y int) bool {
 }
 
 type hitBox struct {
-	id             string
+	id, label      string
 	x1, y1, x2, y2 int
 }
 

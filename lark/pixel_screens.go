@@ -490,7 +490,7 @@ func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, c
 			label := truncateEllipsisPx(ch.Label, dogica.Bold, bodyScale, pBox.Dx())
 			texts = addCenteredText(texts, pBox, label, dogica.Bold, bodyScale, pxInk)
 			id := fmt.Sprintf("choice-%d", i)
-			hits = addLogicalHit(hits, spec, id, r)
+			hits = addLabeledHit(hits, spec, id, ch.Label, r)
 			acts[id] = sceneAction{"story-choice", strconv.Itoa(i)}
 		}
 		navY := bottomY - btnNavH
@@ -502,8 +502,8 @@ func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, c
 		c.panel(backR.Min.X, backR.Min.Y, backR.Dx(), backR.Dy(), pxTileBG, th.border)
 		texts = addCenteredText(texts, physicalRect(prevR, s), "Prev", dogica.Bold, bodyScale, pxInk)
 		texts = addCenteredText(texts, physicalRect(backR, s), "Back", dogica.Bold, bodyScale, pxInk)
-		hits = addLogicalHit(hits, spec, "menu-prev", prevR)
-		hits = addLogicalHit(hits, spec, "menu-back", backR)
+		hits = addLabeledHit(hits, spec, "menu-prev", "Prev", prevR)
+		hits = addLabeledHit(hits, spec, "menu-back", "Back", backR)
 		acts["menu-prev"] = sceneAction{"menu-page", strconv.Itoa(page - 1)}
 		acts["menu-back"] = sceneAction{"menu-back", ""}
 		return finishPixelScreen(c, spec, texts), hits, acts, totalPages

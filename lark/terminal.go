@@ -166,6 +166,79 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		sendBytes(w, 200, "image/png", pngBytes)
 		return nil, nil
 	}
+	if id, ok := strings.CutSuffix(rest, "/hits"); ok && r.Method == http.MethodGet {
+		if b.ws == nil {
+			return nil, problem(503, "Terminal hub unavailable")
+		}
+		id = strings.ToLower(id)
+		if !terminalIDRE.MatchString(id) {
+			return nil, problem(400, "Invalid terminal ID")
+		}
+		b.ws.mu.Lock()
+		defer b.ws.mu.Unlock()
+		d := b.ws.terminals[id]
+		if d == nil || !b.ws.active(d) {
+			return nil, problem(404, "Terminal not connected")
+		}
+		screen := "home"
+		switch {
+		case d.asleep:
+			screen = "sleep"
+		case d.drawer != "":
+			screen = d.drawer
+		case d.card != nil:
+			screen = "card"
+		case d.view != nil:
+			screen = "view"
+		}
+		state := "idle"
+		switch {
+		case d.asleep:
+			state = "sleeping"
+		case d.recording.active():
+			state = "listening"
+		case d.pose.mood == "listening" || d.pose.mood == "thinking" || d.pose.mood == "speaking":
+			state = d.pose.mood
+		case d.busy:
+			state = "thinking"
+		}
+		w, h := d.screen.width, d.screen.height
+		if w == 0 || h == 0 {
+			w, h = screenSize, screenSize
+		}
+		type hitEntry struct {
+			ID     string `json:"id"`
+			Label  string `json:"label,omitempty"`
+			Action string `json:"action,omitempty"`
+			Value  string `json:"value,omitempty"`
+			X1     int    `json:"x1"`
+			Y1     int    `json:"y1"`
+			X2     int    `json:"x2"`
+			Y2     int    `json:"y2"`
+		}
+		hits := make([]hitEntry, 0, len(d.svg.hits))
+		for _, hb := range d.svg.hits {
+			act := d.scene.actions[hb.id]
+			hits = append(hits, hitEntry{
+				ID:     hb.id,
+				Label:  hb.label,
+				Action: act.kind,
+				Value:  act.value,
+				X1:     hb.x1,
+				Y1:     hb.y1,
+				X2:     hb.x2,
+				Y2:     hb.y2,
+			})
+		}
+		return object{
+			"terminal_id": d.id,
+			"screen":      screen,
+			"state":       state,
+			"width":       w,
+			"height":      h,
+			"hits":        hits,
+		}, nil
+	}
 	if strings.Contains(rest, "/") {
 		return nil, problem(404, "Not found")
 	}

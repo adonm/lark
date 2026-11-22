@@ -923,15 +923,15 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, status, "", r.listenWindow)
 				switch {
 				case status == "listening" && r.listenWindow:
-					hits = []hitBox{{id: "listen-stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+					hits = []hitBox{{id: "listen-stop", label: "Stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
 					r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
 				case status == "listening":
 					btnH := pixelNavHeight(spec)
 					y := spec.safe.Max.Y - btnH
 					gap := 4
 					bw := (spec.safe.Dx() - gap) / 2
-					hits = addLogicalHit(hits, spec, "rec-cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
-					hits = addLogicalHit(hits, spec, "rec-send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
+					hits = addLabeledHit(hits, spec, "rec-cancel", "Cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
+					hits = addLabeledHit(hits, spec, "rec-send", "Send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
 					r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
 				case status == "thinking" || status == "speaking":
 					btnW, btnH := 42, pixelNavHeight(spec)
@@ -939,12 +939,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 						btnW = 48
 					}
 					btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
-					hits = addLogicalHit(hits, spec, "stop", btn)
+					hits = addLabeledHit(hits, spec, "stop", "Stop", btn)
 					r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
 				default:
-					hits = []hitBox{{id: "listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+					hits = []hitBox{{id: "listen", label: "Listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
 					if status == "" {
-						hits = addLogicalHit(hits, spec, "menu", pixelHomeMenuButtonRect(spec))
+						hits = addLabeledHit(hits, spec, "menu", "Menu", pixelHomeMenuButtonRect(spec))
 					}
 					r.view.actions = map[string]sceneAction{"listen": {"listen", ""}, "menu": {"menu", ""}}
 				}

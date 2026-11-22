@@ -536,6 +536,34 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	return generatedReply{reply, sid, stream, ttsStart}, nil
 }
 
+func (b *larkServer) ttsAPI(w http.ResponseWriter, r *http.Request) error {
+	obj, err := jsonBody(r)
+	if err != nil {
+		return err
+	}
+	text := strings.TrimSpace(str(obj["text"]))
+	if text == "" {
+		return problem(400, "Expected non-empty text")
+	}
+	voice := strings.TrimSpace(str(obj["voice"]))
+	if voice == "" {
+		voice = heartVoice
+	}
+	if b.worker == nil {
+		return problem(503, "TTS unavailable")
+	}
+	pcm, err := b.worker.synthesize(r.Context(), voice, text)
+	if err != nil {
+		return problem(503, err.Error())
+	}
+	hdr := wavHeader(len(pcm))
+	out := make([]byte, len(hdr)+len(pcm))
+	copy(out, hdr[:])
+	copy(out[len(hdr):], pcm)
+	sendBytes(w, 200, "audio/wav", out)
+	return nil
+}
+
 func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
 	switch {
@@ -543,6 +571,8 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 		return b.companionAPI(w, r, path)
 	case path == "/api/terminals" || strings.HasPrefix(path, "/api/terminals/"):
 		return b.terminalAPI(w, r, path)
+	case path == "/api/tts" && r.Method == http.MethodPost:
+		return nil, b.ttsAPI(w, r)
 	}
 	if r.Method == http.MethodGet {
 		switch {

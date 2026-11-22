@@ -138,18 +138,23 @@ func menuClip(s string, maxRunes int) string {
 	return string(r[:max(1, maxRunes-1)]) + "…"
 }
 
-func addLogicalHit(hits []hitBox, spec pixelDisplaySpec, id string, r image.Rectangle) []hitBox {
+func addLabeledHit(hits []hitBox, spec pixelDisplaySpec, id, label string, r image.Rectangle) []hitBox {
 	if id == "" || r.Empty() {
 		return hits
 	}
 	s := spec.artScale
 	return append(hits, hitBox{
-		id: id,
-		x1: r.Min.X * s,
-		y1: r.Min.Y * s,
-		x2: r.Max.X*s - 1,
-		y2: r.Max.Y*s - 1,
+		id:    id,
+		label: label,
+		x1:    r.Min.X * s,
+		y1:    r.Min.Y * s,
+		x2:    r.Max.X*s - 1,
+		y2:    r.Max.Y*s - 1,
 	})
+}
+
+func addLogicalHit(hits []hitBox, spec pixelDisplaySpec, id string, r image.Rectangle) []hitBox {
+	return addLabeledHit(hits, spec, id, "", r)
 }
 
 func navBarHits(spec pixelDisplaySpec, page, totalPages int) ([]hitBox, map[string]sceneAction) {
@@ -165,14 +170,14 @@ func navBarHits(spec pixelDisplaySpec, page, totalPages int) ([]hitBox, map[stri
 
 	var hits []hitBox
 	actions := map[string]sceneAction{}
-	hits = addLogicalHit(hits, spec, "menu-back", midRect)
+	hits = addLabeledHit(hits, spec, "menu-back", "Back", midRect)
 	actions["menu-back"] = sceneAction{"menu-back", ""}
 	if page > 0 {
-		hits = addLogicalHit(hits, spec, "menu-prev", leftRect)
+		hits = addLabeledHit(hits, spec, "menu-prev", "Prev", leftRect)
 		actions["menu-prev"] = sceneAction{"menu-page", strconv.Itoa(page - 1)}
 	}
 	if page+1 < totalPages {
-		hits = addLogicalHit(hits, spec, "menu-next", rightRect)
+		hits = addLabeledHit(hits, spec, "menu-next", "Next", rightRect)
 		actions["menu-next"] = sceneAction{"menu-page", strconv.Itoa(page + 1)}
 	}
 	return hits, actions
@@ -285,7 +290,7 @@ func renderPixelListWithHits(spec pixelDisplaySpec, title string, items []tile, 
 		rowRect := image.Rect(rx, ry, rx+rw, ry+rowH)
 		c.panel(rx, ry, rw, rowH, pxTileBG, th.border)
 		if it.id != "" {
-			hits = addLogicalHit(hits, spec, it.id, rowRect)
+			hits = addLabeledHit(hits, spec, it.id, it.label, rowRect)
 			actions[it.id] = it.action
 		}
 		if sprite, ok := pxMenuSprites[it.icon]; ok {
@@ -349,7 +354,7 @@ func menuGridHits(spec pixelDisplaySpec, items []pixelMenuItem, page int, action
 		tx := spec.safe.Min.X + col*(tileW+gapX)
 		ty := gridTop + row*(tileH+gapY)
 		id, act := actionFn(item)
-		hits = addLogicalHit(hits, spec, id, image.Rect(tx, ty, tx+tileW, ty+tileH))
+		hits = addLabeledHit(hits, spec, id, item.label, image.Rect(tx, ty, tx+tileW, ty+tileH))
 		actions[id] = act
 	}
 	return hits, actions
