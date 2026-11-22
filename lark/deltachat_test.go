@@ -1166,7 +1166,7 @@ func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
 	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_listen","seconds":120}}`)
 	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_voice","voice":"bf_lily"}}`)
 	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_volume","terminal":"box3-xdc","volume":45}}`)
-	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"open_book","app":"lost_island"}}`)
+	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"open_story","app":"lost_island"}}`)
 
 	if got := b.companionFor("greg").ListenSeconds; got != 120 {
 		t.Fatalf("listen_seconds = %d, want 120", got)
@@ -1200,5 +1200,71 @@ func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
 	stub.mu.Unlock()
 	if unverifiedReplies != 1 { // only the injected client update itself, no ack/state reply
 		t.Fatalf("expected no reply updates for unverified sender, got %d", unverifiedReplies)
+	}
+}
+
+func TestDeltaChatStoryImportAndExport(t *testing.T) {
+	b, _, stub := dcTestHarness(t)
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc := b.dc
+	stub.mu.Lock()
+	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+	stub.chatContacts[greg.DCAccountID][200] = []uint32{deltachat.ContactSelf, 10}
+	stub.mu.Unlock()
+
+	tweePath := filepath.Join(t.TempDir(), "woods.twee")
+	if err := os.WriteFile(tweePath, []byte(sampleBranchingTwee), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Import .twee attachment.
+	stub.mu.Lock()
+	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, ViewType: deltachat.ViewtypeFile, File: &tweePath}
+	stub.mu.Unlock()
+	dc.handleMessage(t.Context(), greg.DCAccountID, 1)
+
+	// Second import of same title gets -2 suffix.
+	stub.mu.Lock()
+	stub.msgs[greg.DCAccountID][2] = deltachat.Message{Id: 2, ChatId: 200, FromId: 10, ViewType: deltachat.ViewtypeFile, File: &tweePath}
+	stub.mu.Unlock()
+	dc.handleMessage(t.Context(), greg.DCAccountID, 2)
+
+	stories, err := b.listStories(t.Context())
+	if err != nil || len(stories) != 2 {
+		t.Fatalf("expected 2 imported stories, got %d (%v)", len(stories), err)
+	}
+
+	// /stories lists them; /story sends .twee + .xdc.
+	stub.mu.Lock()
+	stub.msgs[greg.DCAccountID][3] = deltachat.Message{Id: 3, ChatId: 200, FromId: 10, Text: "/stories", ViewType: deltachat.ViewtypeText}
+	stub.msgs[greg.DCAccountID][4] = deltachat.Message{Id: 4, ChatId: 200, FromId: 10, Text: "/story the-whispering-woods", ViewType: deltachat.ViewtypeText}
+	stub.mu.Unlock()
+	dc.handleMessage(t.Context(), greg.DCAccountID, 3)
+	dc.handleMessage(t.Context(), greg.DCAccountID, 4)
+
+	stub.mu.Lock()
+	sent := slices.Clone(stub.sent)
+	stub.mu.Unlock()
+	if len(sent) < 5 {
+		t.Fatalf("expected import replies, /stories list, and .twee + .xdc sends, got %d messages", len(sent))
+	}
+	var sawList, sawTwee, sawXDC bool
+	for _, m := range sent {
+		if m.data.Text != nil && strings.Contains(*m.data.Text, "The Whispering Woods") {
+			sawList = true
+		}
+		if m.data.Viewtype != nil && *m.data.Viewtype == deltachat.ViewtypeFile {
+			sawTwee = true
+		}
+		if m.data.Viewtype != nil && *m.data.Viewtype == deltachat.ViewtypeWebxdc {
+			sawXDC = true
+		}
+	}
+	if !sawList || !sawTwee || !sawXDC {
+		t.Fatalf("missing expected sends: list=%v twee=%v xdc=%v", sawList, sawTwee, sawXDC)
 	}
 }

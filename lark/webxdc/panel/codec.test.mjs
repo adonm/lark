@@ -7,15 +7,10 @@ const codec = require("./codec.js");
 
 test("encodeCommand builds versioned payloads", () => {
   assert.deepEqual(codec.encodeCommand("sync"), { v: 1, op: "sync" });
-  assert.deepEqual(codec.encodeCommand("open_book", { app: "lost_island" }), {
+  assert.deepEqual(codec.encodeCommand("open_story", { app: "lost_island" }), {
     v: 1,
-    op: "open_book",
+    op: "open_story",
     app: "lost_island",
-  });
-  assert.deepEqual(codec.encodeCommand("play_game", { app: "math_game" }), {
-    v: 1,
-    op: "play_game",
-    app: "math_game",
   });
   assert.deepEqual(codec.encodeCommand("set_voice", { voice: "bf_lily" }), {
     v: 1,
@@ -36,7 +31,7 @@ test("encodeCommand builds versioned payloads", () => {
 });
 
 test("encodeCommand rejects invalid inputs", () => {
-  assert.throws(() => codec.encodeCommand("open_book", { app: "" }));
+  assert.throws(() => codec.encodeCommand("open_story", { app: "" }));
   assert.throws(() => codec.encodeCommand("set_volume", { terminal: "box3-b324", volume: 120 }));
   assert.throws(() => codec.encodeCommand("set_listen", { seconds: 45 }));
   assert.throws(() => codec.encodeCommand("bogus"));
@@ -51,8 +46,7 @@ test("decodeUpdate and applyStateUpdate preserve portrait across updates", () =>
     op: "state",
     companion: { id: "greg", name: "Greg", form: "an old chameleon", portrait: "data:image/png;base64,AAA" },
     terminals: [{ id: "box3-b324", online: true, volume: 60 }],
-    books: [],
-    games: [],
+    stories: [],
     voices: [],
   }));
   assert.equal(s1.companion.portrait, "data:image/png;base64,AAA");
@@ -62,11 +56,10 @@ test("decodeUpdate and applyStateUpdate preserve portrait across updates", () =>
     op: "state",
     companion: { id: "greg", name: "Greg", form: "an old chameleon", listen_seconds: 60 },
     terminals: [{ id: "box3-b324", online: true, volume: 70 }],
-    books: [{ name: "lost_island", title: "Lost Island" }],
-    games: [],
+    stories: [{ name: "lost_island", title: "Lost Island" }],
     voices: [],
   }));
   assert.equal(s2.companion.portrait, "data:image/png;base64,AAA");
   assert.equal(s2.companion.listen_seconds, 60);
-  assert.equal(s2.books.length, 1);
+  assert.equal(s2.stories.length, 1);
 });

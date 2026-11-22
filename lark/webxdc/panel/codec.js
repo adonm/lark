@@ -15,10 +15,9 @@
     switch (op) {
       case "sync":
         return { v: PROTOCOL_VERSION, op: "sync" };
-      case "open_book":
-      case "play_game":
+      case "open_story":
         if (typeof f.app !== "string" || !f.app.trim()) {
-          throw new Error("app is required");
+          throw new Error("story id is required");
         }
         return { v: PROTOCOL_VERSION, op, app: f.app.trim() };
       case "set_voice":
@@ -59,7 +58,7 @@
   }
 
   function applyStateUpdate(prev, update) {
-    const base = prev || { companion: {}, terminals: [], books: [], games: [], voices: [] };
+    const base = prev || { companion: {}, terminals: [], stories: [], voices: [] };
     if (!update || update.op !== "state") return base;
     const prevPortrait = base.companion && base.companion.portrait ? base.companion.portrait : "";
     const nextComp = Object.assign({}, update.companion || {});
@@ -69,8 +68,7 @@
     return {
       companion: nextComp,
       terminals: Array.isArray(update.terminals) ? update.terminals : [],
-      books: Array.isArray(update.books) ? update.books : [],
-      games: Array.isArray(update.games) ? update.games : [],
+      stories: Array.isArray(update.stories) ? update.stories : [],
       voices: Array.isArray(update.voices) ? update.voices : [],
     };
   }

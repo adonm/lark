@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,10 +21,53 @@ import (
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 )
 
-const dcPanelVersion = "1"
+const dcPanelVersion = "2"
 
 //go:embed webxdc/panel/*
 var panelAssets embed.FS
+
+//go:embed webxdc/story/*
+var storyAssets embed.FS
+
+func buildStoryXDC(twee string) ([]byte, error) {
+	entries, err := fs.ReadDir(storyAssets, "webxdc/story")
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
+	})
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || strings.HasSuffix(name, ".test.mjs") {
+			continue
+		}
+		data, err := storyAssets.ReadFile("webxdc/story/" + name)
+		if err != nil {
+			return nil, err
+		}
+		w, err := zw.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := w.Write(data); err != nil {
+			return nil, err
+		}
+	}
+	w, err := zw.Create("story.twee")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.Write([]byte(twee)); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 func buildPanelXDC() ([]byte, error) {
 	entries, err := fs.ReadDir(panelAssets, "webxdc/panel")
@@ -322,10 +367,10 @@ func (s *dcService) pushPanelState(ctx context.Context, accID, msgID uint32, com
 		}
 	}
 
-	var books, games []object
-	if stories, err := s.b.listStories(ctx); err == nil {
-		for _, st := range stories {
-			books = append(books, object{"name": st.ID, "title": st.Title})
+	var stories []object
+	if list, err := s.b.listStories(ctx); err == nil {
+		for _, st := range list {
+			stories = append(stories, object{"name": st.ID, "title": st.Title})
 		}
 	}
 
@@ -340,8 +385,7 @@ func (s *dcService) pushPanelState(ctx context.Context, accID, msgID uint32, com
 			"op":        "state",
 			"companion": compObj,
 			"terminals": termList,
-			"books":     books,
-			"games":     games,
+			"stories":   stories,
 			"voices":    voices,
 		},
 	})
@@ -349,4 +393,109 @@ func (s *dcService) pushPanelState(ctx context.Context, accID, msgID uint32, com
 		return
 	}
 	_ = rpc.SendWebxdcStatusUpdate(accID, msgID, string(data), nil)
+}
+
+func (s *dcService) sendStoriesList(ctx context.Context, rpc dcRPC, accID, chatID uint32) {
+	stories, err := s.b.listStories(ctx)
+	if err != nil {
+		msg := "Could not load stories."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	if len(stories) == 0 {
+		msg := "No stories yet."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	var lines []string
+	lines = append(lines, "Stories:")
+	for _, st := range stories {
+		lines = append(lines, fmt.Sprintf("- %s (%s, %d passages)", st.Title, st.ID, st.Passages))
+	}
+	out := strings.Join(lines, "\n")
+	_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &out})
+}
+
+func (s *dcService) sendStoryFiles(ctx context.Context, rpc dcRPC, accID, chatID uint32, query string) {
+	stories, err := s.b.listStories(ctx)
+	if err != nil {
+		msg := "Could not load stories."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	var found *savedStory
+	for i := range stories {
+		st := &stories[i]
+		if st.ID == q || strings.EqualFold(st.Title, query) {
+			found = st
+			break
+		}
+	}
+	if found == nil {
+		msg := fmt.Sprintf("Story %q not found. Try /stories to see available stories.", query)
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	xdcBytes, err := buildStoryXDC(found.Twee)
+	if err != nil {
+		msg := "Could not package story player."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	tmpDir, err := os.MkdirTemp("", "lark-story-*")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tweePath := filepath.Join(tmpDir, found.ID+".twee")
+	if err := os.WriteFile(tweePath, []byte(found.Twee), 0o600); err == nil {
+		vtFile := deltachat.ViewtypeFile
+		caption := found.Title + " (.twee)"
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &caption, File: &tweePath, Viewtype: &vtFile})
+	}
+
+	xdcPath := filepath.Join(tmpDir, found.ID+".xdc")
+	if err := os.WriteFile(xdcPath, xdcBytes, 0o600); err == nil {
+		vtXDC := deltachat.ViewtypeWebxdc
+		caption := found.Title
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &caption, File: &xdcPath, Viewtype: &vtXDC})
+	}
+}
+
+func (s *dcService) importTweeAttachment(ctx context.Context, rpc dcRPC, accID, chatID uint32, senderName, filePath string) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		msg := "Could not read .twee attachment."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 64*1024+1))
+	if err != nil {
+		msg := "Could not read .twee attachment."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	if len(raw) > 64*1024 {
+		msg := "Story file exceeds 64 KiB limit."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	cs, err := parseTwee(string(raw))
+	if err != nil {
+		msg := fmt.Sprintf("Could not import story:\n%s", err.Error())
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	slug := s.b.nextAvailableStorySlug(ctx, cs.Title)
+	saved, _, err := s.b.saveStory(ctx, slug, string(raw), senderName, true)
+	if err != nil {
+		msg := fmt.Sprintf("Could not save story: %s", err.Error())
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	msg := fmt.Sprintf("Imported story %q (%s, %d passages).", saved.Title, saved.ID, saved.Passages)
+	_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
 }

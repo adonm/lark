@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultChatmailRelay = "nine.testrun.org"
-	dcWelcomeVersion     = "1"
+	dcWelcomeVersion     = "2"
 )
 
 type dcRPC interface {
@@ -862,10 +862,6 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		}
 		text = strings.TrimSpace(spoken)
 	}
-	if text == "" {
-		return
-	}
-	who := s.b.companionFor(companionID)
 	senderName := strings.TrimSpace(contact.DisplayName)
 	if senderName == "" {
 		senderName = strings.TrimSpace(contact.Name)
@@ -873,6 +869,14 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	if senderName == "" {
 		senderName = "Friend"
 	}
+	if !isVoice && msg.File != nil && strings.HasSuffix(strings.ToLower(*msg.File), ".twee") {
+		s.importTweeAttachment(ctx, rpc, accID, msg.ChatId, senderName, *msg.File)
+		return
+	}
+	if text == "" {
+		return
+	}
+	who := s.b.companionFor(companionID)
 
 	private := false
 	if !isVoice && strings.HasPrefix(text, "/") {
@@ -921,8 +925,19 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				log.Printf("Delta Chat /panel error: %v", err)
 			}
 			return
+		case "/stories":
+			s.sendStoriesList(ctx, rpc, accID, msg.ChatId)
+			return
+		case "/story":
+			if arg == "" {
+				hint := "Usage: /story <name>"
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
+				return
+			}
+			s.sendStoryFiles(ctx, rpc, accID, msg.ChatId, arg)
+			return
 		default:
-			hint := "Unknown command. Try /say <words>, /private <words>, /panel, or /help."
+			hint := "Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /panel, or /help."
 			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint}); err != nil {
 				log.Printf("Delta Chat SendMsg error: %v", err)
 			}
@@ -1032,9 +1047,11 @@ func welcomeText(c companionState) string {
 		intro + " Text me anytime — I'll read it out at home and reply.",
 		"/say <words> — I'll say it out loud exactly",
 		"/private <words> — just between us",
+		"/stories — list interactive stories",
+		"/story <name> — play and download a story",
 		"/panel — open my control panel",
 		"/help — this message",
-		"When listening mode is on, people at home can answer you out loud.",
+		"Send a .twee file to import a story. When listening mode is on, people at home can answer you out loud.",
 	}, "\n")
 }
 

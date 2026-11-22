@@ -2,9 +2,9 @@
   "use strict";
 
   const codec = window.LarkPanelCodec;
-  const tabs = ["status", "books", "games", "settings"];
+  const tabs = ["status", "stories", "settings"];
   let activeTab = "status";
-  let state = { companion: {}, terminals: [], books: [], games: [], voices: [] };
+  let state = { companion: {}, terminals: [], stories: [], voices: [] };
   let bannerTimer = null;
 
   function el(tag, attrs, children) {
@@ -163,8 +163,7 @@
   function renderAll() {
     renderHeader();
     renderStatus();
-    renderAppList("panel-books", state.books, "open_book", "Open on device", "No books saved yet.");
-    renderAppList("panel-games", state.games, "play_game", "Play on device", "No games saved yet.");
+    renderAppList("panel-stories", state.stories, "open_story", "Open on device", "No stories saved yet.");
     renderSettings();
   }
 
@@ -199,8 +198,7 @@
       op: "state",
       companion: { id: "greg", name: "Greg", form: "an old chameleon", voice: "bf_lily", listen_seconds: 60 },
       terminals: [{ id: "box3-b324", name: "BOX-3", online: true, volume: 60 }],
-      books: [{ name: "lost_island", title: "Lost Island" }, { name: "clockwork_owl", title: "The Clockwork Owl" }],
-      games: [{ name: "math_game", title: "Math Game" }, { name: "fireworks", title: "Fireworks" }],
+      stories: [{ name: "lost_island", title: "Lost Island" }, { name: "clockwork_owl", title: "The Clockwork Owl" }],
       voices: [{ id: "af_heart", name: "Heart" }, { id: "bf_lily", name: "Lily" }, { id: "bm_fable", name: "Fable" }],
     });
     renderAll();
