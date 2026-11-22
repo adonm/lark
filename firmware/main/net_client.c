@@ -33,8 +33,6 @@ enum {
     INPUT_CAP = 24,
     TCP_BUF_BYTES = 64 * 1024,
     UDP_BUF_BYTES = 16 * 1024,
-    SELECT_IDLE_MS = 20,
-    SELECT_BUSY_MS = 5,
     CONNECT_TIMEOUT_MS = 5000,
 };
 
@@ -91,6 +89,9 @@ static unsigned input_head, input_count, drag_after;
 static portMUX_TYPE udp_lock = portMUX_INITIALIZER_UNLOCKED;
 static int tcp_fd = -1;
 static int udp_fd = -1;
+static int wake_rx_fd = -1;
+static int wake_tx_fd = -1;
+static atomic_bool wake_pending;
 static struct sockaddr_in bridge_udp_addr;
 static uint32_t active_ssrc;
 static uint16_t rtp_rec_seq;
@@ -167,6 +168,44 @@ static bool send_tcp_frame(uint32_t session, uint8_t type, const void *payload, 
     return send_all_tcp(tcp_fd, hdr, sizeof(hdr)) && (!len || send_all_tcp(tcp_fd, payload, len));
 }
 
+static void wake_service(void)
+{
+    if (service) xTaskNotifyGive(service);
+    if (wake_tx_fd >= 0 && !atomic_exchange_explicit(&wake_pending, true, memory_order_acq_rel)) {
+        uint8_t b = 1;
+        lwip_send(wake_tx_fd, &b, sizeof(b), 0);
+    }
+}
+
+static void init_wake_sockets(void)
+{
+    if (wake_rx_fd >= 0) return;
+    int rfd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int tfd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (rfd < 0 || tfd < 0) {
+        if (rfd >= 0) lwip_close(rfd);
+        if (tfd >= 0) lwip_close(tfd);
+        return;
+    }
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+        .sin_port = 0,
+    };
+    socklen_t alen = sizeof(addr);
+    if (lwip_bind(rfd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        lwip_getsockname(rfd, (struct sockaddr *)&addr, &alen) != 0 ||
+        lwip_connect(tfd, (const struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        lwip_close(rfd);
+        lwip_close(tfd);
+        return;
+    }
+    lwip_fcntl(rfd, F_SETFL, lwip_fcntl(rfd, F_GETFL, 0) | O_NONBLOCK);
+    lwip_fcntl(tfd, F_SETFL, lwip_fcntl(tfd, F_GETFL, 0) | O_NONBLOCK);
+    wake_rx_fd = rfd;
+    wake_tx_fd = tfd;
+}
+
 static bool enqueue_session(input_t input)
 {
     if (!input.session || !service) return false;
@@ -183,6 +222,7 @@ static bool enqueue_session(input_t input)
     }
     portEXIT_CRITICAL(&input_lock);
     if (full) atomic_fetch_add_explicit(&telemetry_io.input_drops, 1, memory_order_relaxed);
+    else wake_service();
     return !full;
 }
 
@@ -225,7 +265,7 @@ bool net_client_rec_start(uint32_t session, uint16_t rec_session, uint8_t target
     if (!ctrl_queue || !session || ready_socket_session() != session) return false;
     ctrl_msg_t msg = { .kind = CTRL_REC_START, .session = session, .rec_session = rec_session, .target = target };
     if (xQueueSend(ctrl_queue, &msg, 0) != pdPASS) return false;
-    if (service) xTaskNotifyGive(service);
+    wake_service();
     return true;
 }
 
@@ -239,8 +279,8 @@ void net_client_rec_end(uint32_t session, uint16_t rec_session, uint8_t target, 
         .target = target,
         .cancelled = cancelled,
     };
-    if (xQueueSend(ctrl_queue, &msg, 0) == pdPASS && service) {
-        xTaskNotifyGive(service);
+    if (xQueueSend(ctrl_queue, &msg, 0) == pdPASS) {
+        wake_service();
     }
 }
 
@@ -719,12 +759,12 @@ static bool open_connection(uint32_t *out_session)
     return true;
 }
 
-static bool has_pending_inputs(void)
+static void drain_wake_socket(void)
 {
-    portENTER_CRITICAL(&input_lock);
-    bool any = input_count > 0 || pending_drag.session != 0;
-    portEXIT_CRITICAL(&input_lock);
-    return any || (ctrl_queue && uxQueueMessagesWaiting(ctrl_queue) > 0);
+    atomic_store_explicit(&wake_pending, false, memory_order_release);
+    if (wake_rx_fd < 0) return;
+    uint8_t buf[16];
+    while (lwip_recv(wake_rx_fd, buf, sizeof(buf), 0) > 0) {}
 }
 
 static void drain_ctrl(void)
@@ -762,6 +802,7 @@ static void service_task(void *arg)
             }
             continue;
         }
+        init_wake_sockets();
         uint32_t session = 0;
         if (!open_connection(&session)) {
             close_sockets();
@@ -773,6 +814,7 @@ static void service_task(void *arg)
         int64_t after_status = esp_timer_get_time() / 1000 + STATUS_MS;
 
         while (atomic_load(&wifi_online) && tcp_fd >= 0) {
+            drain_wake_socket();
             drain_ctrl();
             input_t input;
             while (next_input(&input)) send_input(&input);
@@ -786,9 +828,16 @@ static void service_task(void *arg)
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(tcp_fd, &rfds);
-            int wait_ms = has_pending_inputs() ? SELECT_BUSY_MS : SELECT_IDLE_MS;
-            struct timeval tv = { .tv_sec = 0, .tv_usec = wait_ms * 1000 };
-            int ready = lwip_select(tcp_fd + 1, &rfds, NULL, NULL, &tv);
+            int maxfd = tcp_fd;
+            if (wake_rx_fd >= 0) {
+                FD_SET(wake_rx_fd, &rfds);
+                if (wake_rx_fd > maxfd) maxfd = wake_rx_fd;
+            }
+            int64_t rem_ms = after_status - now;
+            if (rem_ms < 1) rem_ms = 1;
+            if (rem_ms > STATUS_MS) rem_ms = STATUS_MS;
+            struct timeval tv = { .tv_sec = (time_t)(rem_ms / 1000), .tv_usec = (suseconds_t)((rem_ms % 1000) * 1000) };
+            int ready = lwip_select(maxfd + 1, &rfds, NULL, NULL, &tv);
             if (ready < 0) break;
 
             if (FD_ISSET(tcp_fd, &rfds)) {
@@ -829,7 +878,7 @@ static void service_task(void *arg)
 void net_client_network_changed(bool online)
 {
     atomic_store(&wifi_online, online);
-    if (service) xTaskNotifyGive(service);
+    wake_service();
 }
 
 esp_err_t net_client_init(void)
