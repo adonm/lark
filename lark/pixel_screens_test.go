@@ -380,3 +380,34 @@ func renderPixelListWithHitsImg(spec pixelDisplaySpec, title string, th pixelThe
 	texts = addCenteredText(texts, physicalRect(image.Rect(spec.safe.Min.X, spec.logicalH/2+6, spec.safe.Max.X, spec.logicalH/2+20), spec.artScale), title, dogica.Bold, spec.bodyTextScale, th.accent)
 	return finishPixelScreen(c, spec, texts)
 }
+
+func TestRenderPixelListDrawsNavBar(t *testing.T) {
+	spec := pixelSpecForGeometry(roundScreen)
+	th := defaultPixelTheme()
+	for _, items := range [][]tile{nil, {{id: "a", label: "Alpha"}}} {
+		img, hits, _ := renderPixelListWithHits(spec, "Memories", items, "No memories", 0, th, th.accent)
+		var back hitBox
+		for _, h := range hits {
+			if h.id == "menu-back" {
+				back = h
+			}
+		}
+		if back.x2 <= back.x1 {
+			t.Fatalf("missing menu-back hit")
+		}
+		// Verify the Back button border is actually drawn (differs from background).
+		bg := img.RGBAAt(0, 0)
+		drawn := false
+		for y := back.y1; y <= back.y2 && !drawn; y++ {
+			for x := back.x1; x <= back.x2; x++ {
+				if img.RGBAAt(x, y) != bg {
+					drawn = true
+					break
+				}
+			}
+		}
+		if !drawn {
+			t.Fatalf("menu-back button was not drawn for items=%v", items)
+		}
+	}
+}
