@@ -106,7 +106,12 @@ class Panel {
       window.webxdc = {
         selfAddr: "tester@example.org",
         selfName: "Tester",
-        sendUpdate(update) { sent.push(update.payload ?? update); },
+        // Like Delta Chat: own updates are delivered to this listener too.
+        sendUpdate(update) {
+          const payload = update.payload ?? update;
+          sent.push(payload);
+          if (listener) listener({ payload, serial: sent.length, max_serial: sent.length });
+        },
         setUpdateListener(cb) { listener = cb; return Promise.resolve(); },
       };
     });
@@ -375,6 +380,13 @@ test("regression: history survives state pushes, tab switches, and stale respons
     await p.deliver({ v: 1, op: "history", dir: "out", sid: req2.sid, seq: 1, channel: "all", q: "", has_more: false, append: false, items: [] });
     assert.equal(await p.page.locator("#body-history .hist-item").count(), 3);
     assert.doesNotMatch(await p.page.locator("#body-history").innerText(), /No matching messages/);
+
+    // Real clients deliver the panel's own update back to its listener; that
+    // command echo must not clear the list before the response arrives.
+    await p.page.fill("#hist-search", "next");
+    await p.page.click('#body-history button:has-text("Find")');
+    await p.waitSent("history", (r) => r.q === "next");
+    assert.equal(await p.page.locator("#body-history .hist-item").count(), 3);
     await p.shot("history-regression");
   } finally {
     await p.close();

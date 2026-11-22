@@ -236,9 +236,11 @@
         if (msg.op === "live_state") renderHeader();
         else renderAll();
       } else if (msg.op === "history") {
-        // Only accept the answer to this instance's latest request. Replayed
-        // updates and responses to superseded filters must not touch the list.
-        if (msg.sid !== hist.sid || Number(msg.seq) !== hist.seq) return;
+        // Delta Chat also delivers the panel's own updates back to this
+        // listener. Only accept the server's answer to this instance's latest
+        // request: replayed updates, our own command, and responses to
+        // superseded filters must not touch the list.
+        if (msg.dir !== "out" || msg.sid !== hist.sid || Number(msg.seq) !== hist.seq) return;
         clearPending();
         hist.loaded = true; hist.loading = false; hist.has_more = !!msg.has_more; hist.next_cursor = msg.next_cursor || null;
         hist.items = msg.append ? hist.items.concat(msg.items || []) : (msg.items || []);

@@ -299,18 +299,18 @@ func TestQADeltaChatLive(t *testing.T) {
 	// Voice: the state and the ack both carry the saved voice.
 	sendPanel(`{"payload":{"v":1,"op":"set_voice","voice":"bf_lily"}}`)
 	waitPanel("ack with voice", func(p map[string]any) bool {
-		return p["op"] == "ack" && p["req_op"] == "set_voice" && p["ok"] == true && p["voice"] == "bf_lily"
+		return p["dir"] == "out" && p["op"] == "ack" && p["req_op"] == "set_voice" && p["ok"] == true && p["voice"] == "bf_lily"
 	})
 	waitPanel("state with voice", func(p map[string]any) bool {
 		comp, _ := p["companion"].(map[string]any)
-		return p["op"] == "state" && comp != nil && comp["voice"] == "bf_lily"
+		return p["dir"] == "out" && p["op"] == "state" && comp != nil && comp["voice"] == "bf_lily"
 	})
 
 	// One history request must yield exactly one response, even after more
 	// panel updates arrive (the v3 echo loop produced thousands).
 	sendPanel(`{"payload":{"v":1,"op":"history","channel":"all","limit":5,"sid":"qa","seq":1}}`)
 	historyResp := waitPanel("history response", func(p map[string]any) bool {
-		return p["op"] == "history" && p["sid"] == "qa" && p["seq"] == float64(1)
+		return p["dir"] == "out" && p["op"] == "history" && p["sid"] == "qa" && p["seq"] == float64(1)
 	})
 	if historyResp["dir"] != "out" {
 		t.Fatalf("history response missing direction marker: %+v", historyResp)
@@ -326,7 +326,7 @@ func TestQADeltaChatLive(t *testing.T) {
 	}
 	before := countHistory()
 	sendPanel(`{"payload":{"v":1,"op":"sync"}}`)
-	waitPanel("state after sync", func(p map[string]any) bool { return p["op"] == "state" })
+	waitPanel("state after sync", func(p map[string]any) bool { return p["dir"] == "out" && p["op"] == "state" })
 	time.Sleep(2 * time.Second)
 	if after := countHistory(); after != before {
 		t.Fatalf("history echo: %d responses before sync, %d after", before, after)
