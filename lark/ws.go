@@ -175,13 +175,16 @@ func (h *wsHub) pushWakeWord(d *wsTerminal, enabled bool) {
 	d.client.enqueueProto(msgWakeWordCtrl, encodeWakeWordCtrl(enabled, d.id, d.companionID))
 }
 
-func (h *wsHub) pushRecStart(d *wsTerminal, target string, bridgeEndpoint bool) {
+func (h *wsHub) pushRecStart(d *wsTerminal, target string, bridgeEndpoint, listen bool) {
 	var flags uint8
 	if target != "" {
 		flags |= recTargetInter
 	}
 	if bridgeEndpoint {
 		flags |= recTargetBridgeE
+	}
+	if listen {
+		flags |= recTargetListen
 	}
 	d.client.enqueueProto(msgRecCtrl, encodeRecCtrl(recOpStart, flags, d.recSession, target))
 }

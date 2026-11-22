@@ -22,6 +22,9 @@ type deviceCapture struct {
 	stopTimer   *time.Timer
 	endpoint    *endpointCapture
 	ignoreStart bool
+	listen      bool
+	listenUntil time.Time
+	listenSpan  time.Duration
 }
 
 func (c *deviceCapture) active() bool { return c.phase != captureIdle }
@@ -76,4 +79,5 @@ func (c *deviceCapture) clear() {
 		c.stopTimer = nil
 	}
 	c.phase, c.started, c.target, c.pcm = captureIdle, time.Time{}, "", nil
+	c.listen, c.listenUntil, c.listenSpan = false, time.Time{}, 0
 }

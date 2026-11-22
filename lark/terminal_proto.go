@@ -109,6 +109,7 @@ const (
 	recOpStart       uint8 = 1
 	recOpCancel      uint8 = 2
 	recTargetInter   uint8 = 1 << 0
+	recTargetListen  uint8 = 1 << 6
 	recTargetBridgeE uint8 = 1 << 7
 
 	// TTS ops

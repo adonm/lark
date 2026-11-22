@@ -112,8 +112,10 @@ type wsTerminal struct {
 	moodAt    time.Time
 	last      time.Time
 	meter     time.Time
-	asleep    bool
-	wakeWord  bool
+	asleep         bool
+	wakeWord       bool
+	replyTo        string
+	listenRenderAt time.Time
 
 	recording     deviceCapture
 	recSession    uint16
@@ -231,6 +233,9 @@ func (h *wsHub) publishCompanion(id string, companion companionState, clearView 
 		if clearView {
 			h.clearView(d)
 			d.agentSetScene = d.busy
+		}
+		if companion.ListenSeconds <= 0 && d.recording.active() && d.recording.listen {
+			h.stopListeningWindow(d, now)
 		}
 		h.render(d, now, true)
 	}
@@ -639,6 +644,7 @@ type renderRequest struct {
 	readingBook *savedApp
 	readingPage int
 	full        bool
+	listenFrac  float64
 	trace       *turnTrace
 }
 
@@ -720,6 +726,11 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		menuHint:    !d.bootHint || now.Before(d.menuHintUntil),
 		companion:   new(d.companion),
 		pose:        pose,
+		listenFrac:  -1,
+	}
+	if d.recording.active() && d.recording.listen && d.recording.listenSpan > 0 {
+		rem := max(0, d.recording.listenUntil.Sub(now))
+		r.listenFrac = min(1.0, float64(rem)/float64(d.recording.listenSpan))
 	}
 	d.grade.Store(uint32(r.grade))
 	switch {
@@ -863,9 +874,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				if r.pose.mood == "idle" && r.pose.bobFrame%2 == 1 {
 					bobY = 1
 				}
-				img = renderPixelHomeWeather(spec, bg, poses[poseIdx], r.grade, r.weather, r.weatherTick, status, bobY, "", r.menuHint)
-				switch status {
-				case "listening":
+				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, r.weather, r.weatherTick, status, bobY, "", r.menuHint, r.listenFrac)
+				switch {
+				case status == "listening" && r.listenFrac >= 0:
+					hits = []hitBox{{id: "listen-stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+					r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
+				case status == "listening":
 					btnH := 14
 					if !spec.round {
 						btnH = 18
@@ -876,7 +890,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 					hits = addLogicalHit(hits, spec, "rec-cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
 					hits = addLogicalHit(hits, spec, "rec-send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
 					r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
-				case "thinking", "speaking":
+				case status == "thinking" || status == "speaking":
 					btnW, btnH := 38, 14
 					if !spec.round {
 						btnW, btnH = 44, 18
@@ -1062,10 +1076,10 @@ func (h *wsHub) animate(ctx context.Context) {
 					h.render(d, now, false)
 				}
 				switch {
-				case d.recording.active() && d.recording.stopTimer == nil && now.Sub(d.recording.started) > 90*time.Second:
+				case d.recording.active() && !d.recording.listen && d.recording.stopTimer == nil && now.Sub(d.recording.started) > 90*time.Second:
 					h.stopRecordingAtLimit(d, now)
 				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(4*time.Second)):
-					h.playbackDone(d, now)
+					h.playbackDone(d, now, false)
 				case !d.asleep && d.drawer != drawerPair && !d.busy && !d.recording.active() && !d.ttsStarted && !d.awaitAck && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
 					h.render(d, now, false)
@@ -1076,7 +1090,10 @@ func (h *wsHub) animate(ctx context.Context) {
 				case d.stopTapsExpired(now):
 					h.render(d, now, false)
 				case (d.drawer == "" || d.asleep) && (d.app == nil && d.view == nil || d.asleep || d.recording.active()):
-					if !d.asleep && d.drawer == "" && h.b != nil && h.b.weather != nil && h.b.weather.kind() != weatherClear && now.Sub(d.weatherAt) >= 400*time.Millisecond {
+					if d.recording.active() && d.recording.listen && !d.asleep && d.drawer == "" && now.Sub(d.listenRenderAt) >= time.Second {
+						d.listenRenderAt = now
+						h.render(d, now, false)
+					} else if !d.asleep && d.drawer == "" && h.b != nil && h.b.weather != nil && h.b.weather.kind() != weatherClear && now.Sub(d.weatherAt) >= 400*time.Millisecond {
 						d.weatherAt = now
 						d.weatherTick++
 						h.render(d, now, false)

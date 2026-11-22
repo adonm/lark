@@ -122,10 +122,10 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		}
 		if aborted && (d.ttsStarted || d.awaitAck) {
 			h.stopPlayback(d, false)
-			h.playbackDone(d, now)
+			h.playbackDone(d, now, true)
 		} else if !aborted && d.awaitAck {
 			d.ttsStarted = false
-			h.playbackDone(d, now)
+			h.playbackDone(d, now, false)
 		}
 	}
 }
@@ -142,6 +142,10 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	h.wake(d, now)
 	if wasAsleep {
 		h.render(d, now, false)
+		return
+	}
+	if evName == "tap" && d.recording.active() && d.recording.listen {
+		h.stopListeningWindow(d, now)
 		return
 	}
 	inside := d.screen.shape != "round" || inScreenCircle(x, y)

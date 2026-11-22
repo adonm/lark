@@ -788,6 +788,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			voice:        s.b.voiceFor(companionID),
 			chime:        "intercom",
 			showCard:     true,
+			replyTo:      senderName,
 			trace:        traceFrom(turnCtx),
 		})
 	}

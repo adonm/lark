@@ -147,6 +147,10 @@ func renderPixelHome(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade grade
 }
 
 func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, tick int, status string, bobY int, caption string, showMenuHint bool) *image.RGBA {
+	return renderPixelHomeListen(spec, bg, poseImg, grade, weather, tick, status, bobY, caption, showMenuHint, -1)
+}
+
+func renderPixelHomeListen(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grade gradeKey, weather weatherKind, tick int, status string, bobY int, caption string, showMenuHint bool, listenFrac float64) *image.RGBA {
 	c := newPixelCanvas(spec.logicalW, spec.logicalH)
 	blitCenteredBG(c, bg)
 	if poseImg != nil {
@@ -196,6 +200,20 @@ func renderPixelHomeWeather(spec pixelDisplaySpec, bg, poseImg *image.RGBA, grad
 				x: physBox.Min.X + padX, y: physBox.Min.Y + padY + i*lineH,
 				text: line, font: dogica.Regular, scale: spec.bodyTextScale, color: pxInk,
 			})
+		}
+	} else if status == "listening" && listenFrac >= 0 {
+		barH := 3
+		if !spec.round {
+			barH = 4
+		}
+		barW := spec.safe.Dx()
+		bx := spec.safe.Min.X
+		by := spec.safe.Max.Y - barH
+		c.panel(bx, by, barW, barH, pxPanelBG, pxPanelBorder)
+		frac := max(0.0, min(1.0, listenFrac))
+		innerW := max(0, int(math.Round(float64(barW-2)*frac)))
+		if innerW > 0 {
+			c.rect(bx+1, by+1, innerW, barH-2, pxMint)
 		}
 	} else if status == "listening" {
 		btnH := 14

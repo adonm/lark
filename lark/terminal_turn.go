@@ -41,6 +41,7 @@ func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, requ
 		h.cancelTurn(d, "recording")
 	}
 	d.drawer, d.card, d.pending, d.view = "", nil, nil, nil
+	d.replyTo = ""
 	if !bridgeEndpoint || d.ttsStarted || d.awaitAck {
 		h.stopPlayback(d, true)
 	}
@@ -62,11 +63,41 @@ func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, requ
 		if bridgeEndpoint {
 			h.startEndpoint(d)
 		}
-		h.pushRecStart(d, target, bridgeEndpoint)
+		h.pushRecStart(d, target, bridgeEndpoint, false)
 	}
 	h.takeVoiceOwnership(d)
 	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
 	h.render(d, now, false)
+}
+
+func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
+	if !h.active(d) || d.companion.ListenSeconds <= 0 || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+		return false
+	}
+	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck || d.app != nil || d.drawer != "" {
+		return false
+	}
+	h.wake(d, now)
+	d.drawer, d.card, d.pending, d.view = "", nil, nil, nil
+	span := time.Duration(d.companion.ListenSeconds) * time.Second
+	d.recording.start(now, "", true)
+	d.recording.listen = true
+	d.recording.listenSpan = span
+	d.recording.listenUntil = now.Add(span)
+	d.listenRenderAt = now
+	d.recSession++
+	h.startEndpoint(d)
+	h.pushRecStart(d, "", true, true)
+	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
+	h.render(d, now, false)
+	return true
+}
+
+func (h *wsHub) stopListeningWindow(d *wsTerminal, now time.Time) {
+	if d.recording.active() && d.recording.listen {
+		d.replyTo = ""
+		h.recordingControl(d, now, true)
+	}
 }
 
 func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
@@ -310,6 +341,14 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 		d.trace = nil
 		return
 	}
+	if !d.ttsStarted && !d.awaitAck && d.stopAudio == nil && d.replyAudio == nil {
+		if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
+			if h.startListeningWindow(d, now) {
+				d.trace = nil
+				return
+			}
+		}
+	}
 	h.render(d, now, false)
 	d.trace = nil
 }
@@ -386,6 +425,10 @@ func (h *wsHub) runVoice(ctx context.Context, d *wsTerminal, id uint64, target s
 }
 
 func (h *wsHub) runTurn(ctx context.Context, d *wsTerminal, id uint64, text, source string, pcm []byte) {
+	h.runTurnChannel(ctx, d, id, text, source, pcm, turnChannel{})
+}
+
+func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, text, source string, pcm []byte, ch turnChannel) {
 	if d.companionID == "" {
 		h.turnError(d, id, "This terminal is not attached to a companion.")
 		return
@@ -419,7 +462,7 @@ func (h *wsHub) runTurn(ctx context.Context, d *wsTerminal, id uint64, text, sou
 		h.turnError(d, id, "Chat is not ready yet.")
 		return
 	}
-	gen, err := h.b.generateReply(ctx, ctx, sender, text, turnOptions{source: source,
+	gen, err := h.b.generateReply(ctx, ctx, sender, text, turnOptions{source: source, channel: ch,
 		publish: func(stream *AudioStream, start time.Time) { h.publish(d, id, ctx, stream, start) }})
 	if err != nil {
 		h.turnError(d, id, "Could not finish that turn.")
@@ -489,7 +532,7 @@ func (h *wsHub) publish(d *wsTerminal, id uint64, ctx context.Context, stream *A
 	}
 	if stream == nil {
 		h.stopPlayback(d, true)
-		h.playbackDone(d, time.Now())
+		h.playbackDone(d, time.Now(), true)
 		return
 	}
 	// The turn deadline bounds synthesis; it must not cut off paced playback
@@ -527,7 +570,7 @@ func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace,
 					d.pending = a.answer
 				}
 			}
-			h.playbackDone(d, time.Now())
+			h.playbackDone(d, time.Now(), true)
 		} else {
 			d.replyAudio = nil
 			d.ttsStarted = false
@@ -679,7 +722,7 @@ func (h *wsHub) stopPlayback(d *wsTerminal, notify bool) {
 	d.audio++
 }
 
-func (h *wsHub) playbackDone(d *wsTerminal, now time.Time) {
+func (h *wsHub) playbackDone(d *wsTerminal, now time.Time, aborted bool) {
 	d.awaitAck = false
 	if d.pending != nil {
 		d.view, d.pending = d.pending, nil
@@ -690,9 +733,14 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time) {
 			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
 		}
 	}
-	if !h.maybeStartVoice(d, now) && !h.maybeStartNoticeLocked(d, now) {
-		h.render(d, now, false)
+	if h.maybeStartVoice(d, now) || h.maybeStartNoticeLocked(d, now) {
+		return
 	}
+	if !aborted && h.startListeningWindow(d, now) {
+		return
+	}
+	d.replyTo = ""
+	h.render(d, now, false)
 }
 
 type wsReceipt struct {
@@ -720,13 +768,14 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 }
 
 type queuedNotice struct {
-	view   *sceneView
-	chime  string
-	voice  string
-	intro  string
-	text   string
-	stream *AudioStream
-	trace  *turnTrace
+	view    *sceneView
+	chime   string
+	voice   string
+	intro   string
+	text    string
+	stream  *AudioStream
+	replyTo string
+	trace   *turnTrace
 }
 
 type terminalNotice struct {
@@ -739,6 +788,7 @@ type terminalNotice struct {
 	pcm          []byte
 	chime        string
 	showCard     bool
+	replyTo      string
 	trace        *turnTrace
 }
 
@@ -820,13 +870,14 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 			stream = immediateStream
 		}
 		q := queuedNotice{
-			view:   view,
-			chime:  n.chime,
-			voice:  n.voice,
-			intro:  n.intro,
-			text:   speakText,
-			stream: stream,
-			trace:  n.trace,
+			view:    view,
+			chime:   n.chime,
+			voice:   n.voice,
+			intro:   n.intro,
+			text:    speakText,
+			stream:  stream,
+			replyTo: n.replyTo,
+			trace:   n.trace,
 		}
 		if d.noticeBusy() {
 			// Queued notices synthesize their own stream when drained so they don't race or expire.
@@ -851,6 +902,7 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 
 func (h *wsHub) deliverNoticeNowLocked(d *wsTerminal, now time.Time, q queuedNotice) {
 	d.drawer, d.pending = "", nil
+	d.replyTo = q.replyTo
 	if q.view != nil {
 		if d.app != nil {
 			d.card = q.view
