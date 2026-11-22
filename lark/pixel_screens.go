@@ -258,6 +258,9 @@ func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA
 	gridTop := spec.safe.Min.Y + titleH + 2
 	gridBottom := spec.safe.Max.Y - navH - 2
 	gapX, gapY := 4, 2
+	if !spec.round {
+		gapX = 2
+	}
 	tileW := (spec.safe.Dx() - (cols-1)*gapX) / cols
 	tileH := (gridBottom - gridTop - (rows-1)*gapY) / rows
 
@@ -273,10 +276,14 @@ func renderPixelMenu(spec pixelDisplaySpec, page int, th pixelTheme) *image.RGBA
 		tx := spec.safe.Min.X + col*(tileW+gapX)
 		ty := gridTop + row*(tileH+gapY)
 		c.panel(tx, ty, tileW, tileH, pxTileBG, th.border)
-		if sprite, ok := pxMenuSprites[item.icon]; ok {
-			c.blitSprite(tx+4, ty+(tileH-12)/2, sprite, pxIconPalette, 1)
+		iconX, labelX := tx+4, tx+19
+		if !spec.round {
+			iconX, labelX = tx+3, tx+17
 		}
-		labelBox := image.Rect(tx+19, ty+1, tx+tileW-3, ty+tileH-1)
+		if sprite, ok := pxMenuSprites[item.icon]; ok {
+			c.blitSprite(iconX, ty+(tileH-12)/2, sprite, pxIconPalette, 1)
+		}
+		labelBox := image.Rect(labelX, ty+1, tx+tileW-2, ty+tileH-1)
 		physLabel := physicalRect(labelBox, s)
 		label := truncateEllipsisPx(item.label, dogica.Regular, spec.bodyTextScale, physLabel.Dx())
 		thPx := dogica.Regular.Ascent * spec.bodyTextScale

@@ -237,7 +237,29 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if layout, err := computePairQRLayout(spec, invite); err == nil {
+			t.Logf("%s Pair QR: version=%d modules=%dx%d quiet=%d modPx=%dpx",
+				spec.name, layout.version, layout.modules, layout.modules, layout.quiet, layout.modPx)
+		}
 		save(spec.name+"-pair-qr", pairImg)
+
+		// One sample per app template.
+		geom := roundScreen
+		if !spec.round {
+			geom = screenGeometry{320, 240, "rect"}
+		}
+		d := &wsTerminal{kind: "hardware", screen: geom, client: &wsClient{kind: "hardware"}}
+		for _, tpl := range templateNames() {
+			var appSpec savedApp
+			_ = appSpec.setTemplate(tpl, map[string]any{})
+			if _, views, err := initApp(appSpec, []appPlayer{{id: "sample"}}, nil, []*wsTerminal{d}, nil, nil); err == nil && len(views) > 0 {
+				var enc frameEncoder
+				save(spec.name+"-tpl-"+tpl, enc.rgbaFromFB(views[0].fb, image.Rect(0, 0, geom.width, geom.height), geom.width))
+			}
+		}
+		// Offline sample.
+		offImg := renderPixelListWithHitsImg(spec, "Offline", th)
+		save(spec.name+"-offline", offImg)
 	}
 
 	const cols = 4
@@ -272,4 +294,13 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func renderPixelListWithHitsImg(spec pixelDisplaySpec, title string, th pixelTheme) *image.RGBA {
+	c := newPixelCanvas(spec.logicalW, spec.logicalH)
+	c.fill(pxPanelBG)
+	c.blitSprite((spec.logicalW-12*2)/2, (spec.logicalH-12*2)/2-10, pxMenuSprites["voice"], pxIconPalette, 2)
+	var texts []pixelTextOp
+	texts = addCenteredText(texts, physicalRect(image.Rect(spec.safe.Min.X, spec.logicalH/2+6, spec.safe.Max.X, spec.logicalH/2+20), spec.artScale), title, dogica.Bold, spec.bodyTextScale, th.accent)
+	return finishPixelScreen(c, spec, texts)
 }

@@ -28,7 +28,7 @@ app = (() => {
   const header = (g, sub) => {
     g.clear(pal.bg);
     const sx = g.safe.x, sy = g.safe.y, sw = g.safe.w;
-    g.text(sx + Math.floor(sw / 2), sy + 2, title.slice(0, 14), {color: pal.accent, align: "center", bold: true});
+    g.text(sx + Math.floor(sw / 2), sy + 2, title.slice(0, g.round ? 14 : 24), {color: pal.accent, align: "center", bold: true});
     if (sub) {
       g.text(sx + Math.floor(sw / 2), sy + 12, String(sub), {color: pal.muted, align: "center"});
     }
