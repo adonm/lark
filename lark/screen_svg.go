@@ -334,13 +334,19 @@ func embedQRSvg(qrSVG string, x, y, size int) string {
 	inner := qrSVG[start+endTag+1 : closeIdx]
 	inner = strings.ReplaceAll(inner, `style="fill:#000000"`, `fill="#000000"`)
 	inner = strings.ReplaceAll(inner, `style="fill:#ffffff"`, `fill="#ffffff"`)
-	vb := `viewBox="0 0 100 100"`
+	vbW := 100.0
 	if i := strings.Index(attrs, `viewBox="`); i >= 0 {
 		if j := strings.IndexByte(attrs[i+9:], '"'); j >= 0 {
-			vb = attrs[i : i+9+j+1]
+			fields := strings.Fields(attrs[i+9 : i+9+j])
+			if len(fields) == 4 {
+				if w, err := strconv.ParseFloat(fields[2], 64); err == nil && w > 0 {
+					vbW = w
+				}
+			}
 		}
 	}
-	return fmt.Sprintf(`<svg x="%d" y="%d" width="%d" height="%d" %s>%s</svg>`, x, y, size, size, vb, inner)
+	scale := float64(size) / vbW
+	return fmt.Sprintf(`<g transform="translate(%d,%d) scale(%.6f)">%s</g>`, x, y, scale, inner)
 }
 
 func pairScene(name, qrSVG string) sceneView {

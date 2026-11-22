@@ -109,7 +109,7 @@ func (s *stubDCRPC) GetChatSecurejoinQrCode(accID uint32, _ *uint32) (string, er
 }
 
 func (s *stubDCRPC) CreateQrSvg(text string) (string, error) {
-	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29"><rect width="29" height="29" fill="#ffffff"/><rect x="2" y="2" width="7" height="7" fill="#000000" data-qr="` + text + `"/></svg>`, nil
+	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect x="0" y="0" width="512" height="512" style="fill:#ffffff"/><g transform="translate(48,48)"><path style="fill:#000000" data-qr="` + text + `" d="M0,0h200v200h-200z"/></g></svg>`, nil
 }
 
 func (s *stubDCRPC) SecureJoin(accID uint32, qr string) (uint32, error) {
@@ -295,9 +295,13 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 	if !strings.Contains(qrSVG, "Pair") {
 		t.Fatalf("missing Pair title in SVG: %s", qrSVG)
 	}
-	// Rasterize the Pair QR scene to confirm SVG->RGB565 succeeds.
-	if _, err := buildScreen(qrSVG, false, roundScreen); err != nil {
+	// Rasterize the Pair QR scene to confirm SVG->RGB565 renders black QR pixels.
+	scr, err := buildScreen(qrSVG, false, roundScreen)
+	if err != nil {
 		t.Fatalf("Pair QR SVG failed to rasterize: %v", err)
+	}
+	if !slices.Contains(scr.fb, uint16(0x0000)) {
+		t.Fatal("Pair QR SVG rendered without any black QR pixels")
 	}
 
 	// Back -> Unpair -> tap Alice -> removed.
