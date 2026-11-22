@@ -88,6 +88,7 @@ func (b *larkServer) runSchemaUpgrade(ctx context.Context, delay, maxDelay time.
 			b.diag.mu.Lock()
 			b.diag.refresh.State = "current"
 			b.diag.mu.Unlock()
+			go b.prewarmSessions(ctx)
 			return
 		}
 		log.Printf("Lark MCP schema upgrade pending: %v", err)
@@ -112,6 +113,22 @@ func readMCPContract(agentPath string) (string, error) {
 		return "", fmt.Errorf("read agent prompt: %w", err)
 	}
 	return hashMCPSchema(mcpTools, mcpInstructions, mcpRuntimeContract, string(prompt)), nil
+}
+
+func (b *larkServer) prewarmSessions(ctx context.Context) {
+	if b.oc == nil {
+		return
+	}
+	list, err := b.allCompanions(ctx)
+	if err != nil {
+		return
+	}
+	for _, c := range list {
+		if ctx.Err() != nil {
+			return
+		}
+		b.oc.prewarm(ctx, c.ID, c.Name)
+	}
 }
 
 func (b *larkServer) syncSchemaUpgrade(ctx context.Context) error {

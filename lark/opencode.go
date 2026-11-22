@@ -100,6 +100,7 @@ type openCode struct {
 	active     map[string]context.CancelFunc
 	interrupts map[string]bool
 	resets     map[string]*ocReset
+	verified   map[string]string
 }
 
 type ocReset struct {
@@ -111,7 +112,9 @@ func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, se
 	o := &openCode{upstream: u, project: project, settings: settings, db: db,
 		store:  sessionStore(db),
 		active: make(map[string]context.CancelFunc), interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
-		feed: eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
+		verified: make(map[string]string),
+		feed:     eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
+	o.feed.onConfigChange = func() { o.invalidateVerified() }
 	for i := range o.turns {
 		o.turns[i] = make(chan struct{}, 1)
 	}
@@ -124,7 +127,44 @@ func (o *openCode) get(device string) (string, error) {
 	return sid, err
 }
 
+func (o *openCode) invalidateVerified(devices ...string) {
+	o.mu.Lock()
+	if len(devices) == 0 {
+		clear(o.verified)
+	} else {
+		for _, dev := range devices {
+			delete(o.verified, dev)
+		}
+	}
+	o.mu.Unlock()
+}
+
+func (o *openCode) prewarm(ctx context.Context, device, character string) {
+	if o == nil || device == "" {
+		return
+	}
+	o.mu.Lock()
+	cached := o.verified[device]
+	o.mu.Unlock()
+	if cached != "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	binding, err := o.readBinding(ctx, device)
+	if err != nil || binding.sid == "" {
+		return
+	}
+	unlock, err := o.lock(ctx, device)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	_, _ = o.ensureSession(ctx, device, character, false)
+}
+
 func (o *openCode) save(device, sid string) error {
+	o.invalidateVerified(device)
 	err := o.store.save(device, sid, sid == "")
 	o.sig.notify()
 	return err
@@ -233,6 +273,7 @@ func (o *openCode) prepareReset(device string) func(context.Context) error {
 
 // Block new prompts and interrupt the old mappings before changing them.
 func (o *openCode) prepareMappingChange(devices ...string) func(context.Context, func() error) error {
+	o.invalidateVerified(devices...)
 	gates := make([]int, 0, len(devices))
 	o.mu.Lock()
 	for _, device := range devices {
@@ -290,6 +331,7 @@ func ocData[T any](ctx context.Context, api upstream, method, path string, in an
 }
 
 func (o *openCode) ReconnectMCP(ctx context.Context, name string) error {
+	o.invalidateVerified()
 	query := ""
 	if o.project != "" {
 		query = "?" + url.Values{"location[directory]": {o.project}}.Encode()
@@ -315,6 +357,7 @@ func (o *openCode) ReconnectMCP(ctx context.Context, name string) error {
 
 // CompactSession returns false without an error for an ineligible or stale session.
 func (o *openCode) CompactSession(ctx context.Context, device, sid string) (bool, error) {
+	o.invalidateVerified(device)
 	if sid == "" {
 		return false, nil
 	}
@@ -415,6 +458,16 @@ func (o *openCode) configuredSettings(ctx context.Context) (ocSettings, error) {
 	return settings, nil
 }
 
+func (o *openCode) fastSession(ctx context.Context, device, character string, replace bool) (string, error) {
+	o.mu.Lock()
+	cached := o.verified[device]
+	o.mu.Unlock()
+	if cached != "" {
+		return cached, nil
+	}
+	return o.ensureSession(ctx, device, character, replace)
+}
+
 func (o *openCode) ensureSession(ctx context.Context, device, character string, replace bool) (string, error) {
 	if o.contract != "" {
 		catalog, err := o.db.getMeta(ctx, mcpSchemaMeta)
@@ -474,6 +527,11 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 					return "", err
 				}
 			}
+			o.mu.Lock()
+			if o.verified != nil {
+				o.verified[device] = sid
+			}
+			o.mu.Unlock()
 			return sid, nil
 		}
 		var status *upstreamStatus
@@ -518,6 +576,11 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 	if err := o.replaceBinding(ctx, device, binding, created.ID, after); err != nil {
 		return "", err
 	}
+	o.mu.Lock()
+	if o.verified != nil {
+		o.verified[device] = created.ID
+	}
+	o.mu.Unlock()
 	return created.ID, nil
 }
 
@@ -777,7 +840,7 @@ func (o *openCode) askPrepared(ctx context.Context, device string, prepare func(
 	trace.measure(diagGate, admitted.Sub(waiting))
 	defer unlock()
 	character, prompt := prepare()
-	sid, err = o.ensureSession(ctx, device, character, source != "timer")
+	sid, err = o.fastSession(ctx, device, character, source != "timer")
 	if err != nil {
 		return "", "", err
 	}
@@ -788,6 +851,7 @@ func (o *openCode) askPrepared(ctx context.Context, device string, prepare func(
 	trace.measure(diagPromptPrep, time.Since(admitted))
 	reply, err = o.runTurnStreaming(ctx, sid, prompt, stream, source, onChat)
 	if err != nil {
+		o.invalidateVerified(device)
 		o.requestInterrupt(device)
 	}
 	return reply, sid, err

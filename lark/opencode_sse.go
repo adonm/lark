@@ -31,10 +31,11 @@ type ocEvent struct {
 }
 
 type eventFeed struct {
-	mu        sync.Mutex
-	connected bool
-	sig       condSignal
-	bySession map[string]map[chan ocEvent]struct{}
+	mu             sync.Mutex
+	connected      bool
+	sig            condSignal
+	bySession      map[string]map[chan ocEvent]struct{}
+	onConfigChange func()
 }
 
 func (f *eventFeed) setConnected(connected bool) {
@@ -81,6 +82,11 @@ func (f *eventFeed) dispatch(raw []byte) {
 		return
 	}
 	switch event.Type {
+	case "model.updated", "agent.updated":
+		if f.onConfigChange != nil {
+			f.onConfigChange()
+		}
+		return
 	case "session.text.started", "session.text.delta", "session.text.ended", "session.step.started",
 		"session.tool.input.started", "session.tool.called",
 		"session.idle", "session.status",

@@ -455,6 +455,9 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 	snapSeq := h.nextSeq()
 	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
 	h.render(d, now, true)
+	if d.companionID != "" && h.b.oc != nil {
+		go h.b.oc.prewarm(c.ctx, d.companionID, d.companion.Name)
+	}
 	return true
 }
 
@@ -547,6 +550,9 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 	snapSeq := h.nextSeq()
 	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
 	h.render(d, now, true)
+	if d.companionID != "" && h.b.oc != nil {
+		go h.b.oc.prewarm(c.ctx, d.companionID, d.companion.Name)
+	}
 	return true
 }
 

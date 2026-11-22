@@ -31,6 +31,7 @@ func (o *openCode) readBinding(ctx context.Context, companion string) (sessionBi
 // The turn gate serializes local writers; only publish a fully prepared binding,
 // and never overwrite a mapping that changed while OpenCode was creating it.
 func (o *openCode) replaceBinding(ctx context.Context, companion string, old sessionBinding, sid string, after int64) error {
+	o.invalidateVerified(companion)
 	var result sql.Result
 	var err error
 	now := time.Now().UnixMilli()

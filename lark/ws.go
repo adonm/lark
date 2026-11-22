@@ -435,6 +435,9 @@ func (h *wsHub) attachTerminal(termID, compID string) {
 		if h.voiceOwners[compID] == "" {
 			h.voiceOwners[compID] = d.id
 		}
+		if h.b.oc != nil {
+			go h.b.oc.prewarm(d.client.ctx, compID, d.companion.Name)
+		}
 	} else {
 		d.companion = blankCompanion()
 		d.voice = h.b.voices.defaultFor("")
