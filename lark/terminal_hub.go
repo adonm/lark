@@ -25,8 +25,6 @@ type terminalCaps struct {
 	BridgeEndpoint bool `json:"bridge_endpoint,omitempty"`
 	Battery        bool `json:"battery"`
 	HeadPads       bool `json:"head_pads"`
-	Call           bool `json:"call"`
-	CallPCM        bool `json:"call_pcm,omitempty"`
 	Drag           bool `json:"drag"`
 }
 
@@ -48,7 +46,6 @@ type wsStatus struct {
 	InputDrops     *uint32  `json:"input_drops,omitempty"`
 	AudioUnderruns *uint32  `json:"audio_underruns,omitempty"`
 	AudioDrops     *uint32  `json:"audio_drops,omitempty"`
-	CallTXDrops    *uint32  `json:"call_tx_drops,omitempty"`
 }
 
 type wsTerminal struct {
@@ -111,18 +108,6 @@ type wsTerminal struct {
 	meter     time.Time
 	asleep    bool
 	wakeWord  bool
-
-	callState                   callState
-	callID                      uint32
-	callPeer                    string
-	callMuted                   bool
-	callOrigin                  bool
-	callStarted                 time.Time
-	callSecond                  time.Duration
-	callCancel                  context.CancelFunc
-	callFramesIn, callFramesOut uint64
-	callRTPSeq                  uint16
-	callRTPTS                   uint32
 
 	recording     deviceCapture
 	recSession    uint16
@@ -229,15 +214,9 @@ func (h *wsHub) peerPayload(scoped bool, seq uint32) []byte {
 	}
 	slices.SortFunc(list, func(a, b peerDisplay) int { return strings.Compare(a.id, b.id) })
 	compOnline := make(map[string]bool)
-	compCaps := make(map[string]terminalCaps)
 	for _, p := range list {
 		if p.online && p.companionID != "" {
 			compOnline[p.companionID] = true
-			if p.caps.Call {
-				c := compCaps[p.companionID]
-				c.Call = true
-				compCaps[p.companionID] = c
-			}
 		}
 	}
 	b := make([]byte, 0, 256)
@@ -251,15 +230,12 @@ func (h *wsHub) peerPayload(scoped bool, seq uint32) []byte {
 	for _, c := range h.storedCompanions {
 		b = appendStr8(b, c.ID)
 		b = appendStr8(b, c.Name)
-		var cfg, on, callCap byte
+		var cfg, on byte
 		if c.Configured {
 			cfg = 1
 		}
 		if compOnline[c.ID] {
 			on = 1
-		}
-		if compCaps[c.ID].Call {
-			callCap = 1
 		}
 		b = append(b, cfg)
 		b = appendStr8(b, c.FaceBG)
@@ -272,7 +248,7 @@ func (h *wsHub) peerPayload(scoped bool, seq uint32) []byte {
 			b = appendStr16(b, c.Personality)
 			b = appendStr8(b, h.b.voices.resolve(c.Voice, companionTheme(c.Name)))
 		}
-		b = append(b, on, callCap)
+		b = append(b, on, 0)
 	}
 	if scoped {
 		b = binary.LittleEndian.AppendUint16(b, 0)
@@ -391,7 +367,7 @@ func (h *wsHub) broadcastPeerFrames() {
 			}
 		}
 		for _, d := range h.terminals {
-			if d.drawer == "intercom" || d.drawer == "call" || d.card.hasIntercom() || d.view.hasIntercom() {
+			if d.drawer == "intercom" || d.card.hasIntercom() || d.view.hasIntercom() {
 				h.render(d, time.Now(), false)
 			}
 		}
@@ -709,7 +685,6 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		} else {
 			old.client.cancel()
 		}
-		h.endCall(old, "disconnected")
 		h.dropApp(old)
 		old.recording.clear()
 		h.cancelTurn(old, "reconnect")
@@ -802,7 +777,6 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 		} else {
 			old.client.cancel()
 		}
-		h.endCall(old, "disconnected")
 		h.dropApp(old)
 		old.recording.clear()
 		h.cancelTurn(old, "reconnect")
@@ -901,9 +875,6 @@ func (d *wsTerminal) status(s wsStatus) {
 	if s.AudioDrops != nil {
 		t.AudioDrops = s.AudioDrops
 	}
-	if s.CallTXDrops != nil {
-		t.CallTXDrops = s.CallTXDrops
-	}
 }
 
 func (d *wsTerminal) voiceTheme() string {
@@ -949,10 +920,6 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	}
 	mood := "idle"
 	switch {
-	case d.callState == callActive:
-		mood = "call"
-	case d.callState != callNone:
-		mood = "calling"
 	case d.asleep:
 		mood = "sleepy"
 	case d.recording.active():
@@ -974,15 +941,6 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 	r := renderRequest{full: full || d.renderNext != nil && d.renderNext.full, trace: d.trace, grade: h.frameGrade(d, now)}
 	d.grade.Store(uint32(r.grade))
 	switch {
-	case d.callState != callNone:
-		if p := h.callPeer(d); p != nil {
-			var elapsed time.Duration
-			if d.callState == callActive {
-				elapsed = now.Sub(d.callStarted)
-				d.callSecond = elapsed.Truncate(time.Second)
-			}
-			r.view = callScene(d.callState, d.callID, p.companion, d.callMuted, elapsed)
-		}
 	case d.drawer != "" && mood == "idle":
 		switch d.drawer {
 		case drawerGames, drawerMemories, drawerHistory:
@@ -992,12 +950,11 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 			r.view = volumeScene(d.autoVol, d.vol)
 		case "voice":
 			r.view = voiceScene(d.voice, d.menuPage)
-		case "intercom", "call":
-			calling := d.drawer == "call"
+		case "intercom":
 			var choices []menuPeer
 			seen := make(map[string]bool)
 			for _, other := range h.terminals {
-				if other.companionID == "" || other.companionID == d.companionID || !h.active(other) || (calling && !other.caps.Call) {
+				if other.companionID == "" || other.companionID == d.companionID || !h.active(other) {
 					continue
 				}
 				if seen[other.companionID] {
@@ -1007,11 +964,9 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 				choices = append(choices, menuPeer{other.companionID, other.companion.Name, other.companion.FaceBG, other.companion.AccentColor})
 			}
 			slices.SortFunc(choices, func(a, b menuPeer) int { return strings.Compare(a.id, b.id) })
-			if !calling {
-				choices = append([]menuPeer{{"all", "Everyone", "#FFADAC", "#FFD68B"}}, choices...)
-			}
+			choices = append([]menuPeer{{"all", "Everyone", "#FFADAC", "#FFD68B"}}, choices...)
 			d.menuPage = clampMenuPage(d.menuPage, len(choices), tilesPerPage)
-			r.view = peerScene(choices, d.menuPage, calling)
+			r.view = peerScene(choices, d.menuPage)
 		case "stats":
 			if d.client.scope == nil {
 				d.statsAt = now
@@ -1020,7 +975,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 			}
 			fallthrough
 		default:
-			r.view = menuHome(d.voice, d.autoVol, d.vol, d.client.scope != nil, d.caps.Call, d.menuPage)
+			r.view = menuHome(d.voice, d.autoVol, d.vol, d.client.scope != nil, d.menuPage)
 		}
 	case mood == "listening":
 		r.companion, r.pose = new(d.companion), pose
@@ -1035,7 +990,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		r.companion, r.pose = new(d.companion), pose
 	}
 	if card := r.view.intercom; card != nil {
-		r.view = card.scene(h.canCall(d, card.sender.ID))
+		r.view = card.scene()
 	}
 	if r.companion == nil && r.app == nil && (mood == "thinking" || mood == "speaking") {
 		r.view.actions = maps.Clone(r.view.actions)
@@ -1106,7 +1061,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		var native wsFrame
 		var rawBytes int
 		interactionChanged := pointerRev && wantRGB &&
-			(r.view.call != oldScene.call || !maps.Equal(r.view.actions, oldScene.actions) || !slices.Equal(screen.hits, prev.hits))
+			(!maps.Equal(r.view.actions, oldScene.actions) || !slices.Equal(screen.hits, prev.hits))
 		if err == nil && (r.full && r.app == nil || screen.source != prev.source || screen.grade != prev.grade || interactionChanged) {
 			start := time.Now()
 			if screen.fb != nil {
@@ -1176,9 +1131,6 @@ func (h *wsHub) wake(d *wsTerminal, now time.Time) {
 }
 
 func (h *wsHub) setSleeping(d *wsTerminal, asleep bool) {
-	if asleep && d.callState != callNone {
-		return
-	}
 	if d.asleep != asleep {
 		d.asleep = asleep
 		h.pushPower(d, d.brightness(), true)
@@ -1219,12 +1171,6 @@ func (h *wsHub) animate(ctx context.Context) {
 				if checkGrade && !d.virtual() && !(d.asleep && d.caps.PanelSleep) &&
 					d.svg.grade != h.frameGrade(d, now) {
 					h.render(d, now, false)
-				}
-				if d.callState != callNone {
-					if d.callState == callActive && now.Sub(d.callStarted).Truncate(time.Second) > d.callSecond {
-						h.render(d, now, false)
-					}
-					continue
 				}
 				switch {
 				case d.recording.active() && d.recording.stopTimer == nil && now.Sub(d.recording.started) > 90*time.Second:

@@ -27,7 +27,6 @@ enum {
     LARK_MSG_REC_START = 0x06,
     LARK_MSG_REC_END = 0x07,
     LARK_MSG_TTS_ACK = 0x08,
-    LARK_MSG_CALL_REQ = 0x09,
     LARK_MSG_MEDIA = 0x0A,
     LARK_MSG_TEXT_INPUT = 0x0B,
     LARK_MSG_PROMPT_REPLY = 0x0C,
@@ -47,7 +46,6 @@ enum {
     LARK_MSG_REC_CTRL = 0x86,
     LARK_MSG_TTS_CTRL = 0x87,
     LARK_MSG_TTS_PCM = 0x88,
-    LARK_MSG_CALL_CTRL = 0x89,
     LARK_MSG_CHIME = 0x8A,
     LARK_MSG_POWER = 0x8B,
     LARK_MSG_VOLUME = 0x8C,
@@ -95,8 +93,6 @@ enum {
 enum {
     LARK_CAP_BATTERY = 1u << 0,
     LARK_CAP_HEAD_PADS = 1u << 1,
-    LARK_CAP_CALL = 1u << 2,
-    LARK_CAP_CALL_PCM = 1u << 3,
     LARK_CAP_DRAG = 1u << 4,
     LARK_CAP_POINTER_REV = 1u << 5,
     LARK_CAP_BRIDGE_ENDPOINT = 1u << 6,
@@ -155,14 +151,6 @@ enum {
     LARK_TTS_END = 2,
 };
 
-// Call req actions & ctrl ops
-enum {
-    LARK_CALL_END = 0,
-    LARK_CALL_START = 1,
-    LARK_CALL_MUTE = 2,
-    LARK_CALL_UNMUTE = 3,
-};
-
 // Chime kinds
 enum {
     LARK_CHIME_TAP = 0,
@@ -190,9 +178,6 @@ enum {
     LARK_RTP_PCM_BYTES = LARK_RTP_SAMPLES * 2,
     LARK_RTP_PACKET_BYTES = LARK_RTP_HDR_SIZE + LARK_RTP_PCM_BYTES,
     LARK_RTP_PT_REC_PCM = 96,
-    LARK_RTP_PT_CALL_UP = 97,
-    LARK_RTP_PT_CALL_DOWN = 98,
-    LARK_JITTER_SLOTS = 3,
 };
 
 typedef struct __attribute__((packed)) {
@@ -410,102 +395,6 @@ static inline bool lark_rtp_decode(const uint8_t *src, size_t len, uint8_t *pt, 
     if (ts) *ts = ((uint32_t)src[4] << 24) | ((uint32_t)src[5] << 16) | ((uint32_t)src[6] << 8) | (uint32_t)src[7];
     if (ssrc) *ssrc = ((uint32_t)src[8] << 24) | ((uint32_t)src[9] << 16) | ((uint32_t)src[10] << 8) | (uint32_t)src[11];
     return true;
-}
-
-typedef struct {
-    bool valid;
-    uint16_t seq;
-    uint16_t bytes;
-    int16_t pcm[LARK_RTP_SAMPLES];
-} lark_jitter_slot_t;
-
-typedef struct {
-    bool synced;
-    uint16_t next_seq;
-    lark_jitter_slot_t slots[LARK_JITTER_SLOTS];
-} lark_jitter_t;
-
-static inline void lark_jitter_reset(lark_jitter_t *jb)
-{
-    memset(jb, 0, sizeof(*jb));
-}
-
-static inline int16_t lark_seq_diff(uint16_t a, uint16_t b)
-{
-    return (int16_t)(a - b);
-}
-
-static inline bool lark_jitter_push(lark_jitter_t *jb, uint16_t seq, const void *pcm, size_t bytes)
-{
-    if (!jb || !pcm || !bytes || bytes > LARK_RTP_PCM_BYTES || (bytes % 2) != 0) return false;
-    if (!jb->synced) {
-        jb->synced = true;
-        jb->next_seq = seq;
-    }
-    int16_t diff = lark_seq_diff(seq, jb->next_seq);
-    if (diff < 0) return false; // Stale or duplicate packet.
-    if (diff > 100) {
-        lark_jitter_reset(jb);
-        jb->synced = true;
-        jb->next_seq = seq;
-    } else if (diff >= LARK_JITTER_SLOTS) {
-        uint16_t new_next = (uint16_t)(seq - (LARK_JITTER_SLOTS - 1));
-        for (int i = 0; i < LARK_JITTER_SLOTS; ++i) {
-            if (jb->slots[i].valid && lark_seq_diff(jb->slots[i].seq, new_next) < 0) {
-                jb->slots[i].valid = false;
-            }
-        }
-        jb->next_seq = new_next;
-    }
-    int free_idx = -1;
-    for (int i = 0; i < LARK_JITTER_SLOTS; ++i) {
-        if (jb->slots[i].valid && jb->slots[i].seq == seq) {
-            free_idx = i;
-            break;
-        }
-        if (!jb->slots[i].valid && free_idx < 0) free_idx = i;
-    }
-    if (free_idx < 0) {
-        // All 3 slots occupied: evict the oldest sequence.
-        free_idx = 0;
-        for (int i = 1; i < LARK_JITTER_SLOTS; ++i) {
-            if (lark_seq_diff(jb->slots[i].seq, jb->slots[free_idx].seq) < 0) free_idx = i;
-        }
-    }
-    lark_jitter_slot_t *slot = &jb->slots[free_idx];
-    slot->valid = true;
-    slot->seq = seq;
-    slot->bytes = (uint16_t)bytes;
-    memcpy(slot->pcm, pcm, bytes);
-    return true;
-}
-
-static inline size_t lark_jitter_pop(lark_jitter_t *jb, int16_t *out_pcm)
-{
-    if (!jb || !jb->synced || !out_pcm) return 0;
-    for (int step = 0; step < LARK_JITTER_SLOTS; ++step) {
-        for (int i = 0; i < LARK_JITTER_SLOTS; ++i) {
-            lark_jitter_slot_t *slot = &jb->slots[i];
-            if (slot->valid && slot->seq == jb->next_seq) {
-                size_t bytes = slot->bytes;
-                memcpy(out_pcm, slot->pcm, bytes);
-                slot->valid = false;
-                jb->next_seq++;
-                return bytes;
-            }
-        }
-        // Only skip a missing slot if a newer packet is already buffered.
-        bool newer = false;
-        for (int i = 0; i < LARK_JITTER_SLOTS; ++i) {
-            if (jb->slots[i].valid && lark_seq_diff(jb->slots[i].seq, jb->next_seq) > 0) {
-                newer = true;
-                break;
-            }
-        }
-        if (!newer) break;
-        jb->next_seq++;
-    }
-    return 0;
 }
 
 static inline bool lark_parse_bridge_url(const char *url, char *host_out, size_t host_cap, uint16_t *port_out)

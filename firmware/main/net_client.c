@@ -40,7 +40,6 @@ enum {
 
 _Static_assert(FRAME_PACKET_CAP >= FRAME_HEADER_SIZE + FRAME_PIXELS * sizeof(uint16_t),
                "Receive buffer must fit full raw frames");
-_Static_assert((int)AUDIO_CALL_SAMPLES == (int)LARK_RTP_SAMPLES, "Call cadence must be 20 ms (320 samples)");
 _Static_assert((int)AUDIO_RECORD_CHUNK_SAMPLES == (int)LARK_RTP_SAMPLES, "Record cadence must be 20 ms (320 samples)");
 
 typedef enum {
@@ -49,7 +48,6 @@ typedef enum {
     INPUT_UP,
     TTS_ACK,
     REJECT_RECORD,
-    CALL_FAILED,
     WAKE_WORD,
 } input_kind_t;
 
@@ -94,11 +92,10 @@ static int tcp_fd = -1;
 static int udp_fd = -1;
 static struct sockaddr_in bridge_udp_addr;
 static uint32_t active_ssrc;
-static uint16_t rtp_rec_seq, rtp_call_seq;
-static uint32_t rtp_rec_ts, rtp_call_ts;
+static uint16_t rtp_rec_seq;
+static uint32_t rtp_rec_ts;
 
 static uint8_t *rx_buffer;
-static lark_jitter_t call_jb;
 static bool tts_accepted;
 static uint8_t tts_carry;
 static bool tts_odd;
@@ -247,11 +244,6 @@ void net_client_tts_ack(uint32_t session, uint32_t audio_id, bool aborted)
     enqueue_session((input_t){ .kind = TTS_ACK, .session = session, .audio_id = audio_id, .aborted = aborted });
 }
 
-void net_client_call_failed(uint32_t session, uint32_t id)
-{
-    enqueue_session((input_t){ .kind = CALL_FAILED, .session = session, .audio_id = id });
-}
-
 static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, size_t samples)
 {
     if (!samples || samples > LARK_RTP_SAMPLES || !ready_socket_session() || session != net_client_session()) {
@@ -268,15 +260,9 @@ static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, siz
         fd = udp_fd;
         dst = bridge_udp_addr;
         ssrc = active_ssrc;
-        if (pt == LARK_RTP_PT_REC_PCM) {
-            seq = rtp_rec_seq++;
-            ts = rtp_rec_ts;
-            rtp_rec_ts += (uint32_t)samples;
-        } else {
-            seq = rtp_call_seq++;
-            ts = rtp_call_ts;
-            rtp_call_ts += (uint32_t)samples;
-        }
+        seq = rtp_rec_seq++;
+        ts = rtp_rec_ts;
+        rtp_rec_ts += (uint32_t)samples;
     }
     portEXIT_CRITICAL(&udp_lock);
 
@@ -291,14 +277,6 @@ static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, siz
 bool net_client_rec_pcm(uint32_t session, const int16_t *pcm, size_t samples)
 {
     return send_rtp_audio(session, LARK_RTP_PT_REC_PCM, pcm, samples);
-}
-
-void net_client_call_pcm(uint32_t session, uint32_t id, const int16_t *pcm)
-{
-    if (!media_call_sending(id)) return;
-    if (!send_rtp_audio(session, LARK_RTP_PT_CALL_UP, pcm, AUDIO_CALL_SAMPLES)) {
-        atomic_fetch_add_explicit(&telemetry_io.call_tx_drops, 1, memory_order_relaxed);
-    }
 }
 
 static void send_input(const input_t *input)
@@ -316,16 +294,6 @@ static void send_input(const input_t *input)
     }
     if (input->kind == REJECT_RECORD) {
         net_client_rec_end(session, input->rec_session, input->target, true);
-        return;
-    }
-    if (input->kind == CALL_FAILED) {
-        uint8_t buf[6] = { LARK_CALL_END, 0, 0, 0, 0, 0 };
-        uint32_t cid = input->audio_id;
-        buf[1] = (uint8_t)(cid & 0xFF);
-        buf[2] = (uint8_t)((cid >> 8) & 0xFF);
-        buf[3] = (uint8_t)((cid >> 16) & 0xFF);
-        buf[4] = (uint8_t)((cid >> 24) & 0xFF);
-        send_tcp_frame(session, LARK_MSG_CALL_REQ, buf, sizeof(buf), true);
         return;
     }
     if (input->kind == WAKE_WORD) {
@@ -364,7 +332,6 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
     if (BOARD_HAS_HEAD_PADS) caps |= LARK_CAP_HEAD_PADS;
     if (media_audio_ready()) {
         caps |= LARK_CAP_BRIDGE_ENDPOINT | LARK_CAP_WAKE_WORD;
-        if (BOARD_HAS_CALL) caps |= LARK_CAP_CALL | LARK_CAP_CALL_PCM;
     }
     const char *board = BOARD_NAME;
     const char *fw = esp_app_get_description()->version;
@@ -457,9 +424,7 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         bridge_udp_addr.sin_port = htons(w.udp_port);
         active_ssrc = w.ssrc;
         rtp_rec_seq = 0;
-        rtp_call_seq = 0;
         rtp_rec_ts = 0;
-        rtp_call_ts = 0;
         portEXIT_CRITICAL(&udp_lock);
         atomic_store(&ready_session, session);
         if (hello_sem) xSemaphoreGive(hello_sem);
@@ -533,27 +498,6 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
     case LARK_MSG_TTS_PCM:
         receive_tts_pcm(payload, len);
         break;
-    case LARK_MSG_CALL_CTRL: {
-        if (len < 5) break;
-        uint8_t op = payload[0];
-        uint32_t call_id = (uint32_t)payload[1] | ((uint32_t)payload[2] << 8) |
-                           ((uint32_t)payload[3] << 16) | ((uint32_t)payload[4] << 24);
-        if (!call_id) break;
-        if (op == LARK_CALL_START) {
-            tts_accepted = false;
-            tts_odd = false;
-            lark_jitter_reset(&call_jb);
-            if (!media_call_start(call_id, false)) net_client_call_failed(session, call_id);
-        } else if (op == LARK_CALL_MUTE) {
-            media_call_set_mute(call_id, true);
-        } else if (op == LARK_CALL_UNMUTE) {
-            media_call_set_mute(call_id, false);
-        } else {
-            media_call_end(call_id);
-            lark_jitter_reset(&call_jb);
-        }
-        break;
-    }
     case LARK_MSG_CHIME: {
         if (len < 1) break;
         static const audio_tone_t map[] = {
@@ -660,7 +604,6 @@ static void close_sockets(void)
         atomic_store(&ready_session, 0);
         tts_accepted = false;
         tts_odd = false;
-        lark_jitter_reset(&call_jb);
         media_link_lost();
         display_set_link(false);
     }
@@ -763,32 +706,6 @@ static bool open_connection(uint32_t *out_session)
     return true;
 }
 
-static void drain_udp(void)
-{
-    uint8_t pkt[1500];
-    int16_t out_pcm[LARK_RTP_SAMPLES];
-    for (;;) {
-        struct sockaddr_in from;
-        socklen_t flen = sizeof(from);
-        int n = lwip_recvfrom(udp_fd, pkt, sizeof(pkt), 0, (struct sockaddr *)&from, &flen);
-        if (n <= 0) break;
-        uint8_t pt = 0;
-        uint16_t seq = 0;
-        uint32_t ts = 0, ssrc = 0;
-        if (!lark_rtp_decode(pkt, (size_t)n, &pt, &seq, &ts, &ssrc)) continue;
-        if (pt != LARK_RTP_PT_CALL_DOWN || ssrc != active_ssrc || !active_ssrc) continue;
-        if (from.sin_addr.s_addr != bridge_udp_addr.sin_addr.s_addr) continue;
-        size_t pcm_bytes = (size_t)n - LARK_RTP_HDR_SIZE;
-        if (!pcm_bytes || (pcm_bytes % 2) != 0 || pcm_bytes > LARK_RTP_PCM_BYTES) continue;
-        if (lark_jitter_push(&call_jb, seq, pkt + LARK_RTP_HDR_SIZE, pcm_bytes)) {
-            size_t popped;
-            while ((popped = lark_jitter_pop(&call_jb, out_pcm)) > 0) {
-                media_call_pcm(out_pcm, popped);
-            }
-        }
-    }
-}
-
 static bool has_pending_inputs(void)
 {
     portENTER_CRITICAL(&input_lock);
@@ -856,19 +773,11 @@ static void service_task(void *arg)
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(tcp_fd, &rfds);
-            int max_fd = tcp_fd;
-            if (udp_fd >= 0) {
-                FD_SET(udp_fd, &rfds);
-                if (udp_fd > max_fd) max_fd = udp_fd;
-            }
             int wait_ms = has_pending_inputs() ? SELECT_BUSY_MS : SELECT_IDLE_MS;
             struct timeval tv = { .tv_sec = 0, .tv_usec = wait_ms * 1000 };
-            int ready = lwip_select(max_fd + 1, &rfds, NULL, NULL, &tv);
+            int ready = lwip_select(tcp_fd + 1, &rfds, NULL, NULL, &tv);
             if (ready < 0) break;
 
-            if (udp_fd >= 0 && FD_ISSET(udp_fd, &rfds)) {
-                drain_udp();
-            }
             if (FD_ISSET(tcp_fd, &rfds)) {
                 uint8_t hbuf[LARK_PROTO_HDR_SIZE];
                 if (!recv_exact(tcp_fd, hbuf, sizeof(hbuf))) break;

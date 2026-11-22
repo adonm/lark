@@ -87,7 +87,6 @@ type wsHub struct {
 	storedCompanions  []companionState
 	refreshing        bool
 	refreshNeeded     bool
-	nextCall          uint32
 	atmosphere        bool
 	udpPort           uint16
 	stateSeq          uint32
@@ -372,22 +371,6 @@ func (h *wsHub) pushTTSAbort(d *wsTerminal, audioID uint64) {
 	d.client.enqueueProto(msgTTSCtrl, encodeTTSCtrl(ttsOpStop, audioID))
 }
 
-func (h *wsHub) pushCallStart(d *wsTerminal) {
-	d.client.enqueueProto(msgCallCtrl, encodeCallCtrl(callOpStart, d.callID, ""))
-}
-
-func (h *wsHub) pushCallMute(d *wsTerminal) {
-	op := callOpUnmute
-	if d.callMuted {
-		op = callOpMute
-	}
-	d.client.enqueueProto(msgCallCtrl, encodeCallCtrl(op, d.callID, ""))
-}
-
-func (h *wsHub) pushCallEnd(d *wsTerminal, callID uint32, reason string) {
-	d.client.enqueueProto(msgCallCtrl, encodeCallCtrl(callOpEnd, callID, reason))
-}
-
 func (h *wsHub) pushChime(d *wsTerminal, kind string) {
 	if code, ok := encodeChimePayload(kind); ok {
 		d.client.enqueueProto(msgChime, []byte{code})
@@ -617,7 +600,6 @@ func (h *wsHub) teardownTerminal(d *wsTerminal) {
 			expiresAt:      now.Add(time.Duration(resumeWindowMS) * time.Millisecond),
 		}
 	}
-	h.endCall(d, "disconnected")
 	h.dropApp(d)
 	delete(h.terminals, d.key)
 	d.recording.clear()
@@ -663,7 +645,6 @@ func (h *wsHub) attachTerminal(termID, compID string) {
 	}
 	oldComp := d.companionID
 	wasOwner := oldComp != "" && h.voiceOwners[oldComp] == d.id
-	h.endCall(d, "reassigned")
 	h.dropApp(d)
 	d.recording.clear()
 	h.cancelTurn(d, "reassigned")

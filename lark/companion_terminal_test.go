@@ -61,12 +61,16 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 	testRequest(t, http.MethodDelete, base+"/api/companions/"+cakeID, "unit", nil, 204)
 }
 
-func TestCompanionIntercomCallAndTunnelScope(t *testing.T) {
+func TestCompanionIntercomAndTunnelScope(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
-	cake := callClient(t, b, base, "cake", "Cake")
-	mint := callClient(t, b, base, "mint", "Mint")
+	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
+	_, _ = b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"})
+	cake := testConnectWS(t, base, "unit", true)
+	cake.helloWeb(t, "web-00000001", "cake", capDrag, false)
+	mint := testConnectWS(t, base, "unit", true)
+	mint.helloWeb(t, "web-00000002", "mint", capDrag, false)
 
 	// Intercom addressed by companion.
 	intercom := toolTest(t, base, "emit", object{"to": "mint", "intercom": object{"from": "cake", "text": "Tea time!"}}, false)
@@ -74,15 +78,7 @@ func TestCompanionIntercomCallAndTunnelScope(t *testing.T) {
 		t.Fatalf("unexpected intercom receipt: %v", intercom)
 	}
 	mint.until(t, hasSVG("Tea time!"))
-
-	// Call addressed by companion.
-	callOut := toolTest(t, base, "emit", object{"to": "mint", "call": object{"from": "cake"}}, false)
-	callID := callOut["call"].(object)["id"]
-	mint.until(t, hasSVG("call-answer"))
-	tapCallControl(t, mint, "call-answer")
-	cake.until(t, hasProto(msgCallCtrl, ""))
-	toolTest(t, base, "emit", object{"to": "mint", "call": object{"op": "hangup", "id": callID}}, false)
-	cake.until(t, hasProto(msgCallCtrl, ""))
+	_ = cake
 
 	// Tunnel scope restricted to companion.
 	c, _ := b.companionByID("mint")

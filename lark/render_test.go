@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/pierrec/lz4/v4"
 	"github.com/srwiley/oksvg"
@@ -33,7 +32,7 @@ func facePoseSVGs() []string {
 	}
 }
 
-func TestCallScreenTouchTargets(t *testing.T) {
+func TestIntercomScreenTouchTargets(t *testing.T) {
 	companion := blankCompanion()
 	companion.ID = "mint"
 	companion.Name = "Mint & Friends"
@@ -43,11 +42,7 @@ func TestCallScreenTouchTargets(t *testing.T) {
 		view sceneView
 		ids  []string
 	}{
-		{"incoming", callScene(callRingingIn, 1, companion, false, 0), []string{"call-answer", "call-decline"}},
-		{"outgoing", callScene(callRingingOut, 1, companion, false, 0), []string{"call-hangup"}},
-		{"active", callScene(callActive, 1, companion, false, 62*time.Second), []string{"call-mute", "call-hangup"}},
-		{"muted", callScene(callActive, 1, companion, true, 62*time.Second), []string{"call-mute", "call-hangup"}},
-		{"voice note", card.scene(true), []string{"call", "reply", "done"}},
+		{"voice note", card.scene(), []string{"reply", "done"}},
 	} {
 		for _, geom := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
 			t.Run(tc.name+"/"+strconv.Itoa(geom.width), func(t *testing.T) {
@@ -108,15 +103,15 @@ func TestMenuScreenTouchTargets(t *testing.T) {
 		rows = append(rows, menuRow{"A long heading for this detail card", strings.Repeat("Wide W with some text ", 50)})
 	}
 	for name, scene := range map[string]sceneView{
-		"menu-first":     menuHome(heartVoice, true, 55, false, true, 0),
-		"menu-last":      menuHome(heartVoice, true, 55, false, true, 1),
+		"menu-first":     menuHome(heartVoice, true, 55, false, 0),
+		"menu-last":      menuHome(heartVoice, true, 55, false, 1),
 		"games":          gamesScene(games, 1, ""),
 		"memories":       menuList("Memories", "", rows, 1),
 		"history":        menuList("History", "", rows, 1),
 		"memory-detail":  menuDetail("Memories", rows[0]),
 		"history-detail": menuDetail("History", rows[0]),
 		"voice":          voiceScene(heartVoice, 1),
-		"call-peers":     peerScene([]menuPeer{{"cat-1", "Friend", "#404040", "#FF0000"}}, 0, true),
+		"intercom-peers": peerScene([]menuPeer{{"cat-1", "Friend", "#404040", "#FF0000"}}, 0),
 	} {
 		for _, geom := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
 			t.Run(name+"/"+strconv.Itoa(geom.width), func(t *testing.T) {
@@ -207,14 +202,14 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 		}
 		scenes = append(scenes, scene{name, s.svg(""), regions})
 	}
-	menu("home page 1", menuHome(heartVoice, true, 55, false, false, 0),
+	menu("home page 1", menuHome(heartVoice, true, 55, false, 0),
 		reg("intercom icon", accentPalette.bg, 103, 98, 22, 21, 13, 13),
 		reg("intercom label", accentPalette.bg, 67, 126, 94, 22, 44, 9),
 		reg("games icon", warningPalette.bg, 235, 98, 22, 21, 13, 8),
 		reg("games label", warningPalette.bg, 199, 126, 94, 22, 40, 9),
 		reg("history label", volumePalette.bg, 67, 221, 94, 22, 40, 9),
 		reg("memories label", accentPalette.bg, 199, 221, 94, 22, 50, 9))
-	menu("home page 2", menuHome(heartVoice, true, 55, false, false, 1),
+	menu("home page 2", menuHome(heartVoice, true, 55, false, 1),
 		reg("volume icon", volumePalette.bg, 235, 94, 22, 21, 13, 10),
 		reg("volume label", volumePalette.bg, 199, 118, 94, 18, 45, 9),
 		reg("volume subtitle", volumePalette.bg, 199, 140, 94, 15, 32, 6),
@@ -267,7 +262,7 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 				reg("peer "+strconv.Itoa(i)+" label", "#372530", x+22, y+42, 70, 18, 24, 7))
 		}
 	}
-	menu("intercom", peerScene(choices, 1, false), append(choiceRegions,
+	menu("intercom", peerScene(choices, 1), append(choiceRegions,
 		reg("previous label", navPalette.bg, 89, 286, 40, 20, 23, 7),
 		reg("next label", navPalette.bg, 231, 286, 40, 20, 23, 7))...)
 	var rows []region

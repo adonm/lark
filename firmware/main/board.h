@@ -1,6 +1,5 @@
 #pragma once
 
-#define BOARD_HAS_CALL 1
 #define BOARD_HAS_DRAG 1
 #define BOARD_HAS_HEAD_PADS 0
 

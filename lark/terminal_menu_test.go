@@ -75,15 +75,17 @@ func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 
 func TestWSMainMenuPages(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	c := callClient(t, b, base, callCake, "Cake")
-	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-call", "menu-games", "menu-history", "menu-next")
-	page2 := tapMenu(t, c, "menu-next", "menu-prev", "menu-memories", "menu-voice", "menu-volume", "menu-stats")
+	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"})
+	c := testConnectWS(t, base, "unit", true)
+	c.helloWeb(t, "web-00000001", "cake", capDrag, false)
+	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-games", "menu-history", "menu-memories", "menu-next")
+	page2 := tapMenu(t, c, "menu-next", "menu-prev", "menu-voice", "menu-volume", "menu-stats")
 	for _, check := range []struct {
 		svg  string
 		omit []string
 	}{
-		{page1, []string{"menu-prev", "menu-memories", "menu-voice", "menu-volume", "menu-stats"}},
-		{page2, []string{"menu-next", "menu-call", "menu-intercom", "menu-games", "menu-history"}},
+		{page1, []string{"menu-prev", "menu-voice", "menu-volume", "menu-stats"}},
+		{page2, []string{"menu-next", "menu-intercom", "menu-games", "menu-history", "menu-memories"}},
 	} {
 		for _, id := range check.omit {
 			if strings.Contains(check.svg, id) {
@@ -91,7 +93,7 @@ func TestWSMainMenuPages(t *testing.T) {
 			}
 		}
 	}
-	tapMenu(t, c, "menu-prev", "menu-call", "menu-next")
+	tapMenu(t, c, "menu-prev", "menu-intercom", "menu-next")
 	tapMenu(t, c, "menu-back", "companion-ring")
 }
 
@@ -187,11 +189,10 @@ func TestWSMenuListDetails(t *testing.T) {
 	} {
 		t.Run(tc.drawer, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
-			c := callClient(t, b, base, id, "Cake")
+			_, _ = b.createCompanion(t.Context(), object{"id": id, "name": "Cake"})
+			c := testConnectWS(t, base, "unit", true)
+			c.helloWeb(t, "web-00000001", id, capDrag, false)
 			tapMenu(t, c, "menu", "menu-history")
-			if tc.drawer == drawerMemories {
-				tapMenu(t, c, "menu-next", "menu-memories")
-			}
 			open := "menu-" + tc.drawer
 			tapMenu(t, c, open, tc.empty, "menu-back")
 			tapMenu(t, c, "menu-back", open)

@@ -26,7 +26,6 @@ const (
 	msgRecStart    uint8 = 0x06
 	msgRecEnd      uint8 = 0x07
 	msgTTSAck      uint8 = 0x08
-	msgCallReq     uint8 = 0x09
 	msgMedia       uint8 = 0x0A
 	msgTextInput   uint8 = 0x0B
 	msgPromptReply uint8 = 0x0C
@@ -44,7 +43,6 @@ const (
 	msgRecCtrl      uint8 = 0x86
 	msgTTSCtrl      uint8 = 0x87
 	msgTTSPCM       uint8 = 0x88
-	msgCallCtrl     uint8 = 0x89
 	msgChime        uint8 = 0x8A
 	msgPower        uint8 = 0x8B
 	msgVolume       uint8 = 0x8C
@@ -84,8 +82,6 @@ const (
 	// Capability bits
 	capBattery        uint32 = 1 << 0
 	capHeadPads       uint32 = 1 << 1
-	capCall           uint32 = 1 << 2
-	capCallPCM        uint32 = 1 << 3
 	capDrag           uint32 = 1 << 4
 	capPointerRev     uint32 = 1 << 5
 	capBridgeEndpoint uint32 = 1 << 6
@@ -131,11 +127,7 @@ const (
 	ttsOpStart uint8 = 1
 	ttsOpEnd   uint8 = 2
 
-	// Call ops
-	callOpEnd    uint8 = 0
-	callOpStart  uint8 = 1
-	callOpMute   uint8 = 2
-	callOpUnmute uint8 = 3
+	// Chime kinds
 
 	// Chime kinds
 	chimeTap      uint8 = 0
@@ -157,8 +149,6 @@ const (
 	rtpPCMBytes          = rtpSamples * 2
 	rtpPacketBytes       = rtpHeaderSize + rtpPCMBytes
 	rtpPTRecPCM    uint8 = 96
-	rtpPTCallUp    uint8 = 97
-	rtpPTCallDown  uint8 = 98
 )
 
 var (
@@ -357,12 +347,9 @@ func encodeTerminalResume(protoVer uint8, token [resumeTokenLen]byte, lastSeq ui
 }
 
 func helloCapsFromMask(mask uint32) terminalCaps {
-	call := mask&capCall != 0
 	return terminalCaps{
 		Battery:        mask&capBattery != 0,
 		HeadPads:       mask&capHeadPads != 0,
-		Call:           call,
-		CallPCM:        call && mask&capCallPCM != 0,
 		Drag:           mask&capDrag != 0,
 		PointerRev:     mask&capPointerRev != 0,
 		BridgeEndpoint: mask&capBridgeEndpoint != 0,
@@ -378,12 +365,6 @@ func capsMaskFromCaps(c terminalCaps) uint32 {
 	}
 	if c.HeadPads {
 		m |= capHeadPads
-	}
-	if c.Call {
-		m |= capCall
-	}
-	if c.CallPCM {
-		m |= capCallPCM
 	}
 	if c.Drag {
 		m |= capDrag
@@ -513,15 +494,6 @@ func encodeTTSAck(aborted bool, audioID uint64) []byte {
 	return b[:]
 }
 
-func parseCallReq(b []byte) (action uint8, callID uint32, target string, ok bool) {
-	if len(b) < 6 {
-		return 0, 0, "", false
-	}
-	off := 5
-	target, ok = readStr8(b, &off)
-	return b[0], binary.LittleEndian.Uint32(b[1:5]), target, ok
-}
-
 func parseTextInput(b []byte) (string, bool) {
 	off := 0
 	return readStr16(b, &off)
@@ -584,13 +556,6 @@ func encodeTTSCtrl(op uint8, audioID uint64) []byte {
 	b[0] = op
 	binary.LittleEndian.PutUint64(b[1:9], audioID)
 	return b[:]
-}
-
-func encodeCallCtrl(op uint8, callID uint32, reason string) []byte {
-	b := make([]byte, 0, 6+len(reason))
-	b = append(b, op)
-	b = binary.LittleEndian.AppendUint32(b, callID)
-	return appendStr8(b, reason)
 }
 
 func encodeChimePayload(kind string) (byte, bool) {

@@ -28,10 +28,6 @@ func TestVirtualE2E(t *testing.T) {
 			c := s.board(t, "esp-vocat", "Idle")
 			s.idleWake(t, c, time.Now())
 		})
-		t.Run("CallTimeout", func(t *testing.T) {
-			t.Parallel()
-			s.callTimeout(t)
-		})
 		t.Run("Product", func(t *testing.T) {
 			t.Parallel() // Keep idle/call sockets reading throughout the real timeouts.
 			t.Run("VoiceTypedAndStop", s.voiceTypedStop)
@@ -40,7 +36,6 @@ func TestVirtualE2E(t *testing.T) {
 			t.Run("Box3Menus", func(t *testing.T) { s.menus(t, "esp-box-3", "MenusRect") })
 			t.Run("RawFramebuffer", s.rawFramebuffer)
 			t.Run("IntercomReply", s.intercom)
-			t.Run("Calls", s.calls)
 			t.Run("Apps", s.apps)
 			t.Run("TimersMemoryHistory", s.data)
 			t.Run("ScopedTunnel", s.scopedTunnel)
@@ -110,22 +105,6 @@ func e2eFields(f wsFrame, op string, pairs ...string) bool {
 				}
 			}
 			if pairs[i] == "audio" && fmt.Sprint(binary.LittleEndian.Uint64(p[1:9])) != pairs[i+1] {
-				return false
-			}
-		}
-		return true
-	case "call":
-		if mt != msgCallCtrl || len(p) < 6 {
-			return false
-		}
-		for i := 0; i < len(pairs); i += 2 {
-			if pairs[i] == "state" {
-				st := strings.Trim(pairs[i+1], `"`)
-				if st == "start" && p[0] != callOpStart || st == "end" && p[0] != callOpEnd {
-					return false
-				}
-			}
-			if pairs[i] == "reason" && !bytes.Contains(p[6:], []byte(strings.Trim(pairs[i+1], `"`))) {
 				return false
 			}
 		}
@@ -464,13 +443,13 @@ func (s *e2eSuite) menus(t *testing.T, variant, label string) {
 	c.mirrorOn(t, s)
 	s.browser(t, label+"Peer")
 	first := c.tapScene(t, "menu", "menu-intercom")
-	for _, id := range []string{"menu-call", "menu-games", "menu-history"} {
+	for _, id := range []string{"menu-games", "menu-history"} {
 		if !strings.Contains(first, id) {
 			t.Fatal("missing first page control:", id)
 		}
 	}
 	for _, nav := range []struct{ id, want string }{
-		{"menu-intercom", "Talk to…"}, {"menu-call", "Call"}, {"menu-games", "No saved games yet"}, {"menu-history", "No messages yet"},
+		{"menu-intercom", "Talk to…"}, {"menu-games", "No saved games yet"}, {"menu-history", "No messages yet"},
 	} {
 		c.tapScene(t, nav.id, nav.want)
 		c.tapScene(t, "menu-back", "menu-intercom")
@@ -597,114 +576,6 @@ func (s *e2eSuite) intercom(t *testing.T) {
 	}
 }
 
-func e2eRing(t *testing.T, a, b *e2eCompanion) time.Time {
-	t.Helper()
-	start := time.Now()
-	sendCallStartReq(t, a.testWS, b.id)
-	a.op(t, "chime", "kind", `"ring"`)
-	b.op(t, "chime", "kind", `"ring"`)
-	b.scene(t, "call-answer")
-	return start
-}
-
-func e2eStartCall(t *testing.T, a, b *e2eCompanion) int {
-	t.Helper()
-	first, second := a.op(t, "call", "state", `"start"`), b.op(t, "call", "state", `"start"`)
-	id := int(binary.LittleEndian.Uint32(framePayload(first)[1:5]))
-	for _, f := range []wsFrame{first, second} {
-		if id == 0 || int(binary.LittleEndian.Uint32(framePayload(f)[1:5])) != id {
-			t.Fatal("peers did not negotiate a matching tagged firmware call")
-		}
-	}
-	a.scene(t, "call-mute")
-	b.scene(t, "call-mute")
-	return id
-}
-
-func e2eEndCall(t *testing.T, a, b *e2eCompanion, reason string) {
-	t.Helper()
-	for _, c := range []*e2eCompanion{a, b} {
-		c.op(t, "call", "state", `"end"`, "reason", fmt.Sprintf("%q", reason))
-	}
-}
-
-func (s *e2eSuite) calls(t *testing.T) {
-	for _, variant := range []string{"WebWeb", "WebBoard"} {
-		t.Run(variant, func(t *testing.T) {
-			a := s.browser(t, "CallFrom")
-			var b *e2eCompanion
-			if variant == "WebWeb" {
-				b = s.browser(t, "CallTo")
-			} else {
-				b = s.board(t, "esp-box-3", "CallBoard")
-				b.mirrorOn(t, s)
-			}
-			ring := e2eRing(t, a, b)
-			b.tap(t, "call-answer")
-			e2eStartCall(t, a, b)
-			t.Logf("ring → connected %s", time.Since(ring).Round(time.Millisecond))
-			pcm := bytes.Repeat([]byte{100, 5}, callPCMBytes/2)
-			relay := func(from, to *e2eCompanion, data []byte) {
-				t.Helper()
-				start := time.Now()
-				from.write(t, maskedFrame(wsBinary, true, append([]byte{0x04}, data...)))
-				if got := to.expect(t, "relayed call PCM", isPlayback); !bytes.Equal(got.data[1:], data) {
-					t.Fatal("call relayed unexpected or mutated PCM")
-				}
-				t.Logf("tagged microphone → peer PCM %s", time.Since(start).Round(time.Microsecond))
-			}
-			relay(a, b, pcm)
-			relay(b, a, pcm)
-			b.tap(t, "call-mute")
-			b.op(t, "call", "muted", "true")
-			b.scene(t, "Unmute")
-			b.write(t, maskedFrame(wsBinary, true, append([]byte{0x04}, pcm...)))
-			b.syncFrames(t)
-			relay(a, b, pcm) // Mute does not silence downlink.
-			b.tap(t, "call-mute")
-			b.op(t, "call", "muted", "false")
-			b.scene(t, `aria-label=\"Mute\"`)
-			relay(b, a, bytes.Repeat([]byte{5, 100}, callPCMBytes/2))
-			b.tap(t, "call-hangup")
-			e2eEndCall(t, a, b, "hung up")
-			a.expect(t, "call history event", func(f wsFrame) bool {
-				return f.op == wsText && bytes.Contains(f.data, []byte(`"type":"chat"`)) &&
-					bytes.Contains(f.data, []byte(`"source":"call"`))
-			})
-			if !slices.ContainsFunc(s.history(t, a.id, ""), func(row chatEntry) bool {
-				return row.Source == "call" && strings.Contains(row.Text, "Voice call with")
-			}) {
-				t.Fatal("completed call did not enter canonical history")
-			}
-		})
-	}
-	t.Run("BusyDeclineGlare", func(t *testing.T) {
-		a, b, third := s.browser(t, "GlareA"), s.browser(t, "GlareB"), s.browser(t, "Busy")
-		e2eRing(t, a, b)
-		sendCallStartReq(t, third.testWS, b.id)
-		third.scene(t, "busy.")
-		b.tap(t, "call-decline")
-		e2eEndCall(t, a, b, "declined")
-		e2eRing(t, a, b)
-		sendCallStartReq(t, b.testWS, a.id)
-		e2eStartCall(t, a, b) // The reciprocal request answers, not starts a second call.
-		a.tap(t, "call-hangup")
-		e2eEndCall(t, a, b, "hung up")
-	})
-}
-
-func (s *e2eSuite) callTimeout(t *testing.T) {
-	a, b := s.browser(t, "TimeoutA"), s.browser(t, "TimeoutB")
-	a.timeout, b.timeout = 32*time.Second, 32*time.Second
-	start := e2eRing(t, a, b)
-	e2eEndCall(t, a, b, "no answer")
-	if elapsed := time.Since(start); elapsed < 24*time.Second || elapsed > 29*time.Second {
-		t.Fatalf("unexpected no-answer timing: %s", elapsed)
-	} else {
-		t.Logf("ring → no answer %s", elapsed.Round(time.Millisecond))
-	}
-}
-
 func (s *e2eSuite) idleWake(t *testing.T, c *e2eCompanion, start time.Time) {
 	c.timeout = 130 * time.Second
 	c.op(t, "power", "brightness", "12")
@@ -760,7 +631,7 @@ func (s *e2eSuite) scopedTunnel(t *testing.T) {
 	get("/api/devices/"+c.id+"/messages", 200)
 	get("/api/devices/"+other.id+"/messages", 403)
 	ws := testConnectWS(t, scope.base, scope.token, true)
-	ws.helloWeb(t, "web-scope001", c.id, capCall|capDrag|capBridgeEndpoint, false)
+	ws.helloWeb(t, "web-scope001", c.id, capDrag|capBridgeEndpoint, false)
 	client := &e2eCompanion{testWS: ws, id: c.id, name: c.name}
 	client.timeout = 20 * time.Second
 	ws.sendProto(t, msgWatch, appendStr8(nil, other.id))

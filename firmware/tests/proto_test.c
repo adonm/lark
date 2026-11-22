@@ -37,9 +37,9 @@ static void test_tcp_header(void)
 static void test_rtp_header(void)
 {
     uint8_t pkt[LARK_RTP_PACKET_BYTES];
-    lark_rtp_encode(pkt, LARK_RTP_PT_CALL_UP, 0xABCD, 0x11223344u, 0xDEADBEEFu);
+    lark_rtp_encode(pkt, LARK_RTP_PT_REC_PCM, 0xABCD, 0x11223344u, 0xDEADBEEFu);
     assert(pkt[0] == 0x80);
-    assert(pkt[1] == LARK_RTP_PT_CALL_UP);
+    assert(pkt[1] == LARK_RTP_PT_REC_PCM);
     assert(pkt[2] == 0xAB && pkt[3] == 0xCD);
     assert(pkt[4] == 0x11 && pkt[5] == 0x22 && pkt[6] == 0x33 && pkt[7] == 0x44);
     assert(pkt[8] == 0xDE && pkt[9] == 0xAD && pkt[10] == 0xBE && pkt[11] == 0xEF);
@@ -48,7 +48,7 @@ static void test_rtp_header(void)
     uint16_t seq = 0;
     uint32_t ts = 0, ssrc = 0;
     assert(lark_rtp_decode(pkt, sizeof(pkt), &pt, &seq, &ts, &ssrc));
-    assert(pt == LARK_RTP_PT_CALL_UP);
+    assert(pt == LARK_RTP_PT_REC_PCM);
     assert(seq == 0xABCD);
     assert(ts == 0x11223344u);
     assert(ssrc == 0xDEADBEEFu);
@@ -56,43 +56,6 @@ static void test_rtp_header(void)
     assert(!lark_rtp_decode(pkt, LARK_RTP_HDR_SIZE - 1, &pt, &seq, &ts, &ssrc));
     pkt[0] = 0x00;
     assert(!lark_rtp_decode(pkt, sizeof(pkt), &pt, &seq, &ts, &ssrc));
-}
-
-static void test_jitter_buffer(void)
-{
-    lark_jitter_t jb;
-    lark_jitter_reset(&jb);
-    int16_t p1[LARK_RTP_SAMPLES], p2[LARK_RTP_SAMPLES], p3[LARK_RTP_SAMPLES], out[LARK_RTP_SAMPLES];
-    for (int i = 0; i < LARK_RTP_SAMPLES; ++i) {
-        p1[i] = (int16_t)(100 + i);
-        p2[i] = (int16_t)(200 + i);
-        p3[i] = (int16_t)(300 + i);
-    }
-
-    // Out-of-order arrival across wraparound: 65535, 0, 1
-    assert(lark_jitter_push(&jb, 65535, p1, sizeof(p1)));
-    assert(lark_jitter_push(&jb, 1, p3, sizeof(p3)));
-    assert(lark_jitter_push(&jb, 0, p2, sizeof(p2)));
-
-    // Stale packet should be rejected
-    assert(!lark_jitter_push(&jb, 65534, p1, sizeof(p1)));
-
-    assert(lark_jitter_pop(&jb, out) == sizeof(out));
-    assert(out[0] == 100 && out[10] == 110);
-    assert(lark_jitter_pop(&jb, out) == sizeof(out));
-    assert(out[0] == 200 && out[10] == 210);
-    assert(lark_jitter_pop(&jb, out) == sizeof(out));
-    assert(out[0] == 300 && out[10] == 310);
-    assert(lark_jitter_pop(&jb, out) == 0);
-
-    // Packet loss: 2 is lost, 3 and 4 arrive -> pops 3 and 4
-    assert(lark_jitter_push(&jb, 3, p2, sizeof(p2)));
-    assert(lark_jitter_push(&jb, 4, p3, sizeof(p3)));
-    assert(lark_jitter_pop(&jb, out) == sizeof(out));
-    assert(out[0] == 200);
-    assert(lark_jitter_pop(&jb, out) == sizeof(out));
-    assert(out[0] == 300);
-    assert(lark_jitter_pop(&jb, out) == 0);
 }
 
 static void test_url_parsing(void)
@@ -128,7 +91,7 @@ static void test_hello_welcome_reject(void)
     lark_hello_t h = {
         .proto_version = LARK_PROTO_VERSION,
         .kind = LARK_KIND_HARDWARE,
-        .caps_mask = LARK_CAP_BATTERY | LARK_CAP_CALL | LARK_CAP_DRAG,
+        .caps_mask = LARK_CAP_BATTERY | LARK_CAP_DRAG,
         .display_formats = LARK_DISP_RGB565,
         .frame_codecs = LARK_CODEC_RAW | LARK_CODEC_RLE565 | LARK_CODEC_LZ4 | LARK_CODEC_JPEG,
         .width = 360,
@@ -195,7 +158,6 @@ int main(void)
 {
     test_tcp_header();
     test_rtp_header();
-    test_jitter_buffer();
     test_url_parsing();
     test_hello_welcome_reject();
     printf("PASS host proto tests\n");

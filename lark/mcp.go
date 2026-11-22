@@ -205,9 +205,8 @@ var mcpTools = func() []object {
 				"template": enum(templateNames()...), "data": appTemplateSchema(""),
 				"save_current": schema(object{"name": text, "title": text}, "name"),
 				"load":         text, "save_as": text, "delete_saved": text, "initial_state": jsonObject, "state_patch": jsonObject, "tick_ms": number, "max_ticks": number, "exit": flag})),
-		tool("emit", "Start or hang up a call, send intercom, or play notes/effects. Receipts describe queued or skipped deliveries, not playback. Calls use exact companion IDs, never all.",
+		tool("emit", "Send intercom or play notes/effects. Receipts describe queued or skipped deliveries, not playback.",
 			schema(object{"to": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
-				"call":  schema(object{"op": enum("start", "hangup"), "from": text, "id": object{"type": "integer", "minimum": 1, "maximum": uint64(1<<32 - 1)}}),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
 	}
 }()
@@ -261,13 +260,11 @@ func (h *wsHub) terminalStatus(entry object, id string, full bool) {
 	entry["ws_connected"], entry["ws"], entry["mode"] = false, false, "offline"
 	entry["battery_pct"], entry["volume"], entry["scene_rev"] = nil, nil, uint64(0)
 	entry["sleeping"] = false
-	entry["can_call"] = false
 	h.mu.Lock()
 	if d := h.terminals[key]; d != nil && h.active(d) {
 		entry["ws_connected"], entry["ws"], entry["online"], entry["mode"] = true, true, true, d.pose.mood
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
-		entry["can_call"], entry["call"] = d.caps.Call, h.callSnapshot(d)
 		entry["auto_volume"], entry["sleeping"] = d.autoVol, d.asleep
 		if d.board != "" {
 			entry["board"], entry["shape"], entry["width"], entry["height"] = d.board, d.screen.shape, d.screen.width, d.screen.height
@@ -333,40 +330,6 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 		return nil, problem(400, "Expected exact companion ID or all")
 	}
 	out := object{"ok": true, "to": to}
-	if raw, ok := args["call"]; ok {
-		call, valid := raw.(object)
-		if len(args) != 2 || broadcast(to) || !valid {
-			return nil, fieldError("call", "use only call and to with exact companion IDs")
-		}
-		if b.ws == nil {
-			return nil, problem(503, "Terminal hub unavailable")
-		}
-		op, specified := call["op"]
-		if op == "hangup" {
-			_, hasFrom := call["from"]
-			id, err := mcpUint(call, "id")
-			if hasFrom || err != nil || id != nil && (*id == 0 || *id > 1<<32-1) {
-				return nil, fieldError("call", "hangup uses to as a participant and optionally call.id")
-			}
-			result, receipts := b.ws.mcpHangup(to, id)
-			out["call"], out["receipts"] = result, receipts
-			return out, nil
-		}
-		from := strings.ToLower(str(call["from"]))
-		if _, hasID := call["id"]; specified && op != "start" || hasID || broadcast(from) ||
-			!validCompanionID(from) || strings.EqualFold(from, to) {
-			return nil, fieldError("call", "use only call.from and to with exact companion IDs")
-		}
-		result, err := b.ws.mcpCall(from, to)
-		var receipt object
-		if err != nil {
-			receipt = deliveryReceipt("call", to, err.Error())
-		} else {
-			receipt = deliveryReceipt("call", to, "")
-		}
-		out["call"], out["receipts"] = result, []object{receipt}
-		return out, nil
-	}
 	var pcm []byte
 	var kind string
 	var audioField string
@@ -526,9 +489,6 @@ func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
 	d := h.voiceOwner(companionID)
 	if d == nil {
 		return nil, "not_connected"
-	}
-	if d.callState != callNone {
-		return nil, "on_call"
 	}
 	return d, ""
 }

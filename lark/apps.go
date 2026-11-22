@@ -951,10 +951,6 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			return nil, problem(409, "Companion is not connected: "+id)
 		}
 		for _, d := range terms {
-			if args["exit"] != true && d.callState != callNone {
-				h.mu.Unlock()
-				return nil, problem(409, "Companion is on a call: "+id)
-			}
 			if menu != nil && !d.canLaunchMenuGame(menu) {
 				h.mu.Unlock()
 				return nil, problem(409, "Games menu changed")
@@ -1115,10 +1111,6 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		if d.appGen != gens[i] {
 			h.mu.Unlock()
 			return nil, problem(409, "Companion view changed: "+d.companionID)
-		}
-		if d.callState != callNone {
-			h.mu.Unlock()
-			return nil, problem(409, "Companion is on a call: "+d.companionID)
 		}
 		if menu != nil && !d.canLaunchMenuGame(menu) {
 			h.mu.Unlock()

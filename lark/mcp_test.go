@@ -162,7 +162,6 @@ func TestMCPClosedArguments(t *testing.T) {
 		{"patch", object{"apps": object{"rename": []object{{"from": "book", "to": "novel", "typo": true}}}}, "apps.rename.typo"},
 		{"app", object{"delete_saved": "sample", "typo": true}, "typo"},
 		{"emit", object{"to": "all", "intercom": object{"from": "test", "text": "Hello", "typo": 1}}, "intercom.typo"},
-		{"emit", object{"to": "test", "call": object{"from": "caller", "typo": 1}}, "call.typo"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			out := toolTest(t, base, tc.tool, tc.args, true)

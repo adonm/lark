@@ -487,7 +487,7 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 		}()
 	}
 	d := h.voiceOwner(key)
-	if d != nil && d.callState == callNone {
+	if d != nil {
 		if t.AppName != "" {
 			defer func() {
 				if _, err := b.runSavedApp(ctx, t.CompanionID, t.AppName, nil); err != nil && ctx.Err() == nil {

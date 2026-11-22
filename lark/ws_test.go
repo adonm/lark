@@ -717,7 +717,7 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	from.recStart(t, "mint")
 	from.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm[:100])
-	from.sendRTP(t, rtpPTCallUp, 1, 320, 1, []byte{1, 2}) // wrong audio direction is ignored
+	from.sendRTP(t, 99, 1, 320, 1, []byte{1, 2}) // unknown RTP payload type is ignored
 	from.sendRTP(t, rtpPTRecPCM, 2, 640, 1, pcm[100:])
 	from.recEnd(t, "", false)
 	to.until(t, func(f wsFrame) bool {

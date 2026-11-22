@@ -244,10 +244,6 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 				b.ws.mu.Unlock()
 				return nil, problem(503, "Chat unavailable")
 			}
-			if t.callState != callNone {
-				b.ws.mu.Unlock()
-				return nil, problem(409, "Companion is in a call")
-			}
 			b.ws.startTurn(t, now, false, "typed", func(ctx context.Context, turn uint64) {
 				b.ws.runTurn(ctx, t, turn, text, "typed", nil)
 			})

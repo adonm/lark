@@ -177,21 +177,6 @@ func targets(others []companionTarget, target string) []companionTarget {
 	return names
 }
 
-func parseCallCommand(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	trimEnd := func(s string) string { return strings.TrimRight(s, " .,!?:;") }
-	text = trimEnd(callSuffix.ReplaceAllString(trimEnd(text), ""))
-	m := callRE.FindStringSubmatch(callPrefix.ReplaceAllString(text, ""))
-	if m == nil {
-		return ""
-	}
-	target := strings.Trim(m[1]+m[2], " .,!?:;\"“”")
-	if broadcast(target) {
-		return ""
-	}
-	return target
-}
-
 func directBody(text string) string {
 	text = strings.TrimSpace(text)
 	loc := directRE.FindStringIndex(text)

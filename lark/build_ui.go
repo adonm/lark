@@ -108,7 +108,7 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	h.mu.Lock()
 	d := h.voiceOwner(job.device)
 	if d == nil || !h.active(d) ||
-		d.announcing || d.busy || d.queuedVoice != nil || d.recording.active() || d.callState != callNone ||
+		d.announcing || d.busy || d.queuedVoice != nil || d.recording.active() ||
 		d.stopAudio != nil || d.awaitAck || d.asleep || d.drawer != "" || d.card != nil && d.card.build != job.id {
 		h.mu.Unlock()
 		return

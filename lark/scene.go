@@ -16,7 +16,6 @@ type sceneView struct {
 	actions        map[string]sceneAction
 	duringTurn     bool // Timer notices may be dismissed even while speaking.
 	intercom       *intercomCard
-	call           uint32
 	menu           *menuContent
 	build          string // Set only on a progress card.
 }
@@ -164,7 +163,7 @@ type intercomCard struct {
 	text   string
 }
 
-func (card intercomCard) scene(canCall bool) sceneView {
+func (card intercomCard) scene() sceneView {
 	sender, text := card.sender, card.text
 	if text == "" {
 		text = "Voice message"
@@ -174,14 +173,8 @@ func (card intercomCard) scene(canCall bool) sceneView {
 	s.intercom = &card
 	reply := tile{id: "reply", label: "Reply", action: sceneAction{"reply", sender.ID}, colors: primaryPalette}
 	done := tile{id: "done", label: "Done", action: sceneAction{"companion", ""}, colors: navPalette}
-	if canCall {
-		s.control(bounds{43, 218, 78, 55}, tile{id: "call", label: "Call", action: sceneAction{"call-peer", sender.ID}, colors: answerPalette})
-		s.control(bounds{141, 218, 78, 55}, reply)
-		s.control(bounds{239, 218, 78, 55}, done)
-	} else {
-		s.control(bounds{85, 218, 85, 55}, reply)
-		s.control(bounds{190, 218, 85, 55}, done)
-	}
+	s.control(bounds{85, 218, 85, 55}, reply)
+	s.control(bounds{190, 218, 85, 55}, done)
 	return s
 }
 

@@ -182,14 +182,11 @@ func tileGrid(title string, choices []tile, page int) sceneView {
 	return s
 }
 
-func menuHome(voice string, auto bool, level int, scoped, calling bool, page int) sceneView {
+func menuHome(voice string, auto bool, level int, scoped bool, page int) sceneView {
 	link := func(id, label, detail, icon string, colors palette) tile {
 		return tile{id: "menu-" + id, label: label, detail: detail, icon: icon, colors: colors, action: sceneAction{"menu-open", id}}
 	}
 	var choices []tile
-	if calling {
-		choices = append(choices, link("call", "Call", "", "call", successPalette))
-	}
 	choices = append(choices, link("intercom", "Talk to…", "", "intercom", accentPalette))
 	if !scoped {
 		choices = append(choices, link(drawerGames, "Games", "", "games", warningPalette))
@@ -297,11 +294,8 @@ type menuPeer struct {
 	id, name, face, accent string
 }
 
-func peerScene(peers []menuPeer, page int, calling bool) sceneView {
+func peerScene(peers []menuPeer, page int) sceneView {
 	title, prefix, action := "Talk to…", "intercom", "reply"
-	if calling {
-		title, prefix, action = "Call", "call", "call-peer"
-	}
 	choices := make([]tile, 0, len(peers))
 	for i, p := range peers {
 		id := prefix + "-" + p.id
@@ -312,42 +306,6 @@ func peerScene(peers []menuPeer, page int, calling bool) sceneView {
 			action: sceneAction{action, p.id}, colors: palette{p.face, menuPeerInk(p.face)}})
 	}
 	s := tileGrid(title, choices, page)
-	if len(choices) == 0 {
-		s.art += svgLabel(180, 167, 18, "No call-ready devices online", menuMuted)
-	}
-	return s
-}
-
-func callScene(state callState, id uint32, peer companionState, muted bool, elapsed time.Duration) sceneView {
-	name := truncate(peer.Name, 20)
-	title := "In call · " + name
-	switch state {
-	case callRingingOut:
-		title = "Calling " + name + "…"
-	case callRingingIn:
-		title = name + " calling"
-	}
-	ink := menuPeerInk(peer.FaceBG)
-	s := sceneView{bg: menuBG, title: title, call: id,
-		art: svgCircle(180, 113, 48, peer.FaceBG) + svgCircle(180, 86, 8, peer.AccentColor) +
-			svgCircle(164, 107, 5, ink) + svgCircle(196, 107, 5, ink) +
-			svgRect(175, 120, 10, 6, 3, ink, "none", 0) +
-			svgLabel(180, 190, min(27, 440/max(1, runeLen(title))), title, menuInk)}
-	left, right, center := bounds{68, 245, 100, 54}, bounds{192, 245, 100, 54}, bounds{115, 260, 130, 54}
-	if state == callRingingIn {
-		s.control(left, actionTile("call-answer", "Answer", "", answerPalette))
-		s.control(right, actionTile("call-decline", "Decline", "", dangerPalette))
-	} else if state == callActive {
-		s.art += svgLabel(180, 229, 24, callDuration(elapsed), menuMuted)
-		label := "Mute"
-		if muted {
-			label = "Unmute"
-		}
-		s.control(left, actionTile("call-mute", label, "", navPalette))
-		s.control(right, actionTile("call-hangup", "Hang Up", "", dangerPalette))
-	} else {
-		s.control(center, actionTile("call-hangup", "Hang Up", "", dangerPalette))
-	}
 	return s
 }
 

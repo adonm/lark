@@ -168,18 +168,10 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 				b.ws.mu.Lock()
 				compTerminals := b.ws.terminalsFor(c.ID)
 				best := b.ws.voiceOwner(c.ID)
-				canCall := false
-				var callSnap object
 				var lastAppErr object
 				var activeAppState any
 				mode, sleeping := "offline", false
 				for _, t := range compTerminals {
-					if t.caps.Call {
-						canCall = true
-					}
-					if t.callState != callNone && callSnap == nil {
-						callSnap = b.ws.callSnapshot(t)
-					}
 					if t.lastAppError != nil && lastAppErr == nil {
 						lastAppErr = t.lastAppError
 					}
@@ -192,8 +184,6 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 					}
 				}
 				b.ws.mu.Unlock()
-				compObj["can_call"] = canCall
-				compObj["call"] = callSnap
 				compObj["last_app_error"] = lastAppErr
 				compObj["active_app"] = activeApp
 				if activeAppState != nil {

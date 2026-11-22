@@ -265,7 +265,7 @@ func (s *e2eSuite) browser(t *testing.T, name string) *e2eCompanion {
 		t.Fatal("missing web terminal ID")
 	}
 	ws := testConnectWS(t, s.base, s.token, true)
-	ws.helloWeb(t, termID, id, capCall|capCallPCM|capDrag|capBridgeEndpoint, false)
+	ws.helloWeb(t, termID, id, capDrag|capBridgeEndpoint, false)
 	c := &e2eCompanion{testWS: ws, id: id, name: name}
 	c.scene(t, "companion-ring")
 	return c
@@ -276,7 +276,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	name := s.prefix + " " + label
 	id := "lark-" + strings.ToLower(s.prefix) + "-" + strings.ToLower(label)
 	width, height, battery := 360, 360, variant == "esp-vocat"
-	var caps uint32 = capCall | capCallPCM | capDrag | capPointerRev | capBridgeEndpoint | capWakeWord
+	var caps uint32 = capDrag | capPointerRev | capBridgeEndpoint | capWakeWord
 	wireShape := shapeRound
 	if battery {
 		caps |= capBattery | capPanelSleep
@@ -450,9 +450,6 @@ func (c *e2eCompanion) tap(t *testing.T, id string) {
 func (c *e2eCompanion) audio(t *testing.T, prefix byte, pcm []byte) {
 	t.Helper()
 	pt := rtpPTRecPCM
-	if prefix == callMicPrefix {
-		pt = rtpPTCallUp
-	}
 	var seq uint16
 	for offset := 0; offset < len(pcm); offset += rtpPCMBytes {
 		part := pcm[offset:min(offset+rtpPCMBytes, len(pcm))]

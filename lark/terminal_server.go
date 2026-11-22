@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
-	"log"
 	"net"
 	"net/netip"
 	"sync"
@@ -389,33 +388,4 @@ func (nc *nativeClient) enqueue(msgType uint8, payload []byte) bool {
 
 func (nc *nativeClient) enqueueWait(ctx context.Context, msgType uint8, payload []byte) bool {
 	return enqueueWaitChan(ctx, nc.client.ctx, &nc.outMu, nc.out, &nc.drained, nativeOutMsg{msgType: msgType, payload: payload})
-}
-
-func (nc *nativeClient) sendCallDownUDP(pcm []byte) bool {
-	if len(pcm) == 0 || len(pcm)%2 != 0 {
-		return false
-	}
-	nc.udpMu.Lock()
-	addr := nc.udpAddr
-	if addr == nil {
-		nc.udpMu.Unlock()
-		return false
-	}
-	var pkt [rtpPacketBytes]byte
-	for len(pcm) > 0 {
-		chunk := min(rtpPCMBytes, len(pcm))
-		seq := nc.rtpSeq
-		nc.rtpSeq++
-		ts := nc.rtpTS
-		nc.rtpTS += uint32(chunk / 2)
-		n := encodeRTPPacket(pkt[:], rtpPTCallDown, seq, ts, nc.ssrc, pcm[:chunk])
-		if _, err := nc.server.udpConn.WriteToUDP(pkt[:n], addr); err != nil {
-			nc.udpMu.Unlock()
-			log.Printf("native UDP call send error: %v", err)
-			return false
-		}
-		pcm = pcm[chunk:]
-	}
-	nc.udpMu.Unlock()
-	return true
 }

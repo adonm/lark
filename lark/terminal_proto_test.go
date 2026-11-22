@@ -147,7 +147,7 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 	}
 
 	// Valid handshake returns MSG_HELLO_OK and initial MSG_FRAME.
-	caps := capBattery | capCall | capCallPCM | capDrag | capPointerRev | capBridgeEndpoint | capPanelSleep | capWakeWord
+	caps := capBattery | capDrag | capPointerRev | capBridgeEndpoint | capPanelSleep | capWakeWord
 	nc, okPayload := dialNativeDevice(t, srv, "lark-nat1", "unit", caps)
 	if nc == nil || nc.ssrc == 0 || binary.LittleEndian.Uint16(okPayload[2:4]) != srv.udpPort {
 		t.Fatal("invalid WELCOME")
@@ -247,7 +247,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 
 func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	gotPCM := make(chan []byte, 1)
-	b, base := wsHarness(t, func(b *larkServer, _ string) {
+	b, _ := wsHarness(t, func(b *larkServer, _ string) {
 		b.stt = func(_ context.Context, pcm []byte) (string, error) {
 			cp := make([]byte, len(pcm))
 			copy(cp, pcm)
@@ -265,7 +265,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	defer srv.shutdown()
 
 	// 1. Native device UDP 20 ms REC_PCM
-	nat, _ := dialNativeDevice(t, srv, "lark-natcall", "unit", capCall|capCallPCM|capDrag|capPointerRev)
+	nat, _ := dialNativeDevice(t, srv, "lark-natcall", "unit", capDrag|capPointerRev)
 	frame := nat.readUntil(msgFrame)
 	revLo := binary.LittleEndian.Uint16(frame[10:12])
 
@@ -305,52 +305,6 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for UDP REC_PCM")
 	}
-
-	// 2. Cross-transport duplex call: Native TCP+UDP <-> Browser WS virtual client
-	web := callClient(t, b, base, callMint, "Mint")
-	b.ws.mu.Lock()
-	b.ws.startCall(b.ws.terminals["lark-natcall"], callMint)
-	b.ws.mu.Unlock()
-
-	nat.readUntil(msgChime)
-	web.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeRing
-	})
-	web.until(t, hasSVG("call-answer"))
-	tapCallControl(t, web, "call-answer")
-
-	callStart := nat.readUntil(msgCallCtrl)
-	if len(callStart) < 5 || callStart[0] != callOpStart {
-		t.Fatalf("expected MSG_CALL_CTRL start, got %v", callStart)
-	}
-	web.until(t, callCtrlMatch(callOpStart, ""))
-	web.until(t, hasSVG("call-hangup"))
-
-	// Native -> Browser WS (20 ms RTP -> WS MEDIA RTP)
-	upSample := bytes.Repeat([]byte{0x11, 0x22}, rtpSamples)
-	nat.sendRTP(rtpPTCallUp, upSample)
-	if got := web.until(t, hasProto(msgMedia, "")); !bytes.Equal(framePayload(got)[rtpHeaderSize:], upSample) {
-		t.Fatal("native -> web call PCM mismatch")
-	}
-
-	// Browser WS -> Native (2x 20 ms WS MEDIA RTP -> 2x 20 ms UDP RTP)
-	downSample := bytes.Repeat([]byte{0x33, 0x44}, callPCMBytes/2)
-	web.sendRTP(t, rtpPTCallUp, 1, 320, 1, downSample[:rtpPCMBytes])
-	web.sendRTP(t, rtpPTCallUp, 2, 640, 1, downSample[rtpPCMBytes:])
-	p1 := nat.readRTP(rtpPTCallDown)
-	p2 := nat.readRTP(rtpPTCallDown)
-	if !bytes.Equal(append(p1, p2...), downSample) {
-		t.Fatal("web -> native UDP RTP call PCM mismatch")
-	}
-
-	// End call cleanly
-	tapCallControl(t, web, "call-hangup")
-	callEnd := nat.readUntil(msgCallCtrl)
-	if len(callEnd) < 5 || callEnd[0] != callOpEnd {
-		t.Fatalf("expected MSG_CALL_CTRL end, got %v", callEnd)
-	}
-	web.until(t, callCtrlMatch(callOpEnd, "hung up"))
 }
 
 func TestNativeUDPEndpointCopyRace(t *testing.T) {

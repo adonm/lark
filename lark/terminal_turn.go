@@ -10,12 +10,11 @@ import (
 )
 
 const (
-	micPrefix     = 0x01
-	pcmPrefix     = 0x02
-	callMicPrefix = 0x04
-	pcmPacket     = 4 << 10
-	maxAudioLead  = 8 * time.Second
-	recStopWait   = 450 * time.Millisecond
+	micPrefix    = 0x01
+	pcmPrefix    = 0x02
+	pcmPacket    = 4 << 10
+	maxAudioLead = 8 * time.Second
+	recStopWait  = 450 * time.Millisecond
 )
 
 func recordTarget(s string) (string, bool) {
@@ -113,11 +112,8 @@ func (h *wsHub) handleRTPPacket(c *wsClient, pkt []byte) {
 }
 
 func (h *wsHub) dispatchRTPPCM(c *wsClient, pt uint8, pcm []byte) {
-	switch pt {
-	case rtpPTRecPCM:
+	if pt == rtpPTRecPCM {
 		h.micChunkPCM(c, micPrefix, pcm)
-	case rtpPTCallUp:
-		h.micChunkPCM(c, callMicPrefix, pcm)
 	}
 }
 
@@ -129,12 +125,6 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 	defer h.mu.Unlock()
 	d := c.terminal
 	if d == nil || !h.active(d) {
-		return
-	}
-	if d.callState != callNone {
-		if d.callState == callActive && d.caps.CallPCM && prefix == callMicPrefix {
-			h.relayCallPCMBytes(d, pcm)
-		}
 		return
 	}
 	rec := &d.recording
@@ -398,17 +388,6 @@ func (h *wsHub) runTurn(ctx context.Context, d *wsTerminal, id uint64, text, sou
 		h.finishTurn(d, id, nil, nil)
 		return
 	}
-	if target := parseCallCommand(text); target != "" {
-		others, _ := h.peerSnapshot(sender.ID)
-		if matches := targets(others, target); len(matches) == 1 {
-			h.mu.Lock()
-			if h.active(d) && d.turn == id && ctx.Err() == nil {
-				h.startCall(d, matches[0].ID)
-			}
-			h.mu.Unlock()
-			return
-		}
-	}
 	others, direct, err := h.b.intercomIntent(sender.ID, text)
 	if err != nil || others != nil && ctx.Err() != nil {
 		h.turnError(d, id, "Could not find nearby companions.")
@@ -509,10 +488,6 @@ func (h *wsHub) play(d *wsTerminal, stream *AudioStream) context.Context {
 
 func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace, ttsStart time.Time) context.Context {
 	ctx, cancel := context.WithCancel(d.client.ctx)
-	if d.callState != callNone {
-		cancel()
-		return ctx
-	}
 	h.stopPlayback(d, true)
 	d.stopAudio = cancel
 	id := d.audio
@@ -718,7 +693,7 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 	defer h.mu.Unlock()
 	var connected []companionTarget
 	for _, p := range others {
-		if d := h.voiceOwner(p.ID); d != nil && d.callState == callNone {
+		if d := h.voiceOwner(p.ID); d != nil {
 			connected = append(connected, p)
 		}
 	}
@@ -755,10 +730,10 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender companionState, recipi
 		return nil
 	}
 	for _, d := range connected {
-		if !h.active(d) || d.callState != callNone {
+		if !h.active(d) {
 			continue
 		}
-		view := (intercomCard{sender, text}).scene(false)
+		view := (intercomCard{sender, text}).scene()
 		h.cancelTurn(d, "intercom")
 		h.stopPlayback(d, true)
 		if d.recording.active() {
@@ -816,7 +791,7 @@ func (h *wsHub) caption(receipts []wsReceipt, sender companionState, text string
 	if len(receipts) == 0 || text == "" {
 		return
 	}
-	view := (intercomCard{sender, shortText(text, maxMessage, true)}).scene(false)
+	view := (intercomCard{sender, shortText(text, maxMessage, true)}).scene()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, r := range receipts {

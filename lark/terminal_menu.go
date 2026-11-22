@@ -104,19 +104,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	}
 
 	native := c.kind == "hardware"
-	if d.callState != callNone {
-		switch msgType {
-		case msgTelemetry, msgPointer, msgCallReq, msgTTSAck:
-		case msgRecStart:
-			return
-		case msgRecEnd:
-			d.recording.receivedEnd()
-			d.recording.clear()
-			return
-		default:
-			return
-		}
-	}
 	switch msgType {
 	case msgWakeWord:
 		h.clearDoneOrErrorStatus(d)
@@ -141,20 +128,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 			h.pointer(d, evName, x, y, rev, now, native)
 		} else if d.caps.Drag && (native || c.kind == "web") && d.displayApp != nil && d.app == d.displayApp && !d.asleep {
 			h.pointer(d, evName, x, y, rev, now, native)
-		}
-	case msgCallReq:
-		action, callID, target, ok := parseCallReq(payload)
-		if !ok || c.terminal != d {
-			return
-		}
-		h.clearDoneOrErrorStatus(d)
-		if action == callOpStart {
-			if tgt, ok := recordTarget(target); ok && tgt != "" {
-				h.takeVoiceOwnership(d)
-				h.startCall(d, tgt)
-			}
-		} else if action == callOpEnd && callID != 0 && d.callID == callID {
-			h.endCall(d, "audio unavailable")
 		}
 	case msgRecStart:
 		_, target, ok := parseRecStart(payload)
@@ -250,22 +223,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	if native && !d.acceptPointerRevision(a.kind, &rev) {
 		return
 	}
-	if d.callState != callNone {
-		if d.scene.call != d.callID {
-			return
-		}
-		switch a.kind {
-		case "call-answer":
-			h.answerCall(d)
-		case "call-decline":
-			h.declineCall(d)
-		case "call-hangup":
-			h.endCall(d, "hung up")
-		case "call-mute":
-			h.toggleCallMute(d)
-		}
-		return
-	}
 	if d.displayApp != nil {
 		if d.app == d.displayApp {
 			if i := slices.Index(d.app.terminals, d); i >= 0 {
@@ -355,16 +312,12 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		} else {
 			h.startRecording(d, a.value, now, true)
 		}
-	case "call-peer":
-		h.takeVoiceOwnership(d)
-		h.startCall(d, a.value)
 	}
 }
 
 func (d *wsTerminal) acceptPointerRevision(action string, rev *uint16) bool {
 	switch action {
-	case "stop", "rec-cancel", "rec-send", "rec-continue", "listen", "reply", "call-peer",
-		"call-answer", "call-decline", "call-hangup", "call-mute", "build-cancel":
+	case "stop", "rec-cancel", "rec-send", "rec-continue", "listen", "reply", "build-cancel":
 		if !d.caps.PointerRev {
 			return true
 		}

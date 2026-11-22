@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -60,67 +59,30 @@ func TestMCPHistoryCursor(t *testing.T) {
 		"messages_cursor": object{"before_ts": now.UnixMilli()}}, true)
 }
 
-func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
+func TestMCPEmitReceipts(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	cake := callClient(t, b, base, callCake, "Cake")
-	mint := callClient(t, b, base, callMint, "Mint")
+	cake := testConnectWS(t, base, "unit", false)
+	cake.hello(t, "vocat-0001", "Cake")
+	mint := testConnectWS(t, base, "unit", false)
+	mint.hello(t, "vocat-0002", "Mint")
 	const speaker = "speaker"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, "vocat-0003", "Speaker")
-	device := func(id string) object { return stateMe(t, base, id)["companion"].(object) }
-	start := toolTest(t, base, "emit", object{"to": callMint, "call": object{"from": callCake}}, false)
-	call := start["call"].(object)
-	callID := call["id"].(json.Number)
-	if d := device(callMint); d["can_call"] != true || d["call"].(object)["peer_companion_id"] != callCake ||
-		d["call"].(object)["direction"] != "incoming" || d["call"].(object)["state"] != "ringing" {
-		t.Fatal(d)
-	}
-	mint.until(t, hasSVG("call-answer"))
-	tapCallControl(t, mint, "call-answer")
-	mint.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpStart
-	})
-	if c := device(callCake)["call"].(object); c["id"] != callID || c["state"] != "connected" || c["started_at"] == nil {
-		t.Fatal(c)
-	}
-	suppressed := toolTest(t, base, "emit", object{"to": callMint, "notes": "C5:150"}, false)
-	if r := suppressed["receipts"].([]any)[0].(object); suppressed["played"] != false || r["status"] != "skipped" || r["reason"] != "on_call" {
-		t.Fatal(suppressed)
-	}
 	offline := toolTest(t, base, "emit", object{"to": "everyone", "sfx": "pop"}, false)
 	if rs := offline["receipts"].([]any); offline["played"] != false || len(rs) != 1 || rs[0].(object)["reason"] != "not_connected" {
 		t.Fatal(offline)
 	}
-	result := toolTest(t, base, "emit", object{"to": "all", "chime": "tap", "intercom": object{"from": callCake, "text": "Hello"}}, false)
+	result := toolTest(t, base, "emit", object{"to": "all", "chime": "tap", "intercom": object{"from": "cake", "text": "Hello"}}, false)
 	check := map[string]string{}
 	for _, item := range result["receipts"].([]any) {
 		r := item.(object)
 		check[str(r["action"])+"/"+str(r["companion_id"])] = str(r["status"])
 	}
-	if result["played"] != true || check["chime/"+speaker] != "queued" || check["chime/"+callMint] != "skipped" ||
-		check["intercom/"+speaker] != "queued" || check["intercom/"+callMint] != "skipped" {
+	if result["played"] != true || check["chime/"+speaker] != "queued" || check["chime/mint"] != "queued" ||
+		check["intercom/"+speaker] != "queued" || check["intercom/mint"] != "queued" {
 		t.Fatal(result)
 	}
-	if result := toolTest(t, base, "emit", object{"to": callMint, "call": object{"op": "hangup", "id": 42}}, false); result["call"] != nil ||
-		result["receipts"].([]any)[0].(object)["reason"] != "call_changed" {
-		t.Fatal(result)
-	}
-	hangup := toolTest(t, base, "emit", object{"to": callMint, "call": object{"op": "hangup", "id": callID}}, false)
-	if c := hangup["call"].(object); c["state"] != "ended" || c["id"] != callID || len(hangup["receipts"].([]any)) != 2 {
-		t.Fatal(hangup)
-	}
-	cake.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpEnd
-	})
-	mint.until(t, func(f wsFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgCallCtrl, "")(f) && len(p) >= 1 && p[0] == callOpEnd
-	})
-	if device(callCake)["call"] != nil || device(callMint)["call"] != nil {
-		t.Fatal("hangup left one participant in the call")
-	}
+	_ = b
 }
 
 func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
