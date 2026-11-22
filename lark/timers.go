@@ -22,8 +22,8 @@ const (
 var timerIDRE = regexp.MustCompile(`^[a-f0-9]{24}$`)
 
 type savedTimer struct {
-	ID        string    `json:"id"`
-	DeviceID  string    `json:"device_id"`
+	ID          string    `json:"id"`
+	CompanionID string    `json:"companion_id"`
 	Label     string    `json:"label"`
 	Say       string    `json:"say"`
 	Chime     string    `json:"chime"`
@@ -50,7 +50,7 @@ type timerManager struct {
 
 type timerHandle struct{ timer *time.Timer }
 
-const timerColumns = "id,device_id,label,say,chime,wake_agent,created_at,fire_at,notes_json,app_name"
+const timerColumns = "id,companion_id,label,say,chime,wake_agent,created_at,fire_at,notes_json,app_name"
 
 func newTimerManager(b *larkServer) *timerManager {
 	ctx, cancel := context.WithCancel(b.root)
@@ -61,7 +61,7 @@ func scanTimer(r rowScanner) (savedTimer, error) {
 	var t savedTimer
 	var wake int
 	var created, fire, notes string
-	err := r.Scan(&t.ID, &t.DeviceID, &t.Label, &t.Say, &t.Chime, &wake, &created, &fire, &notes, &t.AppName)
+	err := r.Scan(&t.ID, &t.CompanionID, &t.Label, &t.Say, &t.Chime, &wake, &created, &fire, &notes, &t.AppName)
 	if err != nil {
 		return t, err
 	}
@@ -77,7 +77,7 @@ func scanTimer(r rowScanner) (savedTimer, error) {
 }
 
 func (m *timerManager) list(ctx context.Context, id string) ([]savedTimer, error) {
-	rows, err := m.b.db.readDB().QueryContext(ctx, "SELECT "+timerColumns+" FROM timers WHERE (?='' OR device_id=?)", id, id)
+	rows, err := m.b.db.readDB().QueryContext(ctx, "SELECT "+timerColumns+" FROM timers WHERE (?='' OR companion_id=?)", id, id)
 	if err != nil {
 		return nil, problem(502, "Cannot read timers")
 	}
@@ -103,7 +103,7 @@ func (t savedTimer) state(now time.Time) object {
 	if notes == nil {
 		notes = []string{}
 	}
-	return object{"id": t.ID, "device_id": t.DeviceID, "label": t.Label, "say": t.Say, "notes": notes,
+	return object{"id": t.ID, "companion_id": t.CompanionID, "label": t.Label, "say": t.Say, "notes": notes,
 		"app": t.AppName, "wake_agent": t.WakeAgent, "created_at": t.CreatedAt, "chime": t.Chime,
 		"fire_at": t.FireAt, "remaining_s": (remaining + time.Second - 1) / time.Second}
 }
@@ -125,7 +125,7 @@ func (b *larkServer) timerState(ctx context.Context, id string, now time.Time) (
 
 func (m *timerManager) activeCount(ctx context.Context, id string) int {
 	var count int
-	_ = m.b.db.readDB().QueryRowContext(ctx, "SELECT count(*) FROM timers WHERE device_id=?", id).Scan(&count)
+	_ = m.b.db.readDB().QueryRowContext(ctx, "SELECT count(*) FROM timers WHERE companion_id=?", id).Scan(&count)
 	return count
 }
 
@@ -153,7 +153,7 @@ func (m *timerManager) restore(now time.Time) error {
 }
 
 func parseTimer(args object, now time.Time) (savedTimer, error) {
-	t := savedTimer{ID: randomHex(12), DeviceID: str(args["device_id"]), CreatedAt: now.UTC(), Label: "Timer", Chime: "celebrate"}
+	t := savedTimer{ID: randomHex(12), CompanionID: strings.ToLower(str(args["companion_id"])), CreatedAt: now.UTC(), Label: "Timer", Chime: "celebrate"}
 	return editTimer(t, args, now, false)
 }
 
@@ -229,7 +229,7 @@ func editTimer(t savedTimer, args object, now time.Time, update bool) (savedTime
 	return t, nil
 }
 
-func (m *timerManager) update(ctx context.Context, id, device string, args object, now time.Time) (savedTimer, error) {
+func (m *timerManager) update(ctx context.Context, id, companion string, args object, now time.Time) (savedTimer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var t savedTimer
@@ -250,15 +250,15 @@ func (m *timerManager) update(ctx context.Context, id, device string, args objec
 	if err != nil {
 		return t, unavailable
 	}
-	if device != t.DeviceID {
-		return t, problem(403, "Device out of scope")
+	if companion != t.CompanionID {
+		return t, problem(403, "Companion out of scope")
 	}
 	before := t.FireAt
 	t, err = editTimer(t, args, now, true)
 	if err != nil {
 		return t, err
 	}
-	if t.WakeAgent && m.fromTimerTurn[strings.ToLower(t.DeviceID)] != 0 {
+	if t.WakeAgent && m.fromTimerTurn[strings.ToLower(t.CompanionID)] != 0 {
 		return t, problem(409, "Cannot schedule a wake-agent timer during a timer-triggered turn")
 	}
 	if t.AppName != "" {
@@ -291,15 +291,15 @@ func (m *timerManager) set(ctx context.Context, t savedTimer) error {
 	if m.closed {
 		return problem(503, "Timers unavailable")
 	}
-	if t.WakeAgent && m.fromTimerTurn[strings.ToLower(t.DeviceID)] != 0 {
+	if t.WakeAgent && m.fromTimerTurn[strings.ToLower(t.CompanionID)] != 0 {
 		return problem(409, "Cannot schedule a wake-agent timer during a timer-triggered turn")
 	}
 	notes, _ := json.Marshal(t.Notes)
 	result, err := m.b.db.ExecContext(ctx, `INSERT INTO timers (`+timerColumns+`)
-		SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE device_id=?) < 8
+		SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE companion_id=?) < 8
 		AND (SELECT count(*) FROM timers) < 32 AND (?='' OR EXISTS(SELECT 1 FROM apps WHERE name=?))`,
-		t.ID, t.DeviceID, t.Label, t.Say, t.Chime, t.WakeAgent, t.CreatedAt.Format(time.RFC3339Nano), t.FireAt.Format(time.RFC3339Nano),
-		string(notes), t.AppName, t.DeviceID, t.AppName, t.AppName)
+		t.ID, t.CompanionID, t.Label, t.Say, t.Chime, t.WakeAgent, t.CreatedAt.Format(time.RFC3339Nano), t.FireAt.Format(time.RFC3339Nano),
+		string(notes), t.AppName, t.CompanionID, t.AppName, t.AppName)
 	if err != nil {
 		return problem(502, "Cannot save timer")
 	}
@@ -370,7 +370,7 @@ func (m *timerManager) claim(id string, expected *timerHandle) (savedTimer, bool
 	}
 	m.stopLocked(id)
 	if t.WakeAgent {
-		m.fromTimerTurn[strings.ToLower(t.DeviceID)]++
+		m.fromTimerTurn[strings.ToLower(t.CompanionID)]++
 	}
 	return t, true
 }
@@ -383,21 +383,21 @@ func (m *timerManager) fire(id string, expected *timerHandle) {
 	if t.WakeAgent {
 		defer func() {
 			m.mu.Lock()
-			key := strings.ToLower(t.DeviceID)
+			key := strings.ToLower(t.CompanionID)
 			if m.fromTimerTurn[key]--; m.fromTimerTurn[key] == 0 {
 				delete(m.fromTimerTurn, key)
 			}
 			m.mu.Unlock()
 		}()
 	}
-	m.b.timerUpdate(t.DeviceID)
+	m.b.timerUpdate(t.CompanionID)
 	m.b.deliverTimer(m.ctx, t)
 	if m.onFired != nil {
 		m.onFired(id)
 	}
 }
 
-func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]string, error) {
+func (m *timerManager) cancelTimers(ctx context.Context, companion, id string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -406,17 +406,17 @@ func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]s
 	ids := []string{}
 	if id != "" {
 		var owner string
-		err := m.b.db.readDB().QueryRowContext(ctx, "SELECT device_id FROM timers WHERE id=?", id).Scan(&owner)
+		err := m.b.db.readDB().QueryRowContext(ctx, "SELECT companion_id FROM timers WHERE id=?", id).Scan(&owner)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, problem(404, "Timer not found")
 		}
 		if err != nil {
 			return nil, problem(502, "Cannot read timer")
 		}
-		if device != "" && device != owner {
-			return nil, problem(403, "Device out of scope")
+		if companion != "" && companion != owner {
+			return nil, problem(403, "Companion out of scope")
 		}
-		deleted, err := deleteRow(ctx, m.b.db, "DELETE FROM timers WHERE id=? AND device_id=?", id, owner)
+		deleted, err := deleteRow(ctx, m.b.db, "DELETE FROM timers WHERE id=? AND companion_id=?", id, owner)
 		if err != nil {
 			return nil, problem(502, "Cannot cancel timer")
 		}
@@ -426,7 +426,7 @@ func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]s
 		m.stopLocked(id)
 		ids = append(ids, owner)
 	} else {
-		rows, err := m.b.db.QueryContext(ctx, "DELETE FROM timers WHERE device_id=? RETURNING id", device)
+		rows, err := m.b.db.QueryContext(ctx, "DELETE FROM timers WHERE companion_id=? RETURNING id", companion)
 		if err != nil {
 			return nil, problem(502, "Cannot cancel timers")
 		}
@@ -441,7 +441,7 @@ func (m *timerManager) cancelTimers(ctx context.Context, device, id string) ([]s
 		if rows.Err() != nil {
 			return nil, problem(502, "Cannot cancel timers")
 		}
-		ids = append(ids, device)
+		ids = append(ids, companion)
 	}
 	return ids, nil
 }
@@ -451,9 +451,9 @@ func (b *larkServer) timerUpdate(id string) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		key := strings.ToLower(id)
-		frame := textFrame(object{"type": "timers", "device_id": id})
+		frame := textFrame(object{"type": "timers", "companion_id": id})
 		for c := range h.clients {
-			if c.watch == key || c.device != nil && c.device.key == key && c.device.virtual() {
+			if c.watch == key || c.terminal != nil && c.terminal.companionID == key && c.terminal.virtual() {
 				c.enqueue(frame)
 			}
 		}
@@ -461,8 +461,8 @@ func (b *larkServer) timerUpdate(id string) {
 }
 
 func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
-	who, err := b.lookupDevice(t.DeviceID)
-	if err != nil || ctx.Err() != nil {
+	who, ok := b.companionByID(t.CompanionID)
+	if !ok || ctx.Err() != nil {
 		return
 	}
 	h := b.ws
@@ -478,23 +478,23 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 		pcm, _ = synthesizeMelody(t.Notes)
 	}
 	h.mu.Lock()
-	key, now := strings.ToLower(t.DeviceID), time.Now()
+	key, now := strings.ToLower(t.CompanionID), time.Now()
 	if h.parentRefresh(key, now) != "" {
 		h.mu.Unlock()
 		return
 	}
 	if !t.WakeAgent {
 		defer func() {
-			entry := newChat("card", who.Character, "Time's up! "+message, "timer")
+			entry := newChat("card", who.Name, "Time's up! "+message, "timer")
 			entry.SceneTitle = t.Label
-			b.chat(t.DeviceID, entry, true)
+			b.chat(t.CompanionID, entry, true)
 		}()
 	}
-	d := h.devices[key]
-	if d != nil && h.active(d) && d.callState == callNone {
+	d := h.audioTerminal(key)
+	if d != nil && d.callState == callNone {
 		if t.AppName != "" {
 			defer func() {
-				if _, err := b.runSavedApp(ctx, t.DeviceID, t.AppName, nil); err != nil && ctx.Err() == nil {
+				if _, err := b.runSavedApp(ctx, t.CompanionID, t.AppName, nil); err != nil && ctx.Err() == nil {
 					log.Printf("Lark could not launch timer app %q: %v", t.AppName, err)
 				}
 			}()
@@ -522,11 +522,13 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 			h.chime(d, t.Chime)
 		}
 		view := timerScene(message)
-		d.card, d.drawer = &view, ""
+		for _, td := range h.terminalsFor(key) {
+			td.card, td.drawer = &view, ""
+			h.render(td, now, false)
+		}
 		if t.Say != "" {
 			h.speakLocalAfter(d, t.Say, pcm)
 		}
-		h.render(d, now, false)
 		h.mu.Unlock()
 		return
 	}
@@ -551,11 +553,11 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 	if m == nil {
 		return nil, problem(503, "Timers unavailable")
 	}
-	if raw, exists := args["device_id"]; exists {
-		id = str(raw)
+	if raw, exists := args["companion_id"]; exists {
+		id = strings.ToLower(str(raw))
 	}
-	if !deviceIDRE.MatchString(id) {
-		return nil, problem(400, "Invalid timer device_id")
+	if !validCompanionID(id) {
+		return nil, problem(400, "Invalid timer companion_id")
 	}
 	op, present := args["op"]
 	_, secs := args["in_seconds"]
@@ -565,12 +567,12 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 	}
 	switch op {
 	case "set":
-		who, err := b.lookupDevice(id)
-		if err != nil {
-			return nil, err
+		who, ok := b.companionByID(id)
+		if !ok {
+			return nil, problem(404, "Companion not found")
 		}
 		now := time.Now()
-		t, err := parseTimer(withDevice(args, id), now)
+		t, err := parseTimer(withCompanion(args, id), now)
 		if err != nil {
 			return nil, err
 		}
@@ -581,7 +583,7 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 			return nil, err
 		}
 		b.timerUpdate(id)
-		entry := newChat("card", who.Character, "Timer: "+t.Label, "timer")
+		entry := newChat("card", who.Name, "Timer: "+t.Label, "timer")
 		entry.SceneTitle = t.Label
 		b.chat(id, entry, true)
 		return t.state(now), nil
@@ -594,12 +596,12 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 			return nil, err
 		}
 		b.timerUpdate(id)
-		return object{"device_id": id, "id": timerID, "all": all, "cancelled": true}, nil
+		return object{"companion_id": id, "id": timerID, "all": all, "cancelled": true}, nil
 	case "update":
 		timerID := str(args["id"])
 		_, hasAll := args["all"]
 		fields := len(args) - 2
-		if _, present := args["device_id"]; present {
+		if _, present := args["companion_id"]; present {
 			fields--
 		}
 		if !timerIDRE.MatchString(timerID) || hasAll || fields < 1 {
@@ -624,16 +626,16 @@ func (b *larkServer) timerAPI(w http.ResponseWriter, r *http.Request, path, scop
 	if m == nil {
 		return nil, problem(503, "Timers unavailable")
 	}
-	id := r.URL.Query().Get("device_id")
+	id := strings.ToLower(r.URL.Query().Get("companion_id"))
 	if scope != "" {
 		if id != "" && id != scope {
-			return nil, problem(403, "Device out of scope")
+			return nil, problem(403, "Companion out of scope")
 		}
 		id = scope
 	}
 	if path == "/api/timers" && r.Method == http.MethodGet {
-		if id != "" && !deviceIDRE.MatchString(id) {
-			return nil, problem(400, "Invalid timer device_id")
+		if id != "" && !validCompanionID(id) {
+			return nil, problem(400, "Invalid timer companion_id")
 		}
 		timers, err := m.list(r.Context(), id)
 		return object{"timers": timers}, err

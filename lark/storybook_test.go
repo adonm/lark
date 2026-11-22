@@ -59,24 +59,24 @@ func TestStorybookSpeciesAndStickersRender(t *testing.T) {
 
 func TestStorybookThroughMCP(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "lark-storybook"
+	const id = "bean"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Bean")
-	out := toolTest(t, base, "patch", object{"device_id": id, "companion": object{"save_profile": false, "preset": object{
+	board.helloV2(t, "vocat-0001", "Bean")
+	out := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{"preset": object{
 		"species": "fox", "palette": "berry", "eyes": "star", "accessory": "scarf",
 	}}}, false)
 	companion := out["companion"].(object)
 	if companion["face_bg"] != "#FAEAF0" || !strings.Contains(str(companion["face_svg"]), `data-part="eyes"`) {
 		t.Fatal(companion)
 	}
-	toolTest(t, base, "patch", object{"device_id": id, "companion": object{"preset": object{"species": "fox", "extra": true}}}, true)
-	out = toolTest(t, base, "app", object{"devices": id, "screen": object{"title": "Owl spot", "body": []object{
+	toolTest(t, base, "patch", object{"companion_id": id, "companion": object{"preset": object{"species": "fox", "extra": true}}}, true)
+	out = toolTest(t, base, "app", object{"companions": id, "screen": object{"title": "Owl spot", "body": []object{
 		{"type": "sticker", "name": "owl", "palette": object{"base": "mint", "fur": "#96C7AD"}, "id": "bird"},
 	}}}, false)
 	if out["layout_warnings"] != nil {
 		t.Fatal(out)
 	}
-	toolTest(t, base, "app", object{"devices": id, "screen": object{"body": []object{
+	toolTest(t, base, "app", object{"companions": id, "screen": object{"body": []object{
 		{"type": "sticker", "name": "owl", "id": "lark-exit"},
 	}}}, true)
 }

@@ -10,25 +10,25 @@ import (
 	"testing"
 )
 
-func TestPhonePWAInstallAssets(t *testing.T) {
-	b, base := wsHarness(t, func(b *larkServer, _ string) { b.virtual = virtualStore(b.db) })
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Violet"}, 201))
+func TestPWAInstallAssets(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	v := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Violet"}, 201))
 	id := str(v["id"])
-	companion, ok := b.virtualByID(id)
+	companion, ok := b.companionByID(id)
 	if !ok {
-		t.Fatal("virtual companion not created")
+		t.Fatal("companion not created")
 	}
 	login := httptest.NewRequest("GET", "/api/scope", nil)
 	login.Header.Set("X-Lark-Token", b.token)
 	w := httptest.NewRecorder()
 	b.ServeHTTP(w, login)
 	cookies := w.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Path != phonePWAPath || !cookies[0].Secure || !cookies[0].HttpOnly ||
+	if len(cookies) != 1 || cookies[0].Path != pwaPath || !cookies[0].Secure || !cookies[0].HttpOnly ||
 		cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Value == b.token {
 		t.Fatal("install artwork session is not protected")
 	}
 	cookie := cookies[0]
-	const manifest = phonePWAPath + "manifest.webmanifest"
+	const manifest = pwaPath + "manifest.webmanifest"
 	const grant = "scoped-pwa-fixture"
 	scoped := b.scoped(companion, grant)
 	request := func(t *testing.T, handler http.Handler, path string, cookie *http.Cookie, status int) *httptest.ResponseRecorder {
@@ -44,12 +44,12 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 		}
 		return w
 	}
-	request(t, b, manifest+"?device_id="+id, nil, 401)
-	request(t, b, "/api/devices", cookie, 401)
-	request(t, b, manifest+"?device_id=virt-00000000", cookie, 404)
+	request(t, b, manifest+"?companion_id="+id, nil, 401)
+	request(t, b, "/api/companions", cookie, 401)
+	request(t, b, manifest+"?companion_id=missing", cookie, 404)
 	request(t, scoped, manifest, cookie, 401)
-	request(t, scoped, manifest+"?token="+grant+"&device_id=virt-00000000", nil, 403)
-	request(t, scoped, phonePWAPath+"icon-192.png?device_id="+id, cookie, 401)
+	request(t, scoped, manifest+"?token="+grant+"&companion_id=missing", nil, 403)
+	request(t, scoped, pwaPath+"icon-192.png?companion_id="+id, cookie, 401)
 	request(t, scoped, "/app/parent", nil, 404)
 	assertAsset := request(t, scoped, "/app/lark.svg", nil, 200)
 	if assertAsset.Header().Get("Content-Type") != "image/svg+xml" {
@@ -61,7 +61,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 		query   string
 		cookie  *http.Cookie
 	}{
-		{"LAN", b, "?device_id=" + id, cookie},
+		{"LAN", b, "?companion_id=" + id, cookie},
 		{"scoped", scoped, "?token=" + grant, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 			obj := testObject(t, m.Body.Bytes())
 			u, err := url.Parse(str(obj["start_url"]))
 			if err != nil || u.IsAbs() || u.Path != "/app" || u.RawQuery != tc.query[1:] || obj["scope"] != "/app" ||
-				obj["name"] != "Violet" || obj["id"] != "/app?device_id="+id || obj["display"] != "standalone" ||
+				obj["name"] != "Violet" || obj["id"] != "/app?companion_id="+id || obj["display"] != "standalone" ||
 				obj["orientation"] != "portrait" || obj["theme_color"] != storybookPalettes["peach"].furShadow || obj["background_color"] != storybookPalettes["peach"].bg {
 				t.Fatal("manifest metadata or launch scope is incorrect")
 			}
@@ -83,7 +83,7 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 			for i, size := range []int{192, 512, 512} {
 				icon := icons[i].(map[string]any)
 				src := str(icon["src"])
-				if !strings.HasPrefix(src, phonePWAPath) || !strings.HasSuffix(src, tc.query) ||
+				if !strings.HasPrefix(src, pwaPath) || !strings.HasSuffix(src, tc.query) ||
 					(icon["purpose"] == "maskable") != (i == 2) {
 					t.Fatal("incorrect icon path or maskable purpose")
 				}
@@ -109,10 +109,12 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 			}
 		})
 	}
-	quick := request(t, b, manifest+"?device_id=phone-abcd", cookie, 200)
+	blank := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{}, 201))
+	blankID := str(blank["id"])
+	quick := request(t, b, manifest+"?companion_id="+blankID, cookie, 200)
 	quickApp := testObject(t, quick.Body.Bytes())
-	if quickApp["name"] != "Phone Lark" || quickApp["start_url"] != "/app?device_id=phone-abcd" {
-		t.Fatal("Quick Join cat cannot be launched again")
+	if quickApp["name"] != "Lark" || quickApp["start_url"] != "/app?companion_id="+blankID {
+		t.Fatal("blank companion PWA metadata mismatch", quickApp)
 	}
 	lanWorker := request(t, b, "/app/sw.js", nil, 200)
 	privateWorker := request(t, scoped, "/app/sw.js", nil, 200)
@@ -124,18 +126,20 @@ func TestPhonePWAInstallAssets(t *testing.T) {
 	}
 }
 
-func TestPhoneCompanionReconnectDoesNotReplaceLiveTab(t *testing.T) {
-	b, base := wsHarness(t, func(b *larkServer, _ string) { b.virtual = virtualStore(b.db) })
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))
+func TestWebTerminalReconnectDoesNotReplaceLiveTab(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	v := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{}, 201))
 	id := str(v["id"])
-	companion, _ := b.virtualByID(id)
+	companion, _ := b.companionByID(id)
+	term := testObject(t, testRequest(t, "POST", base+"/api/terminals", "unit", object{"kind": "web", "companion_id": id}, 201))
+	termID := str(term["id"])
 	const grant = "scoped-hello-fixture"
 	scoped := httptest.NewServer(b.scoped(companion, grant))
 	defer scoped.Close()
 	first := testConnectWS(t, base, "unit", false)
-	first.hello(t, id, "New Cat")
+	first.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id})
 	second := testConnectWS(t, scoped.URL, grant, true)
-	second.hello(t, id, "New Cat") // An explicit new join can still take over.
+	second.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID}) // An explicit new join can still take over.
 	closeFrame := func(socket *testWS) {
 		t.Helper()
 		f := socket.until(t, func(f wsFrame) bool { return f.op == wsClose })
@@ -146,7 +150,7 @@ func TestPhoneCompanionReconnectDoesNotReplaceLiveTab(t *testing.T) {
 	closeFrame(first)
 	join := func() *testWS {
 		s := testConnectWS(t, base, "unit", false)
-		s.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "New Cat", "if_free": true})
+		s.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id, "if_free": true})
 		return s
 	}
 	closeFrame(join())
@@ -156,7 +160,7 @@ func TestPhoneCompanionReconnectDoesNotReplaceLiveTab(t *testing.T) {
 	watcher.until(t, hasWS("peers", id))
 	second.write(t, maskedFrame(wsClose, true, wsCloseFrame(1000).data))
 	second.until(t, func(f wsFrame) bool { return f.op == wsClose })
-	// detach happens after the close handshake. A watcher sees the cat go offline.
-	watcher.until(t, func(f wsFrame) bool { return hasWS("peers", "")(f) && !bytes.Contains(f.data, []byte(id)) })
+	// detach happens after the close handshake. A watcher sees the terminal go offline.
+	watcher.until(t, func(f wsFrame) bool { return hasWS("peers", "")(f) && !bytes.Contains(f.data, []byte(termID)) })
 	join().until(t, hasWS("svg", id))
 }

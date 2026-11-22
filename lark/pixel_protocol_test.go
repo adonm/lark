@@ -8,11 +8,11 @@ import (
 
 func TestMCPRejectsCompanionSprite(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "lark-pixel-test"
+	const id = "new-companion"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "")
+	board.helloV2(t, "vocat-0001", "")
 	raw := str(stateMe(t, base, id)["companion"].(object)["face_svg"])
-	rejected := toolTest(t, base, "patch", object{"device_id": id, "companion": object{
+	rejected := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{
 		"sprite": object{"rows": []string{"kk", "k."}},
 	}}, true)
 	if got := str(rejected["error"]); got != "companion.sprite: unknown argument" {
@@ -38,16 +38,16 @@ func TestMCPDeclarativeScreen(t *testing.T) {
 	_, base := wsHarness(t, nil)
 	round := testConnectWS(t, base, "unit", false)
 	box := testConnectWS(t, base, "unit", false)
-	round.helloV2(t, "lark-pixel-round", "")
-	box.json(t, object{"ev": "hello", "role": "device", "device_id": "lark-pixel-box", "proto": 2,
+	round.helloV2(t, "vocat-0001", "Cake")
+	box.json(t, object{"ev": "hello", "role": "device", "terminal_id": "box3-0001", "character": "Mint", "proto": 2,
 		"firmware": "0.9.5", "width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
 	box.until(t, isDisplay)
-	ids := []string{"lark-pixel-round", "lark-pixel-box"}
+	ids := []string{"cake", "mint"}
 	spec, err := decodeObject([]byte(screenTestSpec))
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := toolTest(t, base, "app", object{"devices": ids, "screen": spec, "save_as": "rain-shine"}, false)
+	out := toolTest(t, base, "app", object{"companions": ids, "screen": spec, "save_as": "rain-shine"}, false)
 	if out["title"] != "Rain & shine" || out["saved"] == nil || out["layout_warnings"] != nil {
 		t.Fatal(out)
 	}
@@ -57,7 +57,7 @@ func TestMCPDeclarativeScreen(t *testing.T) {
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); r.Max.X > 320 || r.Max.Y > 240 {
 		t.Fatal(r)
 	}
-	reloaded := toolTest(t, base, "app", object{"devices": ids, "load": "rain-shine"}, false)
+	reloaded := toolTest(t, base, "app", object{"companions": ids, "load": "rain-shine"}, false)
 	for _, id := range []string{exitNode, "start", "a", "b", "spark"} {
 		if !slices.Contains(reloaded["hit_ids"].([]any), any(id)) {
 			t.Fatal("missing reloaded control", id, reloaded)
@@ -98,9 +98,9 @@ func TestJSDeclarativeScreen(t *testing.T) {
 		return ui.screen(` + screenTestSpec + `);
 	}`
 	for _, g := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
-		d := &wsDevice{screen: g, client: &wsClient{role: "device"}}
+		d := &wsTerminal{screen: g, client: &wsClient{role: "device"}}
 		spec := savedApp{Code: code}
-		_, views, err := initApp(spec, []appPlayer{{id: "pixel"}}, nil, []*wsDevice{d}, nil, buildScreen)
+		_, views, err := initApp(spec, []appPlayer{{id: "pixel"}}, nil, []*wsTerminal{d}, nil, buildScreen)
 		if err != nil {
 			t.Fatal(err)
 		}

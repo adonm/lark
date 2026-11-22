@@ -134,12 +134,12 @@ func TestMCPProtocol(t *testing.T) {
 			t.Fatal(old)
 		}
 	}
-	snap := toolTest(t, base, "state", object{"device_id": id}, false)
+	snap := toolTest(t, base, "state", object{"companion_id": "cake"}, false)
 	me := snap["me"].(object)
-	if len(snap) != 7 || me["device"].(object)["name"] != "Cake" || me["device"].(object)["screen"].(object)["title"] != "Companion" {
+	if len(snap) != 6 || me["companion"].(object)["name"] != "Cake" || len(me["terminals"].([]any)) != 1 {
 		t.Fatal(snap)
 	}
-	patchControl(t, base, id, object{"volume": 40})
+	patchControl(t, base, "cake", object{"volume": 40})
 	toolTest(t, base, "patch", object{"memory": object{"scope": "app:scores", "key": "best", "value": 7, "expected_version": 0}}, false)
 	if v := toolTest(t, base, "patch", object{"memory": object{"op": "delete", "scope": "app:scores", "key": "best", "expected_version": 0}}, true); v["version"] != json.Number("1") {
 		t.Fatal(v)
@@ -154,7 +154,7 @@ func TestMCPClosedArguments(t *testing.T) {
 		path string
 	}{
 		{"state", object{"include": []string{}, "device": "typo"}, "device"},
-		{"patch", object{"device_id": "test", "companion": object{"save_profle": true}}, "companion.save_profle"},
+		{"patch", object{"companion_id": "test", "companion": object{"save_profle": true}}, "companion.save_profle"},
 		{"patch", object{"timer": object{"seconds": 5}}, "timer.seconds"},
 		{"patch", object{"memory": []object{{"scope": "shared", "key": "k", "value": 1, "typo": 2}}}, "memory.typo"},
 		{"patch", object{"apps": object{"delete": []string{"book"}, "typo": true}}, "apps.typo"},
@@ -180,12 +180,12 @@ func TestMCPClosedArguments(t *testing.T) {
 
 func stateMe(t *testing.T, base, id string) object {
 	t.Helper()
-	return toolTest(t, base, "state", object{"device_id": id, "include": []string{}}, false)["me"].(object)
+	return toolTest(t, base, "state", object{"companion_id": id, "include": []string{}}, false)["me"].(object)
 }
 
-func patchControl(t *testing.T, base, id string, device object) object {
+func patchControl(t *testing.T, base, id string, terminal object) object {
 	t.Helper()
-	return toolTest(t, base, "patch", object{"device_id": id, "device": device}, false)["device"].(object)
+	return toolTest(t, base, "patch", object{"companion_id": id, "terminal": terminal}, false)["terminal"].(object)
 }
 
 func TestMCPStateSlices(t *testing.T) {
@@ -193,22 +193,22 @@ func TestMCPStateSlices(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "lark-slices"
+	const termID, id = "vocat-0001", "cake"
 	board := testConnectWS(t, base, "unit", false)
-	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake", "caps": object{"battery": true}})
+	board.json(t, object{"ev": "hello", "role": "device", "proto": 2, "terminal_id": termID, "character": "Cake", "caps": object{"battery": true}})
 	board.until(t, hasWS("hello_ok", ""))
 	board.json(t, object{"ev": "status", "wifi_rssi": -62, "cpu_pct": 24, "battery_pct": 73})
 	board.barrier(t)
 	b.ws.mu.Lock()
-	wifiOK := b.ws.devices[id].telemetry.WiFi != nil
+	wifiOK := b.ws.terminals[termID].telemetry.WiFi != nil
 	b.ws.mu.Unlock()
 	if !wifiOK {
 		t.Fatal("missing telemetry wifi")
 	}
-	toolTest(t, base, "patch", object{"device_id": id, "companion": object{"name": "Slices", "save_profile": true}, "timer": object{"in_seconds": 300, "chime": "tap"},
-		"memory": []object{{"scope": "shared", "key": "score", "value": object{"points": 7}}, {"scope": id, "key": "seen", "value": []any{true, nil}}}}, false)
+	toolTest(t, base, "patch", object{"companion_id": id, "companion": object{"name": "Slices"}, "timer": object{"in_seconds": 300, "chime": "tap"},
+		"memory": []object{{"scope": "shared", "key": "score", "value": object{"points": 7}}, {"scope": "companion:" + id, "key": "seen", "value": []any{true, nil}}}}, false)
 	const code = `function render(s){return '<svg><text x="80" y="180">'+s.n+'</text></svg>';}`
-	toolTest(t, base, "app", object{"devices": id, "save_as": "slices", "code": code, "initial_state": object{"n": 8}}, false)
+	toolTest(t, base, "app", object{"companions": id, "save_as": "slices", "code": code, "initial_state": object{"n": 8}}, false)
 	history, err := b.history.read(t.Context(), id, 1)
 	if err != nil || len(history) != 1 || history[0].Source != "app" {
 		t.Fatalf("missing app history: %v (%v)", history, err)
@@ -220,30 +220,29 @@ func TestMCPStateSlices(t *testing.T) {
 	b.diag.metrics[diagE2E].add(12, 32)
 	b.diag.mu.Unlock()
 
-	args := object{"device_id": id, "include": []string{"devices", "companions", "apps", "timers", "memory", "saved_companions", "messages", "diagnostics"},
+	args := object{"companion_id": id, "include": []string{"companions", "terminals", "apps", "timers", "memory", "messages", "diagnostics"},
 		"include_code": true, "messages_limit": 1}
 	s := toolTest(t, base, "state", args, false)
-	dev, me := s["devices"].(object)[id].(object), s["me"].(object)
+	term, me := s["terminals"].(object)[termID].(object), s["me"].(object)
 	active, companion := me["active_app"].(object), s["companions"].(object)[id].(object)
-	if dev["wifi_rssi"] != json.Number("-62") || dev["cpu_pct"] != json.Number("24") || dev["battery_pct"] != json.Number("73") ||
-		dev["active_app_state"].(object)["n"] != json.Number("8") || active["state"].(object)["n"] != json.Number("8") ||
-		companion["name"] != "Slices" || !strings.Contains(str(companion["face_svg"]), "data-pose") {
-		t.Fatal("missing live device, companion or app state", dev)
+	if term["wifi_rssi"] != json.Number("-62") || term["cpu_pct"] != json.Number("24") || term["battery_pct"] != json.Number("73") ||
+		me["companion"].(object)["active_app_state"].(object)["n"] != json.Number("8") || active["state"].(object)["n"] != json.Number("8") ||
+		companion["name"] != "Slices" || !strings.Contains(str(me["companion"].(object)["face_svg"]), "data-pose") {
+		t.Fatal("missing live terminal, companion or app state", term)
 	}
-	if s["saved_companions"].(object)["slices"].(object)["face_svg"] != companion["face_svg"] ||
-		s["apps"].(object)["slices"].(object)["code"] != code || len(s["timers"].([]any)) != 1 {
+	if s["apps"].(object)["slices"].(object)["code"] != code || len(s["timers"].([]any)) != 1 {
 		t.Fatal("missing saved sources or timer")
 	}
 	mem, msgs := s["memory"].(object), s["messages"].([]any)
 	if mem["shared"].(object)["score"].(object)["value"].(object)["points"] != json.Number("7") ||
-		!slices.Equal(mem[id].(object)["seen"].(object)["value"].([]any), []any{true, nil}) ||
+		!slices.Equal(mem["companion:"+id].(object)["seen"].(object)["value"].([]any), []any{true, nil}) ||
 		len(msgs) != 1 || msgs[0].(object)["text"] != "latest canonical message" {
 		t.Fatal(mem, msgs)
 	}
 	diag, now := s["diagnostics"].(object), s["now"].(object)
 	latency := diag["latency"].(object)[diagMetricNames[diagE2E]].(object)
 	if latency["p50"] != json.Number("12") || latency["p95"] != json.Number("12") ||
-		diag["bridge"] == nil || diag["tts"] == nil || diag["host"] == nil || len(diag["devices"].([]any)) != 1 ||
+		diag["bridge"] == nil || diag["tts"] == nil || diag["host"] == nil || len(diag["terminals"].([]any)) != 1 ||
 		now["unix_ms"] == nil || now["local"] == "" {
 		t.Fatal(diag, now)
 	}
@@ -303,9 +302,9 @@ func TestMCPSavedAppEdits(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "lark-book"
+	const id = "cake"
 	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, id, "Cake")
+	dev.hello(t, "vocat-book", "Cake")
 	watcher := testConnectWS(t, base, "unit", false)
 	watcher.json(t, object{"ev": "hello", "role": "web"})
 	watcher.until(t, hasWS("peers", ""))
@@ -332,7 +331,7 @@ func TestMCPSavedAppEdits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	timer := patchTimerTest(t, base, object{"op": "set", "device_id": id, "in_seconds": 600, "app": "book"}, false)
+	timer := patchTimerTest(t, base, object{"companion_id": id, "in_seconds": 600, "app": "book"}, false)
 	assertTimerApp := func(name string) {
 		t.Helper()
 		timers := toolTest(t, base, "state", object{"include": []string{"timers"}}, false)["timers"].([]any)
@@ -438,13 +437,17 @@ func TestMCPSavedAppEdits(t *testing.T) {
 }
 
 func TestEmitIntercom(t *testing.T) {
-	_, base := wsHarness(t, func(b *larkServer, _ string) {
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
-	const from, to, text = "lark-sender", "phone-bee1", "Dinner is ready."
+	const from, to, text = "cake", "mint", "Dinner is ready."
+	if _, err := b.createCompanion(t.Context(), object{"id": to, "name": "Mint"}); err != nil {
+		t.Fatal(err)
+	}
 	sender, recipient := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
-	sender.hello(t, from, "Cake")
-	recipient.hello(t, to, "Mint")
+	sender.hello(t, "vocat-0001", "Cake")
+	recipient.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-bee10000", "companion_id": to})
+	recipient.until(t, hasWS("svg", ""))
 	out := toolTest(t, base, "emit", object{"to": "all", "intercom": object{"from": from, "text": text}}, false)
 	if !slices.Equal(out["intercom"].(object)["sent_to"].([]any), []any{to}) {
 		t.Fatal(out)
@@ -455,7 +458,7 @@ func TestEmitIntercom(t *testing.T) {
 		return card && audio
 	})
 	for _, id := range []string{from, to} {
-		s := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages"}}, false)
+		s := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"messages"}}, false)
 		msgs := s["messages"].([]any)
 		if len(msgs) != 1 || msgs[0].(object)["source"] != "intercom" || msgs[0].(object)["text"] != text {
 			t.Fatal(msgs)
@@ -465,27 +468,27 @@ func TestEmitIntercom(t *testing.T) {
 
 func TestMCPControl(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "lark-control"
+	const termID, id = "vocat-control", "cake"
 	c := testConnectWS(t, base, "unit", false)
-	c.hello(t, id, "Cake")
+	c.hello(t, termID, "Cake")
 	watcher := testConnectWS(t, base, "unit", false)
 	watcher.json(t, object{"ev": "hello", "role": "web"})
 	watcher.until(t, hasWS("peers", id))
-	watcher.json(t, object{"ev": "watch", "device_id": id})
+	watcher.json(t, object{"ev": "watch", "companion_id": id})
 	watcher.until(t, hasWS("power", `"brightness":85`))
 
 	for _, invalid := range []object{
 		{}, {"volume": -1}, {"volume": 101}, {"volume": 1.5}, {"sleep": "true"},
 	} {
-		toolTest(t, base, "patch", object{"device_id": id, "device": invalid}, true)
+		toolTest(t, base, "patch", object{"companion_id": id, "terminal": invalid}, true)
 	}
 	b.ws.mu.Lock()
-	d := b.ws.devices[id]
+	d := b.ws.terminals[termID]
 	b.ws.startTurn(d, time.Now(), false, "typed", func(context.Context, uint64) {})
 	turn := d.turn
 	b.ws.mu.Unlock()
 	out := patchControl(t, base, id, object{"volume": 0, "sleep": true})
-	if out["device_id"] != id || out["volume"] != json.Number("0") || out["sleeping"] != true {
+	if out["terminal_id"] != termID || out["volume"] != json.Number("0") || out["sleeping"] != true {
 		t.Fatal(out)
 	}
 	for _, client := range []*testWS{c, watcher} {
@@ -495,9 +498,11 @@ func TestMCPControl(t *testing.T) {
 	b.ws.finishTurn(d, turn, nil, nil)
 	checkStatus := func(mode, volume string) {
 		t.Helper()
-		device := stateMe(t, base, id)["device"].(object)
-		if device["mode"] != mode || device["volume"] != json.Number(volume) {
-			t.Fatal(device)
+		me := stateMe(t, base, id)
+		comp := me["companion"].(object)
+		vol := me["terminals"].([]any)[0].(object)["volume"].(object)
+		if comp["mode"] != mode || vol["volume"] != json.Number(volume) {
+			t.Fatal(me)
 		}
 	}
 	checkStatus("sleepy", "0")

@@ -17,10 +17,10 @@ type sessionBinding struct {
 	found          bool
 }
 
-func (o *openCode) readBinding(ctx context.Context, device string) (sessionBinding, error) {
+func (o *openCode) readBinding(ctx context.Context, companion string) (sessionBinding, error) {
 	var b sessionBinding
-	err := o.db.readDB().QueryRowContext(ctx, `SELECT session_id,contract_hash,updated_at,context_after_ms FROM sessions WHERE device_id=?`,
-		device).Scan(&b.sid, &b.contract, &b.updated, &b.after)
+	err := o.db.readDB().QueryRowContext(ctx, `SELECT session_id,contract_hash,updated_at,context_after_ms FROM sessions WHERE companion_id=?`,
+		companion).Scan(&b.sid, &b.contract, &b.updated, &b.after)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return b, problem(502, "Cannot read sessions")
 	}
@@ -30,17 +30,17 @@ func (o *openCode) readBinding(ctx context.Context, device string) (sessionBindi
 
 // The turn gate serializes local writers; only publish a fully prepared binding,
 // and never overwrite a mapping that changed while OpenCode was creating it.
-func (o *openCode) replaceBinding(ctx context.Context, device string, old sessionBinding, sid string, after int64) error {
+func (o *openCode) replaceBinding(ctx context.Context, companion string, old sessionBinding, sid string, after int64) error {
 	var result sql.Result
 	var err error
 	now := time.Now().UnixMilli()
 	if old.found {
 		result, err = o.db.ExecContext(ctx, `UPDATE sessions SET session_id=?,contract_hash=?,updated_at=?,context_after_ms=?
-			WHERE device_id=? AND session_id=? AND contract_hash=? AND updated_at=? AND context_after_ms=?`,
-			sid, o.contract, now, after, device, old.sid, old.contract, old.updated, old.after)
+			WHERE companion_id=? AND session_id=? AND contract_hash=? AND updated_at=? AND context_after_ms=?`,
+			sid, o.contract, now, after, companion, old.sid, old.contract, old.updated, old.after)
 	} else {
-		result, err = o.db.ExecContext(ctx, `INSERT INTO sessions (device_id,session_id,contract_hash,updated_at,context_after_ms)
-			VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING`, device, sid, o.contract, now, after)
+		result, err = o.db.ExecContext(ctx, `INSERT INTO sessions (companion_id,session_id,contract_hash,updated_at,context_after_ms)
+			VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING`, companion, sid, o.contract, now, after)
 	}
 	if err == nil {
 		n, err := result.RowsAffected()
@@ -51,15 +51,15 @@ func (o *openCode) replaceBinding(ctx context.Context, device string, old sessio
 	return problem(502, "Cannot replace OpenCode session binding")
 }
 
-func (o *openCode) recentDialogue(ctx context.Context, device string, after int64) (string, error) {
+func (o *openCode) recentDialogue(ctx context.Context, companion string, after int64) (string, error) {
 	if after <= 0 {
 		return "", nil
 	}
-	// Only canonical dialogue from this device. Do not load archives, cards,
+	// Only canonical dialogue from this companion. Do not load archives, cards,
 	// intercom, tool data, timer wakes, attachments, or prompt headers.
-	rows, err := o.db.readDB().QueryContext(ctx, `SELECT role,text FROM messages WHERE device_id=? AND ts_ms>?
+	rows, err := o.db.readDB().QueryContext(ctx, `SELECT role,text FROM messages WHERE companion_id=? AND ts_ms>?
 		AND role IN ('user','companion') AND source IN ('typed','voice','text')
-		ORDER BY ts_ms DESC,id DESC LIMIT 12`, strings.ToLower(device), after)
+		ORDER BY ts_ms DESC,id DESC LIMIT 12`, strings.ToLower(companion), after)
 	if err != nil {
 		return "", problem(502, "Cannot read recent dialogue")
 	}

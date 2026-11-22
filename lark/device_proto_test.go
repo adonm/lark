@@ -206,7 +206,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 
 	// Test TTS control + PCM + ACK, power, and volume
 	b.ws.mu.Lock()
-	dev := b.ws.devices["lark-nat2"]
+	dev := b.ws.terminals["lark-nat2"]
 	if dev == nil || dev.telemetry.Battery == nil || *dev.telemetry.Battery != 88 || *dev.telemetry.WiFi != -52 {
 		b.ws.mu.Unlock()
 		t.Fatal("MSG_STATUS telemetry was not applied")
@@ -307,7 +307,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	// 2. Cross-transport duplex call: Native TCP+UDP <-> Browser WS virtual client
 	web := callClient(t, b, base, callMint, "Mint")
 	b.ws.mu.Lock()
-	b.ws.startCall(b.ws.devices["lark-natcall"], callMint)
+	b.ws.startCall(b.ws.terminals["lark-natcall"], callMint)
 	b.ws.mu.Unlock()
 
 	nat.readUntil(msgChime)
@@ -357,7 +357,7 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 	_, _ = dialNativeDevice(t, ds, "lark-udprace", "unit", capBridgeEndpoint)
 
 	b.ws.mu.Lock()
-	d := b.ws.devices["lark-udprace"]
+	d := b.ws.terminals["lark-udprace"]
 	ep := &endpointCapture{
 		cancel:    func() {},
 		packets:   make(chan micPacket, 16),
@@ -402,10 +402,11 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ds.shutdown()
-	_, _ = dialNativeDevice(t, ds, "lark-udpalloc", "unit", 0)
+	nc, _ := dialNativeDevice(t, ds, "lark-udpalloc", "unit", 0)
+	nc.readUntil(msgFrame)
 
 	b.ws.mu.Lock()
-	d := b.ws.devices["lark-udpalloc"]
+	d := b.ws.terminals["lark-udpalloc"]
 	d.recording.phase = captureOpen
 	d.recording.pcm = make([]byte, 0, 128*rtpPCMBytes)
 	ssrc := d.client.native.ssrc
@@ -434,14 +435,14 @@ func BenchmarkNativeUDPHandle(b *testing.B) {
 		remoteIP: remote.Addr(),
 		udpAddr:  net.UDPAddrFromAddrPort(remote),
 	}
-	d := &wsDevice{
+	d := &wsTerminal{
 		key:       "lark-udpbench",
 		recording: deviceCapture{phase: captureOpen, started: time.Now(), pcm: make([]byte, 0, maxPCM)},
 		client:    &wsClient{native: nc, ctx: b.Context()},
 	}
-	d.client.device = d
+	d.client.terminal = d
 	nc.client = d.client
-	h.devices["lark-udpbench"] = d
+	h.terminals["lark-udpbench"] = d
 	ds.peers[ssrc] = nc
 
 	pkt := make([]byte, rtpPacketBytes)

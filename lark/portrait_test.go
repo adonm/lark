@@ -287,15 +287,13 @@ func TestPortraitOpenCodeContract(t *testing.T) {
 func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	sheet := portraitFixture(t)
 	dir := t.TempDir()
-	b, base := wsHarness(t, func(b *larkServer, _ string) {
-		b.virtual = virtualStore(b.db)
-	})
-	own := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))
-	other := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{}, 201))
+	b, base := wsHarness(t, nil)
+	own := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Own"}, 201))
+	other := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Other"}, 201))
 	id := str(own["id"])
 	patch := func(spec object, failed bool) object {
 		t.Helper()
-		out := toolTest(t, base, "patch", object{"device_id": id, "companion": object{"portrait": spec, "save_profile": false}}, failed)
+		out := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{"portrait": spec}}, failed)
 		companion, _ := out["companion"].(object)
 		return companion
 	}
@@ -313,7 +311,7 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	}}
 	patch(object{"prompt": " ", "edit": true}, true)
 	patch(object{"prompt": "invalid", "typo": true}, true)
-	badStyle := toolTest(t, base, "patch", object{"device_id": id, "companion": object{
+	badStyle := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{
 		"portrait": object{"prompt": "an owl", "style": "vector"},
 	}}, true)
 	if got := str(badStyle["error"]); got != "companion.portrait.style: expected one of [storybook pixel]" {
@@ -331,9 +329,9 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 			t.Fatalf("%s not private: %v", pose, err)
 		}
 	}
-	s1 := httptest.NewServer(b.scoped(virtualClient{ID: id}, "on-device"))
+	s1 := httptest.NewServer(b.scoped(companionState{ID: id}, "on-device"))
 	defer s1.Close()
-	s2 := httptest.NewServer(b.scoped(virtualClient{ID: str(other["id"])}, "other-device"))
+	s2 := httptest.NewServer(b.scoped(companionState{ID: str(other["id"])}, "other-device"))
 	defer s2.Close()
 	path := "/api/portraits/" + asset + "/idle.png"
 	testRequest(t, "GET", s1.URL+path, "", nil, 401)

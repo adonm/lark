@@ -35,9 +35,9 @@ func TestSynthesizeMelody(t *testing.T) {
 
 func TestWSMelody(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	id := "lark-melody"
+	id := "cake"
 	c := testConnectWS(t, base, "unit", false)
-	c.hello(t, id, "Cake")
+	c.hello(t, "vocat-0001", "Cake")
 	notes := []string{"C5:120", "R:80"}
 	pcm, _ := synthesizeMelody(notes)
 	check := func() {

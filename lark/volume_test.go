@@ -38,7 +38,7 @@ func TestAmbientRMSAndVolume(t *testing.T) {
 			t.Errorf("ambient %d gave rms=%g volume=%d, want %d", tc.rms, rms, ambientVolume(rms), tc.vol)
 		}
 	}
-	d := wsDevice{autoVol: true}
+	d := wsTerminal{autoVol: true}
 	d.measureAmbient(ambientSample(80))
 	d.measureAmbient(ambientSample(1800))
 	if !d.hasAmbient || d.ambientEMA != 854 {
@@ -48,16 +48,16 @@ func TestAmbientRMSAndVolume(t *testing.T) {
 
 func TestAmbientVolumePrecedesPlaybackWithoutPersisting(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "phone-beef"
+	const id = "web-beef0000"
 	web := testConnectWS(t, base, "unit", false)
-	web.hello(t, id, "Test")
+	web.json(t, object{"ev": "hello", "role": "web", "terminal_id": id})
 	volume := func(level string) func(wsFrame) bool { return hasWS("volume", `"level":`+level) }
 	f := testObject(t, web.until(t, volume("55")).data)
 	if f["persist"] != false || f["auto_volume"] != true {
 		t.Fatal(f)
 	}
 	b.ws.mu.Lock()
-	d := b.ws.devices[id]
+	d := b.ws.terminals[id]
 	d.measureAmbient(ambientSample(1800))
 	s := newAudioStream()
 	s.append(make([]byte, 1600))
@@ -116,7 +116,7 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	board.json(t, object{"ev": "status", "volume": 95})
 	tap(180, 315)
 	web.until(t, hasWS("svg", "menu-volume"))
-	entry := apiObjects(t, base+"/api/devices", "devices")[0].(object)
+	entry := apiObjects(t, base+"/api/terminals", "terminals")[0].(object)
 	if auto, vol := b.volumePrefs(id); auto || vol != 55 || entry["auto_volume"] != false || entry["volume"] != json.Number("55") {
 		t.Fatalf("unintended head-touch volume change: persisted %t %d, device %v", auto, vol, entry)
 	}
@@ -134,22 +134,25 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 }
 
 func TestVolumeAPIAndScopedPersistence(t *testing.T) {
-	b, base := wsHarness(t, func(b *larkServer, _ string) { b.virtual = virtualStore(b.db) })
-	v := testObject(t, testRequest(t, http.MethodPost, base+"/api/virtual-clients", "unit", object{}, 201))
+	b, base := wsHarness(t, nil)
+	v := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{}, 201))
 	id := str(v["id"])
-	client, _ := b.virtualByID(id)
+	term := testObject(t, testRequest(t, http.MethodPost, base+"/api/terminals", "unit", object{"kind": "web", "companion_id": id}, 201))
+	termID := str(term["id"])
+	client, _ := b.companionByID(id)
 	scoped := httptest.NewServer(b.scoped(client, "private"))
 	defer scoped.Close()
-	path := "/api/devices/" + id + "/volume"
-	testRequest(t, http.MethodPost, scoped.URL+"/api/devices/lark-other/volume", "private", object{"auto": true}, 403)
+	path := "/api/terminals/" + termID + "/volume"
+	testRequest(t, http.MethodPost, scoped.URL+"/api/terminals/vocat-0000/volume", "private", object{"auto": true}, 403)
 	testRequest(t, http.MethodPost, base+path, "unit", object{"auto": false, "volume": 101}, 400)
 	testRequest(t, http.MethodPost, scoped.URL+path, "private", object{"auto": false, "volume": 65}, 200)
 	f := testObject(t, testRequest(t, http.MethodGet, scoped.URL+"/api/scope", "private", nil, 200))
-	if f["auto_volume"] != false || f["volume"] != json.Number("65") {
+	terms := f["terminals"].([]any)
+	if len(terms) != 1 || terms[0].(object)["auto_volume"] != false || terms[0].(object)["volume"] != json.Number("65") {
 		t.Fatal("unexpected scoped preferences", f)
 	}
 	ws := testConnectWS(t, base, "unit", false)
-	ws.hello(t, id, "Cat")
+	ws.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id})
 	ws.until(t, hasWS("volume", `"level":65`))
 	manual := patchControl(t, base, id, object{"volume": 70})
 	if manual["auto_volume"] != false || manual["volume"] != json.Number("70") {

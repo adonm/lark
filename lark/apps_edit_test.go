@@ -8,15 +8,16 @@ import (
 
 func TestMCPSaveCurrentAndUpdateWithoutRelaunch(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "lark-save"
+	const termID = "vocat-0001"
+	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Cake")
-	toolTest(t, base, "app", object{"devices": id, "template": "reader",
+	board.helloV2(t, termID, "Cake")
+	toolTest(t, base, "app", object{"companions": id, "template": "reader",
 		"data": object{"pages": []string{"One", "Two"}}}, false)
 	board.until(t, isDisplay)
 	board.json(t, object{"ev": "tap", "x": 236, "y": 62})
 	board.until(t, isDisplay)
-	save := toolTest(t, base, "app", object{"devices": id, "save_current": object{"name": "copy", "title": "Copy"}}, false)
+	save := toolTest(t, base, "app", object{"companions": id, "save_current": object{"name": "copy", "title": "Copy"}}, false)
 	saved := save["saved"].(object)
 	if saved["template"] != "reader" || saved["title"] != "Copy" || save["state"].(object)["page"] != json.Number("1") {
 		t.Fatal(save)
@@ -40,31 +41,32 @@ func TestMCPSaveCurrentAndUpdateWithoutRelaunch(t *testing.T) {
 	if a := stateMe(t, base, id)["active_app"].(object); a["title"] != "Story" || a["state"].(object)["page"] != json.Number("1") {
 		t.Fatal("save or update relaunched the current app", a)
 	}
-	toolTest(t, base, "app", object{"devices": id, "load": "copy"}, false)
+	toolTest(t, base, "app", object{"companions": id, "load": "copy"}, false)
 	board.until(t, isDisplay)
 	board.json(t, object{"ev": "tap", "x": 180, "y": 320})
 	board.until(t, isDisplay)
-	toolTest(t, base, "app", object{"devices": id, "save_current": object{"name": "missing"}}, true)
+	toolTest(t, base, "app", object{"companions": id, "save_current": object{"name": "missing"}}, true)
 }
 
 func TestMCPDeviceLastAppError(t *testing.T) {
 	_, base := wsHarness(t, nil)
-	const id = "lark-broken"
+	const termID = "vocat-0002"
+	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Cake")
+	board.helloV2(t, termID, "Cake")
 	const code = `function render(){return '<svg><rect x="130" y="140" width="100" height="50" data-id="broken"/></svg>'}
 		function onTap(){throw new Error("oops")}`
-	toolTest(t, base, "app", object{"devices": id, "title": "Broken", "code": code}, false)
+	toolTest(t, base, "app", object{"companions": id, "title": "Broken", "code": code}, false)
 	board.until(t, isDisplay)
 	board.json(t, object{"ev": "tap", "x": 180, "y": 160})
 	board.until(t, hasWS("error", "oops"))
 	me := stateMe(t, base, id)
-	got := me["device"].(object)["last_app_error"].(object)
+	got := me["companion"].(object)["last_app_error"].(object)
 	if me["active_app"] != nil || got["action"] != "tap" || got["name"] != "broken" || !strings.Contains(str(got["error"]), "oops") {
 		t.Fatal(me)
 	}
-	toolTest(t, base, "app", object{"devices": id, "template": "timer"}, false)
-	if got := stateMe(t, base, id)["device"].(object)["last_app_error"]; got != nil {
+	toolTest(t, base, "app", object{"companions": id, "template": "timer"}, false)
+	if got := stateMe(t, base, id)["companion"].(object)["last_app_error"]; got != nil {
 		t.Fatal(got)
 	}
 }

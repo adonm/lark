@@ -154,8 +154,8 @@ func (b *larkServer) compactAPI(w http.ResponseWriter, r *http.Request) (any, er
 		if err != nil {
 			return nil, err
 		}
-		if _, present := input["device_id"]; present {
-			device, err = deviceID(r, input, true)
+		if _, present := input["companion_id"]; present {
+			device, err = companionIDArg(r, input, true)
 			if err != nil {
 				return nil, err
 			}

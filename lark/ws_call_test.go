@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-const callCake = "phone-000a"
-const callMint = "phone-000b"
+const callCake = "cake"
+const callMint = "mint"
 
 func callClient(t *testing.T, b *larkServer, base, id, name string) *testWS {
 	return callClientCaps(t, b, base, id, name, true)
@@ -34,7 +34,7 @@ func callClientCaps(t *testing.T, b *larkServer, base, id, name string, tagged b
 		t.Fatal(err)
 	}
 	c := testConnectWS(t, base, "unit", false)
-	c.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": name,
+	c.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-" + randomHex(4), "companion_id": id,
 		"caps": object{"call": true, "call_pcm": tagged, "drag": true}})
 	c.until(t, hasWS("svg", ""))
 	return c
@@ -63,7 +63,7 @@ func checkCallStates(t *testing.T, h *wsHub, a, b callState) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, want := range map[string]callState{callCake: a, callMint: b} {
-		d := h.devices[id]
+		d := h.audioTerminal(id)
 		if d == nil {
 			if want != callNone {
 				t.Fatalf("%s disconnected; wanted %v", id, want)
@@ -125,7 +125,7 @@ func TestWSCallDuplex(t *testing.T) {
 	cake.barrier(t)
 	checkCallStates(t, b.ws, callActive, callActive)
 	b.ws.mu.Lock()
-	for _, d := range b.ws.devices {
+	for _, d := range b.ws.terminals {
 		if d.recording.pcm != nil || d.recording.open() || d.busy {
 			t.Error("call audio entered the assistant turn path")
 		}
@@ -159,7 +159,7 @@ func TestWSCallDeclineBusyTimeoutAndDisconnect(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	plum := callClient(t, b, base, "phone-000c", "Plum")
+	plum := callClient(t, b, base, "plum", "Plum")
 	cake.json(t, object{"ev": "call", "target": callMint})
 	mint.until(t, hasWS("svg", "call-decline"))
 	plum.json(t, object{"ev": "call", "target": callMint})
@@ -171,7 +171,7 @@ func TestWSCallDeclineBusyTimeoutAndDisconnect(t *testing.T) {
 	checkCallStates(t, b.ws, callNone, callNone)
 
 	b.ws.mu.Lock()
-	err := b.ws.ringCall(b.ws.devices[callCake], callMint, 40*time.Millisecond)
+	err := b.ws.ringCall(b.ws.audioTerminal(callCake), callMint, 40*time.Millisecond)
 	b.ws.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -190,8 +190,8 @@ func TestWSCallDeclineBusyTimeoutAndDisconnect(t *testing.T) {
 	checkCallStates(t, b.ws, callNone, callNone)
 
 	old := testConnectWS(t, base, "unit", false)
-	old.hello(t, "lark-legacy", "Legacy")
-	cake.json(t, object{"ev": "call", "target": "lark-legacy"})
+	old.hello(t, "vocat-0099", "Legacy")
+	cake.json(t, object{"ev": "call", "target": "legacy"})
 	cake.until(t, hasWS("svg", "firmware"))
 	cake.json(t, object{"ev": "call", "target": "offline"})
 	cake.until(t, hasWS("svg", "offline is offline"))
@@ -245,7 +245,7 @@ func TestWSNaturalVoiceCallRequiresKnownPeer(t *testing.T) {
 	})
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	greg := callClient(t, b, base, "phone-000c", "Greg")
+	greg := callClient(t, b, base, "greg", "Greg")
 	voice := func(text string) {
 		transcripts <- text
 		cake.json(t, object{"ev": "rec_start"})
@@ -302,7 +302,7 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	game := object{"devices": callMint, "tick_ms": 250, "code": `
+	game := object{"companions": callMint, "tick_ms": 250, "code": `
 		function init(){return {x:180}}
 		function render(s){return '<svg><circle data-id="game-target" cx="'+s.x+'" cy="180" r="30"/></svg>'}
 		function onTick(s){s.x++; return s}
@@ -312,7 +312,7 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 	cake.json(t, object{"ev": "call", "target": callMint})
 	mint.until(t, hasWS("svg", "call-answer"))
 	b.ws.mu.Lock()
-	d := b.ws.devices[callMint]
+	d := b.ws.audioTerminal(callMint)
 	app := d.app
 	// Even a stale app marker must not claim a tap on the committed call scene.
 	d.displayApp = app
@@ -329,7 +329,7 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 	b.ws.mu.Lock()
 	closed := d.app == nil && app.ctx.Err() != nil
 	backdated := time.Now().Add(-idleSleep - time.Second)
-	for _, side := range b.ws.devices {
+	for _, side := range b.ws.terminals {
 		side.callStarted, side.last = backdated, backdated
 	}
 	b.ws.mu.Unlock()
@@ -340,7 +340,7 @@ func TestWSCallPreemptsGameAndStaysAwake(t *testing.T) {
 		side.until(t, hasWS("svg", `aria-label=\"2:`))
 	}
 	b.ws.mu.Lock()
-	for _, side := range b.ws.devices {
+	for _, side := range b.ws.terminals {
 		if side.asleep || side.brightness() != 85 || side.callSecond < idleSleep {
 			t.Errorf("%s dimmed or didn't animate past idle timeout", side.key)
 		}
@@ -360,7 +360,7 @@ func TestWSCallStopsPlaybackAndExcludesNoteTail(t *testing.T) {
 	old := bytes.Repeat([]byte{5, 1}, callPCMBytes/2)
 	stream.append(old)
 	b.ws.mu.Lock()
-	playback := b.ws.play(b.ws.devices[callMint], stream)
+	playback := b.ws.play(b.ws.audioTerminal(callMint), stream)
 	b.ws.mu.Unlock()
 	mint.until(t, hasWS("tts", `"state":"start"`))
 	mint.until(t, isPlayback)
@@ -391,7 +391,7 @@ func TestWSCallStopsPlaybackAndExcludesNoteTail(t *testing.T) {
 		t.Fatal("callee received stale note or TTS PCM")
 	}
 	b.ws.mu.Lock()
-	d := b.ws.devices[callCake]
+	d := b.ws.audioTerminal(callCake)
 	framesIn, framesOut := d.callFramesIn, d.callFramesOut
 	b.ws.mu.Unlock()
 	if framesIn != 1 || framesOut != 1 {
@@ -413,7 +413,7 @@ func TestWSCallGlareAndAudioFailure(t *testing.T) {
 	}
 	checkCallStates(t, b.ws, callActive, callActive)
 	b.ws.mu.Lock()
-	id := b.ws.devices[callMint].callID
+	id := b.ws.audioTerminal(callMint).callID
 	b.ws.mu.Unlock()
 	mint.json(t, object{"ev": "call_end", "call": id + 1})
 	mint.barrier(t)
@@ -426,11 +426,11 @@ func TestWSCallGlareAndAudioFailure(t *testing.T) {
 }
 
 func TestCallPCMBackpressure(t *testing.T) {
-	h := &wsHub{devices: make(map[string]*wsDevice)}
-	makeSide := func(id, peer string) *wsDevice {
-		d := &wsDevice{key: id, callPeer: peer, callID: 1, callState: callActive,
+	h := &wsHub{terminals: make(map[string]*wsTerminal)}
+	makeSide := func(id, peer string) *wsTerminal {
+		d := &wsTerminal{key: id, id: id, callPeer: peer, callID: 1, callState: callActive,
 			client: &wsClient{ctx: context.Background(), out: make(chan wsFrame, 8)}}
-		h.devices[id] = d
+		h.terminals[id] = d
 		return d
 	}
 	caller := makeSide(callCake, callMint)

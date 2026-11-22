@@ -15,9 +15,9 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		h.mu.Unlock()
 		return
 	}
-	if c.scope != nil && ev.DeviceID != "" && ev.DeviceID != c.scope.ID {
+	if c.scope != nil && ev.CompanionID != "" && !strings.EqualFold(ev.CompanionID, c.scope.ID) {
 		h.mu.Unlock()
-		c.enqueue(textFrame(object{"op": "error", "status": 403, "error": "Device out of scope"}))
+		c.enqueue(textFrame(object{"op": "error", "status": 403, "error": "Companion out of scope"}))
 		return
 	}
 	now := time.Now()
@@ -29,25 +29,40 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		return
 	}
 	defer h.mu.Unlock()
-	d := c.device
+	d := c.terminal
 	if d == nil {
 		if ev.Event == "wake_word" && c.role == "web" && c.scope == nil && ev.Enabled != nil {
-			if target := h.devices[strings.ToLower(ev.DeviceID)]; target != nil && h.active(target) && target.caps.WakeWord &&
+			tid := strings.ToLower(ev.TerminalID)
+			if tid == "" {
+				tid = strings.ToLower(ev.DeviceID)
+			}
+			if target := h.terminals[tid]; target != nil && h.active(target) && target.caps.WakeWord &&
 				target.client.role == "device" {
 				target.wakeWord = *ev.Enabled
-				enabled := h.parentRefresh(target.key, now) == "" && target.wakeWord
+				enabled := (target.companionID == "" || h.parentRefresh(target.companionID, now) == "") && target.wakeWord
 				h.pushWakeWord(target, enabled)
-				c.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "device_id": target.who.DeviceID}))
+				c.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "terminal_id": target.id}))
 			}
 			return
 		}
 		if ev.Event == "watch" && c.role == "web" {
-			if ev.DeviceID == "" {
+			watchID := strings.ToLower(ev.CompanionID)
+			if watchID == "" {
+				watchID = strings.ToLower(ev.TerminalID)
+			}
+			if watchID == "" {
+				watchID = strings.ToLower(ev.DeviceID)
+			}
+			if watchID == "" {
 				c.watch = ""
 				return
 			}
-			c.watch = strings.ToLower(ev.DeviceID)
-			if d := h.devices[c.watch]; d != nil && h.active(d) {
+			c.watch = watchID
+			d := h.terminals[c.watch]
+			if d == nil || !h.active(d) {
+				d = h.audioTerminal(c.watch)
+			}
+			if d != nil && h.active(d) {
 				if d.svgWire.data != nil {
 					c.enqueue(d.svgWire)
 				}
@@ -59,9 +74,18 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 			}
 			return
 		}
-		d = h.devices[c.watch]
-		if ev.Event == "text" && ev.DeviceID != "" {
-			d = h.devices[strings.ToLower(ev.DeviceID)]
+		d = h.terminals[c.watch]
+		if d == nil || !h.active(d) {
+			d = h.audioTerminal(c.watch)
+		}
+		if ev.Event == "text" {
+			if ev.TerminalID != "" {
+				d = h.terminals[strings.ToLower(ev.TerminalID)]
+			} else if ev.CompanionID != "" {
+				d = h.audioTerminal(strings.ToLower(ev.CompanionID))
+			} else if ev.DeviceID != "" {
+				d = h.terminals[strings.ToLower(ev.DeviceID)]
+			}
 		}
 		if ev.Event != "tap" && ev.Event != "drag" && ev.Event != "up" && ev.Event != "text" {
 			return
@@ -70,14 +94,14 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 	if d == nil || !h.active(d) {
 		return
 	}
-	if c.scope != nil && ev.Event == "watch" && ev.DeviceID == c.scope.ID {
+	if c.scope != nil && ev.Event == "watch" && strings.EqualFold(ev.CompanionID, c.scope.ID) {
 		if d.svgWire.data != nil {
 			c.enqueue(d.svgWire)
 		}
 		return
 	}
 	native := c.role == "device"
-	if h.parentRefresh(d.key, now) != "" {
+	if d.companionID != "" && h.parentRefresh(d.companionID, now) != "" {
 		switch ev.Event {
 		case "status", "tts_ack", "rec_end":
 		case "rec_start", "rec_request":
@@ -120,11 +144,11 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 			h.pointer(d, ev, now, native)
 		}
 	case "call":
-		if target, ok := recordTarget(ev.Target); ok && target != "" && c.device == d {
+		if target, ok := recordTarget(ev.Target); ok && target != "" && c.terminal == d {
 			h.startCall(d, target)
 		}
 	case "call_end":
-		if c.device == d && ev.Call != 0 && d.callID == ev.Call {
+		if c.terminal == d && ev.Call != 0 && d.callID == ev.Call {
 			h.endCall(d, "audio unavailable")
 		}
 	case "rec_start":
@@ -136,7 +160,7 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 			}
 		}
 	case "rec_request": // A virtual web cat uses the same bridge-owned handshake as a board.
-		if c.role == "web" && c.device == d && h.bridgeEndpoint(d) && !d.recording.active() {
+		if c.role == "web" && c.terminal == d && h.bridgeEndpoint(d) && !d.recording.active() {
 			if target, ok := recordTarget(ev.Target); ok && target == "" {
 				h.startRecording(d, target, now, true)
 			}
@@ -158,7 +182,7 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 		text := strings.TrimSpace(ev.Text)
 		if ok && target != "" && text != "" && len(text) <= 4096 {
 			h.startTurn(d, now, false, "intercom", func(ctx context.Context, id uint64) {
-				others, err := h.peerSnapshot(d.who.DeviceID)
+				others, err := h.peerSnapshot(d.companionID)
 				if err != nil || ctx.Err() != nil {
 					h.turnError(d, id, "Could not find nearby companions.")
 					return
@@ -180,7 +204,7 @@ func (h *wsHub) handle(c *wsClient, ev wsEvent) {
 	}
 }
 
-func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
+func (h *wsHub) pointer(d *wsTerminal, ev wsEvent, now time.Time, native bool) {
 	width, height := screenSize, screenSize
 	if native {
 		width, height = d.screen.width, d.screen.height
@@ -297,7 +321,7 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 		h.render(d, now, false)
 	case "voice-select":
 		h.mu.Unlock()
-		err := h.saveVoice(d.who.DeviceID, a.value)
+		err := h.saveVoice(d.companionID, a.value)
 		h.mu.Lock()
 		if err == nil && h.active(d) {
 			h.chime(d, "tap")
@@ -320,7 +344,7 @@ func (h *wsHub) pointer(d *wsDevice, ev wsEvent, now time.Time, native bool) {
 	}
 }
 
-func (d *wsDevice) acceptPointerRevision(action string, rev *uint16) bool {
+func (d *wsTerminal) acceptPointerRevision(action string, rev *uint16) bool {
 	switch action {
 	case "stop", "rec-cancel", "rec-send", "rec-continue", "listen", "reply", "call-peer",
 		"call-answer", "call-decline", "call-hangup", "call-mute", "build-cancel":
@@ -335,15 +359,15 @@ func (d *wsDevice) acceptPointerRevision(action string, rev *uint16) bool {
 
 const stopTapWindow = 2500 * time.Millisecond
 
-func (d *wsDevice) resetStopTaps() {
+func (d *wsTerminal) resetStopTaps() {
 	d.stopTaps, d.stopTapAt = 0, time.Time{}
 }
 
-func (d *wsDevice) stopTapsExpired(now time.Time) bool {
+func (d *wsTerminal) stopTapsExpired(now time.Time) bool {
 	return d.stopTaps != 0 && now.Sub(d.stopTapAt) > stopTapWindow
 }
 
-func (h *wsHub) tapStop(d *wsDevice, now time.Time) {
+func (h *wsHub) tapStop(d *wsTerminal, now time.Time) {
 	if d.busy && !d.ttsStarted && !d.awaitAck {
 		if d.stopTapsExpired(now) {
 			d.resetStopTaps()
@@ -364,14 +388,14 @@ func (h *wsHub) tapStop(d *wsDevice, now time.Time) {
 	h.chime(d, "cancel")
 }
 
-func (h *wsHub) leaveScene(d *wsDevice, now time.Time, reason string) {
+func (h *wsHub) leaveScene(d *wsTerminal, now time.Time, reason string) {
 	h.cancelTurn(d, reason)
 	h.stopPlayback(d, true)
 	h.clearView(d)
 	h.render(d, now, true)
 }
 
-func (h *wsHub) clearView(d *wsDevice) {
+func (h *wsHub) clearView(d *wsTerminal) {
 	d.appGen++
 	h.dropApp(d)
 	d.drawer, d.view, d.pending, d.card = "", nil, nil, nil
@@ -399,8 +423,8 @@ func (m *menuContent) scene(drawer string, page int) sceneView {
 }
 
 // The placeholder identifies this request even if another client moves the menu while SQL runs.
-func (h *wsHub) loadMenu(d *wsDevice) {
-	drawer, id, name := d.drawer, d.who.DeviceID, d.companion.Name
+func (h *wsHub) loadMenu(d *wsTerminal) {
+	drawer, id, name := d.drawer, d.companionID, d.companion.Name
 	pending := &menuContent{notice: "Loading…"}
 	d.menuData = pending
 	h.mu.Unlock()
@@ -440,7 +464,7 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 		}
 		return m, err
 	case drawerMemories:
-		entries, err := b.memoryEntries(ctx, id)
+		entries, err := b.memoryEntries(ctx, "companion:"+id)
 		m.notice = "No memories yet"
 		for _, entry := range entries {
 			raw := entry["value"].(json.RawMessage)
@@ -473,18 +497,18 @@ func menuText(text string) string {
 	return shortText(text, len(text), false)
 }
 
-func (d *wsDevice) canLaunchMenuGame(menu *menuContent) bool {
+func (d *wsTerminal) canLaunchMenuGame(menu *menuContent) bool {
 	return d.drawer == drawerGames && d.menuData == menu && d.pose.mood == "idle"
 }
 
-func (h *wsHub) launchMenuGame(d *wsDevice, name string) {
+func (h *wsHub) launchMenuGame(d *wsTerminal, name string) {
 	menu := d.menuData
-	if menu == nil || !d.canLaunchMenuGame(menu) {
+	if menu == nil || !d.canLaunchMenuGame(menu) || d.companionID == "" {
 		return
 	}
 	h.chime(d, "tap")
 	h.mu.Unlock()
-	_, err := h.b.runSavedApp(d.client.ctx, d.who.DeviceID, name, menu)
+	_, err := h.b.runSavedApp(d.client.ctx, d.companionID, name, menu)
 	h.mu.Lock()
 	if err != nil && h.active(d) && d.canLaunchMenuGame(menu) {
 		menu.notice = "Game unavailable"

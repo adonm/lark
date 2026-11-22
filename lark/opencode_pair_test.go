@@ -31,7 +31,7 @@ func TestPairOpenCodeOnlyOnAuthenticatedLAN(t *testing.T) {
 	b := &larkServer{token: "admin", oc: &openCode{upstream: api}, pairPort: 49376}
 	lan := httptest.NewServer(b)
 	defer lan.Close()
-	scoped := httptest.NewServer(b.scoped(virtualClient{ID: "virt-12345678"}, "cat"))
+	scoped := httptest.NewServer(b.scoped(companionState{ID: "cake"}, "cat"))
 	defer scoped.Close()
 	const path = "/api/opencode/pair"
 	for _, tc := range []struct {

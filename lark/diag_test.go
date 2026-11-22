@@ -99,7 +99,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		"free_heap": 65536, "min_free_heap": 32768, "free_psram": 6291456, "uptime_s": 320, "volume": 70})
 	board.until(t, isDisplay)
 	b.ws.mu.Lock()
-	device := b.ws.devices[id]
+	device := b.ws.terminals[id]
 	probe := device.client.ping(time.Now().Add(-12 * time.Millisecond))
 	b.ws.mu.Unlock()
 	board.write(t, maskedFrame(wsPong, true, []byte("not mine")))
@@ -116,10 +116,10 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	if err := json.Unmarshal(raw, &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Generated.IsZero() || len(report.Devices) != 1 || report.Turns == nil || report.Latency["render_ms"].Count == 0 {
+	if report.Generated.IsZero() || len(report.Terminals) != 1 || report.Turns == nil || report.Latency["render_ms"].Count == 0 {
 		t.Fatalf("invalid diagnostics response: %s", raw)
 	}
-	d := report.Devices[0]
+	d := report.Terminals[0]
 	if !d.WS || d.Board != "esp-box-3" || d.Firmware != "0.8.4" || d.RTT == nil || *d.RTT < 12 ||
 		d.CPU == nil || *d.CPU != 27 || *d.WiFi != -60 || *d.FreeHeap != 65536 || *d.MinHeap != 32768 || *d.FreePSRAM != 6291456 ||
 		*d.HasBattery || d.DeviceVol == nil || *d.DeviceVol != 70 || d.Frame.Bytes >= d.Frame.RawBytes || (d.Frame.Codec != "RLE565" && d.Frame.Codec != "LZ4") {
@@ -136,7 +136,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	if err := json.Unmarshal(raw, &report); err != nil {
 		t.Fatal(err)
 	}
-	d = report.Devices[0]
+	d = report.Terminals[0]
 	if d.LastFrameRev == nil || *d.LastFrameRev != 65535 || d.DisplayFlushMS == nil || *d.DisplayFlushMS != 12 ||
 		d.InputDrops == nil || *d.InputDrops != 0 || d.AudioUnderruns == nil || *d.AudioUnderruns != 2 ||
 		d.AudioDrops == nil || *d.AudioDrops != 3 {
@@ -299,15 +299,15 @@ func stopTestHarness(t *testing.T, id string) (*larkServer, string, <-chan strin
 }
 
 func TestThinkingStopRequiresThreeTaps(t *testing.T) {
-	const id = "lark-stop"
-	b, base, interrupts := stopTestHarness(t, id)
+	const id = "vocat-stop"
+	b, base, interrupts := stopTestHarness(t, "cake")
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
 	mirror.watch(t, id)
 	cancelled := make(chan bool, 1)
 	b.ws.mu.Lock()
-	d := b.ws.devices[id]
+	d := b.ws.terminals[id]
 	now := time.Now()
 	b.ws.startTurn(d, now, false, "typed", func(ctx context.Context, _ uint64) {
 		<-ctx.Done()
@@ -378,7 +378,7 @@ func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
 	stream := newAudioStream()
 	stream.append([]byte{1, 0})
 	b.ws.mu.Lock()
-	d := b.ws.devices[id]
+	d := b.ws.terminals[id]
 	b.ws.startTurn(d, time.Now(), false, "typed", func(ctx context.Context, _ uint64) { <-ctx.Done() })
 	turn := d.turn
 	b.ws.mu.Unlock()

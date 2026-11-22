@@ -106,7 +106,7 @@ func TestWSGamesMenuLaunchesOnBoard(t *testing.T) {
 }
 
 func TestWSMenuListDetails(t *testing.T) {
-	const id = "phone-20af"
+	const id = "cake"
 	const body = "A long note starts here and finishes with a tiny blue kite."
 	for _, tc := range []struct {
 		drawer, empty, first, label string
@@ -118,11 +118,11 @@ func TestWSMenuListDetails(t *testing.T) {
 				if i == 3 {
 					value = body
 				}
-				if _, err := b.db.setMemory(t.Context(), memoryWrite{id, fmt.Sprintf("memory-%d", i), strconv.Quote(value)}, nil); err != nil {
+				if _, err := b.db.setMemory(t.Context(), memoryWrite{"companion:" + id, fmt.Sprintf("memory-%d", i), strconv.Quote(value)}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if _, err := b.db.setMemory(t.Context(), memoryWrite{"phone-20ff", "private", `"Not this cat's memory"`}, nil); err != nil {
+			if _, err := b.db.setMemory(t.Context(), memoryWrite{"companion:other", "private", `"Not this cat's memory"`}, nil); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -138,7 +138,7 @@ func TestWSMenuListDetails(t *testing.T) {
 				}
 				b.history.add(id, e)
 			}
-			b.history.add("phone-20ff", newChat("user", "", "Not this cat's message", "typed"))
+			b.history.add("other", newChat("user", "", "Not this cat's message", "typed"))
 		}},
 	} {
 		t.Run(tc.drawer, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 			menuFrame(t, web, "menu-games")
 			web.barrier(t)
 			b.ws.mu.Lock()
-			running := b.ws.devices[id].app != nil
+			running := b.ws.terminals[id].app != nil
 			b.ws.mu.Unlock()
 			if running {
 				t.Fatal("leaving Games didn't cancel the stale launch")

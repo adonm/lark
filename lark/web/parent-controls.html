@@ -6,12 +6,12 @@
       <button type="button" id="parent-signout" class="ghost">Sign out</button>
     </div>
   </div>
-  <label data-field for="parent-device">Companion or device
+  <label data-field for="parent-device">Companion
     <select id="parent-device" {{if not .Devices}}disabled{{end}}>
-      {{range .Devices}}<option value="{{.device_id}}" {{if eq .device_id $.Selected}}selected{{end}}>{{.character}} ({{.device_id}})</option>{{end}}
+      {{range .Devices}}<option value="{{.companion_id}}" {{if eq .companion_id $.Selected}}selected{{end}}>{{.name}} ({{.companion_id}})</option>{{end}}
     </select>
   </label>
-  <p id="no-devices" class="small" {{if .Devices}}hidden{{end}}>No companions or devices are registered.</p>
+  <p id="no-devices" class="small" {{if .Devices}}hidden{{end}}>No companions are registered.</p>
 </header>
 {{with .Usage}}
 <div id="parent-selected" class="parent-columns">

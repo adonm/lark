@@ -19,28 +19,27 @@ import (
 )
 
 type larkServer struct {
-	db        *larkDB
-	root      context.Context
-	token     string
-	peers     peers
-	stt       func(context.Context, []byte) (string, error)
-	endpoint  *endpointSettings
-	oc        *openCode
-	pairPort  int
-	worker    *synthWorker
-	voices    deviceVoices
-	clips     speechClips
-	audio     audioCache
-	ota       otaFile
-	box3OTA   otaFile
-	ws        *wsHub
-	virtual   *store[virtualClient]
-	tunnels   *tunnelManager
-	history   *chatHistory
-	timers    *timerManager
-	builders  *buildManager
-	portraits *portraitStore
-	diag      diagnostics
+	db              *larkDB
+	root            context.Context
+	token           string
+	terminals       *store[terminalRecord]
+	stt             func(context.Context, []byte) (string, error)
+	endpoint        *endpointSettings
+	oc              *openCode
+	pairPort        int
+	worker          *synthWorker
+	voices          companionVoices
+	clips           speechClips
+	audio           audioCache
+	ota             otaFile
+	box3OTA         otaFile
+	ws              *wsHub
+	tunnels         *tunnelManager
+	history         *chatHistory
+	timers          *timerManager
+	builders        *buildManager
+	portraits       *portraitStore
+	diag            diagnostics
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
 	companionTitles sync.Mutex
 
@@ -135,49 +134,27 @@ func jsonBody(r *http.Request) (object, error) {
 	return decodeObject(buf)
 }
 
-func deviceID(r *http.Request, obj object, required bool) (string, error) {
-	v, provided := obj["device_id"]
+func companionIDArg(r *http.Request, obj object, required bool) (string, error) {
+	v, provided := obj["companion_id"]
 	if !provided && !required {
-		v = "lark"
-		if values := r.Header.Values("X-Device-Id"); len(values) > 0 {
+		v = ""
+		if values := r.Header.Values("X-Companion-Id"); len(values) > 0 {
 			v = values[0]
 		}
 	}
-	id := str(v)
-	if !deviceIDRE.MatchString(id) {
-		return "", problem(400, "Invalid device ID")
+	id := strings.ToLower(strings.TrimSpace(str(v)))
+	if id == "" && !required {
+		return "", nil
+	}
+	if !validCompanionID(id) {
+		return "", problem(400, "Invalid companion ID")
 	}
 	return id, nil
 }
 
-func (b *larkServer) voiceFor(who peer) string {
-	return b.voices.get(who.DeviceID, b.voiceTheme(who))
-}
-
-func (b *larkServer) voiceTheme(who peer) string {
-	theme := deviceTheme(who.Character)
-	if v, ok := b.virtualByID(strings.ToLower(who.DeviceID)); ok {
-		return deviceTheme(v.Character)
-	}
-	if b.peers.store != nil {
-		if p, ok, _ := b.peers.get(who.DeviceID); ok {
-			return deviceTheme(p.Character)
-		}
-	}
-	return theme
-}
-
-func voiceDevice(path string) (string, bool) {
-	return deviceSettingID(path, "voice")
-}
-
-func deviceSettingID(path, setting string) (string, bool) {
-	suffix, ok := strings.CutPrefix(path, "/api/devices/")
-	if !ok {
-		return "", false
-	}
-	id, ok := strings.CutSuffix(suffix, "/"+setting)
-	return id, ok && deviceIDRE.MatchString(id)
+func (b *larkServer) voiceFor(companionID string) string {
+	c := b.companionFor(companionID)
+	return b.voices.resolve(c.Voice, companionTheme(c.Name))
 }
 
 func (b *larkServer) volumeAPI(r *http.Request, id string) (any, error) {
@@ -190,11 +167,11 @@ func (b *larkServer) volumeAPI(r *http.Request, id string) (any, error) {
 		return nil, problem(400, `Expected {"auto":true} or {"auto":false,"volume":0..100}`)
 	}
 	if b.ws == nil {
-		return nil, problem(503, "Device hub unavailable")
+		return nil, problem(503, "Terminal hub unavailable")
 	}
 	delete(args, "auto")
 	args["auto_volume"] = auto
-	return b.ws.mcpControl(r.Context(), id, args)
+	return b.ws.terminalVolumeControl(r.Context(), id, args)
 }
 
 func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
@@ -213,7 +190,7 @@ func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
 	if err := save(id, voice); err != nil {
 		return nil, err
 	}
-	return object{"device_id": id, "voice": voice}, nil
+	return object{"companion_id": id, "voice": voice}, nil
 }
 
 type answer struct {
@@ -238,11 +215,11 @@ type delivery struct {
 	sent, delivered, failed []string
 }
 
-func intercomConfirmation(target string, recipients []peer, sent, partial bool) (title, reply string) {
+func intercomConfirmation(target string, recipients []companionTarget, sent, partial bool) (title, reply string) {
 	if broadcast(target) {
 		target = "everyone"
 	} else if len(recipients) != 0 {
-		target = recipients[0].Character
+		target = recipients[0].Name
 	}
 	switch {
 	case !sent:
@@ -254,7 +231,7 @@ func intercomConfirmation(target string, recipients []peer, sent, partial bool) 
 	}
 }
 
-func (b *larkServer) intercomIntent(id, text string) ([]peer, *intercomMessage, error) {
+func (b *larkServer) intercomIntent(id, text string) ([]companionTarget, *intercomMessage, error) {
 	body := directBody(text)
 	if body == "" {
 		return nil, nil, nil
@@ -266,18 +243,18 @@ func (b *larkServer) intercomIntent(id, text string) ([]peer, *intercomMessage, 
 	return others, directMessage(others, body), nil
 }
 
-func (b *larkServer) relay(ctx context.Context, sender peer, others []peer, target, text string) (answer, error) {
+func (b *larkServer) relay(ctx context.Context, sender companionState, others []companionTarget, target, text string) (answer, error) {
 	recipients := b.intercomTargets(others, target)
 	d := b.deliver(ctx, sender, recipients, text, nil)
 	_, reply := intercomConfirmation(target, recipients, len(d.delivered) != 0, len(d.failed) != 0)
-	sid, err := b.oc.get(sender.DeviceID)
+	sid, err := b.oc.get(sender.ID)
 	if err != nil {
 		return answer{}, err
 	}
 	out := answer{Reply: reply, SessionID: sid}
 	start := time.Now()
 	if b.worker != nil && b.worker.ready.Load() {
-		if pcm, err := b.clips.get(ctx, b.worker, b.voiceFor(sender), reply); err == nil {
+		if pcm, err := b.clips.get(ctx, b.worker, b.voiceFor(sender.ID), reply); err == nil {
 			s := newAudioStream()
 			s.append(pcm)
 			s.finish(nil)
@@ -287,20 +264,20 @@ func (b *larkServer) relay(ctx context.Context, sender peer, others []peer, targ
 	return out, nil
 }
 
-func (b *larkServer) turn(ctx context.Context, sender peer, text string) (answer, error) {
+func (b *larkServer) turn(ctx context.Context, sender companionState, text string) (answer, error) {
 	const source = "typed"
 	if traceFrom(ctx) == nil {
-		ctx = b.traceTurn(ctx, sender.DeviceID, b.companionFor(sender).Name, source, time.Now())
+		ctx = b.traceTurn(ctx, sender.ID, sender.Name, source, time.Now())
 	}
-	others, direct, err := b.intercomIntent(sender.DeviceID, text)
+	others, direct, err := b.intercomIntent(sender.ID, text)
 	if err != nil {
 		return answer{}, err
 	}
 	if direct != nil {
-		b.chat(sender.DeviceID, newChat("user", "You", text, source), true)
+		b.chat(sender.ID, newChat("user", "You", text, source), true)
 		return b.relay(ctx, sender, others, direct.target, direct.text)
 	}
-	if reply, _, err := b.buildReply(ctx, sender, text); err != nil {
+	if reply, _, err := b.buildReply(ctx, sender.ID, text); err != nil {
 		return answer{}, err
 	} else if reply != "" {
 		out := answer{Reply: reply}
@@ -308,7 +285,7 @@ func (b *larkServer) turn(ctx context.Context, sender peer, text string) (answer
 			start := time.Now()
 			audioCtx, cancel := context.WithTimeout(ctx, ttsWait)
 			defer cancel()
-			speech := newSpeechTurn(audioCtx, cancel, w, b.voiceFor(sender), nil)
+			speech := newSpeechTurn(audioCtx, cancel, w, b.voiceFor(sender.ID), nil)
 			speech.complete([]string{reply})
 			b.attachAudio(ctx, &out, speech.stream, start)
 		}
@@ -342,9 +319,9 @@ type turnOptions struct {
 	publish func(*AudioStream, time.Time)
 }
 
-func turnPrompt(sender peer, web bool, source, text string, companion companionState) string {
+func turnPrompt(companionID string, web bool, source, text string, companion companionState) string {
 	kind := "hardware"
-	if web || webDeviceID(strings.ToLower(sender.DeviceID)) {
+	if web {
 		kind = "web"
 	}
 	extra := ""
@@ -354,14 +331,14 @@ func turnPrompt(sender peer, web bool, source, text string, companion companionS
 	if companion.Personality != "" {
 		extra += " · vibe: " + companion.Personality
 	}
-	return fmt.Sprintf("[%s (%s) · %s · %s%s]\n%s", companion.Name, sender.DeviceID, kind, source, extra, text)
+	return fmt.Sprintf("[%s (%s) · %s · %s%s]\n%s", companion.Name, companionID, kind, source, extra, text)
 }
 
 // Play plain prose as soon as the first PCM is ready; reconcile against the
 // authoritative reply before finishing the stream.
-func (b *larkServer) generateReply(ctx, audioBase context.Context, sender peer, text string, options turnOptions) (generatedReply, error) {
+func (b *larkServer) generateReply(ctx, audioBase context.Context, sender companionState, text string, options turnOptions) (generatedReply, error) {
 	if traceFrom(ctx) == nil {
-		ctx = b.traceTurn(ctx, sender.DeviceID, b.companionFor(sender).Name, options.source, time.Now())
+		ctx = b.traceTurn(ctx, sender.ID, sender.Name, options.source, time.Now())
 	}
 	makeSpeech := func(onFirst func(*AudioStream)) *speechTurn {
 		deadline, ok := ctx.Deadline()
@@ -369,7 +346,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender peer, 
 			deadline = time.Now().Add(turnTimeout)
 		}
 		audioCtx, cancel := context.WithDeadline(context.WithValue(audioBase, traceKey{}, traceFrom(ctx)), deadline)
-		return newSpeechTurn(audioCtx, cancel, b.worker, b.voiceFor(sender), onFirst)
+		return newSpeechTurn(audioCtx, cancel, b.worker, b.voiceFor(sender.ID), onFirst)
 	}
 	var mu sync.Mutex
 	var eager *speechTurn
@@ -413,15 +390,15 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender peer, 
 		drop(true)
 	}}
 	prepare := func() (string, string) {
-		companion := b.companionFor(sender)
-		return companion.Name, turnPrompt(sender, options.web, options.source, text, companion)
+		companion := b.companionFor(sender.ID)
+		return companion.Name, turnPrompt(sender.ID, options.web, options.source, text, companion)
 	}
-	raw, sid, err := b.oc.askPrepared(ctx, sender.DeviceID, prepare, pieces, options.source,
+	raw, sid, err := b.oc.askPrepared(ctx, sender.ID, prepare, pieces, options.source,
 		nil, func(entry chatEntry) {
 			if entry.Role == "assistant" {
-				entry.Sender = b.companionFor(sender).Name
+				entry.Sender = b.companionFor(sender.ID).Name
 			}
-			b.chat(sender.DeviceID, entry, true)
+			b.chat(sender.ID, entry, true)
 		})
 	mu.Lock()
 	defer mu.Unlock()
@@ -456,23 +433,18 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 	switch {
 	case path == "/api/parent":
 		return b.routeParent(w, r, "")
-	case strings.HasSuffix(path, "/parent"):
-		if id, ok := deviceSettingID(path, "parent"); ok {
-			return b.routeParent(w, r, id)
-		}
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/portraits/"):
 		return nil, b.servePortrait(w, r, path, "")
-	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/") ||
-		strings.HasPrefix(path, "/api/devices/") && strings.HasSuffix(path, "/companion"):
+	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/"):
 		return b.companionAPI(w, r, path)
+	case path == "/api/terminals" || strings.HasPrefix(path, "/api/terminals/"):
+		return b.terminalAPI(w, r, path)
 	case path == "/api/memory" || path == "/api/memory/scopes":
 		return b.memoryAPI(w, r, path)
 	case path == "/api/apps" || strings.HasPrefix(path, "/api/apps/"):
 		return b.appAPI(w, r, path)
 	case path == "/api/timers" || strings.HasPrefix(path, "/api/timers/"):
 		return b.timerAPI(w, r, path, "")
-	case path == "/api/virtual-clients" || strings.HasPrefix(path, "/api/virtual-clients/"):
-		return b.virtualAPI(w, r, path)
 	case path == "/api/tunnel/status" || path == "/api/tunnels" || strings.HasPrefix(path, "/api/tunnels/"):
 		return b.tunnelAPI(w, r, path)
 	case r.Method == http.MethodPost && path == "/api/chat":
@@ -490,7 +462,7 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			}
 			serveAppFile(w, "parent.html", "text/html; charset=utf-8")
 			return nil, nil
-		case b.servePhonePWA(w, r, path, nil, "") || serveApp(w, path):
+		case b.servePWA(w, r, path, nil, "") || serveApp(w, path):
 			return nil, nil
 		case path == "/ws" && b.ws != nil:
 			return nil, b.ws.serve(w, r)
@@ -503,18 +475,11 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			}
 			return object{"ok": true, "stt": b.stt != nil, "stt_engine": sttEngine,
 				"opencode": o, "tts": ready, "tts_engine": engine}, nil
-		case path == "/api/devices":
-			devices, err := b.deviceList()
-			return object{"devices": devices}, err
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
 		case path == "/api/scope":
-			b.setPhoneCookie(w)
+			b.setPWACookie(w)
 			return object{"scoped": false, "auto_volume": true, "voices": voiceCatalog}, nil
-		case strings.HasSuffix(path, "/messages"):
-			if id, ok := messagesDevice(path); ok {
-				return b.messages(r, id)
-			}
 		case strings.HasPrefix(path, "/api/audio/"):
 			return nil, b.audio.ServeAudio(w, r, strings.TrimPrefix(path, "/api/audio/"))
 		case path == "/ota/version.json" || path == "/ota/latest.bin":
@@ -532,15 +497,6 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 		if path == "/api/opencode/compact" {
 			return b.compactAPI(w, r)
 		}
-		if id, ok := voiceDevice(path); ok {
-			return b.voiceAPI(r, id)
-		}
-		if id, ok := deviceSettingID(path, "volume"); ok {
-			return b.volumeAPI(r, id)
-		}
-		if id, ok := deviceSettingID(path, "reset"); ok {
-			return b.resetDevice(r, id)
-		}
 		if path == "/api/tts" {
 			obj, err := jsonBody(r)
 			if err != nil {
@@ -553,18 +509,22 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			if b.worker == nil || !b.worker.ready.Load() {
 				return nil, problem(503, "TTS unavailable")
 			}
-			id, err := deviceID(r, obj, false)
+			id, err := companionIDArg(r, obj, false)
 			if err != nil {
 				return nil, err
 			}
-			if err := b.parentAllowed(id); err != nil {
-				return nil, err
+			if id != "" {
+				if err := b.parentAllowed(id); err != nil {
+					return nil, err
+				}
 			}
-			who, _ := b.lookupDevice(id)
-			who.DeviceID = id
+			voice := b.voices.defaultFor("")
+			if id != "" {
+				voice = b.voiceFor(id)
+			}
 			ctx, cancel := context.WithTimeout(ctx, ttsWait)
 			defer cancel()
-			pcm, err := b.worker.synthesize(ctx, b.voiceFor(who), text)
+			pcm, err := b.worker.synthesize(ctx, voice, text)
 			if err != nil {
 				return nil, problem(502, "TTS synthesis failed")
 			}

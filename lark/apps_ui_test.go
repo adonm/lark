@@ -152,14 +152,14 @@ func TestAppUIPagedTextRawTaps(t *testing.T) {
 	board.helloV2(t, id, "Reader")
 	const code = `app = ui.pagedText({title:"Story",pages:["First",{title:"Second & <Last>",text:"Last"}],page:-3,fontSize:99});
 		chime = () => { throw new Error("broken user sound"); };`
-	out := toolTest(t, base, "app", object{"devices": id, "code": code}, false)
+	out := toolTest(t, base, "app", object{"companions": "reader", "code": code}, false)
 	if _, warned := out["layout_warnings"]; warned || !slices.Equal(out["hit_ids"].([]any), []any{exitNode, "next"}) {
 		t.Fatal(out)
 	}
 	board.until(t, isDisplay)
 	checkPage := func(want string) {
 		t.Helper()
-		active, _ := stateMe(t, base, id)["active_app"].(object)
+		active, _ := stateMe(t, base, "reader")["active_app"].(object)
 		state, _ := active["state"].(object)
 		if state["page"] != json.Number(want) {
 			t.Fatalf("wanted page %s, got %v", want, active)
@@ -179,7 +179,7 @@ func TestAppUIPagedTextRawTaps(t *testing.T) {
 	}
 	board.json(t, object{"ev": "tap", "x": 180, "y": 320})
 	board.until(t, isDisplay)
-	if active := stateMe(t, base, id)["active_app"]; active != nil {
+	if active := stateMe(t, base, "reader")["active_app"]; active != nil {
 		t.Fatalf("Home did not exit the reader: %v", active)
 	}
 

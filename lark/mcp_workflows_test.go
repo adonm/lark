@@ -12,15 +12,15 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "lark-timer-edit"
+	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Cake")
-	timer := patchTimerTest(t, base, object{"device_id": id, "in_seconds": 60, "label": "First", "chime": "tap", "say": "Ready", "notes": "C5:150"}, false)
+	board.helloV2(t, "vocat-0001", "Cake")
+	timer := patchTimerTest(t, base, object{"companion_id": id, "in_seconds": 60, "label": "First", "chime": "tap", "say": "Ready", "notes": "C5:150"}, false)
 	timerID := str(timer["id"])
 	b.timers.mu.Lock()
 	old := b.timers.handles[timerID]
 	b.timers.mu.Unlock()
-	got := patchTimerTest(t, base, object{"device_id": id, "id": timerID, "op": "update", "in_seconds": 120, "label": "Later", "say": "", "notes": []string{}}, false)
+	got := patchTimerTest(t, base, object{"companion_id": id, "id": timerID, "op": "update", "in_seconds": 120, "label": "Later", "say": "", "notes": []string{}}, false)
 	if got["fire_at"] == timer["fire_at"] || got["created_at"] != timer["created_at"] || got["id"] != timerID ||
 		got["label"] != "Later" || got["chime"] != "tap" || got["say"] != "" || len(got["notes"].([]any)) != 0 {
 		t.Fatal(got)
@@ -28,9 +28,9 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 	if _, claimed := b.timers.claim(timerID, old); claimed {
 		t.Fatal("a stale callback claimed the rescheduled timer")
 	}
-	patchTimerTest(t, base, object{"device_id": "another-cat", "id": timerID, "op": "update", "label": "Wrong owner"}, true)
-	patchTimerTest(t, base, object{"device_id": id, "id": timerID, "op": "update", "app": "missing"}, true)
-	read := toolTest(t, base, "state", object{"device_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
+	patchTimerTest(t, base, object{"companion_id": "another-cat", "id": timerID, "op": "update", "label": "Wrong owner"}, true)
+	patchTimerTest(t, base, object{"companion_id": id, "id": timerID, "op": "update", "app": "missing"}, true)
+	read := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
 	if len(read) != 1 || read[0].(object)["label"] != "Later" || read[0].(object)["created_at"] != timer["created_at"] {
 		t.Fatal(read)
 	}
@@ -38,25 +38,25 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 
 func TestMCPHistoryCursor(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "lark-history-page"
+	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Cake")
+	board.helloV2(t, "vocat-0002", "Cake")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, msg := range []string{"same-a", "same-b", "same-c"} {
 		b.history.add(id, chatEntry{ID: msg, Sender: "User", Role: "user", Text: msg, Source: "typed", Timestamp: now})
 	}
-	first := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages"}, "messages_limit": 2}, false)
+	first := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"messages"}, "messages_limit": 2}, false)
 	list := first["messages"].([]any)
 	if len(list) != 2 || list[0].(object)["id"] != "same-b" || list[1].(object)["id"] != "same-c" || first["messages_has_more"] != true {
 		t.Fatal(first)
 	}
-	next := toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages"},
+	next := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"messages"},
 		"messages_limit": 2, "messages_cursor": first["messages_next_cursor"]}, false)
 	list = next["messages"].([]any)
 	if len(list) != 1 || list[0].(object)["id"] != "same-a" || next["messages_has_more"] != false || next["messages_next_cursor"] != nil {
 		t.Fatal(next)
 	}
-	toolTest(t, base, "state", object{"device_id": id, "include": []string{"messages"},
+	toolTest(t, base, "state", object{"companion_id": id, "include": []string{"messages"},
 		"messages_cursor": object{"before_ts": now.UnixMilli()}}, true)
 }
 
@@ -64,14 +64,14 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	cake := callClient(t, b, base, callCake, "Cake")
 	mint := callClient(t, b, base, callMint, "Mint")
-	const speaker = "lark-speaker"
+	const speaker = "speaker"
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, speaker, "Speaker")
-	device := func(id string) object { return stateMe(t, base, id)["device"].(object) }
+	board.helloV2(t, "vocat-0003", "Speaker")
+	device := func(id string) object { return stateMe(t, base, id)["companion"].(object) }
 	start := toolTest(t, base, "emit", object{"to": callMint, "call": object{"from": callCake}}, false)
 	call := start["call"].(object)
 	callID := call["id"].(json.Number)
-	if d := device(callMint); d["can_call"] != true || d["call"].(object)["peer_device_id"] != callCake ||
+	if d := device(callMint); d["can_call"] != true || d["call"].(object)["peer_companion_id"] != callCake ||
 		d["call"].(object)["direction"] != "incoming" || d["call"].(object)["state"] != "ringing" {
 		t.Fatal(d)
 	}
@@ -93,7 +93,7 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 	check := map[string]string{}
 	for _, item := range result["receipts"].([]any) {
 		r := item.(object)
-		check[str(r["action"])+"/"+str(r["device_id"])] = str(r["status"])
+		check[str(r["action"])+"/"+str(r["companion_id"])] = str(r["status"])
 	}
 	if result["played"] != true || check["chime/"+speaker] != "queued" || check["chime/"+callMint] != "skipped" ||
 		check["intercom/"+speaker] != "queued" || check["intercom/"+callMint] != "skipped" {
@@ -116,7 +116,7 @@ func TestMCPCallStatusHangupAndEmitReceipts(t *testing.T) {
 
 func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "lark-face-parts"
+	const id = "cake"
 	c := blankCompanion()
 	c.Name, c.Configured = "Cake", true
 	c.FaceSVG = defaultFaceArtwork(c.FaceBG, c.MarkColor, c.AccentColor, c.Configured, true)
@@ -132,9 +132,9 @@ func TestMCPFacePartEditsAndFullSVGFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Cake")
+	board.helloV2(t, "vocat-0004", "Cake")
 	patch := func(edit object, fail bool) object {
-		return toolTest(t, base, "patch", object{"device_id": id, "companion": edit}, fail)
+		return toolTest(t, base, "patch", object{"companion_id": id, "companion": edit}, fail)
 	}
 	replaced := []object{{"part": "eyes", "pose": "talk", "svg": `<circle cx="112" cy="141" r="11" fill="#ABCDEF"/>`}}
 	out := patch(object{"face_edits": replaced}, false)

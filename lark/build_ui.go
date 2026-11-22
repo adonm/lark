@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func (b *larkServer) buildReply(ctx context.Context, who peer, text string) (reply, job string, err error) {
+func (b *larkServer) buildReply(ctx context.Context, companionID, text string) (reply, job string, err error) {
 	if b.builders == nil {
 		return "", "", nil
 	}
@@ -15,7 +15,7 @@ func (b *larkServer) buildReply(ctx context.Context, who peer, text string) (rep
 	if intent.kind == "" {
 		return "", "", nil
 	}
-	if err = b.parentAllowed(who.DeviceID); err != nil {
+	if err = b.parentAllowed(companionID); err != nil {
 		return "", "", err
 	}
 	if err = ctx.Err(); err != nil {
@@ -29,7 +29,7 @@ func (b *larkServer) buildReply(ctx context.Context, who peer, text string) (rep
 	case "clarify-face":
 		reply = "What would you like me to change about my face?"
 	case "cancel":
-		cancelled, err := b.builders.cancel(ctx, who.DeviceID, "")
+		cancelled, err := b.builders.cancel(ctx, companionID, "")
 		switch {
 		case err != nil:
 			reply = "I couldn't cancel the build."
@@ -39,7 +39,7 @@ func (b *larkServer) buildReply(ctx context.Context, who peer, text string) (rep
 			reply = "There isn't a build to cancel."
 		}
 	default:
-		id, err := b.builders.enqueue(ctx, who, intent, text)
+		id, err := b.builders.enqueue(ctx, companionID, intent, text)
 		var clientError *apiError
 		switch {
 		case ctx.Err() != nil:
@@ -69,18 +69,18 @@ func (b *larkServer) buildChat(id string, entries ...chatEntry) {
 	}
 }
 
-func (b *larkServer) deliverOfflineBuildReply(ctx context.Context, who peer, text, reply, source string) error {
+func (b *larkServer) deliverOfflineBuildReply(ctx context.Context, who companionState, text, reply, source string) error {
 	if h := b.ws; h != nil {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		if r := h.parentRefresh(strings.ToLower(who.DeviceID), time.Now()); r != "" {
+		if r := h.parentRefresh(strings.ToLower(who.ID), time.Now()); r != "" {
 			return r.err()
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	b.buildChat(who.DeviceID, newChat("user", "You", text, source), newChat("companion", b.companionFor(who).Name, reply, source))
+	b.buildChat(who.ID, newChat("user", "You", text, source), newChat("companion", who.Name, reply, source))
 	return nil
 }
 
@@ -93,17 +93,19 @@ func buildingScene(id string) sceneView {
 	return view
 }
 
-func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsDevice, turn uint64, text, source, reply, job string) {
+func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsTerminal, turn uint64, text, source, reply, job string) {
 	view := noticeScene("Build", reply)
 	if job != "" {
 		view = buildingScene(job)
 	}
 	h.mu.Lock()
-	allowed := h.active(d) && turn == d.turn && h.parentRefresh(d.key, time.Now()) == "" && ctx.Err() == nil
+	allowed := h.active(d) && turn == d.turn && d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) == "" && ctx.Err() == nil
 	if allowed {
-		h.b.buildChat(d.who.DeviceID, newChat("user", "You", text, source), newChat("companion", d.companion.Name, reply, source))
-		d.card = &view
-		h.render(d, time.Now(), false)
+		h.b.buildChat(d.companionID, newChat("user", "You", text, source), newChat("companion", d.companion.Name, reply, source))
+		for _, td := range h.terminalsFor(d.companionID) {
+			td.card = &view
+			h.render(td, time.Now(), false)
+		}
 	}
 	h.mu.Unlock()
 	if allowed {
@@ -115,8 +117,8 @@ func (h *wsHub) buildAcknowledgement(ctx context.Context, d *wsDevice, turn uint
 
 func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	h.mu.Lock()
-	d := h.devices[job.device]
-	if d == nil || !h.active(d) || h.parentRefresh(d.key, time.Now()) != "" ||
+	d := h.audioTerminal(job.device)
+	if d == nil || !h.active(d) || h.parentRefresh(d.companionID, time.Now()) != "" ||
 		d.announcing || d.busy || d.queuedVoice != nil || d.recording.active() || d.callState != callNone ||
 		d.stopAudio != nil || d.awaitAck || d.asleep || d.drawer != "" || d.card != nil && d.card.build != job.id {
 		h.mu.Unlock()
@@ -138,30 +140,34 @@ func (h *wsHub) announceBuild(ctx context.Context, job buildJob) {
 	view := messageScene(title, title, job.result, d.companion)
 	view.duringTurn = true
 	view.control(bounds{129, 218, 102, 48}, tile{id: "build-done", label: "Done", action: sceneAction{"dismiss", ""}, colors: answerPalette})
-	d.card = &view
 	now := time.Now()
 	d.last = now
 	h.speakLocal(d, job.result)
-	h.render(d, now, false)
+	for _, td := range h.terminalsFor(d.companionID) {
+		td.card = &view
+		h.render(td, now, false)
+	}
 	entry := newChat("card", d.companion.Name, job.result, "builder")
 	entry.SceneTitle = title
 	h.b.buildChat(job.device, entry)
 	h.mu.Unlock()
 }
 
-func (h *wsHub) cancelBuildCard(d *wsDevice, id string) {
+func (h *wsHub) cancelBuildCard(d *wsTerminal, id string) {
 	if h.b.builders == nil || d.card == nil || d.card.build != id {
 		return
 	}
 	card := d.card
 	h.mu.Unlock()
-	cancelled, _ := h.b.builders.cancel(d.client.ctx, d.who.DeviceID, id)
+	cancelled, _ := h.b.builders.cancel(d.client.ctx, d.companionID, id)
 	h.mu.Lock()
 	if cancelled && h.active(d) && d.card == card {
 		view := messageScene("Build cancelled", "Build cancelled", "", d.companion)
 		view.duringTurn = true
 		view.control(bounds{129, 218, 102, 48}, tile{id: "build-done", label: "Done", action: sceneAction{"dismiss", ""}, colors: answerPalette})
-		d.card = &view
-		h.render(d, time.Now(), false)
+		for _, td := range h.terminalsFor(d.companionID) {
+			td.card = &view
+			h.render(td, time.Now(), false)
+		}
 	}
 }

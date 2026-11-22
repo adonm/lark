@@ -52,13 +52,13 @@ func findTunnelCLI(home string) string {
 }
 
 type tunnelRecord struct {
-	DeviceID  string `json:"device_id"`
-	RouteName string `json:"route_name"`
-	URL       string `json:"url"`
-	LocalPort int    `json:"local_port"`
-	Token     string `json:"scoped_token"`
-	Profile   string `json:"profile"`
-	CreatedAt string `json:"created_at,omitempty"`
+	CompanionID string `json:"companion_id"`
+	RouteName   string `json:"route_name"`
+	URL         string `json:"url"`
+	LocalPort   int    `json:"local_port"`
+	Token       string `json:"scoped_token"`
+	Profile     string `json:"profile"`
+	CreatedAt   string `json:"created_at,omitempty"`
 }
 
 var (
@@ -81,7 +81,7 @@ func routeAddress(raw string) (string, string) {
 }
 
 func (v tunnelRecord) public(active bool) object {
-	return object{"device_id": v.DeviceID, "route_name": v.RouteName, "url": v.URL,
+	return object{"companion_id": v.CompanionID, "route_name": v.RouteName, "url": v.URL,
 		"share_url": v.URL + "/app?token=" + v.Token, "local_port": v.LocalPort, "active": active}
 }
 
@@ -108,8 +108,8 @@ func (m *tunnelManager) restore() {
 		return
 	}
 	for id, record := range data {
-		if v, ok := m.b.virtualByID(id); ok {
-			if scope, _, err := m.listen(v, record.Token, record.LocalPort); err == nil {
+		if c, ok := m.b.companionByID(id); ok {
+			if scope, _, err := m.listen(c, record.Token, record.LocalPort); err == nil {
 				m.live[id] = scope
 			} else {
 				log.Printf("Lark could not restore scoped listener for %s", id)
@@ -126,7 +126,7 @@ func (m *tunnelManager) info(id string) object {
 	defer m.mu.Unlock()
 	if v, ok, _ := m.store.get(id); ok {
 		out := v.public(m.live[id] != nil)
-		delete(out, "device_id")
+		delete(out, "companion_id")
 		delete(out, "local_port")
 		return out
 	}
@@ -180,16 +180,16 @@ func (b *larkServer) tunnelAPI(w http.ResponseWriter, r *http.Request, path stri
 		}
 		out := make([]object, 0, len(data))
 		for _, v := range data {
-			out = append(out, v.public(m.live[v.DeviceID] != nil))
+			out = append(out, v.public(m.live[v.CompanionID] != nil))
 		}
-		slices.SortFunc(out, func(a, b object) int { return strings.Compare(str(a["device_id"]), str(b["device_id"])) })
+		slices.SortFunc(out, func(a, b object) int { return strings.Compare(str(a["companion_id"]), str(b["companion_id"])) })
 		return object{"tunnels": out}, nil
 	case path == "/api/tunnels" && r.Method == http.MethodPost:
 		obj, err := jsonBody(r)
 		if err != nil {
 			return nil, err
 		}
-		info, err := m.addLocked(r.Context(), str(obj["device_id"]))
+		info, err := m.addLocked(r.Context(), strings.ToLower(str(obj["companion_id"])))
 		if err != nil {
 			return nil, err
 		}
@@ -206,9 +206,10 @@ func (b *larkServer) tunnelAPI(w http.ResponseWriter, r *http.Request, path stri
 }
 
 func (m *tunnelManager) addLocked(ctx context.Context, id string) (object, error) {
-	v, ok := m.b.virtualByID(id)
-	if !ok || !virtualID.MatchString(id) {
-		return nil, problem(404, "Tunnel requires an existing virtual client")
+	id = strings.ToLower(id)
+	c, ok := m.b.companionByID(id)
+	if !ok || !validCompanionID(id) {
+		return nil, problem(404, "Tunnel requires an existing companion")
 	}
 	values, exists, err := m.store.get(id)
 	if err != nil {
@@ -216,7 +217,7 @@ func (m *tunnelManager) addLocked(ctx context.Context, id string) (object, error
 	}
 	if exists {
 		if m.live[id] == nil {
-			server, _, err := m.listen(v, values.Token, values.LocalPort)
+			server, _, err := m.listen(c, values.Token, values.LocalPort)
 			if err != nil {
 				return nil, problem(409, "Persisted tunnel port is unavailable")
 			}
@@ -227,8 +228,8 @@ func (m *tunnelManager) addLocked(ctx context.Context, id string) (object, error
 	if m.runner == nil {
 		return nil, problem(503, "OpenTunnel CLI not found")
 	}
-	record := tunnelRecord{DeviceID: id, Token: randomHex(16), Profile: "lark-" + randomHex(12), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	server, port, err := m.listen(v, record.Token, 0)
+	record := tunnelRecord{CompanionID: id, Token: randomHex(16), Profile: "lark-" + randomHex(12), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	server, port, err := m.listen(c, record.Token, 0)
 	if err != nil {
 		return nil, problem(502, "Cannot start scoped listener")
 	}
@@ -296,7 +297,7 @@ func (s *scopeServer) close() {
 	}
 }
 
-func (m *tunnelManager) listen(v virtualClient, token string, port int) (*scopeServer, int, error) {
+func (m *tunnelManager) listen(c companionState, token string, port int) (*scopeServer, int, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		return nil, 0, err
@@ -304,7 +305,7 @@ func (m *tunnelManager) listen(v virtualClient, token string, port int) (*scopeS
 	ctx, cancel := context.WithCancel(m.b.root)
 	s := &scopeServer{cancel: cancel}
 	s.server = &http.Server{
-		Handler:           m.b.scoped(v, token),
+		Handler:           m.b.scoped(c, token),
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 105 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,
@@ -313,7 +314,7 @@ func (m *tunnelManager) listen(v virtualClient, token string, port int) (*scopeS
 	return s, ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-func (b *larkServer) scoped(v virtualClient, token string) http.Handler {
+func (b *larkServer) scoped(c companionState, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -331,13 +332,23 @@ func (b *larkServer) scoped(v virtualClient, token string) http.Handler {
 				http.Redirect(w, r, location, http.StatusFound)
 				return
 			}
-			if b.servePhonePWA(w, r, path, &v, token) || serveApp(w, path) {
+			if b.servePWA(w, r, path, &c, token) || serveApp(w, path) {
 				return
 			}
 		}
-		messageID, messages := messagesDevice(path)
-		voiceID, voice := voiceDevice(path)
-		volumeID, volume := deviceSettingID(path, "volume")
+		compRest, isComp := strings.CutPrefix(path, "/api/companions/")
+		var messageID, voiceID string
+		var messages, voice bool
+		if isComp {
+			messageID, messages = strings.CutSuffix(compRest, "/messages")
+			voiceID, voice = strings.CutSuffix(compRest, "/voice")
+		}
+		termRest, isTerm := strings.CutPrefix(path, "/api/terminals/")
+		var volumeID string
+		var volume bool
+		if isTerm {
+			volumeID, volume = strings.CutSuffix(termRest, "/volume")
+		}
 		readPortrait := strings.HasPrefix(path, "/api/portraits/")
 		timers := r.Method == http.MethodGet && path == "/api/timers" ||
 			r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/timers/")
@@ -353,47 +364,46 @@ func (b *larkServer) scoped(v virtualClient, token string) http.Handler {
 		}
 		switch {
 		case get && readPortrait:
-			sendResult(w, nil, b.servePortrait(w, r, path, v.ID))
+			sendResult(w, nil, b.servePortrait(w, r, path, c.ID))
 		case timers:
-			value, err := b.timerAPI(w, r, path, v.ID)
+			value, err := b.timerAPI(w, r, path, c.ID)
 			sendResult(w, value, err)
 		case path == "/api/scope":
-			companion := b.companionFor(peer{DeviceID: v.ID, Character: v.Character})
-			out := object{"scoped": true, "device_id": v.ID, "character": companion.Name, "companion": companion.companionLook, "voices": voiceCatalog,
-				"voice": b.voices.get(v.ID, deviceTheme(companion.Name))}
-			if b.ws != nil {
-				b.ws.deviceStatus(out, v.ID, false)
-			} else {
-				out["auto_volume"], out["volume"] = b.volumePrefs(v.ID)
-			}
-			sendJSON(w, 200, out)
+			companion := b.companionFor(c.ID)
+			entry := b.companionEntry(companion, false)
+			entry["scoped"] = true
+			entry["companion_id"] = c.ID
+			entry["companion"] = companion.companionLook
+			entry["voices"] = voiceCatalog
+			sendJSON(w, 200, entry)
 		case path == "/ws" && b.ws != nil:
-			if err := b.ws.serveScope(w, r, &v); err != nil {
+			if err := b.ws.serveScope(w, r, &c); err != nil {
 				sendError(w, err)
 			}
 		case get && messages:
-			if messageID != v.ID {
-				sendError(w, problem(403, "Device out of scope"))
+			if !strings.EqualFold(messageID, c.ID) {
+				sendError(w, problem(403, "Companion out of scope"))
 				return
 			}
-			value, err := b.messages(r, messageID)
+			value, err := b.messages(r, strings.ToLower(messageID))
 			sendResult(w, value, err)
 		case post && voice:
-			if voiceID != v.ID {
-				sendError(w, problem(403, "Device out of scope"))
+			if !strings.EqualFold(voiceID, c.ID) {
+				sendError(w, problem(403, "Companion out of scope"))
 				return
 			}
-			value, err := b.voiceAPI(r, voiceID)
+			value, err := b.voiceAPI(r, strings.ToLower(voiceID))
 			sendResult(w, value, err)
 		case post && volume:
-			if volumeID != v.ID {
-				sendError(w, problem(403, "Device out of scope"))
+			t, ok := b.terminalByID(volumeID)
+			if !ok || !strings.EqualFold(t.CompanionID, c.ID) {
+				sendError(w, problem(403, "Terminal out of scope"))
 				return
 			}
-			value, err := b.volumeAPI(r, volumeID)
+			value, err := b.volumeAPI(r, t.ID)
 			sendResult(w, value, err)
 		case post:
-			value, err := b.chatAPI(r, v.ID)
+			value, err := b.chatAPI(r, c.ID)
 			sendResult(w, value, err)
 		default:
 			sendError(w, problem(404, "Not found"))

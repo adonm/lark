@@ -32,8 +32,8 @@ func TestAppTemplatesHitCoordinates(t *testing.T) {
 				if err := spec.setTemplate(tc.template, data); err != nil {
 					t.Fatal(err)
 				}
-				d := &wsDevice{screen: geometry, client: &wsClient{role: "device"}}
-				a, views, err := initApp(spec, []appPlayer{{id: "board"}}, nil, []*wsDevice{d}, nil, buildScreen)
+				d := &wsTerminal{screen: geometry, client: &wsClient{role: "device"}}
+				a, views, err := initApp(spec, []appPlayer{{id: "board"}}, nil, []*wsTerminal{d}, nil, buildScreen)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -120,7 +120,7 @@ func TestAppTemplateSaveAndMemoryRefresh(t *testing.T) {
 	const id = "lark-template"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Reader")
-	out := toolTest(t, base, "app", object{"devices": id, "template": "reader", "save_as": "story",
+	out := toolTest(t, base, "app", object{"companions": "reader", "template": "reader", "save_as": "story",
 		"data": object{"title": "Story", "pages": []string{"A frog", "The end"}}}, false)
 	saved := out["saved"].(object)
 	if saved["name"] != "story" || saved["title"] != "Story" || saved["template"] != "reader" || saved["version"] == nil || out["layout_warnings"] != nil {
@@ -129,12 +129,12 @@ func TestAppTemplateSaveAndMemoryRefresh(t *testing.T) {
 	board.until(t, isDisplay)
 	board.json(t, object{"ev": "tap", "x": 236, "y": 62})
 	board.until(t, isDisplay)
-	if a := stateMe(t, base, id)["active_app"].(object); a["state"].(object)["page"] != json.Number("1") {
+	if a := stateMe(t, base, "reader")["active_app"].(object); a["state"].(object)["page"] != json.Number("1") {
 		t.Fatal(a)
 	}
 	board.json(t, object{"ev": "tap", "x": 180, "y": 320})
 	board.until(t, isDisplay)
-	if a := stateMe(t, base, id)["active_app"]; a != nil {
+	if a := stateMe(t, base, "reader")["active_app"]; a != nil {
 		t.Fatal(a)
 	}
 	patch := toolTest(t, base, "patch", object{"memory": object{"scope": "app:story", "key": "content", "expected_version": 0,
@@ -142,11 +142,11 @@ func TestAppTemplateSaveAndMemoryRefresh(t *testing.T) {
 	if patch["memory"].(object)["app:story"].(object)["content"].(object)["version"] != json.Number("1") {
 		t.Fatal(patch)
 	}
-	reloaded := toolTest(t, base, "app", object{"devices": id, "load": "story"}, false)
+	reloaded := toolTest(t, base, "app", object{"companions": "reader", "load": "story"}, false)
 	if hits := reloaded["hit_ids"].([]any); len(hits) != 1 || hits[0] != exitNode {
 		t.Fatal(reloaded)
 	}
-	toolTest(t, base, "app", object{"devices": id, "template": "quiz",
+	toolTest(t, base, "app", object{"companions": "reader", "template": "quiz",
 		"data": object{"questions": []object{{"prompt": "Q", "choices": []string{"A", "B"}, "answer": 0, "typo": true}}}}, true)
 }
 
@@ -155,17 +155,17 @@ func TestAppTemplateCountdownRearmsAfterFinish(t *testing.T) {
 	const id = "lark-countdown"
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, id, "Cake")
-	toolTest(t, base, "app", object{"devices": id, "template": "timer", "data": object{"seconds": 1}}, false)
+	toolTest(t, base, "app", object{"companions": "cake", "template": "timer", "data": object{"seconds": 1}}, false)
 	board.until(t, isDisplay)
 	for range 2 {
-		a := stateMe(t, base, id)["active_app"].(object)
+		a := stateMe(t, base, "cake")["active_app"].(object)
 		if a["ticks_left"] != json.Number("0") {
 			t.Fatal("idle timer scheduled ticks", a)
 		}
 		board.json(t, object{"ev": "tap", "x": 180, "y": 250})
 		board.until(t, hasWS("chime", `"kind":"intercom"`)) // Celebrate at zero.
 		board.until(t, isDisplay)
-		a = stateMe(t, base, id)["active_app"].(object)
+		a = stateMe(t, base, "cake")["active_app"].(object)
 		s := a["state"].(object)
 		if s["left"] != json.Number("0") || s["end"] != json.Number("0") || a["ticks_left"] != json.Number("0") {
 			t.Fatal(a)

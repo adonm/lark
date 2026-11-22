@@ -68,12 +68,12 @@ func TestCompactAPIOnlyOnAuthenticatedLAN(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	})
-	if err := b.oc.save("Cake", "ses-cake"); err != nil {
+	if err := b.oc.save("cake", "ses-cake"); err != nil {
 		t.Fatal(err)
 	}
 	lan := httptest.NewServer(b)
 	defer lan.Close()
-	scoped := httptest.NewServer(b.scoped(virtualClient{ID: "virt-12345678"}, "scoped"))
+	scoped := httptest.NewServer(b.scoped(companionState{ID: "cake"}, "scoped"))
 	defer scoped.Close()
 	const path = "/api/opencode/compact"
 	for _, token := range []string{"", "scoped", "unit"} {
@@ -93,9 +93,9 @@ func TestCompactAPIOnlyOnAuthenticatedLAN(t *testing.T) {
 			t.Fatalf("unexpected compaction result: %s", out)
 		}
 	}
-	check(nil, []string{"Cake"}, nil)
-	check(object{"device_id": "unknown"}, nil, []string{"unknown"})
-	check(object{"device_id": "Cake", "reconnect_mcp": true}, []string{"Cake"}, nil)
+	check(nil, []string{"cake"}, nil)
+	check(object{"companion_id": "unknown"}, nil, []string{"unknown"})
+	check(object{"companion_id": "cake", "reconnect_mcp": true}, []string{"cake"}, nil)
 	if connects.Load() != 1 {
 		t.Fatal("manual MCP reconnect should only run when requested")
 	}

@@ -447,17 +447,17 @@ func (p *portraitStore) has(id string) bool {
 	return err == nil
 }
 
-func (b *larkServer) preparePortrait(ctx context.Context, who peer, args object, raw any) (*pendingPortrait, error) {
+func (b *larkServer) preparePortrait(ctx context.Context, companionID string, args object, raw any) (*pendingPortrait, error) {
 	for _, field := range []string{"preset", "face_svg", "face_edits", "face_bg", "mark_color", "accent_color"} {
 		if _, exists := args[field]; exists {
 			return nil, fieldError("companion.portrait", "cannot combine with %s", field)
 		}
 	}
-	current, err := b.readActiveCompanion(ctx, b.db, who)
-	if err != nil {
-		return nil, problem(502, "Cannot read current companion")
+	current, ok := b.companionByID(companionID)
+	if !ok {
+		return nil, problem(404, "Companion not found")
 	}
-	if _, _, err := updateCompanion(current, args, b.voices); err != nil {
+	if _, err := updateCompanion(current, args, b.voices); err != nil {
 		return nil, err
 	}
 	return b.portraits.prepare(ctx, current, raw)
@@ -522,7 +522,7 @@ func (b *larkServer) servePortrait(w http.ResponseWriter, r *http.Request, path,
 	}
 	if scope != "" {
 		var face string
-		if b.db == nil || b.db.readDB().QueryRowContext(r.Context(), `SELECT face_svg FROM companions WHERE device_id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
+		if b.db == nil || b.db.readDB().QueryRowContext(r.Context(), `SELECT face_svg FROM companions WHERE id=?`, strings.ToLower(scope)).Scan(&face) != nil ||
 			activePortrait(face) != id {
 			return problem(404, "Portrait not found")
 		}

@@ -283,7 +283,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			idle := func() bool {
 				b.ws.mu.Lock()
 				defer b.ws.mu.Unlock()
-				d := b.ws.devices[id]
+				d := b.ws.terminals[id]
 				return !d.busy && d.stopAudio == nil && !d.awaitAck
 			}
 			board := testConnectWS(t, base, "unit", false)
@@ -312,7 +312,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				b.ws.sig.wait(t, func() bool {
 					b.ws.mu.Lock()
 					defer b.ws.mu.Unlock()
-					return !b.ws.devices[id].busy
+					return !b.ws.terminals[id].busy
 				})
 				tail.done <- ttsResult{err: errTTS}
 				board.until(t, hasWS("tts", `"state":"abort"`))
@@ -323,7 +323,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				close(finish)
 				b.ws.sig.wait(t, idle)
 				b.ws.mu.Lock()
-				view, pending := b.ws.devices[id].view, b.ws.devices[id].pending
+				view, pending := b.ws.terminals[id].view, b.ws.terminals[id].pending
 				b.ws.mu.Unlock()
 				if view != nil || pending != nil {
 					t.Fatal("interrupted speech displayed a failure card")
@@ -333,7 +333,7 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			b.ws.sig.wait(t, func() bool {
 				b.ws.mu.Lock()
 				defer b.ws.mu.Unlock()
-				d := b.ws.devices[id]
+				d := b.ws.terminals[id]
 				return d.scene.title == "Answer" && strings.Contains(d.svg.source, first) && strings.Contains(d.svg.source, second)
 			})
 		})
@@ -386,7 +386,7 @@ func TestOpenCodeFinalReplyPaginatesToAdmittedPrompt(t *testing.T) {
 func TestOpenCodeCancelAndReset(t *testing.T) {
 	for _, action := range []string{"cancel", "reset", "disconnect"} {
 		t.Run(action, func(t *testing.T) {
-			const id, sid = "lark-session-test", "ses-test"
+			const termID, id, sid = "vocat-0001", "cake", "ses-test"
 			interrupts := make(chan string, 4)
 			release := make(chan struct{})
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -407,22 +407,22 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 				}
 			})
 			c := testConnectWS(t, base, "unit", false)
-			c.hello(t, id, "Cake")
+			c.hello(t, termID, "Cake")
 			if action != "reset" {
 				b.ws.mu.Lock()
-				b.ws.devices[id].busy = true
+				b.ws.terminals[termID].busy = true
 				b.ws.mu.Unlock()
 			}
 			reset := make(chan error, 1)
 			switch action {
 			case "cancel":
 				b.ws.mu.Lock()
-				b.ws.cancelTurn(b.ws.devices[id], "stop")
+				b.ws.cancelTurn(b.ws.terminals[termID], "stop")
 				b.ws.mu.Unlock()
 			case "reset":
 				go func() {
-					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/devices/"+id+"/reset", nil)
-					_, err := b.route(httptest.NewRecorder(), req, "/api/devices/"+id+"/reset")
+					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/companions/"+id+"/reset", nil)
+					_, err := b.route(httptest.NewRecorder(), req, "/api/companions/"+id+"/reset")
 					reset <- err
 				}()
 			case "disconnect":
@@ -487,16 +487,15 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	})
-	who := peer{DeviceID: id, Character: "Cake"}
 	first, second := make(chan error, 1), make(chan error, 1)
 	go func() {
-		_, _, err := o.askPrepared(root, who.DeviceID, func() (string, string) { return who.Character, "First" }, turnStream{}, "text", nil, nil)
+		_, _, err := o.askPrepared(root, id, func() (string, string) { return "Cake", "First" }, turnStream{}, "text", nil, nil)
 		first <- err
 	}()
 	expectValue(t, prompts, "First")
 	o.interruptDevice(id)
 	go func() {
-		_, _, err := o.askPrepared(root, who.DeviceID, func() (string, string) { return who.Character, "Second" }, turnStream{}, "text", nil, nil)
+		_, _, err := o.askPrepared(root, id, func() (string, string) { return "Cake", "Second" }, turnStream{}, "text", nil, nil)
 		second <- err
 	}()
 	select {
@@ -547,17 +546,17 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 			}
 		})
 	})
-	for _, item := range []peer{{DeviceID: "lark-empty"}, {DeviceID: "lark-equal", Character: "lark-equal"}} {
-		if _, err := b.oc.ensureSession(t.Context(), item.DeviceID, item.Character, true); err != nil {
+	for _, item := range []struct{ id, name string }{{"lark-empty", ""}, {"lark-equal", "lark-equal"}} {
+		if _, err := b.oc.ensureSession(t.Context(), item.id, item.name, true); err != nil {
 			t.Fatal(err)
 		}
-		expectValue(t, titles, "Lark: "+item.DeviceID)
+		expectValue(t, titles, "Lark: "+item.id)
 	}
-	const id = "lark-ask"
+	const termID, id = "vocat-0002", "cake"
 	c := testConnectWS(t, base, "unit", false)
-	c.hello(t, id, "Cake")
+	c.hello(t, termID, "Cake")
 	mint := testConnectWS(t, base, "unit", false)
-	mint.hello(t, "lark-mint", "Mint")
+	mint.hello(t, "vocat-0003", "Mint")
 	mirror := testConnectWS(t, base, "unit", true)
 	mirror.watch(t, id)
 	toolTest(t, base, "emit", object{"to": id, "chime": "tap"}, false)
@@ -567,8 +566,8 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 		t.Fatal("local-only tap started an AI session:", created)
 	default:
 	}
-	testRequest(t, "POST", base+"/api/chat", "unit", object{"device_id": id, "text": "Next quiz round!"}, 200)
-	expectValue(t, titles, "Lark: Cake (lark-ask)")
+	testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "Next quiz round!"}, 200)
+	expectValue(t, titles, "Lark: Cake (cake)")
 	select {
 	case text := <-prompts:
 		if !strings.HasSuffix(text, "Next quiz round!") {
@@ -580,7 +579,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	if frame := mirror.until(t, hasWS("svg", "Done.")); !hasWS("svg", "Answer")(frame) {
 		t.Fatal("no-audio answer notice was missing")
 	}
-	if got := apiObjects(t, base+"/api/devices/lark-mint/messages", "messages"); len(got) != 0 {
+	if got := apiObjects(t, base+"/api/companions/mint/messages", "messages"); len(got) != 0 {
 		t.Fatal("fenced prose triggered intercom")
 	}
 }

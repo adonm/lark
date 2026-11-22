@@ -160,23 +160,22 @@ func messageScene(title, heading, text string, companion companionState) sceneVi
 }
 
 type intercomCard struct {
-	sender    peer
-	text      string
-	companion companionState
+	sender companionState
+	text   string
 }
 
 func (card intercomCard) scene(canCall bool) sceneView {
-	sender, text, companion := card.sender, card.text, card.companion
+	sender, text := card.sender, card.text
 	if text == "" {
 		text = "Voice message"
 	}
-	title := "From " + sender.Character
-	s := messageScene(title, truncate(title+"!", 25), text, companion)
+	title := "From " + sender.Name
+	s := messageScene(title, truncate(title+"!", 25), text, sender)
 	s.intercom = &card
-	reply := tile{id: "reply", label: "Reply", action: sceneAction{"reply", sender.DeviceID}, colors: primaryPalette}
+	reply := tile{id: "reply", label: "Reply", action: sceneAction{"reply", sender.ID}, colors: primaryPalette}
 	done := tile{id: "done", label: "Done", action: sceneAction{"companion", ""}, colors: navPalette}
 	if canCall {
-		s.control(bounds{43, 218, 78, 55}, tile{id: "call", label: "Call", action: sceneAction{"call-peer", sender.DeviceID}, colors: answerPalette})
+		s.control(bounds{43, 218, 78, 55}, tile{id: "call", label: "Call", action: sceneAction{"call-peer", sender.ID}, colors: answerPalette})
 		s.control(bounds{141, 218, 78, 55}, reply)
 		s.control(bounds{239, 218, 78, 55}, done)
 	} else {

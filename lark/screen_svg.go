@@ -367,10 +367,10 @@ func menuPeerInk(tint string) string {
 	return "#FFFFFF"
 }
 
-func (h *wsHub) statsScene(d *wsDevice) sceneView {
+func (h *wsHub) statsScene(d *wsTerminal) sceneView {
 	s := menuScene("Stats")
 	s.art += svgRect(38, 93, 284, 185, uiCardRadius, menuCard, menuBorder, 2)
-	device := d.diagDevice()
+	device := d.diagTerminal()
 	h.b.diag.mu.Lock()
 	sys := h.b.diag.system
 	latest := [4]*float64{}

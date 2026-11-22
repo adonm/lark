@@ -17,10 +17,14 @@ import (
 
 func patchTimerTest(t *testing.T, base string, args object, failed bool) object {
 	t.Helper()
-	id := str(args["device_id"])
+	id := str(args["companion_id"])
+	if id == "" {
+		id = str(args["device_id"])
+	}
 	args = maps.Clone(args)
 	delete(args, "device_id")
-	result := toolTest(t, base, "patch", object{"device_id": id, "timer": args}, failed)
+	delete(args, "companion_id")
+	result := toolTest(t, base, "patch", object{"companion_id": id, "timer": args}, failed)
 	if failed {
 		return result
 	}
@@ -30,7 +34,7 @@ func patchTimerTest(t *testing.T, base string, args object, failed bool) object 
 func TestTimerLocalFireAndCancel(t *testing.T) {
 	tts := make(chan string, 8)
 	_, base := wsHarness(t, func(b *larkServer, _ string) {
-		b.voices = deviceVoiceStore(b.db, fableVoice)
+		b.voices = companionVoiceStore(b.db, fableVoice)
 		b.worker = &synthWorker{requests: make(chan ttsRequest)}
 		b.worker.ready.Store(true)
 		go func() {
@@ -50,21 +54,21 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id = "lark-timer"
+	const id = "cake"
 	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, id, "Cake")
+	dev.hello(t, "vocat-0001", "Cake")
 	web := testConnectWS(t, base, "unit", false)
 	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "device_id": id})
+	web.json(t, object{"ev": "watch", "companion_id": id})
 	web.until(t, hasWS("svg", ""))
 	patchControl(t, base, id, object{"sleep": true})
 	dev.until(t, hasWS("power", `"brightness":12`))
 
-	set := object{"device_id": id, "in_seconds": 1, "label": "Cake break", "say": "Take a break."}
+	set := object{"companion_id": id, "in_seconds": 1, "label": "Cake break", "say": "Take a break."}
 	timer := patchTimerTest(t, base, set, false)
 	hasUpdate := func(f wsFrame) bool { return bytes.Contains(f.data, []byte(`"type":"timers"`)) }
 	web.until(t, hasUpdate)
-	if got := apiObjects(t, base+"/api/timers?device_id="+id, "timers"); len(got) != 1 || got[0].(object)["id"] != timer["id"] {
+	if got := apiObjects(t, base+"/api/timers?companion_id="+id, "timers"); len(got) != 1 || got[0].(object)["id"] != timer["id"] {
 		t.Fatal(got)
 	}
 	dev.until(t, hasWS("power", `"brightness":85`))
@@ -88,20 +92,20 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	}
 	dev.json(t, object{"ev": "tap", "x": 180, "y": 315})
 	web.until(t, hasWS("svg", "companion-ring"))
-	entries := apiObjects(t, base+"/api/devices/"+id+"/messages", "messages")
+	entries := apiObjects(t, base+"/api/companions/"+id+"/messages", "messages")
 	if len(entries) != 2 || entries[0].(object)["text"] != "Timer: Cake break" || entries[1].(object)["source"] != "timer" {
 		t.Fatal(entries)
 	}
 	set["in_seconds"] = 3600
 	timer = toolTest(t, base, "patch", object{"timer": set}, false)["timer"].(object)
-	s := toolTest(t, base, "state", object{"device_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
+	s := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
 	if len(s) != 1 || s[0].(object)["id"] != timer["id"] || s[0].(object)["remaining_s"] != json.Number("3600") {
 		t.Fatal(s)
 	}
-	if cancelled := patchTimerTest(t, base, object{"op": "cancel", "device_id": id, "id": timer["id"]}, false); cancelled["cancelled"] != true {
+	if cancelled := patchTimerTest(t, base, object{"op": "cancel", "companion_id": id, "id": timer["id"]}, false); cancelled["cancelled"] != true {
 		t.Fatal(cancelled)
 	}
-	if got := apiObjects(t, base+"/api/timers?device_id="+id, "timers"); len(got) != 0 {
+	if got := apiObjects(t, base+"/api/timers?companion_id="+id, "timers"); len(got) != 0 {
 		t.Fatal(got)
 	}
 }
@@ -111,13 +115,13 @@ func TestTimerLaunchesSavedApp(t *testing.T) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
-	const id, name = "lark-scheduled", "stretch"
+	const id, name = "cake", "stretch"
 	dev, web := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
-	dev.hello(t, id, "Cake")
+	dev.hello(t, "vocat-0002", "Cake")
 	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "device_id": id})
+	web.json(t, object{"ev": "watch", "companion_id": id})
 	web.until(t, hasWS("svg", "companion-ring"))
-	set := object{"op": "set", "device_id": id, "in_seconds": 1, "app": name}
+	set := object{"op": "set", "companion_id": id, "in_seconds": 1, "app": name}
 	if out := patchTimerTest(t, base, set, true); !strings.Contains(str(out["error"]), "App not found") {
 		t.Fatal(out)
 	}
@@ -139,15 +143,15 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lark.db")
 	db := testDB(t, path)
 	now := time.Now().UTC()
-	const device = "virt-01234567"
-	if err := virtualStore(db).save(device, virtualClient{ID: device, Character: "Greg", CreatedAt: now}, false); err != nil {
+	const device = "greg"
+	b := &larkServer{db: db, root: t.Context()}
+	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Greg"}); err != nil {
 		t.Fatal(err)
 	}
-	b := &larkServer{db: db, root: t.Context()}
 	first := newTimerManager(b)
 	ids := [3]string{randomHex(12), randomHex(12), randomHex(12)}
 	for i, delay := range []time.Duration{time.Minute, time.Hour, 2 * time.Hour} {
-		if err := first.set(t.Context(), savedTimer{ID: ids[i], DeviceID: device, Label: fmt.Sprint(i), Chime: "tap",
+		if err := first.set(t.Context(), savedTimer{ID: ids[i], CompanionID: device, Label: fmt.Sprint(i), Chime: "tap",
 			CreatedAt: now.Add(-time.Hour), FireAt: now.Add(delay)}); err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +168,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	db = testDB(t, path)
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b = &larkServer{db: db, root: root, virtual: virtualStore(db), history: &chatHistory{db}, peers: peers{deviceStore(db)}}
+	b = &larkServer{db: db, root: root, terminals: terminalStore(db), history: &chatHistory{db}}
 	b.ws = newWSHub(b, false)
 	defer b.ws.shutdown()
 	m := newTimerManager(b)
@@ -200,15 +204,15 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 }
 
 func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
-	const id = "lark-timer-retry"
+	const id = "cake"
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 	})
 	board := testConnectWS(t, base, "unit", false)
-	board.helloV2(t, id, "Cake")
+	board.helloV2(t, "vocat-0003", "Cake")
 	now := time.Now()
-	timer := savedTimer{ID: randomHex(12), DeviceID: id, CreatedAt: now, FireAt: now.Add(time.Hour), Label: "Retry", Chime: "celebrate"}
+	timer := savedTimer{ID: randomHex(12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour), Label: "Retry", Chime: "celebrate"}
 	if err := b.timers.set(t.Context(), timer); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +236,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 }
 
 func TestTimerWakeAgentGuard(t *testing.T) {
-	const device, other, sid = "lark-timer", "lark-other", "ses-reminder"
+	const device, other, sid = "cake", "mint", "ses-reminder"
 	prompt, release := make(chan string, 1), make(chan struct{})
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.timers = newTimerManager(b)
@@ -259,9 +263,9 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 		})
 	})
 	c := testConnectWS(t, base, "unit", false)
-	c.hello(t, device, "Cake")
-	testConnectWS(t, base, "unit", false).hello(t, other, "Mint")
-	args := object{"device_id": device, "op": "set", "wake_agent": true, "in_seconds": 29}
+	c.hello(t, "vocat-0004", "Cake")
+	testConnectWS(t, base, "unit", false).hello(t, "vocat-0005", "Mint")
+	args := object{"companion_id": device, "op": "set", "wake_agent": true, "in_seconds": 29}
 	patchTimerTest(t, base, args, true)
 	args["in_seconds"] = 30
 	args["at"] = time.Now().Add(time.Hour).Format(time.RFC3339)
@@ -273,7 +277,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 	go func() { defer close(finished); b.timers.fire(str(timer["id"]), nil) }()
 	select {
 	case got := <-prompt:
-		if got != "[Cake (lark-timer) · hardware · timer]\nTimer fired: Timer" {
+		if got != "[Cake (cake) · hardware · timer]\nTimer fired: Timer" {
 			t.Fatal(got)
 		}
 	case <-time.After(5 * time.Second):
@@ -294,46 +298,45 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 }
 
 func TestScopedTimerIsolationAndCaps(t *testing.T) {
-	const owner, other = "virt-01234567", "virt-abcdef12"
+	const owner, other = "owner", "other"
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
-		b.virtual = virtualStore(b.db)
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
 		for _, id := range []string{owner, other} {
-			if err := b.virtual.save(id, virtualClient{ID: id, Character: "Greg", CreatedAt: time.Now()}, false); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Greg"}); err != nil {
 				t.Fatal(err)
 			}
 		}
 	})
-	ownTimer := patchTimerTest(t, base, object{"device_id": owner, "op": "set", "in_seconds": 3600}, false)
-	otherTimer := patchTimerTest(t, base, object{"device_id": other, "op": "set", "in_seconds": 3600}, false)
-	v, _ := b.virtualByID(owner)
-	scope := httptest.NewServer(b.scoped(v, "scoped"))
+	ownTimer := patchTimerTest(t, base, object{"companion_id": owner, "op": "set", "in_seconds": 3600}, false)
+	otherTimer := patchTimerTest(t, base, object{"companion_id": other, "op": "set", "in_seconds": 3600}, false)
+	c, _ := b.companionByID(owner)
+	scope := httptest.NewServer(b.scoped(c, "scoped"))
 	defer scope.Close()
 	get := testObject(t, testRequest(t, "GET", scope.URL+"/api/timers", "scoped", nil, 200))["timers"].([]any)
 	if len(get) != 1 || get[0].(object)["id"] != ownTimer["id"] {
 		t.Fatal(get)
 	}
-	testRequest(t, "GET", scope.URL+"/api/timers?device_id="+other, "scoped", nil, 403)
+	testRequest(t, "GET", scope.URL+"/api/timers?companion_id="+other, "scoped", nil, 403)
 	testRequest(t, "DELETE", scope.URL+"/api/timers/"+str(otherTimer["id"]), "scoped", nil, 403)
 	testRequest(t, "GET", scope.URL+"/api/memory/scopes", "scoped", nil, 404)
 	testRequest(t, "GET", scope.URL+"/api/assets", "scoped", nil, 404)
 	testRequest(t, "DELETE", scope.URL+"/api/timers/"+str(ownTimer["id"]), "scoped", nil, 204)
 	ctx := context.Background()
 	for i := range 31 {
-		id := fmt.Sprintf("device-%d", i/8)
+		id := fmt.Sprintf("companion-%d", i/8)
 		now := time.Now()
-		if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), DeviceID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err != nil {
+		if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err != nil {
 			t.Fatal(i, err)
 		}
 		if i == 7 {
-			if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), DeviceID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
+			if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
 				t.Fatal("allowed ninth timer")
 			}
 		}
 	}
 	now := time.Now()
-	if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), DeviceID: owner, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
+	if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), CompanionID: owner, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
 		t.Fatal("allowed 33rd timer")
 	}
 }

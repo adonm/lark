@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -22,20 +23,16 @@ type companionLook struct {
 }
 
 type companionState struct {
+	ID string `json:"id,omitempty"`
 	companionLook
-	Voice   string `json:"voice"`
-	FaceSVG string `json:"face_svg"`
-}
-
-type savedCompanion struct {
-	companionState
-	Slug      string `json:"slug"`
-	UpdatedAt int64  `json:"updated_at"`
+	Voice     string `json:"voice"`
+	FaceSVG   string `json:"face_svg"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
 }
 
 func blankCompanion() companionState {
 	p := storybookPalettes["peach"]
-	c := companionState{companionLook: companionLook{Name: "New Cat", FaceBG: p.bg, MarkColor: p.furShadow, AccentColor: p.blush}}
+	c := companionState{companionLook: companionLook{Name: "New Companion", FaceBG: p.bg, MarkColor: p.furShadow, AccentColor: p.blush}}
 	c.FaceSVG = c.defaultFace()
 	return c
 }
@@ -53,126 +50,186 @@ func companionSlug(name string) string {
 	return strings.Trim(companionSlugSpace.ReplaceAllString(strings.ToLower(name), "-"), "-")
 }
 
-const activeCompanionColumns = `name,configured,face_bg,mark_color,accent_color,personality,face_svg`
-const savedCompanionColumns = `slug,name,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at`
-const companionVoiceSQL = `COALESCE((SELECT voice FROM voices WHERE device_id=?),(SELECT voice FROM virtual_clients WHERE id=?),'')`
+func validCompanionID(id string) bool {
+	return len(id) >= 1 && len(id) <= 64 && companionSlugRE.MatchString(id)
+}
 
-func readCompanion(row rowScanner) (companionState, error) {
+const companionColumns = `id,name,configured,face_bg,mark_color,accent_color,personality,voice,face_svg,updated_at`
+
+func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured int
-	err := row.Scan(&c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.FaceSVG, &c.Voice)
+	err := row.Scan(&c.ID, &c.Name, &configured, &c.FaceBG, &c.MarkColor, &c.AccentColor, &c.Personality, &c.Voice, &c.FaceSVG, &c.UpdatedAt)
 	c.Configured = configured != 0
+	c.Voice = storedVoice(c.Voice)
 	if err == nil && c.FaceSVG == "" {
 		c.FaceSVG = c.defaultFace()
 	}
 	return c, err
 }
 
-func readSavedCompanion(row rowScanner) (savedCompanion, error) {
-	var p savedCompanion
-	p.Configured = true
-	err := row.Scan(&p.Slug, &p.Name, &p.FaceBG, &p.MarkColor, &p.AccentColor, &p.Personality, &p.Voice, &p.FaceSVG, &p.UpdatedAt)
-	p.Voice = storedVoice(p.Voice)
-	if err == nil && p.FaceSVG == "" {
-		p.FaceSVG = p.defaultFace()
-	}
-	return p, err
-}
-
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO companions (device_id,`+activeCompanionColumns+`,updated_at) VALUES (?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(device_id) DO UPDATE SET name=excluded.name,configured=excluded.configured,face_bg=excluded.face_bg,
+	id = strings.ToLower(id)
+	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,face_bg=excluded.face_bg,
 		mark_color=excluded.mark_color,accent_color=excluded.accent_color,personality=excluded.personality,
-		face_svg=excluded.face_svg,updated_at=max(companions.updated_at+1,excluded.updated_at)`,
-		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.FaceSVG, time.Now().UnixMilli())
-	if err != nil {
-		return err
-	}
-	return syncVirtualCharacter(ctx, tx, id, c.Name)
+		voice=excluded.voice,face_svg=excluded.face_svg,updated_at=max(companions.updated_at+1,excluded.updated_at)`,
+		id, c.Name, c.Configured, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli())
+	return err
 }
 
-func saveCompanionProfile(ctx context.Context, tx *sql.Tx, c companionState, replace bool) error {
-	slug := companionSlug(c.Name)
-	if slug == "" {
-		return nil
+func (b *larkServer) uniqueCompanionSlug(ctx context.Context, q companionQuery, name string) (string, error) {
+	base := companionSlug(name)
+	if base == "" {
+		base = "companion"
 	}
-	conflict := `ON CONFLICT(slug) DO NOTHING`
-	if replace {
-		conflict = `ON CONFLICT(slug) DO UPDATE SET name=excluded.name,face_bg=excluded.face_bg,mark_color=excluded.mark_color,
-			accent_color=excluded.accent_color,personality=excluded.personality,voice=excluded.voice,
-			face_svg=excluded.face_svg,updated_at=excluded.updated_at`
+	if len(base) > 56 {
+		base = strings.TrimRight(base[:56], "-")
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO saved_companions (`+savedCompanionColumns+`) VALUES (?,?,?,?,?,?,?,?,?) `+conflict,
-		slug, c.Name, c.FaceBG, c.MarkColor, c.AccentColor, c.Personality, c.Voice, c.FaceSVG, time.Now().UnixMilli())
-	return err
+	candidate := base
+	for n := 2; ; n++ {
+		var exists bool
+		err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM companions WHERE id=?)`, candidate).Scan(&exists)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s-%d", base, n)
+	}
 }
 
 type companionQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func (b *larkServer) readActiveCompanion(ctx context.Context, q companionQuery, who peer) (companionState, error) {
-	id := strings.ToLower(who.DeviceID)
-	c, err := readCompanion(q.QueryRowContext(ctx, `SELECT `+activeCompanionColumns+`,`+
-		companionVoiceSQL+` FROM companions WHERE device_id=?`, id, id, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		c = blankCompanion()
-		if who.Character != "" && who.Character != c.Name && !strings.EqualFold(who.Character, id) && !webDeviceID(id) {
-			c.Name = who.Character
-			c.Configured = true
-			c.FaceSVG = c.defaultFace()
-		}
-		err = q.QueryRowContext(ctx, "SELECT "+companionVoiceSQL, id, id).Scan(&c.Voice)
-	}
-	c.Voice = storedVoice(c.Voice)
-	return c, err
-}
-
-func (b *larkServer) companionFor(who peer) companionState {
+func (b *larkServer) companionByID(id string) (companionState, bool) {
 	if b.db == nil {
-		return blankCompanion()
+		return companionState{}, false
 	}
-	id := strings.ToLower(who.DeviceID)
-	c, err := readCompanion(b.db.readDB().QueryRowContext(context.Background(), `SELECT `+activeCompanionColumns+`,`+
-		companionVoiceSQL+` FROM companions WHERE device_id=?`, id, id, id))
-	if err == nil {
-		c.Voice = storedVoice(c.Voice)
-		return c
+	c, err := readCompanionRow(b.db.readDB().QueryRow(`SELECT `+companionColumns+` FROM companions WHERE id=?`, strings.ToLower(id)))
+	if err != nil {
+		return companionState{}, false
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		var voice string
-		_ = b.db.readDB().QueryRowContext(context.Background(), "SELECT "+companionVoiceSQL, id, id).Scan(&voice)
-		c = blankCompanion()
-		if who.Character != "" && who.Character != c.Name && !strings.EqualFold(who.Character, id) && !webDeviceID(id) {
-			c.Name = who.Character
-			c.Configured = true
-			c.FaceSVG = c.defaultFace()
-		}
-		c.Voice = storedVoice(voice)
-		return c
-	}
-	return blankCompanion()
+	return c, true
 }
 
-func updateCompanion(c companionState, args object, voices deviceVoices) (companionState, bool, error) {
-	before := c
-	save, err := companionBool(args, "save_profile", false)
-	if err != nil {
-		return c, false, err
+func (b *larkServer) companionFor(id string) companionState {
+	if c, ok := b.companionByID(id); ok {
+		return c
 	}
+	c := blankCompanion()
+	c.ID = strings.ToLower(id)
+	return c
+}
+
+func (b *larkServer) allCompanions(ctx context.Context) ([]companionState, error) {
+	if b.db == nil {
+		return nil, nil
+	}
+	rows, err := b.db.readDB().QueryContext(ctx, `SELECT `+companionColumns+` FROM companions ORDER BY id`)
+	if err != nil {
+		return nil, problem(502, "Cannot read companions")
+	}
+	defer rows.Close()
+	var list []companionState
+	for rows.Next() {
+		c, err := readCompanionRow(rows)
+		if err != nil {
+			return nil, problem(502, "Cannot read companions")
+		}
+		list = append(list, c)
+	}
+	if rows.Err() != nil {
+		return nil, problem(502, "Cannot read companions")
+	}
+	return list, nil
+}
+
+func (b *larkServer) companionTargets(sender string) ([]companionTarget, error) {
+	list, err := b.allCompanions(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]companionTarget, 0, len(list))
+	for _, c := range list {
+		if !strings.EqualFold(sender, c.ID) {
+			out = append(out, companionTarget{ID: c.ID, Name: c.Name})
+		}
+	}
+	return out, nil
+}
+
+func (b *larkServer) companionEntry(c companionState, full bool) object {
+	voice := b.voices.resolve(c.Voice, companionTheme(c.Name))
+	terminals, _ := b.terminalsForCompanion(c.ID)
+	termEntries := make([]object, 0, len(terminals))
+	online := false
+	for _, t := range terminals {
+		te := b.terminalEntry(t, full)
+		if te["online"] == true {
+			online = true
+		}
+		termEntries = append(termEntries, te)
+	}
+	entry := object{
+		"id":           c.ID,
+		"name":         c.Name,
+		"configured":   c.Configured,
+		"face_bg":      c.FaceBG,
+		"mark_color":   c.MarkColor,
+		"accent_color": c.AccentColor,
+		"personality":  c.Personality,
+		"voice":        voice,
+		"online":       online,
+		"dormant":      len(termEntries) == 0,
+		"terminals":    termEntries,
+		"updated_at":   c.UpdatedAt,
+	}
+	if full {
+		entry["face_svg"] = c.FaceSVG
+	}
+	if details := b.tunnels.info(c.ID); details != nil {
+		entry["tunnel"] = details
+	}
+	return entry
+}
+
+func companionTheme(name string) string {
+	if strings.EqualFold(name, "mint") {
+		return "mint"
+	}
+	return "cake"
+}
+
+func (b *larkServer) companionList(ctx context.Context, full bool) ([]object, error) {
+	list, err := b.allCompanions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]object, 0, len(list))
+	for _, c := range list {
+		out = append(out, b.companionEntry(c, full))
+	}
+	return out, nil
+}
+
+func updateCompanion(c companionState, args object, voices companionVoices) (companionState, error) {
+	before := c
 	editLook := false
 	for key, val := range args {
 		switch key {
 		case "name":
 			name := strings.TrimSpace(str(val))
 			if !characterRE.MatchString(name) {
-				return c, false, problem(400, "Invalid companion name (1–40 characters)")
+				return c, problem(400, "Invalid companion name (1–40 characters)")
 			}
 			c.Name, editLook = name, true
 		case "face_bg", "mark_color", "accent_color":
 			tint := color(val)
 			if tint == "" {
-				return c, false, problem(400, "Expected #RRGGBB for "+key)
+				return c, problem(400, "Expected #RRGGBB for "+key)
 			}
 			switch key {
 			case "face_bg":
@@ -186,24 +243,25 @@ func updateCompanion(c companionState, args object, voices deviceVoices) (compan
 		case "personality":
 			vibe, ok := val.(string)
 			if !ok || runeLen(vibe) > 160 || strings.ContainsAny(vibe, "[]") || strings.ContainsFunc(vibe, func(r rune) bool { return !unicode.IsPrint(r) }) {
-				return c, false, problem(400, "Expected a single-line personality of at most 160 characters, without brackets")
+				return c, problem(400, "Expected a single-line personality of at most 160 characters, without brackets")
 			}
 			c.Personality = strings.TrimSpace(vibe)
 		case "voice":
 			if !voices.allowed(str(val)) {
-				return c, false, problem(400, "Unsupported voice")
+				return c, problem(400, "Unsupported voice")
 			}
 			c.Voice = str(val)
 		case "face_svg", "face_edits", "preset":
 			editLook = true
-		case "configured", "save_profile", "device_id", "op":
+		case "configured", "companion_id", "op", "id":
 		default:
-			return c, false, problem(400, "Unknown companion field "+key)
+			return c, problem(400, "Unknown companion field "+key)
 		}
 	}
+	var err error
 	c.Configured, err = companionBool(args, "configured", c.Configured || editLook)
 	if err != nil {
-		return c, false, err
+		return c, err
 	}
 	oldPalette := [...]string{before.FaceBG, before.MarkColor, before.AccentColor}
 	newPalette := [...]string{c.FaceBG, c.MarkColor, c.AccentColor}
@@ -211,12 +269,12 @@ func updateCompanion(c companionState, args object, voices deviceVoices) (compan
 	if raw, set := args["preset"]; set {
 		for _, field := range []string{"face_svg", "face_bg", "mark_color", "accent_color"} {
 			if _, exists := args[field]; exists {
-				return c, false, fieldError("companion.preset", "cannot combine with %s", field)
+				return c, fieldError("companion.preset", "cannot combine with %s", field)
 			}
 		}
 		art, p, err := compileCompanion(raw)
 		if err != nil {
-			return c, false, err
+			return c, err
 		}
 		c.FaceBG, c.MarkColor, c.AccentColor = p.bg, p.furShadow, p.blush
 		if editParts {
@@ -224,10 +282,10 @@ func updateCompanion(c companionState, args object, voices deviceVoices) (compan
 		} else {
 			c.FaceSVG, err = sanitizeFaceSVG(art)
 		}
-		return c, save, err
+		return c, err
 	} else if raw, set := args["face_svg"]; set {
 		if editParts {
-			return c, false, fieldError("companion", "use face_svg or face_edits, not both")
+			return c, fieldError("companion", "use face_svg or face_edits, not both")
 		}
 		c.FaceSVG, err = sanitizeFaceSVG(str(raw))
 	} else if editParts || oldPalette != newPalette || c.Configured != before.Configured {
@@ -242,7 +300,7 @@ func updateCompanion(c companionState, args object, voices deviceVoices) (compan
 			c.FaceSVG, err = editFaceParts(c.FaceSVG, edits)
 		}
 	}
-	return c, save, err
+	return c, err
 }
 
 func companionBool(args object, key string, fallback bool) (bool, error) {
@@ -256,136 +314,69 @@ func companionBool(args object, key string, fallback bool) (bool, error) {
 	return fallback, nil
 }
 
-func (b *larkServer) changeCompanion(ctx context.Context, who peer, theme, op string, args object) (companionState, bool, error) {
-	return b.changeCompanionPrepared(ctx, who, theme, op, args, nil)
+func (b *larkServer) changeCompanion(ctx context.Context, id, op string, args object) (companionState, error) {
+	return b.changeCompanionPrepared(ctx, id, op, args, nil)
 }
 
-func (b *larkServer) changeCompanionPrepared(ctx context.Context, who peer, theme, op string, args object, portrait *pendingPortrait) (companionState, bool, error) {
-	id := strings.ToLower(who.DeviceID)
+func (b *larkServer) changeCompanionPrepared(ctx context.Context, id, op string, args object, portrait *pendingPortrait) (companionState, error) {
+	id = strings.ToLower(id)
 	unavailable := problem(502, "Cannot save companion")
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
-		return companionState{}, false, unavailable
+		return companionState{}, unavailable
 	}
 	defer tx.Rollback()
-	if virtualID.MatchString(id) {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM virtual_clients WHERE id=?)`, id).Scan(&exists); err != nil {
-			return companionState{}, false, unavailable
-		}
-		if !exists {
-			return companionState{}, false, problem(404, "Device not found")
-		}
+	current, err := readCompanionRow(tx.QueryRowContext(ctx, `SELECT `+companionColumns+` FROM companions WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return companionState{}, problem(404, "Companion not found")
 	}
-	current, err := b.readActiveCompanion(ctx, tx, who)
 	if err != nil {
-		return companionState{}, false, unavailable
+		return companionState{}, unavailable
 	}
 	if !b.voices.allowed(current.Voice) {
-		current.Voice = b.voices.defaultFor(theme)
+		current.Voice = b.voices.defaultFor(companionTheme(current.Name))
 	}
 	next := current
-	profilesChanged := false
-	archive := func(c companionState, replace bool) error {
-		if strings.HasPrefix(strings.ToLower(c.Name), "live-") || strings.HasPrefix(id, "lark-live-") || companionSlug(c.Name) == "" {
-			return nil
-		}
-		profilesChanged = true
-		return saveCompanionProfile(ctx, tx, c, replace)
-	}
 	switch op {
 	case "get":
-		return current, false, nil
+		return current, nil
 	case "update":
-		var save bool
-		next, save, err = updateCompanion(current, args, b.voices)
+		next, err = updateCompanion(current, args, b.voices)
 		if err != nil {
-			return companionState{}, false, err
+			return companionState{}, err
 		}
 		if portrait != nil {
 			if current.FaceSVG != portrait.base {
-				return companionState{}, false, problem(409, "Companion changed while the portrait was being drawn")
+				return companionState{}, problem(409, "Companion changed while the portrait was being drawn")
 			}
 			next.Configured, err = companionBool(args, "configured", true)
 			if err != nil {
-				return companionState{}, false, err
+				return companionState{}, err
 			}
 			next.FaceBG = portrait.bg
 			next.FaceSVG = portrait.svg()
 		}
-		// An omitted flag retains default auto-save; an explicit false is a
-		// temporary shift that must not overwrite a named favorite.
-		if _, explicit := args["save_profile"]; save || !explicit && next.Configured {
-			if err := archive(next, true); err != nil {
-				return companionState{}, false, unavailable
-			}
-		}
-	case "load_saved":
-		slug := str(args["slug"])
-		if !validCompanionSlug(slug) {
-			return companionState{}, false, problem(400, "Invalid companion slug")
-		}
-		p, err := readSavedCompanion(tx.QueryRowContext(ctx, `SELECT `+savedCompanionColumns+` FROM saved_companions WHERE slug=?`, slug))
-		if errors.Is(err, sql.ErrNoRows) {
-			return companionState{}, false, problem(404, "Saved companion not found")
-		}
-		if err != nil {
-			return companionState{}, false, unavailable
-		}
-		if current.Configured && companionSlug(current.Name) != slug {
-			if err := archive(current, false); err != nil {
-				return companionState{}, false, unavailable
-			}
-		}
-		next = p.companionState
-		if !b.voices.allowed(next.Voice) {
-			next.Voice = current.Voice
-		}
 	case "reset_blank", "new_session":
-		if current.Configured {
-			if err := archive(current, false); err != nil {
-				return companionState{}, false, unavailable
-			}
-		}
 		next = blankCompanion()
+		next.ID = id
 		next.Voice = current.Voice
 	}
 	if err := writeCompanion(ctx, tx, id, next); err != nil {
-		return companionState{}, false, unavailable
-	}
-	if err := writeCompanionVoice(ctx, tx, id, next.Voice); err != nil {
-		return companionState{}, false, unavailable
+		return companionState{}, unavailable
 	}
 	if op == "new_session" {
-		if err := resetCompanionSession(ctx, tx, who.DeviceID, args["archive_history"] == true); err != nil {
-			return companionState{}, false, err
+		if err := resetCompanionSession(ctx, tx, id, args["archive_history"] == true); err != nil {
+			return companionState{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return companionState{}, false, unavailable
+		return companionState{}, unavailable
 	}
-	return next, profilesChanged, nil
-}
-
-func validCompanionSlug(slug string) bool { return len(slug) <= 40 && companionSlugRE.MatchString(slug) }
-
-func (b *larkServer) savedCompanionState(ctx context.Context) (object, error) {
-	out := object{}
-	if b.db == nil {
-		return out, nil
-	}
-	list, err := b.companionTool(ctx, object{"op": "list_saved"})
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range list["companions"].([]savedCompanion) {
-		out[c.Slug] = c
-	}
-	return out, nil
+	return next, nil
 }
 
 func (b *larkServer) patchCompanion(ctx context.Context, id string, args object) (any, error) {
-	c := withDevice(args, id)
+	c := withCompanion(args, id)
 	op, supplied := c["op"]
 	if !supplied {
 		op = "update"
@@ -396,13 +387,6 @@ func (b *larkServer) patchCompanion(ctx context.Context, id string, args object)
 		}
 	}
 	switch op {
-	case "load", "delete_saved":
-		if str(c["slug"]) == "" {
-			c["slug"] = companionSlug(str(c["name"]))
-		}
-		if op == "load" {
-			op = "load_saved"
-		}
 	case "update", "reset_blank":
 	default:
 		return nil, fieldError("companion.op", "unknown operation")
@@ -411,9 +395,6 @@ func (b *larkServer) patchCompanion(ctx context.Context, id string, args object)
 	result, err := b.companionTool(ctx, c)
 	if err != nil {
 		return nil, err
-	}
-	if op == "delete_saved" {
-		return object{"deleted_saved": c["slug"]}, nil
 	}
 	return result["companion"], nil
 }
@@ -424,59 +405,27 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 	}
 	op := str(args["op"])
 	switch op {
-	case "list_saved":
-		rows, err := b.db.readDB().QueryContext(ctx, `SELECT `+savedCompanionColumns+` FROM saved_companions ORDER BY slug`)
-		if err != nil {
-			return nil, problem(502, "Cannot read saved companions")
-		}
-		defer rows.Close()
-		list := []savedCompanion{}
-		for rows.Next() {
-			p, err := readSavedCompanion(rows)
-			if err != nil {
-				return nil, problem(502, "Cannot read saved companions")
-			}
-			list = append(list, p)
-		}
-		if rows.Err() != nil {
-			return nil, problem(502, "Cannot read saved companions")
-		}
-		return object{"companions": list}, nil
-	case "delete_saved":
-		slug := str(args["slug"])
-		if !validCompanionSlug(slug) {
-			return nil, problem(400, "Invalid companion slug")
-		}
-		if _, err := b.db.ExecContext(ctx, `DELETE FROM saved_companions WHERE slug=?`, slug); err != nil {
-			return nil, problem(502, "Cannot delete saved companion")
-		}
-		if b.ws != nil {
-			b.ws.mu.Lock()
-			b.ws.savedCompanionsChanged()
-			b.ws.mu.Unlock()
-		}
-		return object{"ok": true}, nil
-	case "get", "update", "load_saved", "reset_blank":
+	case "get", "update", "reset_blank":
 	default:
 		return nil, problem(400, "Unknown companion operation")
 	}
-	id := str(args["device_id"])
-	if !deviceIDRE.MatchString(id) {
-		return nil, problem(400, "Invalid device ID")
+	id := strings.ToLower(str(args["companion_id"]))
+	if !validCompanionID(id) {
+		return nil, problem(400, "Invalid companion ID")
 	}
-	who, err := b.lookupDevice(id)
-	if err != nil {
-		return nil, err
+	before, ok := b.companionByID(id)
+	if !ok {
+		return nil, problem(404, "Companion not found")
 	}
-	id = who.DeviceID
 	var portrait *pendingPortrait
 	if raw, ok := args["portrait"]; ok {
 		if op != "update" {
 			return nil, fieldError("companion.portrait", "requires companion update")
 		}
-		args = withDevice(args, id)
+		args = withCompanion(args, id)
 		delete(args, "portrait")
-		portrait, err = b.preparePortrait(ctx, who, args, raw)
+		var err error
+		portrait, err = b.preparePortrait(ctx, id, args, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -486,10 +435,10 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 			b.companionMu.Lock()
 			defer b.companionMu.Unlock()
 		}
-		c, profilesChanged, err := b.changeCompanionPrepared(ctx, who, b.voiceTheme(who), op, args, portrait)
+		c, err := b.changeCompanionPrepared(ctx, id, op, args, portrait)
 		if b.ws != nil && err == nil && op != "get" {
 			b.ws.mu.Lock()
-			b.ws.companionChanged(id, c, profilesChanged)
+			b.ws.companionChanged(id, c)
 			b.ws.mu.Unlock()
 		}
 		return c, err
@@ -500,224 +449,230 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		}
 		return nil, err
 	}
-	if op != "get" && c.Name != who.Character && b.oc != nil {
-		b.syncCompanionTitle(ctx, who)
+	if op != "get" && c.Name != before.Name && b.oc != nil {
+		b.syncCompanionTitle(ctx, id)
 	}
-	return object{"ok": true, "device_id": id, "companion": c}, nil
+	return object{"ok": true, "companion_id": id, "companion": c}, nil
 }
 
-func (b *larkServer) syncCompanionTitle(ctx context.Context, who peer) {
+func (b *larkServer) syncCompanionTitle(ctx context.Context, companionID string) {
 	b.companionTitles.Lock()
 	defer b.companionTitles.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	sid, err := b.oc.get(who.DeviceID)
+	sid, err := b.oc.get(companionID)
 	if err != nil || sid == "" {
 		return
 	}
-	title := larkTitle(who.DeviceID, b.companionFor(who).Name)
+	title := larkTitle(companionID, b.companionFor(companionID).Name)
 	if err := b.oc.jsonCall(ctx, http.MethodPatch, "/api/session/"+sid, object{"title": title}, nil); err != nil {
 		log.Print("Lark could not update a companion session title")
 	}
 }
 
-func (b *larkServer) reassignCompanions(ctx context.Context, args object) (object, error) {
-	fromID, toID := str(args["from_device_id"]), str(args["to_device_id"])
-	mode := "swap"
-	if raw, ok := args["mode"]; ok {
-		mode = str(raw)
-	}
-	if !deviceIDRE.MatchString(fromID) || !deviceIDRE.MatchString(toID) || strings.EqualFold(fromID, toID) {
-		return nil, problem(400, "Expected two distinct device IDs")
-	}
-	if mode != "move" && mode != "swap" {
-		return nil, problem(400, "Expected mode move or swap")
-	}
+func (b *larkServer) createCompanion(ctx context.Context, obj object) (companionState, error) {
 	if b.db == nil {
-		return nil, problem(503, "Companion storage unavailable")
+		return companionState{}, problem(503, "Companion storage unavailable")
 	}
-	from, err := b.lookupDevice(fromID)
-	if err != nil {
-		return nil, err
+	c := blankCompanion()
+	if rawName, ok := obj["name"]; ok {
+		name := strings.TrimSpace(str(rawName))
+		if name != "" {
+			if !characterRE.MatchString(name) {
+				return companionState{}, problem(400, "Invalid companion name (1–40 characters)")
+			}
+			c.Name = name
+			c.Configured = true
+			c.FaceSVG = c.defaultFace()
+		}
 	}
-	to, err := b.lookupDevice(toID)
-	if err != nil {
-		return nil, err
+	patch := object{}
+	for _, k := range []string{"face_bg", "mark_color", "accent_color", "personality", "voice", "face_svg", "preset", "configured"} {
+		if v, exists := obj[k]; exists {
+			patch[k] = v
+		}
 	}
-	fromID, toID = from.DeviceID, to.DeviceID
-	apply := func() error {
-		b.companionMu.Lock()
-		defer b.companionMu.Unlock()
-		nextFrom, nextTo, archived, err := b.transferCompanions(ctx, from, to, mode)
+	if len(patch) > 0 {
+		var err error
+		c, err = updateCompanion(c, patch, b.voices)
 		if err != nil {
-			return err
+			return companionState{}, err
 		}
-		if b.ws != nil {
-			b.ws.mu.Lock()
-			defer b.ws.mu.Unlock()
-			for _, id := range []string{fromID, toID} {
-				if d := b.ws.devices[strings.ToLower(id)]; d != nil && b.ws.active(d) {
-					b.ws.stopCompanionTurn(d)
-				}
-			}
-			b.ws.companionChanged(fromID, nextFrom, false)
-			b.ws.companionChanged(toID, nextTo, archived)
-			b.ws.companionsReassigned(fromID, toID)
-		}
-		return nil
 	}
-	if b.oc != nil {
-		run := b.oc.prepareMappingChange(fromID, toID)
-		if b.ws != nil {
-			b.ws.stopCompanionTurns(fromID, toID)
-		}
-		err = run(ctx, func() error {
-			if err := apply(); err != nil {
-				return err
-			}
-			for _, who := range []peer{from, to} {
-				b.syncCompanionTitle(context.WithoutCancel(ctx), who)
-			}
-			return nil
-		})
-	} else {
-		err = apply()
+	if !b.voices.allowed(c.Voice) {
+		c.Voice = b.voices.defaultFor(companionTheme(c.Name))
 	}
-	if err != nil {
-		return nil, err
-	}
-	return object{"ok": true, "mode": mode, "from_device_id": fromID, "to_device_id": toID}, nil
-}
-
-func (b *larkServer) transferCompanions(ctx context.Context, from, to peer, mode string) (companionState, companionState, bool, error) {
-	fromTheme, toTheme := b.voiceTheme(from), b.voiceTheme(to)
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
-		return companionState{}, companionState{}, false, problem(502, "Cannot reassign companions")
+		return companionState{}, problem(502, "Cannot create companion")
 	}
 	defer tx.Rollback()
-	type assignment struct {
-		companion     companionState
-		sid, contract string
-	}
-	read := func(who peer, theme string) (assignment, error) {
-		var a assignment
-		key := strings.ToLower(who.DeviceID)
-		if virtualID.MatchString(key) {
-			var exists bool
-			if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM virtual_clients WHERE id=?)", key).Scan(&exists); err != nil {
-				return a, err
-			}
-			if !exists {
-				return a, sql.ErrNoRows
-			}
+	id := strings.ToLower(strings.TrimSpace(str(obj["id"])))
+	if id != "" {
+		if !validCompanionID(id) {
+			return companionState{}, problem(400, "Invalid companion ID")
 		}
-		var err error
-		a.companion, err = b.readActiveCompanion(ctx, tx, who)
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM companions WHERE id=?)`, id).Scan(&exists); err != nil {
+			return companionState{}, problem(502, "Cannot create companion")
+		}
+		if exists {
+			return companionState{}, problem(409, "Companion ID already exists")
+		}
+	} else {
+		id, err = b.uniqueCompanionSlug(ctx, tx, c.Name)
 		if err != nil {
-			return a, err
+			return companionState{}, problem(502, "Cannot create companion")
 		}
-		if !b.voices.allowed(a.companion.Voice) {
-			a.companion.Voice = b.voices.defaultFor(theme)
-		}
-		err = tx.QueryRowContext(ctx, "SELECT session_id,contract_hash FROM sessions WHERE device_id=?", who.DeviceID).Scan(&a.sid, &a.contract)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = nil
-		}
-		return a, err
 	}
-	var nextFrom, nextTo assignment
-	archived := false
-	err = func() error {
-		source, err := read(from, fromTheme)
-		if err != nil {
-			return err
-		}
-		target, err := read(to, toTheme)
-		if err != nil {
-			return err
-		}
-		nextFrom, nextTo = target, source
-		if mode == "move" {
-			if target.companion.Configured {
-				if err := saveCompanionProfile(ctx, tx, target.companion, false); err != nil {
-					return err
-				}
-				archived = true
-			}
-			nextFrom = assignment{companion: blankCompanion()}
-			nextFrom.companion.Voice = b.voices.defaultFor("")
-		}
-		now := time.Now().UnixMilli()
-		for id, a := range map[string]assignment{from.DeviceID: nextFrom, to.DeviceID: nextTo} {
-			key := strings.ToLower(id)
-			if err := writeCompanion(ctx, tx, key, a.companion); err != nil {
-				return err
-			}
-			if err := writeCompanionVoice(ctx, tx, key, a.companion.Voice); err != nil {
-				return err
-			}
-			if a.sid == "" {
-				if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE device_id=?", id); err != nil {
-					return err
-				}
-			} else if _, err := tx.ExecContext(ctx, `INSERT INTO sessions (device_id,session_id,updated_at,contract_hash,context_after_ms)
-				VALUES (?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET session_id=excluded.session_id,
-				updated_at=excluded.updated_at,contract_hash=excluded.contract_hash,context_after_ms=excluded.context_after_ms`,
-				id, a.sid, now, a.contract, now); err != nil {
-				return err
-			}
-		}
-		return tx.Commit()
-	}()
-	if errors.Is(err, sql.ErrNoRows) {
-		return companionState{}, companionState{}, false, problem(404, "Device not found")
+	c.ID = id
+	if err := writeCompanion(ctx, tx, id, c); err != nil {
+		return companionState{}, problem(502, "Cannot create companion")
 	}
-	if err != nil {
-		return companionState{}, companionState{}, false, problem(502, "Cannot reassign companions")
+	if err := tx.Commit(); err != nil {
+		return companionState{}, problem(502, "Cannot create companion")
 	}
-	return nextFrom.companion, nextTo.companion, archived, nil
+	if b.ws != nil {
+		b.ws.mu.Lock()
+		b.ws.broadcastPeers()
+		b.ws.mu.Unlock()
+	}
+	return c, nil
 }
 
-func writeCompanionVoice(ctx context.Context, tx *sql.Tx, id, voice string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO voices VALUES (?,?) ON CONFLICT(device_id) DO UPDATE SET voice=excluded.voice`, id, voice)
-	return err
+func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
+	id = strings.ToLower(id)
+	if !validCompanionID(id) {
+		return problem(400, "Invalid companion ID")
+	}
+	if _, ok := b.companionByID(id); !ok {
+		return problem(404, "Companion not found")
+	}
+	terms, err := b.terminalsForCompanion(id)
+	if err != nil {
+		return err
+	}
+	if len(terms) > 0 {
+		return problem(409, "Detach or remove terminals before deleting companion")
+	}
+	if b.tunnels != nil {
+		b.tunnels.mu.Lock()
+		err := b.tunnels.removeLocked(ctx, id, false)
+		b.tunnels.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return problem(502, "Cannot delete companion")
+	}
+	defer tx.Rollback()
+	for _, query := range []string{
+		`DELETE FROM sessions WHERE companion_id=?`,
+		`DELETE FROM messages WHERE companion_id=?`,
+		`DELETE FROM timers WHERE companion_id=?`,
+		`DELETE FROM build_jobs WHERE companion_id=?`,
+		`DELETE FROM parent_settings WHERE companion_id=?`,
+		`DELETE FROM parent_usage WHERE companion_id=?`,
+		`DELETE FROM memory WHERE scope=?`,
+		`DELETE FROM companions WHERE id=?`,
+	} {
+		arg := id
+		if strings.Contains(query, "FROM memory") {
+			arg = "companion:" + id
+		}
+		if _, err := tx.ExecContext(ctx, query, arg); err != nil {
+			return problem(502, "Cannot delete companion")
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return problem(502, "Cannot delete companion")
+	}
+	if b.ws != nil {
+		b.ws.mu.Lock()
+		b.ws.broadcastPeers()
+		b.ws.mu.Unlock()
+	}
+	return nil
 }
 
 func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	switch {
 	case path == "/api/companions" && r.Method == http.MethodGet:
-		return b.companionTool(r.Context(), object{"op": "list_saved"})
-	case path == "/api/companions/reassign" && r.Method == http.MethodPost:
+		list, err := b.companionList(r.Context(), false)
+		if err != nil {
+			return nil, err
+		}
+		return object{"companions": list}, nil
+	case path == "/api/companions" && r.Method == http.MethodPost:
+		obj, err := jsonBody(r)
+		if err != nil {
+			return nil, err
+		}
+		c, err := b.createCompanion(r.Context(), obj)
+		if err != nil {
+			return nil, err
+		}
+		sendJSON(w, 201, b.companionEntry(c, true))
+		return nil, nil
+	}
+	rest, ok := strings.CutPrefix(path, "/api/companions/")
+	if !ok || rest == "" {
+		return nil, problem(404, "Not found")
+	}
+	if id, ok := strings.CutSuffix(rest, "/messages"); ok && r.Method == http.MethodGet {
+		if !validCompanionID(strings.ToLower(id)) {
+			return nil, problem(400, "Invalid companion ID")
+		}
+		return b.messages(r, strings.ToLower(id))
+	}
+	if id, ok := strings.CutSuffix(rest, "/reset"); ok && r.Method == http.MethodPost {
+		if !validCompanionID(strings.ToLower(id)) {
+			return nil, problem(400, "Invalid companion ID")
+		}
+		return b.resetCompanion(r, strings.ToLower(id))
+	}
+	if id, ok := strings.CutSuffix(rest, "/voice"); ok && r.Method == http.MethodPost {
+		if !validCompanionID(strings.ToLower(id)) {
+			return nil, problem(400, "Invalid companion ID")
+		}
+		return b.voiceAPI(r, strings.ToLower(id))
+	}
+	if id, ok := strings.CutSuffix(rest, "/parent"); ok {
+		if !validCompanionID(strings.ToLower(id)) {
+			return nil, problem(400, "Invalid companion ID")
+		}
+		return b.routeParent(w, r, strings.ToLower(id))
+	}
+	if strings.Contains(rest, "/") {
+		return nil, problem(404, "Not found")
+	}
+	id := strings.ToLower(rest)
+	if !validCompanionID(id) {
+		return nil, problem(400, "Invalid companion ID")
+	}
+	switch r.Method {
+	case http.MethodGet:
+		c, ok := b.companionByID(id)
+		if !ok {
+			return nil, problem(404, "Companion not found")
+		}
+		return b.companionEntry(c, true), nil
+	case http.MethodPatch, http.MethodPut:
 		args, err := jsonBody(r)
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
-		defer cancel()
-		return b.reassignCompanions(ctx, args)
-	case strings.HasPrefix(path, "/api/companions/") && r.Method == http.MethodDelete:
-		if _, err := b.companionTool(r.Context(), object{"op": "delete_saved", "slug": strings.TrimPrefix(path, "/api/companions/")}); err != nil {
+		args["op"] = "update"
+		args["companion_id"] = id
+		return b.companionTool(r.Context(), args)
+	case http.MethodDelete:
+		if err := b.deleteCompanion(r.Context(), id); err != nil {
 			return nil, err
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return nil, nil
-	case (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(path, "/api/devices/") && strings.HasSuffix(path, "/companion"):
-		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api/devices/"), "/companion")
-		args, err := jsonBody(r)
-		if err != nil {
-			return nil, err
-		}
-		if _, load := args["slug"]; load {
-			if len(args) != 1 {
-				return nil, problem(400, "Supply either slug or companion fields")
-			}
-			args["op"] = "load_saved"
-		} else {
-			args["op"] = "update"
-		}
-		args["device_id"] = id
-		return b.companionTool(r.Context(), args)
 	}
 	return nil, problem(404, "Not found")
 }

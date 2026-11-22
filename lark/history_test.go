@@ -15,7 +15,6 @@ import (
 
 func TestDeviceResetHistory(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.virtual = virtualStore(b.db)
 		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_reset/interrupt" {
 				fmt.Fprint(w, `{"data":{"interrupted":false}}`)
@@ -24,13 +23,13 @@ func TestDeviceResetHistory(t *testing.T) {
 			w.WriteHeader(404)
 		})
 	})
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Milo"}, 201))
+	v := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Milo"}, 201))
 	id := str(v["id"])
-	path := base + "/api/devices/" + id
+	path := base + "/api/companions/" + id
 	watcher := testConnectWS(t, base, "unit", true)
 	watcher.json(t, object{"ev": "hello", "role": "web"})
 	watcher.until(t, hasWS("peers", ""))
-	const other = "lark-other"
+	const other = "other-companion"
 	for _, e := range []chatEntry{newChat("user", "You", "Hi", "typed"), newChat("companion", "Milo", "Hello", "typed")} {
 		b.history.add(id, e)
 		b.history.add(other, newChat(e.Role, e.Sender, "Other chat", e.Source))
@@ -81,7 +80,7 @@ func TestDeviceResetHistory(t *testing.T) {
 		t.Fatal("reset device still exposes archived history")
 	}
 	var archive string
-	if err := b.db.QueryRow(`SELECT device_id FROM messages WHERE id=?`, original[0].ID).Scan(&archive); err != nil {
+	if err := b.db.QueryRow(`SELECT companion_id FROM messages WHERE id=?`, original[0].ID).Scan(&archive); err != nil {
 		t.Fatal(err)
 	}
 	stamp, ok := strings.CutPrefix(archive, "archive-"+id+"-")
@@ -124,16 +123,16 @@ func TestHistoryCursorPagination(t *testing.T) {
 		if err := json.Unmarshal(raw, &p); err != nil {
 			t.Fatal(err)
 		}
-		if p.DeviceID != id || p.HasMore != (p.Next != nil) {
+		if p.CompanionID != id || p.HasMore != (p.Next != nil) {
 			t.Fatal(p)
 		}
 		return
 	}
-	path := "/api/devices/" + id + "/messages"
+	path := "/api/companions/" + id + "/messages"
 	if p := read(path); len(p.Messages) != 100 || p.Next == nil || p.Next.ID != "msg-405" || p.Messages[99].ID != "msg-504" {
 		t.Fatalf("unexpected default page: %d messages, cursor %v", len(p.Messages), p.Next)
 	}
-	p := read("/api/devices/" + id + "/messages?limit=900")
+	p := read("/api/companions/" + id + "/messages?limit=900")
 	if len(p.Messages) != 500 || p.Next == nil || p.Next.ID != "msg-005" {
 		t.Fatalf("unexpected max page: %d messages, cursor %v", len(p.Messages), p.Next)
 	}

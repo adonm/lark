@@ -26,12 +26,12 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		id, source, kind string
 		web              bool
 	}{
-		{"lark-33d8", "voice", "hardware", false},
-		{"virt-1234abcd", "typed", "web", false},
-		{"phone-1234", "tap", "web", false},
+		{"vocat-33d8", "voice", "hardware", false},
+		{"web-1234abcd", "typed", "web", true},
+		{"web-1234", "tap", "web", true},
 		{"other-id", "tap", "web", true},
 	} {
-		if got := turnPrompt(peer{DeviceID: tc.id}, tc.web, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}); got !=
+		if got := turnPrompt(tc.id, tc.web, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}); got !=
 			"[Cake ("+tc.id+") · "+tc.kind+" · "+tc.source+"]\nHi" {
 			t.Fatal(got)
 		}
@@ -220,16 +220,16 @@ func TestStateAndDirectMessage(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lark.db")
 	db := testDB(t, path)
-	p := peers{deviceStore(db)}
-	mint := peer{"lark-mint", "Mint", "127.0.0.2", 8080, time.Now().Unix()}
-	if err := p.register(mint); err != nil {
+	b := &larkServer{db: db}
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
 		t.Fatal(err)
 	}
-	others, err := (peers{deviceStore(db)}).snapshot("cake")
-	if err != nil || !slices.Equal(targets(others, "everyone"), []peer{mint}) {
-		t.Fatalf("bad peer snapshot %+v %v", others, err)
+	mint := companionTarget{ID: "mint", Name: "Mint"}
+	others, err := b.companionTargets("cake")
+	if err != nil || !slices.Equal(targets(others, "everyone"), []companionTarget{mint}) {
+		t.Fatalf("bad companion targets %+v %v", others, err)
 	}
-	for _, cmd := range []string{"Hey Lark, tell MINT: dinner is ready!", "Tell Mint — dinner is ready!", "Send lark-mint, dinner is ready!"} {
+	for _, cmd := range []string{"Hey Lark, tell MINT: dinner is ready!", "Tell Mint — dinner is ready!", "Send mint, dinner is ready!"} {
 		m := directMessage(others, directBody(cmd))
 		if m == nil || m.text != "dinner is ready!" || len(targets(others, m.target)) != 1 {
 			t.Fatalf("didn't match direct relay: %s", cmd)
@@ -240,14 +240,6 @@ func TestStateAndDirectMessage(t *testing.T) {
 			t.Fatalf("bypassed composition: %s", phrase)
 		}
 	}
-	mint.IP = "127.0.0.4"
-	if err := p.register(mint); err != nil {
-		t.Fatal(err)
-	}
-	next, err := (peers{deviceStore(db)}).snapshot("")
-	if err != nil || !slices.Equal(next, []peer{mint}) || others[0].IP == mint.IP {
-		t.Fatal("register didn't overwrite or modified prior snapshot")
-	}
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatal("state mode", err)
@@ -255,7 +247,7 @@ func TestStateAndDirectMessage(t *testing.T) {
 }
 
 func TestBridgeAuthAndBody(t *testing.T) {
-	b := &larkServer{token: "correct", peers: peers{deviceStore(testDB(t, ":memory:"))}}
+	b := &larkServer{token: "correct", db: testDB(t, ":memory:")}
 	for _, tc := range []struct {
 		lark []string
 		want int
@@ -285,7 +277,7 @@ func TestBridgeAuthAndBody(t *testing.T) {
 			t.Fatalf("%s: retired bridge endpoint returned HTTP %d", path, res.Code)
 		}
 	}
-	for _, path := range []string{"/api/devices", "/api/audio/unknown", "/api/tts", "/ota/version.json"} {
+	for _, path := range []string{"/api/companions", "/api/terminals", "/api/audio/unknown", "/api/tts", "/ota/version.json"} {
 		for _, tokens := range [][]string{nil, {"wrong"}, {"correct", "correct"}} {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			for _, token := range tokens {

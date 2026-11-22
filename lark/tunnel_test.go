@@ -50,47 +50,43 @@ func apiObjects(t *testing.T, url, key string) []any {
 	return testObject(t, testRequest(t, "GET", url, "unit", nil, 200))[key].([]any)
 }
 
-func TestVirtualClientsPersistenceAndDeviceMerge(t *testing.T) {
-	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.virtual = virtualStore(b.db)
-	})
-	if got := apiObjects(t, base+"/api/virtual-clients", "virtual_clients"); len(got) != 0 {
+func TestCompanionsAndTerminalsPersistence(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	if got := apiObjects(t, base+"/api/companions", "companions"); len(got) != 0 {
 		t.Fatal(got)
 	}
 	for _, input := range []object{
-		{"character": "##"},
-		{"character": "Plum", "voice": "unknown"},
+		{"name": "##"},
+		{"name": "Plum", "voice": "unknown"},
 	} {
-		testRequest(t, "POST", base+"/api/virtual-clients", "unit", input, 400)
+		testRequest(t, "POST", base+"/api/companions", "unit", input, 400)
 	}
-	v := testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "  Violet  "}, 201))
-	id := str(v["id"])
-	if v["character"] != "Violet" || v["online"] != false || !virtualID.MatchString(id) || v["created_at"] == "" {
-		t.Fatal(v)
+	c := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "  Violet  "}, 201))
+	id := str(c["id"])
+	if id != "violet" || c["name"] != "Violet" || c["online"] != false || c["dormant"] != true {
+		t.Fatal(c)
 	}
-	if v, _, err := virtualStore(b.db).get(id); err != nil || v.Character != "Violet" {
-		t.Fatal("virtual client not persisted")
+	term := testObject(t, testRequest(t, "POST", base+"/api/terminals", "unit", object{"kind": "web", "companion_id": id}, 201))
+	termID := str(term["id"])
+	if !webTerminalID.MatchString(termID) || term["companion_id"] != id {
+		t.Fatal(term)
 	}
 	physical := testConnectWS(t, base, "unit", false)
-	physical.hello(t, "lark-1234", "Cake")
-	devices := apiObjects(t, base+"/api/devices", "devices")
-	if len(devices) != 2 || devices[0].(object)["kind"] != "physical" || devices[0].(object)["ws_connected"] != true ||
-		devices[1].(object)["kind"] != "virtual" || devices[1].(object)["online"] != false || devices[1].(object)["device_id"] != id {
-		t.Fatal(devices)
+	physical.hello(t, "vocat-1234", "Cake")
+	terminals := apiObjects(t, base+"/api/terminals", "terminals")
+	if len(terminals) != 2 {
+		t.Fatal(terminals)
 	}
-	virtual := testConnectWS(t, base, "unit", false)
-	scene := virtual.hello(t, id, "Ignored")
+	web := testConnectWS(t, base, "unit", false)
+	scene := web.hello(t, termID, "Ignored")
 	if !bytes.Contains(scene.data, []byte(storybookPalettes["peach"].bg)) {
-		t.Fatal("configured cat palette ignored")
+		t.Fatal("configured companion palette ignored")
 	}
-	if v := apiObjects(t, base+"/api/virtual-clients", "virtual_clients")[0].(object); v["ws_connected"] != true {
-		t.Fatal(v)
-	}
-	testRequest(t, "DELETE", base+"/api/virtual-clients/"+id, "unit", nil, 204)
-	virtual.until(t, func(f wsFrame) bool { return f.op == wsClose })
-	testRequest(t, "DELETE", base+"/api/virtual-clients/"+id, "unit", nil, 404)
-	if clients, err := virtualStore(b.db).all(); err != nil || len(clients) != 0 || len(apiObjects(t, base+"/api/devices", "devices")) != 1 {
-		t.Fatal("deleted virtual client still visible")
+	testRequest(t, "DELETE", base+"/api/terminals/"+termID, "unit", nil, 200+4)
+	web.until(t, func(f wsFrame) bool { return f.op == wsClose })
+	testRequest(t, "DELETE", base+"/api/terminals/"+termID, "unit", nil, 404)
+	if terms, err := b.terminals.all(); err != nil || len(terms) != 1 {
+		t.Fatal("deleted web terminal still visible", terms, err)
 	}
 }
 
@@ -139,7 +135,6 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	}))
 	defer oc.Close()
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.virtual = virtualStore(b.db)
 		b.tunnels = newTunnelManager(b, "mock-opentunnel", r.run)
 		b.history = &chatHistory{b.db}
 		b.stt = func(context.Context, []byte) (string, error) { return "Voice to Cake.", nil }
@@ -151,23 +146,23 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 			b.db, dir, settings)
 	})
 	defer b.tunnels.shutdown()
-	id := str(testObject(t, testRequest(t, "POST", base+"/api/virtual-clients", "unit", object{"character": "Plum"}, 201))["id"])
+	id := str(testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Plum"}, 201))["id"])
 	status := testObject(t, testRequest(t, "GET", base+"/api/tunnel/status", "unit", nil, 200))
 	if len(status) != 4 || status["installed"] != true || status["service_running"] != true || status["hostname"] != "home.opentunnel.example" {
 		t.Fatal(status)
 	}
-	testRequest(t, "POST", base+"/api/tunnels", "unit", object{"device_id": "admin"}, 404)
-	testRequest(t, "DELETE", base+"/api/tunnels/virt-00000000", "unit", nil, 404)
-	result := testObject(t, testRequest(t, "POST", base+"/api/tunnels", "unit", object{"device_id": id}, 201))
-	if result["active"] != true || result["route_name"] != "scoped" || result["device_id"] != id {
+	testRequest(t, "POST", base+"/api/tunnels", "unit", object{"companion_id": "admin"}, 404)
+	testRequest(t, "DELETE", base+"/api/tunnels/missing", "unit", nil, 404)
+	result := testObject(t, testRequest(t, "POST", base+"/api/tunnels", "unit", object{"companion_id": id}, 201))
+	if result["active"] != true || result["route_name"] != "scoped" || result["companion_id"] != id {
 		t.Fatal("bad tunnel response")
 	}
-	again := testObject(t, testRequest(t, "POST", base+"/api/tunnels", "unit", object{"device_id": id}, 201))
+	again := testObject(t, testRequest(t, "POST", base+"/api/tunnels", "unit", object{"companion_id": id}, 201))
 	if again["share_url"] != result["share_url"] {
 		t.Fatal("tunnel add not idempotent")
 	}
-	if details := apiObjects(t, base+"/api/devices", "devices")[0].(object)["tunnel"].(object); details["active"] != true {
-		t.Fatal("unified list missing tunnel")
+	if details := apiObjects(t, base+"/api/companions", "companions")[0].(object)["tunnel"].(object); details["active"] != true {
+		t.Fatal("companions list missing tunnel")
 	}
 	restored := newTunnelManager(b, "mock-opentunnel", r.run)
 	defer restored.shutdown()
@@ -191,60 +186,59 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		t.Fatal("bad scoped share URL")
 	}
 	physical := testConnectWS(t, base, "unit", false)
-	physical.hello(t, "lark-private", "Cake")
+	physical.hello(t, "vocat-9999", "Cake")
 	mirror := testConnectWS(t, base, "unit", true)
-	mirror.watch(t, "lark-private")
+	mirror.watch(t, "cake")
 	testRequest(t, "GET", scoped+"/app", "", nil, 200)
 	testRequest(t, "GET", scoped+"/app/client.js", "", nil, 200)
 	testRequest(t, "GET", scoped+"/api/scope", "unit", nil, 401)
 	scope := testObject(t, testRequest(t, "GET", scoped+"/api/scope?token="+token, "", nil, 200))
-	if scope["scoped"] != true || scope["device_id"] != id || scope["character"] != "Plum" ||
+	if scope["scoped"] != true || scope["companion_id"] != id || scope["name"] != "Plum" ||
 		scope["companion"].(object)["face_bg"] != storybookPalettes["peach"].bg {
 		t.Fatal(scope)
 	}
-	for _, path := range []string{"/api/devices", "/api/tunnels", "/api/virtual-clients", "/api/tunnel/status", "/ota/version.json", "/mcp", "/health", "/api/audio/abcd", "/api/companions"} {
+	for _, path := range []string{"/api/terminals", "/api/tunnels", "/api/tunnel/status", "/ota/version.json", "/mcp", "/health", "/api/audio/abcd", "/api/companions"} {
 		testRequest(t, "GET", scoped+path, token, nil, 404)
 	}
 	testRequest(t, "POST", scoped+"/mcp", token, object{}, 404)
-	testRequest(t, "POST", scoped+"/api/devices/"+id+"/companion", token, object{"name": "No"}, 404)
-	testRequest(t, "DELETE", scoped+"/api/companions/plum", token, nil, 404)
-	testRequest(t, "GET", scoped+"/api/devices/"+id+"/messages", token, nil, 200)
-	testRequest(t, "GET", scoped+"/api/devices/lark-private/messages", token, nil, 403)
-	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": "lark-private", "text": "Question?"}, 403)
-	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": ""}, 400)
-	chat := testObject(t, testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": "Question?"}, 200))
-	if chat["reply"] != "Hello!" || chat["device_id"] != id || chat["session_id"] != "ses_shared" || chat["audio_url"] != nil {
+	testRequest(t, "PATCH", scoped+"/api/companions/"+id, token, object{"name": "No"}, 404)
+	testRequest(t, "DELETE", scoped+"/api/companions/"+id, token, nil, 404)
+	testRequest(t, "GET", scoped+"/api/companions/"+id+"/messages", token, nil, 200)
+	testRequest(t, "GET", scoped+"/api/companions/cake/messages", token, nil, 403)
+	testRequest(t, "POST", scoped+"/api/chat", token, object{"companion_id": "cake", "text": "Question?"}, 403)
+	testRequest(t, "POST", scoped+"/api/chat", token, object{"companion_id": id, "text": ""}, 400)
+	chat := testObject(t, testRequest(t, "POST", scoped+"/api/chat", token, object{"companion_id": id, "text": "Question?"}, 200))
+	if chat["reply"] != "Hello!" || chat["companion_id"] != id || chat["session_id"] != "ses_shared" || chat["audio_url"] != nil {
 		t.Fatal("tunneled chat did not return a scoped reply")
 	}
-	header := "[Plum (" + id + ") · web · typed]"
-	assertPrompt := func(text string) {
+	assertPrompt := func(kind, text string) {
 		t.Helper()
+		wantHeader := "[Plum (" + id + ") · " + kind + " · typed]"
 		select {
 		case got := <-prompts:
-			if got != header+"\n"+text || stripLarkHeader(got) != text {
-				t.Fatal("virtual cat prompt identity or provenance is incorrect")
+			if got != wantHeader+"\n"+text || stripLarkHeader(got) != text {
+				t.Fatal("companion prompt identity or provenance is incorrect", got)
 			}
 		default:
 			t.Fatal("did not receive an OpenCode prompt")
 		}
 	}
-	assertPrompt("Question?")
-	lan := testObject(t, testRequest(t, "POST", base+"/api/chat", "unit", object{"device_id": id, "text": "Another question?"}, 200))
-	assertPrompt("Another question?")
+	assertPrompt("hardware", "Question?")
+	lan := testObject(t, testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "Another question?"}, 200))
+	assertPrompt("hardware", "Another question?")
 	if lan["session_id"] != chat["session_id"] || creates.Load() != 1 {
 		t.Fatal("LAN and tunnel did not reuse one OpenCode session")
 	}
-	history := "/api/devices/" + id + "/messages"
+	history := "/api/companions/" + id + "/messages"
 	tunneled := testRequest(t, "GET", scoped+history, token, nil, 200)
 	if !bytes.Contains(tunneled, []byte("Hello!")) || !bytes.Equal(tunneled, testRequest(t, "GET", base+history, "unit", nil, 200)) {
 		t.Fatal("LAN and tunnel histories differ")
 	}
-	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": "lark-private"}, 404)
-	testRequest(t, "POST", scoped+"/api/reset", token, object{"device_id": id}, 404)
-	testRequest(t, "POST", scoped+"/api/companions/reassign", token, object{"from_device_id": id, "to_device_id": "lark-private"}, 404)
+	testRequest(t, "POST", scoped+"/api/companions/cake/reset", token, object{}, 404)
+	testRequest(t, "POST", scoped+"/api/companions/"+id+"/reset", token, object{}, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", token, nil, 404)
 	testRequest(t, "GET", scoped+"/api/diagnostics", "unit", nil, 404)
-	testRequest(t, "POST", scoped+"/api/chat", token, object{"device_id": id, "text": "Tell Cake Hi from HTTP."}, 200)
+	testRequest(t, "POST", scoped+"/api/chat", token, object{"companion_id": id, "text": "Tell Cake Hi from HTTP."}, 200)
 	mirror.until(t, hasWS("svg", "Hi from HTTP."))
 	_, rejected := dialTestWS(t, scoped, "unit", false, nil)
 	if rejected.StatusCode != 401 {
@@ -260,26 +254,26 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	if upgrade.StatusCode != 101 {
 		t.Fatal(upgrade.StatusCode)
 	}
-	conn.json(t, object{"ev": "hello", "role": "device", "device_id": "lark-private", "character": "Not allowed"})
+	conn.json(t, object{"ev": "hello", "role": "device", "terminal_id": "vocat-9999", "companion_id": "cake", "character": "Not allowed"})
 	conn.until(t, hasWS("error", `"status":403`))
-	conn.hello(t, id, "Ignored")
+	conn.hello(t, "web-00001111", "Ignored")
 	peers := conn.until(t, hasWS("peers", id))
-	if !bytes.Contains(peers.data, []byte(`"character":"Cake","device_id":"lark-private","online":true`)) ||
+	if !bytes.Contains(peers.data, []byte(`"id":"cake","name":"Cake","online":true`)) ||
 		bytes.Contains(peers.data, []byte(`"ip"`)) {
-		t.Fatal("scoped WebSocket did not expose the minimal online peer list")
+		t.Fatal("scoped WebSocket did not expose the minimal online companion list")
 	}
-	conn.json(t, object{"ev": "watch", "device_id": "lark-private"})
+	conn.json(t, object{"ev": "watch", "companion_id": "cake"})
 	conn.until(t, hasWS("error", `"status":403`))
-	conn.json(t, object{"ev": "watch", "device_id": id})
+	conn.json(t, object{"ev": "watch", "companion_id": id})
 	conn.until(t, hasWS("svg", ""))
 	conn.json(t, object{"ev": "text", "text": "WebSocket question?"})
 	conn.until(t, chatFrame("Hello!"))
-	assertPrompt("WebSocket question?")
+	assertPrompt("web", "WebSocket question?")
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
 	conn.json(t, object{"ev": "text", "text": "Tell Cake Hi from text."})
 	mirror.until(t, hasWS("svg", "Hi from text."))
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
-	conn.json(t, object{"ev": "intercom", "target": "lark-private", "text": "Hi from WS intercom."})
+	conn.json(t, object{"ev": "intercom", "target": "cake", "text": "Hi from WS intercom."})
 	mirror.until(t, hasWS("svg", "Hi from WS intercom."))
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
 	conn.json(t, object{"ev": "tap", "id": "companion", "x": 180, "y": 316})
@@ -292,13 +286,13 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		}
 	}
 	conn.json(t, object{"ev": "tap", "x": 115, "y": 130})
-	conn.until(t, hasWS("svg", "intercom-lark-private"))
+	conn.until(t, hasWS("svg", "intercom-cake"))
 	conn.json(t, object{"ev": "tap", "x": 245, "y": 116})
-	conn.until(t, hasWS("rec", `"target":"lark-private"`))
-	conn.json(t, object{"ev": "rec_start", "target": "lark-private"})
+	conn.until(t, hasWS("rec", `"target":"cake"`))
+	conn.json(t, object{"ev": "rec_start", "target": "cake"})
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	conn.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm...)))
-	conn.json(t, object{"ev": "rec_end", "target": "lark-private"})
+	conn.json(t, object{"ev": "rec_end", "target": "cake"})
 	got := physical.until(t, func(f wsFrame) bool { return f.op == wsBinary && f.data[0] == pcmPrefix })
 	if !bytes.Equal(got.data[1:], pcm) {
 		t.Fatal("tunneled menu did not deliver recorded PCM")
@@ -307,11 +301,9 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	conn.until(t, hasWS("mode", `"mode":"idle"`))
 	conn.json(t, object{"ev": "tap", "id": "companion", "x": 180, "y": 316})
 	conn.until(t, hasWS("svg", "companion-ring"))
-	conn.json(t, object{"ev": "reset", "device_id": id})
-	conn.json(t, object{"ev": "tap", "id": "new", "x": 230, "y": 104})
-	conn.json(t, object{"ev": "watch", "device_id": id})
+	conn.json(t, object{"ev": "watch", "companion_id": id})
 	conn.until(t, hasWS("svg", storybookPalettes["peach"].bg))
-	testRequest(t, "POST", base+"/api/devices/"+id+"/reset", "unit", object{}, 200)
+	testRequest(t, "POST", base+"/api/companions/"+id+"/reset", "unit", object{}, 200)
 	faceSeen, companionSeen := false, false
 	conn.until(t, func(f wsFrame) bool {
 		faceSeen = faceSeen || hasWS("svg", "#FFF2E7")(f)
@@ -319,7 +311,7 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 		return faceSeen && companionSeen
 	})
 	scope = testObject(t, testRequest(t, "GET", scoped+"/api/scope", token, nil, 200))
-	if scope["character"] != "New Cat" || scope["companion"].(object)["configured"] != false {
+	if scope["name"] != "New Companion" || scope["companion"].(object)["configured"] != false {
 		t.Fatal("scope retained the old companion after reset", scope)
 	}
 	if !bytes.Contains(testRequest(t, "GET", base+history, "unit", nil, 200), []byte("Hello!")) {
@@ -327,7 +319,8 @@ func TestScopedTunnelIsolationAndOwnedLifecycle(t *testing.T) {
 	}
 	restored.shutdown()
 	conn.until(t, func(f wsFrame) bool { return f.op == wsClose })
-	testRequest(t, "DELETE", base+"/api/virtual-clients/"+id, "unit", nil, 204)
+	testRequest(t, "DELETE", base+"/api/terminals/web-00001111", "unit", nil, 204)
+	testRequest(t, "DELETE", base+"/api/companions/"+id, "unit", nil, 204)
 	if len(apiObjects(t, base+"/api/tunnels", "tunnels")) != 0 {
 		t.Fatal("owned route not removed")
 	}
@@ -374,11 +367,11 @@ func TestNoSpeakToolAndFinalVoiceIsPersisted(t *testing.T) {
 			b.db, dir, ocSettings{})
 	})
 	c := testConnectWS(t, base, "unit", false)
-	c.hello(t, id, "Cake")
+	c.hello(t, "vocat-0001", "Cake")
 	w := testConnectWS(t, base, "unit", false)
 	w.json(t, object{"ev": "hello", "role": "web"})
-	w.until(t, hasWS("peers", id))
-	w.json(t, object{"ev": "watch", "device_id": id})
+	w.until(t, hasWS("peers", "cake"))
+	w.json(t, object{"ev": "watch", "companion_id": "cake"})
 	w.until(t, hasWS("svg", ""))
 	c.json(t, object{"ev": "text", "text": "Say something."})
 	w.until(t, chatFrame("Say something."))

@@ -336,7 +336,7 @@ func (b *larkServer) transactSavedAppEdits(ctx context.Context, names []string, 
 
 func (h *wsHub) appRunning(name string) bool {
 	if h != nil {
-		for _, d := range h.devices {
+		for _, d := range h.terminals {
 			if d.app != nil && d.app.spec.Name == name {
 				return true
 			}
@@ -401,7 +401,7 @@ func (b *larkServer) appAPI(w http.ResponseWriter, r *http.Request, path string)
 		if err != nil {
 			return nil, err
 		}
-		return b.runSavedApp(ctx, str(data["device_id"]), str(data["name"]), nil)
+		return b.runSavedApp(ctx, strings.ToLower(str(data["companion_id"])), str(data["name"]), nil)
 	case r.Method == http.MethodDelete:
 		name := strings.TrimPrefix(path, "/api/apps/")
 		_, err := b.deleteSavedApp(ctx, name)
@@ -433,7 +433,7 @@ const appEffectLimit = 8
 type appInstance struct {
 	spec                                savedApp
 	players                             []appPlayer
-	devices                             []*wsDevice
+	devices                             []*wsTerminal
 	vm                                  *goja.Runtime
 	self, state                         goja.Value
 	render, parse, stringify, errorText goja.Callable
@@ -519,7 +519,7 @@ func (a *appInstance) player(i int) goja.Value {
 	return v
 }
 
-func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessage, devices []*wsDevice, initial json.RawMessage, renderer func(string, bool, screenGeometry) (svgScreen, error)) (*appInstance, []svgScreen, error) {
+func initApp(spec savedApp, players []appPlayer, memory map[string]json.RawMessage, devices []*wsTerminal, initial json.RawMessage, renderer func(string, bool, screenGeometry) (svgScreen, error)) (*appInstance, []svgScreen, error) {
 	a := &appInstance{spec: spec, players: players, memory: memory, devices: devices, scope: "app:" + spec.Name,
 		geometry: make([]screenGeometry, len(players)), gradeSources: make([]*atomic.Uint32, len(players)),
 		buildScreen: renderer, lastScreens: make([]svgScreen, len(players))}
@@ -874,31 +874,31 @@ func (a *appInstance) update(ev appEvent, connected []bool) ([]svgScreen, error)
 	return a.screens(connected)
 }
 
-func appDevices(raw any) ([]string, error) {
+func appCompanions(raw any) ([]string, error) {
 	var ids []string
 	switch v := raw.(type) {
 	case string:
-		ids = []string{v}
+		ids = []string{strings.ToLower(v)}
 	case []any:
 		for _, item := range v {
-			ids = append(ids, str(item))
+			ids = append(ids, strings.ToLower(str(item)))
 		}
 	}
 	if len(ids) == 0 || len(ids) > 8 {
-		return nil, problem(400, "Expected 1–8 device IDs")
+		return nil, problem(400, "Expected 1–8 companion IDs")
 	}
 	seen := map[string]bool{}
 	for _, id := range ids {
-		if !deviceIDRE.MatchString(id) || seen[strings.ToLower(id)] {
-			return nil, problem(400, "Invalid or duplicate device ID")
+		if !validCompanionID(id) || seen[id] {
+			return nil, problem(400, "Invalid or duplicate companion ID")
 		}
-		seen[strings.ToLower(id)] = true
+		seen[id] = true
 	}
 	return ids, nil
 }
 
 func (b *larkServer) runSavedApp(ctx context.Context, id, name string, menu *menuContent) (object, error) {
-	return b.launchApp(ctx, object{"devices": id, "load": name}, menu)
+	return b.launchApp(ctx, object{"companions": id, "load": name}, menu)
 }
 
 func (b *larkServer) runApp(ctx context.Context, args object) (object, error) {
@@ -911,25 +911,25 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 			return nil, problem(400, "Use delete_saved without other app fields")
 		}
 		deleted, err := b.deleteSavedApp(ctx, str(name))
-		return object{"ok": true, "delete_saved": name, "deleted": deleted, "devices": []string{}, "title": "", "hit_ids": []string{}}, err
+		return object{"ok": true, "delete_saved": name, "deleted": deleted, "companions": []string{}, "title": "", "hit_ids": []string{}}, err
 	}
-	ids, err := appDevices(args["devices"])
+	ids, err := appCompanions(args["companions"])
 	if err != nil {
 		return nil, err
 	}
 	h := b.ws
 	if h == nil {
-		return nil, problem(503, "Device hub unavailable")
+		return nil, problem(503, "Terminal hub unavailable")
 	}
 	if raw, present := args["save_current"]; present {
 		if len(args) != 2 || len(ids) != 1 {
-			return nil, problem(400, "Use save_current with one device only")
+			return nil, problem(400, "Use save_current with one companion only")
 		}
 		return b.saveCurrentApp(ctx, ids[0], raw)
 	}
 	if raw, present := args["state_patch"]; present {
 		if len(args) != 2 {
-			return nil, problem(400, "Use state_patch with devices only")
+			return nil, problem(400, "Use state_patch with companions only")
 		}
 		patch, err := appJSONObject(raw, "state_patch")
 		if err != nil {
@@ -938,35 +938,37 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		return h.patchRunningApp(ctx, ids, patch)
 	}
 	if args["exit"] == true && len(args) != 2 {
-		return nil, problem(400, "Use exit with devices only")
+		return nil, problem(400, "Use exit with companions only")
 	}
 	h.mu.Lock()
 	players := make([]appPlayer, 0, len(ids))
-	devices := make([]*wsDevice, 0, len(ids))
+	devices := make([]*wsTerminal, 0, len(ids))
 	gens := make([]uint64, 0, len(ids))
 	for _, id := range ids {
-		d := h.devices[strings.ToLower(id)]
-		if d == nil || !h.active(d) {
+		terms := h.terminalsFor(id)
+		if len(terms) == 0 {
 			h.mu.Unlock()
-			return nil, problem(409, "Device is not connected: "+id)
+			return nil, problem(409, "Companion is not connected: "+id)
 		}
 		if args["exit"] != true {
-			if r := h.parentRefresh(d.key, time.Now()); r != "" {
+			if r := h.parentRefresh(id, time.Now()); r != "" {
 				h.mu.Unlock()
 				return nil, r.err()
 			}
 		}
-		if args["exit"] != true && d.callState != callNone {
-			h.mu.Unlock()
-			return nil, problem(409, "Device is on a call: "+id)
+		for _, d := range terms {
+			if args["exit"] != true && d.callState != callNone {
+				h.mu.Unlock()
+				return nil, problem(409, "Companion is on a call: "+id)
+			}
+			if menu != nil && !d.canLaunchMenuGame(menu) {
+				h.mu.Unlock()
+				return nil, problem(409, "Games menu changed")
+			}
+			devices = append(devices, d)
+			gens = append(gens, d.appGen)
+			players = append(players, appPlayer{d.companionID, d.companion.Name, len(players)})
 		}
-		if menu != nil && !d.canLaunchMenuGame(menu) {
-			h.mu.Unlock()
-			return nil, problem(409, "Games menu changed")
-		}
-		devices = append(devices, d)
-		gens = append(gens, d.appGen)
-		players = append(players, appPlayer{d.who.DeviceID, d.companion.Name, len(players)})
 	}
 	h.mu.Unlock()
 	if args["exit"] == true {
@@ -977,7 +979,7 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 				h.closeApp(d.app, time.Now())
 			}
 		}
-		return object{"ok": true, "devices": ids, "title": "", "hit_ids": []string{}}, nil
+		return object{"ok": true, "companions": ids, "title": "", "hit_ids": []string{}}, nil
 	}
 	a := savedApp{SVG: str(args["svg"]), Code: str(args["code"]), Title: shortText(args["title"], 60, false), Author: players[0].name}
 	if raw, present := args["screen"]; present {
@@ -1063,7 +1065,7 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		a.SVG = svgString(clean)
 		if a.scripted() {
 			var geometry screenGeometry
-			if slices.ContainsFunc(devices, func(d *wsDevice) bool { return d.client.role == "device" }) {
+			if slices.ContainsFunc(devices, func(d *wsTerminal) bool { return d.client.role == "device" }) {
 				geometry = roundScreen
 			}
 			if _, err := buildScreen(a.SVG, false, geometry); err != nil {
@@ -1102,11 +1104,11 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 		h.mu.Unlock()
 		return nil, problem(400, err.Error())
 	}
-	out := object{"ok": true, "devices": ids, "title": a.Title, "hit_ids": appHitIDs(screens...)}
+	out := object{"ok": true, "companions": ids, "title": a.Title, "hit_ids": appHitIDs(screens...)}
 	if inst.snapshot != nil {
 		out["state"] = inst.snapshot
 	}
-	round := slices.ContainsFunc(devices, func(d *wsDevice) bool { return d.screen.shape == "round" })
+	round := slices.ContainsFunc(devices, func(d *wsTerminal) bool { return d.screen.shape == "round" })
 	if warnings := appLayoutWarnings(screens, round); len(warnings) > 0 {
 		out["layout_warnings"] = warnings
 	}
@@ -1114,19 +1116,19 @@ func (b *larkServer) launchApp(ctx context.Context, args object, menu *menuConte
 	for i, d := range devices {
 		if !h.active(d) {
 			h.mu.Unlock()
-			return nil, problem(409, "Device disconnected: "+d.who.DeviceID)
+			return nil, problem(409, "Terminal disconnected: "+d.id)
 		}
-		if r := h.parentRefresh(d.key, time.Now()); r != "" {
+		if r := h.parentRefresh(d.companionID, time.Now()); r != "" {
 			h.mu.Unlock()
 			return nil, r.err()
 		}
 		if d.appGen != gens[i] {
 			h.mu.Unlock()
-			return nil, problem(409, "Device view changed: "+d.who.DeviceID)
+			return nil, problem(409, "Companion view changed: "+d.companionID)
 		}
 		if d.callState != callNone {
 			h.mu.Unlock()
-			return nil, problem(409, "Device is on a call: "+d.who.DeviceID)
+			return nil, problem(409, "Companion is on a call: "+d.companionID)
 		}
 		if menu != nil && !d.canLaunchMenuGame(menu) {
 			h.mu.Unlock()
@@ -1245,11 +1247,11 @@ func appFailure(spec savedApp, action string, err error, now time.Time) object {
 func (h *wsHub) activeAppState(a *appInstance) object {
 	ids := []string{}
 	for _, d := range a.devices {
-		if d != nil && h.active(d) {
-			ids = append(ids, d.who.DeviceID)
+		if d != nil && h.active(d) && !slices.Contains(ids, d.companionID) {
+			ids = append(ids, d.companionID)
 		}
 	}
-	out := object{"name": a.spec.Name, "title": a.spec.Title, "kind": a.spec.Kind, "devices": ids, "ticks_left": a.remaining}
+	out := object{"name": a.spec.Name, "title": a.spec.Title, "kind": a.spec.Kind, "companions": ids, "ticks_left": a.remaining}
 	if a.spec.Template != "" {
 		out["template"] = a.spec.Template
 	}
@@ -1263,16 +1265,22 @@ func (h *wsHub) patchRunningApp(ctx context.Context, ids []string, patch json.Ra
 	h.mu.Lock()
 	var a *appInstance
 	for _, id := range ids {
-		d := h.devices[strings.ToLower(id)]
-		if d == nil || !h.active(d) || h.parentRefresh(d.key, time.Now()) != "" || d.app == nil || d.app.vm == nil {
+		terms := h.terminalsFor(id)
+		if len(terms) == 0 || h.parentRefresh(id, time.Now()) != "" {
 			h.mu.Unlock()
 			return nil, problem(409, "No running JS app on "+id)
 		}
-		if a != nil && d.app != a {
-			h.mu.Unlock()
-			return nil, problem(409, "Devices must belong to the same running JS app")
+		for _, d := range terms {
+			if d.app == nil || d.app.vm == nil {
+				h.mu.Unlock()
+				return nil, problem(409, "No running JS app on "+id)
+			}
+			if a != nil && d.app != a {
+				h.mu.Unlock()
+				return nil, problem(409, "Companions must belong to the same running JS app")
+			}
+			a = d.app
 		}
-		a = d.app
 	}
 	done := make(chan appPatchResult, 1)
 	ev := appEvent{kind: "patch", i: -1, now: time.Now(), patch: patch, done: done}
@@ -1304,7 +1312,7 @@ func (b *larkServer) appsChanged() {
 	}
 }
 
-func (h *wsHub) dropApp(d *wsDevice) {
+func (h *wsHub) dropApp(d *wsTerminal) {
 	if a := d.app; a != nil {
 		for i, p := range a.devices {
 			if p == d {
@@ -1313,7 +1321,7 @@ func (h *wsHub) dropApp(d *wsDevice) {
 			}
 		}
 		d.app, d.appView = nil, svgScreen{}
-		if !slices.ContainsFunc(a.devices, func(d *wsDevice) bool { return d != nil }) {
+		if !slices.ContainsFunc(a.devices, func(d *wsTerminal) bool { return d != nil }) {
 			a.cancel()
 		}
 	}
@@ -1330,7 +1338,7 @@ func (h *wsHub) closeApp(a *appInstance, now time.Time) {
 
 func (h *wsHub) tickApps(now time.Time) {
 	seen := map[*appInstance]bool{}
-	for _, d := range h.devices {
+	for _, d := range h.terminals {
 		a := d.app
 		if a == nil || seen[a] || a.remaining == 0 || a.tickQueued || now.Before(a.nextTick) || !h.active(d) {
 			continue
@@ -1411,7 +1419,7 @@ func (h *wsHub) runAppEvents(a *appInstance) {
 				a.snapshot = snapshot
 				h.publishAppViews(a, views)
 				active := h.activeAppState(a)
-				out := object{"ok": true, "devices": active["devices"], "title": a.spec.Title, "state": snapshot, "hit_ids": appHitIDs(views...)}
+				out := object{"ok": true, "companions": active["companions"], "title": a.spec.Title, "state": snapshot, "hit_ids": appHitIDs(views...)}
 				if warnings := appLayoutWarnings(views, slices.Contains(a.geometry, roundScreen)); len(warnings) > 0 {
 					out["layout_warnings"] = warnings
 				}
@@ -1523,7 +1531,10 @@ func (h *wsHub) commitAppEvent(a *appInstance, ev appEvent, views []svgScreen, e
 			a.timeOfSpeech = now
 		}
 		for j, d := range a.devices {
-			if d == nil || !h.active(d) || ev.i >= 0 && j != ev.i && !e.all || h.parentRefresh(d.key, time.Now()) != "" {
+			if d == nil || !h.active(d) || ev.i >= 0 && j != ev.i && !e.all || (d.companionID != "" && h.parentRefresh(d.companionID, time.Now()) != "") {
+				continue
+			}
+			if h.audioTerminal(d.companionID) != d {
 				continue
 			}
 			switch e.kind {
@@ -1548,8 +1559,8 @@ func (h *wsHub) publishAppViews(a *appInstance, views []svgScreen) {
 	}
 }
 
-func withDevice(args object, id string) object {
+func withCompanion(args object, id string) object {
 	out := maps.Clone(args)
-	out["device_id"] = id
+	out["companion_id"] = id
 	return out
 }

@@ -37,24 +37,21 @@ func sqliteDSN(path string, writer bool) string {
 
 var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, character TEXT NOT NULL, ip TEXT NOT NULL, port INTEGER NOT NULL, last_seen INTEGER NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS sessions (device_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
-	`CREATE TABLE IF NOT EXISTS virtual_clients (id TEXT PRIMARY KEY, character TEXT NOT NULL, voice TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS voices (device_id TEXT PRIMARY KEY, voice TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS device_prefs (device_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
-	`CREATE TABLE IF NOT EXISTS companions (device_id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE IF NOT EXISTS saved_companions (slug TEXT PRIMARY KEY, name TEXT NOT NULL, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE IF NOT EXISTS tunnels (device_id TEXT PRIMARY KEY, route_name TEXT NOT NULL, url TEXT NOT NULL, local_port INTEGER NOT NULL, scoped_token TEXT NOT NULL, profile TEXT NOT NULL, created_at TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
-	`CREATE INDEX IF NOT EXISTS messages_device_ts_id ON messages (device_id, ts_ms, id)`,
+	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, face_bg TEXT NOT NULL, mark_color TEXT NOT NULL, accent_color TEXT NOT NULL, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, face_svg TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS terminals (id TEXT PRIMARY KEY, kind TEXT NOT NULL, companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL, ip TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
+	`CREATE TABLE IF NOT EXISTS sessions (companion_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE TABLE IF NOT EXISTS tunnels (companion_id TEXT PRIMARY KEY, route_name TEXT NOT NULL, url TEXT NOT NULL, local_port INTEGER NOT NULL, scoped_token TEXT NOT NULL, profile TEXT NOT NULL, created_at TEXT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS messages_companion_ts_id ON messages (companion_id, ts_ms, id)`,
 	`CREATE TABLE IF NOT EXISTS memory (scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key))`,
 	`CREATE TABLE IF NOT EXISTS apps (name TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL, svg TEXT NOT NULL DEFAULT '', code TEXT NOT NULL DEFAULT '', tick_ms INTEGER NOT NULL DEFAULT 0, max_ticks INTEGER NOT NULL DEFAULT 0, author TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, template TEXT NOT NULL DEFAULT '', data_json TEXT NOT NULL DEFAULT '{}')`,
-	`CREATE TABLE IF NOT EXISTS timers (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, label TEXT NOT NULL, say TEXT NOT NULL, chime TEXT NOT NULL, wake_agent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, fire_at TEXT NOT NULL, notes_json TEXT NOT NULL DEFAULT '[]', app_name TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE IF NOT EXISTS build_jobs (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, state TEXT NOT NULL, spec TEXT NOT NULL,
+	`CREATE TABLE IF NOT EXISTS timers (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, label TEXT NOT NULL, say TEXT NOT NULL, chime TEXT NOT NULL, wake_agent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, fire_at TEXT NOT NULL, notes_json TEXT NOT NULL DEFAULT '[]', app_name TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS build_jobs (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, state TEXT NOT NULL, spec TEXT NOT NULL,
 		created_at INTEGER NOT NULL, result TEXT NOT NULL DEFAULT '', announced INTEGER NOT NULL DEFAULT 0, cleanup INTEGER NOT NULL DEFAULT 0)`,
-	`CREATE INDEX IF NOT EXISTS build_jobs_state ON build_jobs (state, device_id)`,
-	`CREATE TABLE IF NOT EXISTS parent_settings (device_id TEXT PRIMARY KEY, timezone TEXT NOT NULL, quiet_start TEXT NOT NULL, quiet_end TEXT NOT NULL, daily_minutes INTEGER NOT NULL, pause_until_ms INTEGER NOT NULL, override_until_ms INTEGER NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS parent_usage (device_id TEXT NOT NULL, day TEXT NOT NULL, used_ms INTEGER NOT NULL, PRIMARY KEY (device_id, day))`,
+	`CREATE INDEX IF NOT EXISTS build_jobs_state ON build_jobs (state, companion_id)`,
+	`CREATE TABLE IF NOT EXISTS parent_settings (companion_id TEXT PRIMARY KEY, timezone TEXT NOT NULL, quiet_start TEXT NOT NULL, quiet_end TEXT NOT NULL, daily_minutes INTEGER NOT NULL, pause_until_ms INTEGER NOT NULL, override_until_ms INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS parent_usage (companion_id TEXT NOT NULL, day TEXT NOT NULL, used_ms INTEGER NOT NULL, PRIMARY KEY (companion_id, day))`,
 }
 
 type larkDB struct {
@@ -272,7 +269,7 @@ func (b *larkServer) volumePrefs(id string) (auto bool, level int) {
 	if b.db == nil {
 		return auto, level
 	}
-	err := b.db.readDB().QueryRow(`SELECT auto_volume,manual_volume FROM device_prefs WHERE device_id=?`, strings.ToLower(id)).Scan(&auto, &level)
+	err := b.db.readDB().QueryRow(`SELECT auto_volume,manual_volume FROM terminal_prefs WHERE terminal_id=?`, strings.ToLower(id)).Scan(&auto, &level)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Print("Lark could not read volume preferences")
 		return auto, level
@@ -284,8 +281,8 @@ func (b *larkServer) saveVolumePrefs(ctx context.Context, id string, auto bool, 
 	if b.db == nil {
 		return problem(503, "Volume storage unavailable")
 	}
-	_, err := b.db.ExecContext(ctx, `INSERT INTO device_prefs (device_id,auto_volume,manual_volume) VALUES (?,?,?)
-		ON CONFLICT(device_id) DO UPDATE SET auto_volume=excluded.auto_volume,manual_volume=excluded.manual_volume`,
+	_, err := b.db.ExecContext(ctx, `INSERT INTO terminal_prefs (terminal_id,auto_volume,manual_volume) VALUES (?,?,?)
+		ON CONFLICT(terminal_id) DO UPDATE SET auto_volume=excluded.auto_volume,manual_volume=excluded.manual_volume`,
 		strings.ToLower(id), auto, level)
 	if err != nil {
 		return problem(502, "Cannot save volume")
@@ -367,29 +364,26 @@ func (s *store[T]) save(id string, value T, remove bool) error {
 
 func placeholders(n int) string { return strings.Repeat("?,", n-1) + "?" }
 
-func deviceStore(d *larkDB) *store[peer] {
-	return &store[peer]{db: d.DB, readDB: d.readDB(), table: "devices", key: "device_id", columns: "device_id,character,ip,port,last_seen",
-		upsert: "character=excluded.character,ip=excluded.ip,port=excluded.port,last_seen=excluded.last_seen",
-		scan: func(r rowScanner) (string, peer, error) {
-			var p peer
-			err := r.Scan(&p.DeviceID, &p.Character, &p.IP, &p.Port, &p.LastSeen)
-			return p.DeviceID, p, err
-		}, values: func(id string, p peer) []any { return []any{id, p.Character, p.IP, p.Port, p.LastSeen} }}
-}
-
-func voiceStore(d *larkDB) *store[string] {
-	return &store[string]{db: d.DB, readDB: d.readDB(), table: "voices", key: "device_id", columns: "device_id,voice", upsert: "voice=excluded.voice",
-		scan: scanString, values: func(id, voice string) []any { return []any{id, voice} }}
-}
-
-func scanString(r rowScanner) (string, string, error) {
-	var id, value string
-	err := r.Scan(&id, &value)
-	return id, value, err
+func terminalStore(d *larkDB) *store[terminalRecord] {
+	return &store[terminalRecord]{db: d.DB, readDB: d.readDB(), table: "terminals", key: "id", columns: "id,kind,companion_id,ip,port,last_seen,created_at",
+		upsert: "kind=excluded.kind,companion_id=excluded.companion_id,ip=excluded.ip,port=excluded.port,last_seen=excluded.last_seen,created_at=excluded.created_at",
+		scan: func(r rowScanner) (string, terminalRecord, error) {
+			var t terminalRecord
+			var cid sql.NullString
+			err := r.Scan(&t.ID, &t.Kind, &cid, &t.IP, &t.Port, &t.LastSeen, &t.CreatedAt)
+			t.CompanionID = cid.String
+			return t.ID, t, err
+		}, values: func(id string, t terminalRecord) []any {
+			var cid any
+			if t.CompanionID != "" {
+				cid = t.CompanionID
+			}
+			return []any{id, t.Kind, cid, t.IP, t.Port, t.LastSeen, t.CreatedAt}
+		}}
 }
 
 func sessionStore(d *larkDB) *store[string] {
-	return &store[string]{db: d.DB, readDB: d.readDB(), table: "sessions", key: "device_id", columns: "device_id,session_id,updated_at",
+	return &store[string]{db: d.DB, readDB: d.readDB(), table: "sessions", key: "companion_id", columns: "companion_id,session_id,updated_at",
 		upsert: "session_id=excluded.session_id,updated_at=excluded.updated_at,contract_hash='',context_after_ms=excluded.updated_at",
 		scan: func(r rowScanner) (string, string, error) {
 			var id, sid string
@@ -399,29 +393,13 @@ func sessionStore(d *larkDB) *store[string] {
 		}, values: func(id, sid string) []any { return []any{id, sid, time.Now().UnixMilli()} }}
 }
 
-func virtualStore(d *larkDB) *store[virtualClient] {
-	return &store[virtualClient]{db: d.DB, readDB: d.readDB(), table: "virtual_clients", key: "id", columns: "id,character,voice,created_at",
-		upsert: "character=excluded.character,voice=excluded.voice,created_at=excluded.created_at",
-		scan: func(r rowScanner) (string, virtualClient, error) {
-			var v virtualClient
-			var at string
-			err := r.Scan(&v.ID, &v.Character, &v.Voice, &at)
-			if err == nil {
-				v.CreatedAt, err = time.Parse(time.RFC3339Nano, at)
-			}
-			return v.ID, v, err
-		}, values: func(id string, v virtualClient) []any {
-			return []any{id, v.Character, v.Voice, v.CreatedAt.Format(time.RFC3339Nano)}
-		}}
-}
-
 func tunnelStore(d *larkDB) *store[tunnelRecord] {
-	return &store[tunnelRecord]{db: d.DB, readDB: d.readDB(), table: "tunnels", key: "device_id", columns: "device_id,route_name,url,local_port,scoped_token,profile,created_at",
+	return &store[tunnelRecord]{db: d.DB, readDB: d.readDB(), table: "tunnels", key: "companion_id", columns: "companion_id,route_name,url,local_port,scoped_token,profile,created_at",
 		upsert: "route_name=excluded.route_name,url=excluded.url,local_port=excluded.local_port,scoped_token=excluded.scoped_token,profile=excluded.profile",
 		scan: func(r rowScanner) (string, tunnelRecord, error) {
 			var v tunnelRecord
-			err := r.Scan(&v.DeviceID, &v.RouteName, &v.URL, &v.LocalPort, &v.Token, &v.Profile, &v.CreatedAt)
-			return v.DeviceID, v, err
+			err := r.Scan(&v.CompanionID, &v.RouteName, &v.URL, &v.LocalPort, &v.Token, &v.Profile, &v.CreatedAt)
+			return v.CompanionID, v, err
 		}, values: func(id string, v tunnelRecord) []any {
 			return []any{id, v.RouteName, v.URL, v.LocalPort, v.Token, v.Profile, v.CreatedAt}
 		}}

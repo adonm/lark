@@ -17,12 +17,15 @@ var (
 )
 
 func validScope(scope string) bool {
+	if name, ok := strings.CutPrefix(scope, "companion:"); ok {
+		return validCompanionID(name)
+	}
 	for _, prefix := range []string{"game:", "app:"} {
 		if name, ok := strings.CutPrefix(scope, prefix); ok {
 			return slugRE.MatchString(name)
 		}
 	}
-	return deviceIDRE.MatchString(scope)
+	return scope == "shared"
 }
 
 type memoryWrite struct{ scope, key, value string }

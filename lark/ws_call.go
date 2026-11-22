@@ -25,20 +25,20 @@ const (
 )
 
 // Call state and control/PCM ordering are owned by the hub lock.
-func (h *wsHub) callPeer(d *wsDevice) *wsDevice {
-	p := h.devices[d.callPeer]
+func (h *wsHub) callPeer(d *wsTerminal) *wsTerminal {
+	p := h.terminals[d.callPeer]
 	if d.callID == 0 || p == nil || p.callID != d.callID || p.callPeer != d.key {
 		return nil
 	}
 	return p
 }
 
-func (h *wsHub) canCall(d *wsDevice, peerID string) bool {
-	p := h.devices[strings.ToLower(peerID)]
+func (h *wsHub) canCall(d *wsTerminal, companionID string) bool {
+	p := h.audioTerminal(companionID)
 	return d.caps.Call && p != nil && p != d && h.active(p) && p.caps.Call
 }
 
-func (h *wsHub) interruptForCall(d *wsDevice, now time.Time) {
+func (h *wsHub) interruptForCall(d *wsTerminal, now time.Time) {
 	h.cancelTurn(d, "call")
 	h.stopPlayback(d, true)
 	h.abortCallRecording(d)
@@ -46,7 +46,7 @@ func (h *wsHub) interruptForCall(d *wsDevice, now time.Time) {
 	h.wake(d, now)
 }
 
-func (h *wsHub) abortCallRecording(d *wsDevice) {
+func (h *wsHub) abortCallRecording(d *wsTerminal) {
 	rec := &d.recording
 	if rec.active() {
 		h.pushRecStop(d, rec.target, true)
@@ -55,7 +55,7 @@ func (h *wsHub) abortCallRecording(d *wsDevice) {
 	rec.ignoreStart = false
 }
 
-func (h *wsHub) callNotice(d *wsDevice, message string, now time.Time) {
+func (h *wsHub) callNotice(d *wsTerminal, message string, now time.Time) {
 	view := noticeScene("Can't call", message)
 	d.view = &view
 	h.render(d, now, false)
@@ -69,7 +69,7 @@ func (h *wsHub) callNotice(d *wsDevice, message string, now time.Time) {
 	})
 }
 
-func (h *wsHub) startCall(caller *wsDevice, peerID string) {
+func (h *wsHub) startCall(caller *wsTerminal, peerID string) {
 	if err := h.ringCall(caller, peerID, callRingLimit); err != nil && h.active(caller) && caller.parentReason == "" && caller.callState == callNone {
 		now := time.Now()
 		h.interruptForCall(caller, now)
@@ -77,15 +77,17 @@ func (h *wsHub) startCall(caller *wsDevice, peerID string) {
 	}
 }
 
-func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) error {
+func (h *wsHub) ringCall(caller *wsTerminal, peerCompanionID string, limit time.Duration) error {
 	if !h.active(caller) {
 		return problem(409, "Caller is not connected.")
 	}
-	key := strings.ToLower(peerID)
-	callee := h.devices[key]
+	key := strings.ToLower(peerCompanionID)
+	callee := h.audioTerminal(key)
 	now := time.Now()
-	if r := h.parentRefresh(caller.key, now); r != "" {
-		return r.err()
+	if caller.companionID != "" {
+		if r := h.parentRefresh(caller.companionID, now); r != "" {
+			return r.err()
+		}
 	}
 	if callee != nil && h.active(callee) && h.parentRefresh(key, now) != "" {
 		return problem(423, callee.companion.Name+" is resting right now. Try again later.")
@@ -100,21 +102,16 @@ func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) e
 	if caller.callState != callNone {
 		return problem(409, "Caller is already on a call.")
 	}
-	name := peerID
+	name := peerCompanionID
 	if callee != nil {
 		name = callee.companion.Name
-	} else {
-		for _, p := range h.storedPeers {
-			if strings.EqualFold(p.DeviceID, key) {
-				name = p.Character
-				break
-			}
-		}
+	} else if c, ok := h.b.companionByID(key); ok {
+		name = c.Name
 	}
 	switch {
 	case !caller.caps.Call:
 		return problem(409, "This companion needs call support (firmware 0.9.2 or newer).")
-	case callee == caller:
+	case callee == caller || strings.EqualFold(caller.companionID, key):
 		return problem(400, "Choose another companion to call.")
 	case callee == nil || !h.active(callee):
 		return problem(409, name+" is offline.")
@@ -138,7 +135,7 @@ func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) e
 	caller.callOrigin = true
 	caller.callCancel = cancel
 	logCall("start", caller, callee, "", 0)
-	for _, d := range []*wsDevice{caller, callee} {
+	for _, d := range []*wsTerminal{caller, callee} {
 		h.chime(d, "ring")
 		// A new call may have the same artwork as the one that just ended.
 		h.render(d, now, true)
@@ -150,11 +147,11 @@ func (h *wsHub) ringCall(caller *wsDevice, peerID string, limit time.Duration) e
 func (h *wsHub) mcpCall(from, to string) (object, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	caller := h.devices[strings.ToLower(from)]
-	if caller == nil || caller.who.DeviceID != from {
+	caller := h.audioTerminal(from)
+	if caller == nil {
 		return nil, problem(409, "Caller is not connected.")
 	}
-	if callee := h.devices[strings.ToLower(to)]; callee == nil || callee.who.DeviceID != to {
+	if callee := h.audioTerminal(to); callee == nil {
 		return nil, problem(409, "Recipient is not connected.")
 	}
 	if err := h.ringCall(caller, to, callRingLimit); err != nil {
@@ -167,7 +164,7 @@ func (h *wsHub) mcpCall(from, to string) (object, error) {
 	return object{"id": caller.callID, "state": state}, nil
 }
 
-func (h *wsHub) callSnapshot(d *wsDevice) object {
+func (h *wsHub) callSnapshot(d *wsTerminal) object {
 	if d.callState == callNone {
 		return nil
 	}
@@ -177,13 +174,13 @@ func (h *wsHub) callSnapshot(d *wsDevice) object {
 	}
 	peerID := d.callPeer
 	if p := h.callPeer(d); p != nil {
-		peerID = p.who.DeviceID
+		peerID = p.companionID
 	}
 	direction := "incoming"
 	if d.callOrigin {
 		direction = "outgoing"
 	}
-	out := object{"id": d.callID, "state": state, "direction": direction, "peer_device_id": peerID, "muted": d.callMuted}
+	out := object{"id": d.callID, "state": state, "direction": direction, "peer_companion_id": peerID, "muted": d.callMuted}
 	if d.callState == callActive {
 		out["started_at"] = d.callStarted.UTC()
 	}
@@ -193,11 +190,20 @@ func (h *wsHub) callSnapshot(d *wsDevice) object {
 func (h *wsHub) mcpHangup(id string, expected *uint64) (object, []object) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	d := h.devices[strings.ToLower(id)]
+	var d *wsTerminal
+	for _, t := range h.terminalsFor(id) {
+		if t.callState != callNone {
+			d = t
+			break
+		}
+	}
+	if d == nil {
+		d = h.audioTerminal(id)
+	}
 	skip := func(reason string) (object, []object) {
 		return nil, []object{deliveryReceipt("hangup", id, reason)}
 	}
-	if d == nil || d.who.DeviceID != id || !h.active(d) {
+	if d == nil || !h.active(d) {
 		return skip("not_connected")
 	}
 	if d.callState == callNone {
@@ -209,19 +215,19 @@ func (h *wsHub) mcpHangup(id string, expected *uint64) (object, []object) {
 	callID, p := d.callID, h.callPeer(d)
 	h.endCall(d, "hung up")
 	receipts := []object{}
-	for _, side := range []*wsDevice{d, p} {
+	for _, side := range []*wsTerminal{d, p} {
 		if side != nil {
 			reason := ""
 			if !h.active(side) {
 				reason = "not_connected"
 			}
-			receipts = append(receipts, deliveryReceipt("hangup", side.who.DeviceID, reason))
+			receipts = append(receipts, deliveryReceipt("hangup", side.companionID, reason))
 		}
 	}
 	return object{"id": callID, "state": "ended"}, receipts
 }
 
-func (h *wsHub) ringUntilAnswered(ctx context.Context, caller *wsDevice, id uint32) {
+func (h *wsHub) ringUntilAnswered(ctx context.Context, caller *wsTerminal, id uint32) {
 	tick := time.NewTicker(callRingEvery)
 	defer tick.Stop()
 	for {
@@ -243,7 +249,7 @@ func (h *wsHub) ringUntilAnswered(ctx context.Context, caller *wsDevice, id uint
 				return
 			}
 			now := time.Now()
-			if h.parentRefresh(caller.key, now) != "" || h.parentRefresh(peer.key, now) != "" {
+			if h.parentRefresh(caller.companionID, now) != "" || h.parentRefresh(peer.companionID, now) != "" {
 				h.mu.Unlock()
 				return
 			}
@@ -254,7 +260,7 @@ func (h *wsHub) ringUntilAnswered(ctx context.Context, caller *wsDevice, id uint
 	}
 }
 
-func (h *wsHub) answerCall(callee *wsDevice) {
+func (h *wsHub) answerCall(callee *wsTerminal) {
 	if callee.callState != callRingingIn {
 		return
 	}
@@ -264,13 +270,13 @@ func (h *wsHub) answerCall(callee *wsDevice) {
 		return
 	}
 	now := time.Now()
-	if h.parentRefresh(callee.key, now) != "" || h.parentRefresh(caller.key, now) != "" {
+	if h.parentRefresh(callee.companionID, now) != "" || h.parentRefresh(caller.companionID, now) != "" {
 		return
 	}
 	caller.callCancel()
 	caller.callCancel = nil
 	logCall("answer", caller, callee, "", 0)
-	for _, d := range []*wsDevice{caller, callee} {
+	for _, d := range []*wsTerminal{caller, callee} {
 		h.interruptForCall(d, now)
 		d.callState, d.callStarted = callActive, now
 		h.pushCallStart(d)
@@ -278,13 +284,13 @@ func (h *wsHub) answerCall(callee *wsDevice) {
 	}
 }
 
-func (h *wsHub) declineCall(d *wsDevice) {
+func (h *wsHub) declineCall(d *wsTerminal) {
 	if d.callState == callRingingIn {
 		h.endCall(d, "declined")
 	}
 }
 
-func (h *wsHub) endCall(d *wsDevice, reason string) {
+func (h *wsHub) endCall(d *wsTerminal, reason string) {
 	if d.callState == callNone {
 		return
 	}
@@ -297,13 +303,13 @@ func (h *wsHub) endCall(d *wsDevice, reason string) {
 	logCall("end", d, p, reason, elapsed)
 	if p != nil && d.callState == callActive {
 		duration := callDuration(elapsed)
-		dID, pID, dName, pName := d.who.DeviceID, p.who.DeviceID, d.companion.Name, p.companion.Name
+		dID, pID, dName, pName := d.companionID, p.companionID, d.companion.Name, p.companion.Name
 		go func() {
 			h.b.chat(dID, newChat("card", pName, "Voice call with "+pName+" ("+duration+")", "call"), true)
 			h.b.chat(pID, newChat("card", dName, "Voice call with "+dName+" ("+duration+")", "call"), true)
 		}()
 	}
-	for _, side := range []*wsDevice{d, p} {
+	for _, side := range []*wsTerminal{d, p} {
 		if side == nil {
 			continue
 		}
@@ -337,7 +343,7 @@ func (h *wsHub) endCall(d *wsDevice, reason string) {
 	}
 }
 
-func logCall(event string, d, p *wsDevice, reason string, duration time.Duration) {
+func logCall(event string, d, p *wsTerminal, reason string, duration time.Duration) {
 	caller, callee := d.key, d.callPeer
 	in, out := d.callFramesIn, d.callFramesOut
 	if p != nil {
@@ -350,7 +356,7 @@ func logCall(event string, d, p *wsDevice, reason string, duration time.Duration
 		event, d.callID, caller, callee, reason, duration.Round(time.Millisecond), in, out)
 }
 
-func (h *wsHub) toggleCallMute(d *wsDevice) {
+func (h *wsHub) toggleCallMute(d *wsTerminal) {
 	if d.callState == callActive {
 		d.callMuted = !d.callMuted
 		h.pushCallMute(d)
@@ -358,14 +364,14 @@ func (h *wsHub) toggleCallMute(d *wsDevice) {
 	}
 }
 
-func (h *wsHub) relayCallPCM(d *wsDevice, packet []byte) {
+func (h *wsHub) relayCallPCM(d *wsTerminal, packet []byte) {
 	if len(packet) != callPCMBytes+1 {
 		return
 	}
 	h.relayCallPCMBytes(d, packet[1:])
 }
 
-func (h *wsHub) relayCallPCMBytes(d *wsDevice, pcm []byte) {
+func (h *wsHub) relayCallPCMBytes(d *wsTerminal, pcm []byte) {
 	if len(pcm) != callPCMBytes && len(pcm) != rtpPCMBytes {
 		return
 	}
@@ -374,7 +380,7 @@ func (h *wsHub) relayCallPCMBytes(d *wsDevice, pcm []byte) {
 		return
 	}
 	p := h.callPeer(d)
-	if p == nil || !h.active(p) || p.callState != callActive || h.parentRefresh(p.key, time.Now()) != "" {
+	if p == nil || !h.active(p) || p.callState != callActive || h.parentRefresh(p.companionID, time.Now()) != "" {
 		return
 	}
 	c := p.client

@@ -282,7 +282,7 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 		return errInvalidBuild
 	}
 	if portrait == nil {
-		next, _, err = updateCompanion(next, edit, b.voices)
+		next, err = updateCompanion(next, edit, b.voices)
 		if err != nil {
 			return err
 		}
@@ -299,15 +299,6 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 		return err
 	}
 	defer tx.Rollback()
-	if virtualID.MatchString(job.device) {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM virtual_clients WHERE id=?)`, job.device).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return errStaleBuild
-		}
-	}
 	version, err := faceVersion(ctx, tx, job.device)
 	if err != nil {
 		return err
@@ -315,8 +306,10 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 	if version != job.spec.FaceVersion {
 		return errStaleBuild
 	}
-	who := peer{DeviceID: job.device, Character: job.spec.Character}
-	current, err := b.readActiveCompanion(ctx, tx, who)
+	current, err := readCompanionRow(tx.QueryRowContext(ctx, `SELECT `+companionColumns+` FROM companions WHERE id=?`, strings.ToLower(job.device)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return errStaleBuild
+	}
 	if err != nil {
 		return err
 	}
@@ -331,7 +324,7 @@ func (m *buildManager) commitFace(ctx context.Context, job buildJob, edit object
 	portrait = nil // The committed face owns the stored frames.
 	if b.ws != nil {
 		b.ws.mu.Lock()
-		b.ws.publishCompanion(job.device, current, false, false)
+		b.ws.publishCompanion(job.device, current, false)
 		b.ws.mu.Unlock()
 	}
 	return nil

@@ -13,22 +13,22 @@ import (
 	"strings"
 )
 
-const phonePWAPath = "/app/pwa/"
+const pwaPath = "/app/pwa/"
 
-func (b *larkServer) phoneCookie() string {
+func (b *larkServer) pwaCookie() string {
 	mac := hmac.New(sha256.New, []byte(b.token))
-	mac.Write([]byte("lark phone companion install artwork"))
+	mac.Write([]byte("lark companion install artwork"))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (b *larkServer) setPhoneCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "lark-pwa", Value: b.phoneCookie(), Path: phonePWAPath,
+func (b *larkServer) setPWACookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "lark-pwa", Value: b.pwaCookie(), Path: pwaPath,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 }
 
-var phoneWorkers = [2][]byte{phoneWorker(false), phoneWorker(true)}
+var pwaWorkers = [2][]byte{pwaWorker(false), pwaWorker(true)}
 
-func phoneWorker(scoped bool) []byte {
+func pwaWorker(scoped bool) []byte {
 	paths := []string{"/app", "/app/style.css", "/app/lark.svg"}
 	files, _ := webFiles.ReadDir("web")
 	for _, file := range files {
@@ -56,11 +56,11 @@ func phoneWorker(scoped bool) []byte {
 	return append(fmt.Appendf(nil, "const CACHE = \"lark-shell-%s-%x\", SHELL = %s;\n", mode, hash.Sum(nil), shell), worker...)
 }
 
-func (b *larkServer) servePhonePWA(w http.ResponseWriter, r *http.Request, path string, scope *virtualClient, token string) bool {
+func (b *larkServer) servePWA(w http.ResponseWriter, r *http.Request, path string, scope *companionState, token string) bool {
 	if path == "/app/sw.js" {
-		worker := phoneWorkers[0]
+		worker := pwaWorkers[0]
 		if scope != nil {
-			worker = phoneWorkers[1]
+			worker = pwaWorkers[1]
 		}
 		w.Header().Set("Service-Worker-Allowed", "/app")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -68,19 +68,19 @@ func (b *larkServer) servePhonePWA(w http.ResponseWriter, r *http.Request, path 
 		sendBytes(w, 200, "text/javascript; charset=utf-8", worker)
 		return true
 	}
-	const manifest = phonePWAPath + "manifest.webmanifest"
-	if !strings.HasPrefix(path, phonePWAPath) {
+	const manifest = pwaPath + "manifest.webmanifest"
+	if !strings.HasPrefix(path, pwaPath) {
 		return false
 	}
 	icons := map[string]int{"icon-192.png": 192, "icon-512.png": 512, "maskable-512.png": 512}
-	size := icons[path[len(phonePWAPath):]]
+	size := icons[path[len(pwaPath):]]
 	if path != manifest && size == 0 {
 		return false
 	}
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	query := r.URL.Query()
-	id := query.Get("device_id")
+	id := strings.ToLower(query.Get("companion_id"))
 	start := url.URL{Path: "/app"}
 	iconQuery := url.Values{}
 	var companion companionState
@@ -89,8 +89,8 @@ func (b *larkServer) servePhonePWA(w http.ResponseWriter, r *http.Request, path 
 			sendError(w, problem(401, "Unauthorized"))
 			return true
 		}
-		if query.Has("device_id") {
-			sendError(w, problem(403, "Device out of scope"))
+		if query.Has("companion_id") {
+			sendError(w, problem(403, "Companion out of scope"))
 			return true
 		}
 		id = scope.ID
@@ -98,23 +98,21 @@ func (b *larkServer) servePhonePWA(w http.ResponseWriter, r *http.Request, path 
 		// Installed Safari apps can start with separate website storage.
 		// Use the original scoped share capability, never a LAN credential.
 		start.RawQuery = iconQuery.Encode()
-		companion = b.companionFor(peer{DeviceID: id, Character: scope.Character})
+		companion = b.companionFor(id)
 	} else {
 		cookie, err := r.Cookie("lark-pwa")
-		if b.token == "" || err != nil || !tokenMatches([]string{cookie.Value}, b.phoneCookie()) {
+		if b.token == "" || err != nil || !tokenMatches([]string{cookie.Value}, b.pwaCookie()) {
 			sendError(w, problem(401, "Unauthorized"))
 			return true
 		}
-		if v, ok := b.virtualByID(id); ok {
-			companion = b.companionFor(peer{DeviceID: id, Character: v.Character})
-		} else if phoneID.MatchString(id) {
-			companion = b.companionFor(peer{DeviceID: id})
-		} else {
-			sendError(w, problem(404, "Virtual companion not found"))
+		var ok bool
+		companion, ok = b.companionByID(id)
+		if !ok {
+			sendError(w, problem(404, "Companion not found"))
 			return true
 		}
-		start.RawQuery = url.Values{"device_id": {id}}.Encode()
-		iconQuery.Set("device_id", id)
+		start.RawQuery = url.Values{"companion_id": {id}}.Encode()
+		iconQuery.Set("companion_id", id)
 	}
 	if path == manifest {
 		iconList := make([]object, 0, len(icons))
@@ -123,15 +121,15 @@ func (b *larkServer) servePhonePWA(w http.ResponseWriter, r *http.Request, path 
 			if strings.HasPrefix(name, "maskable") {
 				purpose = "maskable"
 			}
-			iconList = append(iconList, object{"src": phonePWAPath + name + "?" + iconQuery.Encode(), "type": "image/png",
+			iconList = append(iconList, object{"src": pwaPath + name + "?" + iconQuery.Encode(), "type": "image/png",
 				"sizes": fmt.Sprintf("%dx%d", icons[name], icons[name]), "purpose": purpose})
 		}
 		name := companion.Name
-		if !companion.Configured && name == "New Cat" {
-			name = "Phone Lark"
+		if !companion.Configured && name == "New Companion" {
+			name = "Lark"
 		}
 		data, _ := json.Marshal(object{
-			"id": "/app?device_id=" + id, "start_url": start.String(), "scope": "/app",
+			"id": "/app?companion_id=" + id, "start_url": start.String(), "scope": "/app",
 			"name": name, "short_name": name, "display": "standalone", "orientation": "portrait",
 			"theme_color": companion.MarkColor, "background_color": companion.FaceBG, "icons": iconList,
 		})

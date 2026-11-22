@@ -257,13 +257,15 @@ type e2eCompanion struct {
 func (s *e2eSuite) browser(t *testing.T, name string) *e2eCompanion {
 	t.Helper()
 	name = s.prefix + " " + name
-	v := testObject(t, s.request(t, "POST", "/api/virtual-clients", object{"character": name, "theme": "mint"}, 201))
+	v := testObject(t, s.request(t, "POST", "/api/companions", object{"name": name}, 201))
 	id := str(v["id"])
-	if !virtualID.MatchString(id) {
-		t.Fatal("missing virtual cat ID")
+	term := testObject(t, s.request(t, "POST", "/api/terminals", object{"kind": "web", "companion_id": id}, 201))
+	termID := str(term["id"])
+	if !webTerminalID.MatchString(termID) {
+		t.Fatal("missing web terminal ID")
 	}
 	ws := testConnectWS(t, s.base, s.token, true)
-	ws.json(t, object{"ev": "hello", "role": "web", "device_id": id, "firmware": "web",
+	ws.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id, "firmware": "web",
 		"volume": 65, "caps": object{"call": true, "call_pcm": true, "drag": true, "bridge_endpoint": true}})
 	c := &e2eCompanion{testWS: ws, id: id, name: name}
 	c.scene(t, "companion-ring")

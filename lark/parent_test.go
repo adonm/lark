@@ -46,8 +46,8 @@ func parentRequest(t *testing.T, base, method, path string, args any, want int) 
 }
 
 func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
-	const id, peerID = "lark-managed", "lark-friend"
-	const path = "/api/devices/" + id + "/parent"
+	const id, peerID = "mint", "cake"
+	const path = "/api/companions/" + id + "/parent"
 	for _, reason := range []parentReason{parentQuiet, parentLimit, parentPause} {
 		t.Run(string(reason), func(t *testing.T) {
 			b, base := wsHarness(t, func(b *larkServer, _ string) {
@@ -61,16 +61,16 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 			for _, pr := range []struct {
 				ws       *testWS
 				id, name string
-			}{{dev, id, "Mint"}, {friend, peerID, "Cake"}} {
-				pr.ws.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": pr.id, "character": pr.name,
+			}{{dev, "vocat-0001", "Mint"}, {friend, "vocat-0002", "Cake"}} {
+				pr.ws.json(t, object{"ev": "hello", "role": "device", "proto": 2, "terminal_id": pr.id, "character": pr.name,
 					"caps": object{"wake_word": true, "call": true}})
 				pr.ws.until(t, isDisplay)
 			}
 			viewer := testConnectWS(t, base, "unit", false)
 			viewer.json(t, object{"ev": "hello", "role": "web"})
-			viewer.json(t, object{"ev": "watch", "device_id": id})
+			viewer.json(t, object{"ev": "watch", "companion_id": id})
 			viewer.until(t, hasWS("svg", "companion-ring"))
-			viewer.json(t, object{"ev": "wake_word", "enabled": true, "device_id": id})
+			viewer.json(t, object{"ev": "wake_word", "enabled": true, "terminal_id": "vocat-0001"})
 			dev.until(t, hasWS("wake_word", `"enabled":true`))
 			dev.json(t, object{"ev": "wake_word"})
 			dev.until(t, hasWS("rec", `"action":"start"`))
@@ -111,13 +111,13 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 			dev.barrier(t)
 			friend.json(t, object{"ev": "call", "target": id})
 			friend.barrier(t)
-			testRequest(t, "POST", base+"/api/chat", "unit", object{"device_id": id, "text": "hello"}, 423)
-			toolTest(t, base, "patch", object{"device_id": id, "device": object{"sleep": false}}, true)
-			toolTest(t, base, "patch", object{"device_id": id, "parent_policy": object{"restricted": false}}, true)
-			toolTest(t, base, "app", object{"devices": id, "svg": `<svg viewBox="0 0 360 360"/>`}, true)
-			patchTimerTest(t, base, object{"device_id": id, "in_seconds": 20, "label": "Rest"}, true)
+			testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "hello"}, 423)
+			toolTest(t, base, "patch", object{"companion_id": id, "terminal": object{"sleep": false}}, true)
+			toolTest(t, base, "patch", object{"companion_id": id, "parent_policy": object{"restricted": false}}, true)
+			toolTest(t, base, "app", object{"companions": id, "svg": `<svg viewBox="0 0 360 360"/>`}, true)
+			patchTimerTest(t, base, object{"companion_id": id, "in_seconds": 20, "label": "Rest"}, true)
 			for _, wake := range []bool{false, true} {
-				b.deliverTimer(t.Context(), savedTimer{DeviceID: id, Label: "Should not arrive", WakeAgent: wake})
+				b.deliverTimer(t.Context(), savedTimer{CompanionID: id, Label: "Should not arrive", WakeAgent: wake})
 			}
 			for _, pair := range [][2]string{{id, peerID}, {peerID, id}} {
 				out := toolTest(t, base, "emit", object{"to": pair[0], "intercom": object{"from": pair[1], "text": "hello"}}, pair[1] == id)
@@ -128,13 +128,13 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 					}
 				}
 			}
-			got := toolTest(t, base, "state", object{"device_id": id, "include": []string{"devices"}}, false)
-			policy := got["me"].(object)["device"].(object)["parent_policy"].(object)
+			got := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"companions"}}, false)
+			policy := got["me"].(object)["companion"].(object)["parent_policy"].(object)
 			if policy["restricted"] != true || policy["reason"] != string(reason) {
 				t.Fatal("wrong policy on MCP state", policy)
 			}
 			b.ws.mu.Lock()
-			d, f := b.ws.devices[id], b.ws.devices[peerID]
+			d, f := b.ws.audioTerminal(id), b.ws.audioTerminal(peerID)
 			blocked := d.asleep && d.parentReason == reason && !d.recording.active() && len(d.recording.pcm) == 0 &&
 				d.callState == callNone && f.callState == callNone && d.app == nil && !d.busy && d.card == nil && d.view == nil
 			b.ws.mu.Unlock()
@@ -153,16 +153,16 @@ func TestParentEnforcesQuietLimitAndPause(t *testing.T) {
 func TestParentAdminAndChildPause(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.parentToken = testParentToken })
 	d := testConnectWS(t, base, "unit", false)
-	const id, text = "lark-mint", "Stop working for five minutes so I can’t use you."
-	const path = "/api/devices/" + id + "/parent"
-	d.hello(t, id, "Mint")
+	const id, text = "mint", "Stop working for five minutes so I can’t use you."
+	const path = "/api/companions/" + id + "/parent"
+	d.hello(t, "vocat-1111", "Mint")
 	d.json(t, object{"ev": "text", "text": text})
 	d.until(t, hasWS("parent_policy", `"reason":"paused"`))
-	testRequest(t, "POST", base+"/api/chat", "unit", object{"device_id": id, "text": "pause for one minute"}, 423)
+	testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": id, "text": "pause for one minute"}, 423)
 	testRequest(t, "GET", base+"/api/parent", "", nil, 401)
 	testRequest(t, "GET", base+"/api/parent", "unit", nil, 403)
 	testRequest(t, "POST", base+path, "unit", object{"action": "unlock", "minutes": 5}, 403)
-	scoped := httptest.NewServer(b.scoped(virtualClient{ID: "virt-0123abcd"}, "scoped"))
+	scoped := httptest.NewServer(b.scoped(companionState{ID: id}, "scoped"))
 	defer scoped.Close()
 	testRequest(t, "GET", scoped.URL+"/app/parent", "scoped", nil, 404)
 	testRequest(t, "GET", scoped.URL+"/app/parent.js", "scoped", nil, 404)
@@ -183,7 +183,7 @@ func TestParentAdminAndChildPause(t *testing.T) {
 	}
 	b.chat(id, newChat("user", "You", "private transcript text", "typed"), true)
 	view := parentRequest(t, base, "GET", "/api/parent", nil, 200)
-	row := view["devices"].([]any)[0].(object)
+	row := view["companions"].([]any)[0].(object)
 	raw, _ := json.Marshal(view)
 	if row["reason"] != "paused" || row["recent"].(object)["talk_turns"] != json.Number("1") || bytes.Contains(raw, []byte("private transcript text")) {
 		t.Fatal("parent activity didn't show counts only")
@@ -191,7 +191,7 @@ func TestParentAdminAndChildPause(t *testing.T) {
 	parentRequest(t, base, "POST", path, object{"action": "settings", "quiet_start": "22:00", "quiet_end": "", "timezone": "UTC", "daily_minutes": 0}, 400)
 	// Reconnecting without wake-word capability must not drop a persisted pause.
 	d = testConnectWS(t, base, "unit", false)
-	d.hello(t, id, "Mint")
+	d.hello(t, "vocat-1111", "Mint")
 	d.json(t, object{"ev": "rec_start"})
 	d.until(t, hasWS("rec", `"cancelled":true`))
 	parentRequest(t, base, "POST", path, object{"action": "unlock", "minutes": 5}, 200)
@@ -229,21 +229,21 @@ func TestParentTokenSeparateAndPrivate(t *testing.T) {
 
 func TestParentTearsDownActiveAppCallAndOfflineChat(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.parentToken = testParentToken })
-	const id, peerID = "lark-active", "lark-partner"
-	const path = "/api/devices/" + id + "/parent"
+	const id, peerID = "mint", "cake"
+	const path = "/api/companions/" + id + "/parent"
 	d := testConnectWS(t, base, "unit", false)
 	peer := testConnectWS(t, base, "unit", false)
 	for _, p := range []struct {
-		ws *testWS
-		id string
-	}{{d, id}, {peer, peerID}} {
-		p.ws.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": p.id, "character": "Cake", "caps": object{"call": true}})
+		ws         *testWS
+		id, name   string
+	}{{d, "vocat-0001", "Mint"}, {peer, "vocat-0002", "Cake"}} {
+		p.ws.json(t, object{"ev": "hello", "role": "device", "proto": 2, "terminal_id": p.id, "character": p.name, "caps": object{"call": true}})
 		p.ws.until(t, isDisplay)
 	}
-	toolTest(t, base, "app", object{"devices": id, "svg": `<svg viewBox="0 0 360 360"><text x="150" y="160">Game</text></svg>`}, false)
+	toolTest(t, base, "app", object{"companions": id, "svg": `<svg viewBox="0 0 360 360"><text x="150" y="160">Game</text></svg>`}, false)
 	parentRequest(t, base, "POST", path, object{"action": "pause", "minutes": 5}, 200)
 	b.ws.mu.Lock()
-	running := b.ws.devices[id].app != nil
+	running := b.ws.audioTerminal(id).app != nil
 	b.ws.mu.Unlock()
 	if running {
 		t.Fatal("app wasn't removed on pause")
@@ -318,7 +318,7 @@ func TestParentCivilTimeAndPersistence(t *testing.T) {
 				t.Fatal("usage didn't split and reset at local midnight", p.day, p.used)
 			}
 			var old int64
-			if err := db.QueryRowContext(ctx, `SELECT used_ms FROM parent_usage WHERE device_id=? AND day=?`, id, before.In(loc).Format(time.DateOnly)).Scan(&old); err != nil || old != 69000 {
+			if err := db.QueryRowContext(ctx, `SELECT used_ms FROM parent_usage WHERE companion_id=? AND day=?`, id, before.In(loc).Format(time.DateOnly)).Scan(&old); err != nil || old != 69000 {
 				t.Fatal("previous day was not retained", old, err)
 			}
 			restarted := &wsHub{b: &larkServer{db: db}}

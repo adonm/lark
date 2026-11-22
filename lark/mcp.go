@@ -21,7 +21,7 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact Lark device IDs. Read keyed snapshots with state, change devices/companions/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
+	mcpInstructions = "Use exact Lark companion IDs. Read keyed snapshots with state, change companions/terminals/memory/timers/saved apps with patch, run or update screens with app, and send live audio with emit. Only final assistant prose is spoken."
 )
 
 type rpcRequest struct {
@@ -185,28 +185,27 @@ var mcpTools = func() []object {
 		"svg": text, "data": appTemplateSchema(""), "tick_ms": number, "max_ticks": number,
 		"expected_version": object{"type": "integer", "minimum": 0}}, "name")
 	return []object{
-		tool("state", "Read live state by slice. device_id adds me.device, me.companion and me.active_app; app_name adds full saved app source, settings and state.",
-			schema(object{"device_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
+		tool("state", "Read live state by slice. companion_id adds me.companion, me.terminals and me.active_app; app_name adds full saved app source, settings and state.",
+			schema(object{"companion_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
 				"app_name": text, "include_code": flag, "messages_limit": object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id")})),
-		tool("patch", "Change devices, companions, timers, memory or saved apps. For a shift, use companion.preset for instant Storybook presets or companion.portrait for bespoke Nano Banana 2.1 art (style pixel for 64×64 retro art). Memory and app batches are atomic. Stop running apps before changing slugs. Deletes run before renames and ignore missing slugs; renames update timers. Cancel timers before deleting their app. Companion defaults to update; create timers with in_seconds or at.",
-			schema(object{"device_id": text,
-				"device": schema(object{"volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag, "voice": voice}),
-				"companion": schema(object{"op": enum("update", "load", "reset_blank", "delete_saved"), "name": text, "face_bg": text, "mark_color": text, "accent_color": text,
+		tool("patch", "Change companions, terminals, timers, memory or saved apps. For a shift, use companion.preset for instant Storybook presets or companion.portrait for bespoke Nano Banana 2.1 art (style pixel for 64×64 retro art). Memory and app batches are atomic. Stop running apps before changing slugs. Deletes run before renames and ignore missing slugs; renames update timers. Cancel timers before deleting their app. Companion defaults to update; create timers with in_seconds or at.",
+			schema(object{"companion_id": text,
+				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag}),
+				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "face_bg": text, "mark_color": text, "accent_color": text,
 					"personality": text, "voice": voice, "preset": companionSchema, "portrait": portraitSchema, "face_svg": object{"type": "string", "maxLength": maxSVG, "description": "Complete SVG face with idle, blink, talk, listen, think and sleep pose layers"},
 					"face_edits": array(schema(object{"part": enum(faceParts...), "pose": enum(faceEditPoses...),
 						"svg": object{"type": "string", "maxLength": 16384, "description": "Replacement SVG fragment. Omit pose for all matching parts."}}, "part", "svg")),
-					"slug": object{"type": "string", "description": "Saved companion slug for load/delete_saved"}, "configured": flag,
-					"save_profile": object{"type": "boolean", "description": "True saves the current form by name; false shifts without replacing a favorite"}}),
+					"configured": flag}),
 				"memory": object{"anyOf": []object{memory, array(memory)}},
 				"apps":   schema(object{"delete": array(text), "rename": array(rename), "update": object{"anyOf": []object{update, array(update)}}}),
-				"timer":  schema(object{"op": enum("set", "update", "cancel"), "device_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag, "app": text})})),
+				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag, "app": text})})),
 		tool("app", "Show a declarative screen, launch a data-only template, display SVG, run/load/save/delete an app, exit to the companion, or shallow-patch running JS state. Players share state and render separately.",
-			schema(object{"devices": object{"anyOf": []object{text, array(text)}}, "title": text, "screen": declarativeScreenSchema, "svg": text, "code": object{"type": "string", "maxLength": 16384},
+			schema(object{"companions": object{"anyOf": []object{text, array(text)}}, "title": text, "screen": declarativeScreenSchema, "svg": text, "code": object{"type": "string", "maxLength": 16384},
 				"template": enum(templateNames()...), "data": appTemplateSchema(""),
 				"save_current": schema(object{"name": text, "title": text}, "name"),
 				"load":         text, "save_as": text, "delete_saved": text, "initial_state": jsonObject, "state_patch": jsonObject, "tick_ms": number, "max_ticks": number, "exit": flag})),
-		tool("emit", "Start or hang up a call, send intercom, or play notes/effects. Receipts describe queued or skipped deliveries, not playback. Calls use exact device IDs, never all.",
+		tool("emit", "Start or hang up a call, send intercom, or play notes/effects. Receipts describe queued or skipped deliveries, not playback. Calls use exact companion IDs, never all.",
 			schema(object{"to": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"call":  schema(object{"op": enum("start", "hangup"), "from": text, "id": object{"type": "integer", "minimum": 1, "maximum": uint64(1<<32 - 1)}}),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
@@ -257,24 +256,15 @@ func checkMCPFields(value any, schema object, path string) error {
 	return nil
 }
 
-func (b *larkServer) lookupDevice(id string) (peer, error) {
-	p, _, err := b.findDevice(id)
-	if err == nil {
-		p.Character = b.companionFor(p).Name
-	}
-	return p, err
-}
-
-func (h *wsHub) deviceStatus(entry object, id string, full bool) {
+func (h *wsHub) terminalStatus(entry object, id string, full bool) {
 	key := strings.ToLower(id)
 	entry["ws_connected"], entry["ws"], entry["mode"] = false, false, "offline"
 	entry["battery_pct"], entry["volume"], entry["scene_rev"] = nil, nil, uint64(0)
 	entry["sleeping"] = false
 	entry["can_call"] = false
 	h.mu.Lock()
-	if d := h.devices[key]; d != nil && h.active(d) {
+	if d := h.terminals[key]; d != nil && h.active(d) {
 		entry["ws_connected"], entry["ws"], entry["online"], entry["mode"] = true, true, true, d.pose.mood
-		entry["character"], entry["companion"], entry["voice"] = d.companion.Name, d.companion.companionLook, d.voice
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
 		entry["can_call"], entry["call"] = d.caps.Call, h.callSnapshot(d)
@@ -286,23 +276,14 @@ func (h *wsHub) deviceStatus(entry object, id string, full bool) {
 			entry["battery_pct"] = d.pct
 		}
 		if full {
-			entry["last_app_error"] = d.lastAppError
-			companion := d.companion
-			companion.Voice = d.voice
-			entry["companion"], entry["voice"] = companion, d.voice
+			entry["battery_mv"], entry["charging"], entry["has_battery"] = d.telemetry.MV, d.telemetry.Charge, d.telemetry.HasBattery
+			entry["wifi_rssi"], entry["cpu_pct"] = d.telemetry.WiFi, d.telemetry.CPU
 			title := d.scene.title
 			if title == "" {
 				title = "Companion"
 			}
 			entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev, "hit_ids": appHitIDs(d.svg)}
 			entry["width"], entry["height"] = d.screen.width, d.screen.height
-			entry["wifi_rssi"], entry["cpu_pct"] = d.telemetry.WiFi, d.telemetry.CPU
-			if a := d.app; a != nil {
-				entry["active_app"] = h.activeAppState(a)
-				if a.snapshot != nil {
-					entry["active_app_state"] = a.snapshot
-				}
-			}
 		}
 		h.mu.Unlock()
 		return
@@ -347,18 +328,18 @@ func (b *larkServer) callMCP(ctx context.Context, name string, args object) (obj
 }
 
 func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
-	to := str(args["to"])
-	if !deviceIDRE.MatchString(to) {
-		return nil, problem(400, "Expected exact device ID or all")
+	to := strings.ToLower(str(args["to"]))
+	if !validCompanionID(to) && to != "all" {
+		return nil, problem(400, "Expected exact companion ID or all")
 	}
 	out := object{"ok": true, "to": to}
 	if raw, ok := args["call"]; ok {
 		call, valid := raw.(object)
 		if len(args) != 2 || broadcast(to) || !valid {
-			return nil, fieldError("call", "use only call and to with exact device IDs")
+			return nil, fieldError("call", "use only call and to with exact companion IDs")
 		}
 		if b.ws == nil {
-			return nil, problem(503, "Device hub unavailable")
+			return nil, problem(503, "Terminal hub unavailable")
 		}
 		op, specified := call["op"]
 		if op == "hangup" {
@@ -371,10 +352,10 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 			out["call"], out["receipts"] = result, receipts
 			return out, nil
 		}
-		from := str(call["from"])
+		from := strings.ToLower(str(call["from"]))
 		if _, hasID := call["id"]; specified && op != "start" || hasID || broadcast(from) ||
-			!deviceIDRE.MatchString(from) || strings.EqualFold(from, to) {
-			return nil, fieldError("call", "use only call.from and to with exact device IDs")
+			!validCompanionID(from) || strings.EqualFold(from, to) {
+			return nil, fieldError("call", "use only call.from and to with exact companion IDs")
 		}
 		result, err := b.ws.mcpCall(from, to)
 		var receipt object
@@ -418,7 +399,7 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 		if !ok {
 			return nil, fieldError("intercom", "expected from and text")
 		}
-		r, delivered, err := b.mcpIntercom(ctx, object{"from_device_id": i["from"], "to_device_id": to, "text": i["text"]})
+		r, delivered, err := b.mcpIntercom(ctx, object{"from_companion_id": i["from"], "to_companion_id": to, "text": i["text"]})
 		if err != nil {
 			return nil, err
 		}
@@ -466,7 +447,7 @@ func volumeCommand(args object, key string) (auto bool, level int, set bool, err
 	return false, 0, false, nil
 }
 
-func (h *wsHub) mcpControl(ctx context.Context, id string, args object) (object, error) {
+func (h *wsHub) terminalVolumeControl(ctx context.Context, id string, args object) (object, error) {
 	auto, level, setVolume, err := volumeCommand(args, "auto_volume")
 	if err != nil {
 		return nil, err
@@ -479,19 +460,18 @@ func (h *wsHub) mcpControl(ctx context.Context, id string, args object) (object,
 	if !setVolume && !setSleep {
 		return nil, problem(400, "Expected volume, auto_volume, or sleep")
 	}
+	id = strings.ToLower(id)
 	if !setSleep {
-		who, err := h.b.lookupDevice(id)
-		if err != nil {
-			return nil, err
+		if _, ok := h.b.terminalByID(id); !ok {
+			return nil, problem(404, "Terminal not found")
 		}
-		id = who.DeviceID
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	d := h.devices[strings.ToLower(id)]
+	d := h.terminals[id]
 	if d == nil || !h.active(d) {
 		if setSleep {
-			return nil, problem(409, "Device is not connected")
+			return nil, problem(409, "Terminal is not connected")
 		}
 		h.mu.Unlock()
 		h.settingsMu.Lock()
@@ -504,10 +484,10 @@ func (h *wsHub) mcpControl(ctx context.Context, id string, args object) (object,
 		if err != nil {
 			return nil, err
 		}
-		return object{"ok": true, "device_id": id, "volume": level, "auto_volume": auto, "sleeping": false}, nil
+		return object{"ok": true, "terminal_id": id, "volume": level, "auto_volume": auto, "sleeping": false}, nil
 	}
-	if setSleep && !asleep {
-		if r := h.parentRefresh(d.key, time.Now()); r != "" {
+	if setSleep && !asleep && d.companionID != "" {
+		if r := h.parentRefresh(d.companionID, time.Now()); r != "" {
 			return nil, r.err()
 		}
 	}
@@ -518,21 +498,23 @@ func (h *wsHub) mcpControl(ctx context.Context, id string, args object) (object,
 	}
 	if setSleep {
 		now := time.Now()
-		if r := h.parentRefresh(d.key, now); !asleep && r != "" {
-			return nil, r.err()
+		if d.companionID != "" {
+			if r := h.parentRefresh(d.companionID, now); !asleep && r != "" {
+				return nil, r.err()
+			}
 		}
 		d.last = now
 		h.setSleeping(d, asleep)
 		h.render(d, now, false)
 	}
-	return object{"ok": true, "device_id": d.who.DeviceID, "volume": d.vol, "auto_volume": d.autoVol, "sleeping": d.asleep}, nil
+	return object{"ok": true, "terminal_id": d.id, "companion_id": d.companionID, "volume": d.vol, "auto_volume": d.autoVol, "sleeping": d.asleep}, nil
 }
 
 func validChime(kind string) bool {
 	return slices.Contains(basicChimes, kind)
 }
 
-func (h *wsHub) chime(d *wsDevice, kind string) bool {
+func (h *wsHub) chime(d *wsTerminal, kind string) bool {
 	if kind == "celebrate" {
 		kind = "intercom" // Existing firmware's happy tone.
 	}
@@ -546,19 +528,19 @@ func (h *wsHub) chime(d *wsDevice, kind string) bool {
 }
 
 func deliveryReceipt(action, id, reason string) object {
-	r := object{"device_id": id, "action": action, "status": "queued"}
+	r := object{"companion_id": id, "action": action, "status": "queued"}
 	if reason != "" {
 		r["status"], r["reason"] = "skipped", reason
 	}
 	return r
 }
 
-func (h *wsHub) signalTarget(id string) (*wsDevice, string) {
-	d := h.devices[strings.ToLower(id)]
-	if d == nil || d.who.DeviceID != id || !h.active(d) {
+func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
+	d := h.audioTerminal(companionID)
+	if d == nil {
 		return nil, "not_connected"
 	}
-	if r := h.parentRefresh(d.key, time.Now()); r != "" {
+	if r := h.parentRefresh(d.companionID, time.Now()); r != "" {
 		return nil, string(r)
 	}
 	if d.callState != callNone {
@@ -569,7 +551,7 @@ func (h *wsHub) signalTarget(id string) (*wsDevice, string) {
 
 func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, error) {
 	if b.ws == nil {
-		return nil, problem(503, "Device hub unavailable")
+		return nil, problem(503, "Terminal hub unavailable")
 	}
 	ids := []string{id}
 	if id == "all" {
@@ -579,7 +561,7 @@ func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, 
 		}
 		ids = make([]string, 0, len(list))
 		for _, p := range list {
-			ids = append(ids, p.DeviceID)
+			ids = append(ids, p.ID)
 		}
 	}
 	receipts := make([]object, 0, len(ids))
@@ -596,7 +578,7 @@ func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, 
 	return receipts, nil
 }
 
-func (h *wsHub) playSignal(d *wsDevice, kind string, pcm []byte) bool {
+func (h *wsHub) playSignal(d *wsTerminal, kind string, pcm []byte) bool {
 	if len(pcm) > 0 {
 		return h.playPCM(d, pcm)
 	}
@@ -604,30 +586,26 @@ func (h *wsHub) playSignal(d *wsDevice, kind string, pcm []byte) bool {
 }
 
 func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []object, error) {
-	sender, err := b.lookupDevice(str(args["from_device_id"]))
-	if err != nil {
-		return nil, nil, err
+	fromID := strings.ToLower(str(args["from_companion_id"]))
+	sender, ok := b.companionByID(fromID)
+	if !ok {
+		return nil, nil, problem(404, "Companion not found")
 	}
-	if err := b.parentAllowed(sender.DeviceID); err != nil {
+	if err := b.parentAllowed(sender.ID); err != nil {
 		return nil, nil, err
 	}
 	text := shortText(args["text"], maxMessage, true)
 	if _, err := spokenText(text); err != nil {
 		return nil, nil, err
 	}
-	to := str(args["to_device_id"])
-	others, err := b.peerSnapshot(sender.DeviceID)
+	to := strings.ToLower(str(args["to_companion_id"]))
+	others, err := b.peerSnapshot(sender.ID)
 	if err != nil {
 		return nil, nil, err
 	}
 	recipients := others
 	if to != "all" {
-		recipients = slices.DeleteFunc(others, func(p peer) bool { return p.DeviceID != to })
-		if len(recipients) == 0 {
-			if p, _, err := b.findDevice(to); err == nil && p.DeviceID == to && p.DeviceID != sender.DeviceID {
-				recipients = []peer{p}
-			}
-		}
+		recipients = slices.DeleteFunc(others, func(p companionTarget) bool { return p.ID != to })
 	}
 	if len(recipients) == 0 && to != "all" {
 		return nil, nil, problem(404, "Recipient not found")
@@ -636,18 +614,18 @@ func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []ob
 	receipts := make([]object, 0, len(recipients))
 	for _, p := range recipients {
 		reason := ""
-		if !slices.Contains(out.sent, p.DeviceID) {
+		if !slices.Contains(out.sent, p.ID) {
 			reason = "not_connected"
 			if h := b.ws; h != nil {
 				h.mu.Lock()
-				_, reason = h.signalTarget(p.DeviceID)
+				_, reason = h.signalTarget(p.ID)
 				h.mu.Unlock()
 				if reason == "" {
 					reason = "queue_unavailable"
 				}
 			}
 		}
-		receipts = append(receipts, deliveryReceipt("intercom", p.DeviceID, reason))
+		receipts = append(receipts, deliveryReceipt("intercom", p.ID, reason))
 	}
 	return object{"ok": len(out.sent) > 0, "sent_to": out.sent, "delivered_to": out.delivered, "failed_to": out.failed}, receipts, nil
 }

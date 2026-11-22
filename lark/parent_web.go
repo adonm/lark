@@ -53,7 +53,7 @@ func parentUsage(row object, now time.Time) parentUsageView {
 	secs := row["used_seconds"].(int)
 	reason := row["reason"].(parentReason)
 	view := parentUsageView{Settings: s, Status: "Available", Variant: "success", Activity: row["recent"].(object),
-		History: "/app?device_id=" + url.QueryEscape(str(row["device_id"])) + "#chat"}
+		History: "/app?companion_id=" + url.QueryEscape(str(row["companion_id"])) + "#chat"}
 	switch reason {
 	case parentQuiet:
 		view.Status, view.Variant = "Quiet hours", "warning"
@@ -102,19 +102,19 @@ func (b *larkServer) routeParent(w http.ResponseWriter, r *http.Request, id stri
 			return nil, err
 		}
 	} else {
-		id = r.URL.Query().Get("device_id")
+		id = r.URL.Query().Get("companion_id")
 	}
-	rows := overview["devices"].([]object)
+	rows := overview["companions"].([]object)
 	var selected object
 	if len(rows) > 0 {
 		selected = rows[0]
 		for _, row := range rows {
-			if row["device_id"] == id {
+			if row["companion_id"] == id {
 				selected = row
 				break
 			}
 		}
-		id = str(selected["device_id"])
+		id = str(selected["companion_id"])
 	}
 	data := struct {
 		Devices  []object

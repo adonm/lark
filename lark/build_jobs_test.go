@@ -175,12 +175,16 @@ func TestBuildIntent(t *testing.T) {
 }
 
 func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
-	const device = "phone-dead"
+	const device = "cat"
 	var speech atomic.Int32
 	stub := &buildStub{allow: make(chan struct{}), reply: quizProposal}
 	b, base := stubBuildBridge(t, stub, true, &speech)
+	if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Cat"}); err != nil {
+		t.Fatal(err)
+	}
 	s := testConnectWS(t, base, "unit", true)
-	s.hello(t, device, "Cat")
+	s.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-dead0001", "companion_id": device})
+	s.until(t, hasWS("svg", ""))
 	s.json(t, object{"ev": "text", "text": "Make me a dinosaur quiz."})
 	cardAndSpeech := func(label string) {
 		t.Helper()
@@ -206,10 +210,10 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 
 	h := b.ws
 	h.mu.Lock()
-	d := h.devices[device]
+	d := h.audioTerminal(device)
 	h.stopCompanionTurn(d) // Same foreground cancellation primitive; not the job gate.
 	h.mu.Unlock()
-	_, err := b.runApp(t.Context(), object{"devices": device, "title": "Not the build",
+	_, err := b.runApp(t.Context(), object{"companions": device, "title": "Not the build",
 		"svg": `<svg viewBox="0 0 360 360"><circle cx="180" cy="180" r="30"/></svg>`})
 	if err != nil {
 		t.Fatal(err)
@@ -247,15 +251,19 @@ func TestBuildReadyWaitsForIdleAndSurvivesStop(t *testing.T) {
 }
 
 func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
-	const device = "phone-dead"
+	const device = "cat"
 	const prompt = "Make me a dinosaur quiz."
 	for _, reason := range []parentReason{parentQuiet, parentLimit, parentPause} {
 		t.Run(string(reason), func(t *testing.T) {
 			var speech atomic.Int32
 			stub := &buildStub{allow: make(chan struct{}), reply: quizProposal}
 			b, base := stubBuildBridge(t, stub, true, &speech)
+			if _, err := b.createCompanion(t.Context(), object{"id": device, "name": "Cat"}); err != nil {
+				t.Fatal(err)
+			}
 			s := testConnectWS(t, base, "unit", true)
-			s.hello(t, device, "Cat")
+			s.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-dead0002", "companion_id": device})
+			s.until(t, hasWS("svg", ""))
 			finishSpeech := func(label, chat string) {
 				t.Helper()
 				seenCard := label == ""
@@ -285,7 +293,7 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 
 			h := b.ws
 			h.mu.Lock()
-			d := h.devices[device]
+			d := h.audioTerminal(device)
 			turn := d.turn
 			now := time.Now().UTC()
 			settings := parentSettings{Timezone: "UTC"}
@@ -318,13 +326,13 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 			// and a new request from the now restricted device.
 			close(stub.allow)
 			h.buildAcknowledgement(t.Context(), d, turn, prompt, "typed", "Building it now!", job)
-			if err := b.deliverOfflineBuildReply(t.Context(), d.who, prompt, "Building it now!", "typed"); err == nil {
+			if err := b.deliverOfflineBuildReply(t.Context(), d.companion, prompt, "Building it now!", "typed"); err == nil {
 				t.Error("restricted offline acknowledgement delivered")
 			}
-			testRequest(t, "POST", base+"/api/chat", "unit", object{"device_id": device, "text": prompt}, 423)
+			testRequest(t, "POST", base+"/api/chat", "unit", object{"companion_id": device, "text": prompt}, 423)
 			s.json(t, object{"ev": "text", "text": prompt})
 			s.barrier(t)
-			if id, err := b.builders.enqueue(t.Context(), d.who, buildIntent{kind: "new"}, prompt); err == nil || id != "" {
+			if id, err := b.builders.enqueue(t.Context(), d.companionID, buildIntent{kind: "new"}, prompt); err == nil || id != "" {
 				t.Fatalf("restricted enqueue: %q, %v", id, err)
 			}
 			expectValue(t, stub.deleted, job)
@@ -358,7 +366,7 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 			// A queued job accepted before a restriction must not be claimed
 			// even if the worker already read it from the database.
 			const queued = "synthetic-queued-race"
-			if _, err := b.db.Exec(`INSERT INTO build_jobs (id,device_id,state,spec,created_at) VALUES (?,?,'queued','{}',?)`,
+			if _, err := b.db.Exec(`INSERT INTO build_jobs (id,companion_id,state,spec,created_at) VALUES (?,?,'queued','{}',?)`,
 				queued, device, now.UnixMilli()); err != nil {
 				t.Fatal(err)
 			}
@@ -394,8 +402,10 @@ func TestBuildDeliveryRespectsParentPolicy(t *testing.T) {
 func TestBuildProposesStorybookCompanion(t *testing.T) {
 	stub := &buildStub{allow: make(chan struct{}), reply: `{"preset":{"species":"owl","palette":"mint","accessory":"scarf"}}`}
 	b, _ := stubBuildBridge(t, stub, true, nil)
-	who := peer{DeviceID: "lark-storybook-build", Character: "Bean"}
-	job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "face"}, "Make me a mint owl wearing a scarf")
+	if _, err := b.createCompanion(t.Context(), object{"id": "storybook-build", "name": "Bean"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := b.builders.enqueue(t.Context(), "storybook-build", buildIntent{kind: "face"}, "Make me a mint owl wearing a scarf")
 	if err != nil || job == "" {
 		t.Fatal(job, err)
 	}
@@ -403,7 +413,7 @@ func TestBuildProposesStorybookCompanion(t *testing.T) {
 	close(stub.allow)
 	expectValue(t, stub.deleted, job)
 	waitBuildState(t, b, job, "ready")
-	companion := b.companionFor(who)
+	companion := b.companionFor("storybook-build")
 	if !companion.Configured || companion.FaceBG != "#E8F7EE" || !strings.Contains(companion.FaceSVG, `data-part="eyes"`) {
 		t.Fatal("did not apply the proposed Storybook form")
 	}
@@ -419,8 +429,10 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 		}
 		return sheet, nil
 	}}
-	who := peer{DeviceID: "lark-portrait-build", Character: "Bean"}
-	job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "face"}, "Make your face a hedgehog in a space suit")
+	if _, err := b.createCompanion(t.Context(), object{"id": "portrait-build", "name": "Bean"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := b.builders.enqueue(t.Context(), "portrait-build", buildIntent{kind: "face"}, "Make your face a hedgehog in a space suit")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +440,7 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 	close(stub.allow)
 	expectValue(t, stub.deleted, job)
 	waitBuildState(t, b, job, "ready")
-	companion := b.companionFor(who)
+	companion := b.companionFor("portrait-build")
 	if !companion.Configured || companion.Name != "Bean" || !b.portraits.has(activePortrait(companion.FaceSVG)) {
 		t.Fatal("did not apply the proposed portrait")
 	}
@@ -437,8 +449,7 @@ func TestBuildProposesBespokePortrait(t *testing.T) {
 func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 	for _, kind := range []string{"edit", "face", "new"} {
 		t.Run(kind, func(t *testing.T) {
-			const device = "lark-stale-build"
-			who := peer{DeviceID: device, Character: "Cat"}
+			const companion = "stale-build"
 			edit := `{"title":"Late title"}`
 			intent := buildIntent{kind: kind}
 			switch kind {
@@ -451,6 +462,9 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			}
 			stub := &buildStub{allow: make(chan struct{}), reply: edit}
 			b, _ := stubBuildBridge(t, stub, true, nil)
+			if _, err := b.createCompanion(t.Context(), object{"id": companion, "name": "Cat"}); err != nil {
+				t.Fatal(err)
+			}
 			write := func(name string) {
 				t.Helper()
 				_, err := b.writeApp(t.Context(), savedApp{Name: "dinosaur-quiz", Title: name, Kind: "drawing",
@@ -462,13 +476,13 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 			if kind == "edit" {
 				write("Base title")
 			}
-			job, err := b.builders.enqueue(t.Context(), who, intent, "Change this")
+			job, err := b.builders.enqueue(t.Context(), companion, intent, "Change this")
 			if err != nil || job == "" {
 				t.Fatal(job, err)
 			}
 			expectValue(t, stub.prompted, job)
 			if kind == "face" {
-				_, _, err := b.changeCompanion(t.Context(), who, "", "update", object{"face_bg": "#000000"})
+				_, err := b.changeCompanion(t.Context(), companion, "update", object{"face_bg": "#000000"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -481,7 +495,7 @@ func TestBuildRejectsNewerAppAndFace(t *testing.T) {
 				t.Fatal(message)
 			}
 			if kind == "face" {
-				if got := b.companionFor(who); got.FaceBG != "#000000" || strings.Contains(got.FaceSVG, `cx="90"`) {
+				if got := b.companionFor(companion); got.FaceBG != "#000000" || strings.Contains(got.FaceSVG, `cx="90"`) {
 					t.Fatal("late job overwrote the newer face")
 				}
 			} else if got, err := b.loadApp(t.Context(), "dinosaur-quiz"); err != nil || got.Title != "Newer title" {
@@ -498,14 +512,17 @@ func TestBuildCancelAndRestartNeverPublish(t *testing.T) {
 			b, _ := stubBuildBridge(t, stub, false, nil)
 			b.builders = newBuildManager(b)
 			stop := runBuildManager(t, b)
-			who := peer{DeviceID: "lark-build-cancel", Character: "Cat"}
-			job, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "new"}, "Make me a quiz")
+			const companion = "build-cancel"
+			if _, err := b.createCompanion(t.Context(), object{"id": companion, "name": "Cat"}); err != nil {
+				t.Fatal(err)
+			}
+			job, err := b.builders.enqueue(t.Context(), companion, buildIntent{kind: "new"}, "Make me a quiz")
 			if job == "" || err != nil {
 				t.Fatal(job, err)
 			}
 			expectValue(t, stub.prompted, job)
-			if second, err := b.builders.enqueue(t.Context(), who, buildIntent{kind: "new"}, "Make me another quiz"); second != "" || err != nil {
-				t.Fatal("allowed two builds for one cat")
+			if second, err := b.builders.enqueue(t.Context(), companion, buildIntent{kind: "new"}, "Make me another quiz"); second != "" || err != nil {
+				t.Fatal("allowed two builds for one companion")
 			}
 			if restart {
 				stop()
@@ -516,7 +533,7 @@ func TestBuildCancelAndRestartNeverPublish(t *testing.T) {
 					t.Fatalf("unexpected recovery status: %q", result)
 				}
 			} else {
-				if cancelled, err := b.builders.cancel(t.Context(), who.DeviceID, job); !cancelled || err != nil {
+				if cancelled, err := b.builders.cancel(t.Context(), companion, job); !cancelled || err != nil {
 					t.Fatal("explicit cancellation failed", err)
 				}
 				expectValue(t, stub.deleted, job)
@@ -546,7 +563,7 @@ func TestBuildForegroundLatencyStub(t *testing.T) {
 			stub := &buildStub{delay: delay, reply: quizProposal}
 			b, _ := stubBuildBridge(t, stub, background, nil)
 			start := time.Now()
-			result, err := b.turn(t.Context(), peer{DeviceID: "lark-build-eval", Character: "Synthetic"}, prompt)
+			result, err := b.turn(t.Context(), companionState{ID: "build-eval", companionLook: companionLook{Name: "Synthetic"}}, prompt)
 			elapsed := time.Since(start)
 			t.Logf("stub foreground acknowledgement: %s (fixed model delay %s)", elapsed, delay)
 			if err != nil {

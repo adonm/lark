@@ -21,8 +21,8 @@ func recoveryServer(t *testing.T, db *larkDB, api *httptest.Server, hash string)
 	t.Cleanup(cancel)
 	o := newOpenCode(ctx, upstream{"OpenCode", api.Client(), fixedEndpoint{base: api.URL}}, db, "/workspace", ocSettings{})
 	o.contract = hash
-	return &larkServer{db: db, root: ctx, oc: o, token: "unit", peers: peers{deviceStore(db)}, virtual: virtualStore(db),
-		history: &chatHistory{db}, voices: deviceVoiceStore(db, heartVoice)}
+	return &larkServer{db: db, root: ctx, oc: o, token: "unit", terminals: terminalStore(db),
+		history: &chatHistory{db}, voices: companionVoiceStore(db, heartVoice)}
 }
 
 func recoveryMCP(ctx context.Context, base, method string, params object) (object, error) {
@@ -139,7 +139,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 				want = "And what fruit grows there?"
 			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || !seeded.Load() || !connected.Load() ||
-				in.Text != "[Plum ("+id+") · web · typed]\n"+want || in.Metadata["larkSource"] != "typed" {
+				in.Text != "[Plum ("+id+") · hardware · typed]\n"+want || in.Metadata["larkSource"] != "typed" {
 				t.Errorf("current turn changed after handoff: %+v", in)
 			}
 			promptID = fmt.Sprintf("msg-user-%d", n)
@@ -162,16 +162,14 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bridge.db")
 	db := testDB(t, path)
 	b := recoveryServer(t, db, api, current)
-	v := virtualClient{ID: id, Character: "Plum", CreatedAt: time.Now()}
-	if err := b.virtual.save(id, v, false); err != nil {
+	c, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "face_bg": "#654321"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	setup := httptest.NewServer(b)
 	defer setup.Close()
-	testRequest(t, http.MethodPost, setup.URL+"/api/devices/"+id+"/companion", "unit",
-		object{"name": "Plum", "face_bg": "#654321", "save_profile": true}, 200)
 	cutoff := time.Now().Add(-time.Minute).UnixMilli()
-	if _, err := db.Exec(`INSERT INTO sessions (device_id,session_id,updated_at,context_after_ms) VALUES (?,?,?,?)`,
+	if _, err := db.Exec(`INSERT INTO sessions (companion_id,session_id,updated_at,context_after_ms) VALUES (?,?,?,?)`,
 		id, oldSID, cutoff, cutoff); err != nil {
 		t.Fatal(err)
 	}
@@ -199,10 +197,10 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 		entry.SceneTitle, entry.ToolSummary = "TOOLS-ONLY", "OLD-TOOL"
 		b.history.add(row.device, entry)
 	}
-	scope := httptest.NewServer(b.scoped(v, "scoped-token"))
+	scope := httptest.NewServer(b.scoped(c, "scoped-token"))
 	defer scope.Close()
 	scopeURL := scope.URL + "/api/scope"
-	historyURL := scope.URL + "/api/devices/" + id + "/messages"
+	historyURL := scope.URL + "/api/companions/" + id + "/messages"
 	snapshot := testRequest(t, "GET", scopeURL, "scoped-token", nil, 200)
 	history := testRequest(t, "GET", historyURL, "scoped-token", nil, 200)
 	if err := b.syncSchemaUpgrade(t.Context()); err == nil {
@@ -211,7 +209,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	if marker, _ := db.getMeta(t.Context(), mcpSchemaMeta); marker != previous {
 		t.Fatal("failed reconnect changed the catalog hash")
 	}
-	testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token", object{"device_id": id, "text": turn}, 503)
+	testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token", object{"companion_id": id, "text": turn}, 503)
 	online.Store(true)
 	lanURL.Store(setup.URL)
 	refresh, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -236,20 +234,20 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	if err := b.syncSchemaUpgrade(t.Context()); err != nil || reconnects.Load() != 2 {
 		t.Fatalf("verified catalog was lost after restart: %v", err)
 	}
-	scope = httptest.NewServer(b.scoped(v, "scoped-token"))
+	scope = httptest.NewServer(b.scoped(c, "scoped-token"))
 	defer scope.Close()
-	got := testObject(t, testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token", object{"device_id": id, "text": turn}, 200))
-	if got["session_id"] != freshSID || got["reply"] != "Mango Island!" || got["device_id"] != id || creates.Load() != 1 {
+	got := testObject(t, testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token", object{"companion_id": id, "text": turn}, 200))
+	if got["session_id"] != freshSID || got["reply"] != "Mango Island!" || got["companion_id"] != id || creates.Load() != 1 {
 		t.Fatalf("wrong scoped recovery: %v", got)
 	}
 	if got := testRequest(t, "GET", scope.URL+"/api/scope", "scoped-token", nil, 200); !bytes.Equal(got, snapshot) {
 		t.Fatal("scoped identity changed")
 	}
 	var saved int
-	if err := db.QueryRow(`SELECT count(*) FROM saved_companions WHERE name='Plum' AND face_bg='#654321'`).Scan(&saved); err != nil || saved != 1 {
-		t.Fatalf("saved companion form changed: %d, %v", saved, err)
+	if err := db.QueryRow(`SELECT count(*) FROM companions WHERE id=? AND name='Plum' AND face_bg='#654321'`, id).Scan(&saved); err != nil || saved != 1 {
+		t.Fatalf("companion form changed: %d, %v", saved, err)
 	}
-	raw := testRequest(t, "GET", scope.URL+"/api/devices/"+id+"/messages", "scoped-token", nil, 200)
+	raw := testRequest(t, "GET", scope.URL+"/api/companions/"+id+"/messages", "scoped-token", nil, 200)
 	var before, after historyPage
 	if json.Unmarshal(history, &before) != nil || json.Unmarshal(raw, &after) != nil ||
 		len(after.Messages) != len(before.Messages)+2 || !bytes.Contains(raw, []byte("BEFORE-RESET")) ||
@@ -263,10 +261,10 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 
 	db = testDB(t, path)
 	b = recoveryServer(t, db, api, current)
-	scope = httptest.NewServer(b.scoped(v, "scoped-token"))
+	scope = httptest.NewServer(b.scoped(c, "scoped-token"))
 	defer scope.Close()
 	testRequest(t, "POST", scope.URL+"/api/chat", "scoped-token",
-		object{"device_id": id, "text": "And what fruit grows there?"}, 200)
+		object{"companion_id": id, "text": "And what fruit grows there?"}, 200)
 	if creates.Load() != 1 || calls.Load() != 2 {
 		t.Fatal("newly versioned binding did not survive restart")
 	}
@@ -298,7 +296,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 						t.Error("bridge repeated a prompt with possible effects")
 					}
 					_, err := recoveryMCP(r.Context(), lanURL.Load().(string), "tools/call", object{"name": "patch",
-						"arguments": object{"device_id": id, "timer": object{"op": "set", "label": "Once only", "in_seconds": 3600}}})
+						"arguments": object{"companion_id": id, "timer": object{"op": "set", "label": "Once only", "in_seconds": 3600}}})
 					if err != nil {
 						t.Error(err)
 					}
@@ -350,7 +348,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			if err := db.setMeta(t.Context(), mcpSchemaMeta, b.oc.contract); err != nil {
 				t.Fatal(err)
 			}
-			if err := b.virtual.save(id, virtualClient{ID: id, Character: "Plum"}, false); err != nil {
+			if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum"}); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now().Add(-time.Minute)
@@ -367,7 +365,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			lanURL.Store(lan.URL)
 			send := func(text string, status int) []byte {
 				t.Helper()
-				return testRequest(t, "POST", lan.URL+"/api/chat", "unit", object{"device_id": id, "text": text}, status)
+				return testRequest(t, "POST", lan.URL+"/api/chat", "unit", object{"companion_id": id, "text": text}, status)
 			}
 			send("First check", 502)
 			probe.Store(1)
@@ -393,7 +391,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 				t.Fatalf("next turn did not recover: %v", got)
 			}
 			var timers int
-			if err := db.QueryRow(`SELECT count(*) FROM timers WHERE device_id=?`, id).Scan(&timers); err != nil ||
+			if err := db.QueryRow(`SELECT count(*) FROM timers WHERE companion_id=?`, id).Scan(&timers); err != nil ||
 				timers != 1 || oldPrompts.Load() != 1 || newPrompts.Load() != 1 {
 				t.Fatalf("recovery repeated a turn or a timer: timers=%d old=%d new=%d, %v", timers, oldPrompts.Load(), newPrompts.Load(), err)
 			}

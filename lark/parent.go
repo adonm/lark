@@ -105,7 +105,7 @@ func (h *wsHub) parentLoad(key string) (*parentRuntime, error) {
 	if h.b.db != nil {
 		s := &p.settings
 		err := h.b.db.readDB().QueryRow(`SELECT timezone,quiet_start,quiet_end,daily_minutes,pause_until_ms,override_until_ms
-			FROM parent_settings WHERE device_id=?`, key).Scan(&s.Timezone, &s.QuietStart, &s.QuietEnd, &s.DailyMinutes, &s.PauseUntil, &s.OverrideUntil)
+			FROM parent_settings WHERE companion_id=?`, key).Scan(&s.Timezone, &s.QuietStart, &s.QuietEnd, &s.DailyMinutes, &s.PauseUntil, &s.OverrideUntil)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -130,7 +130,7 @@ func (h *wsHub) parentSet(key string, s parentSettings, loc *time.Location, now 
 	if err := h.parentAccount(key, p, now, true); err != nil {
 		return err
 	}
-	_, err = h.b.db.Exec(`INSERT INTO parent_settings VALUES (?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET
+	_, err = h.b.db.Exec(`INSERT INTO parent_settings VALUES (?,?,?,?,?,?,?) ON CONFLICT(companion_id) DO UPDATE SET
 		timezone=excluded.timezone,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,
 		daily_minutes=excluded.daily_minutes,pause_until_ms=excluded.pause_until_ms,override_until_ms=excluded.override_until_ms`,
 		key, s.Timezone, s.QuietStart, s.QuietEnd, s.DailyMinutes, s.PauseUntil, s.OverrideUntil)
@@ -148,7 +148,7 @@ func (h *wsHub) parentSet(key string, s parentSettings, loc *time.Location, now 
 func (h *wsHub) parentFlush(key string, p *parentRuntime) error {
 	ms := p.used.Milliseconds()
 	if h.b.db != nil && ms != p.savedMS {
-		if _, err := h.b.db.Exec(`INSERT INTO parent_usage VALUES (?,?,?) ON CONFLICT(device_id,day)
+		if _, err := h.b.db.Exec(`INSERT INTO parent_usage VALUES (?,?,?) ON CONFLICT(companion_id,day)
 			DO UPDATE SET used_ms=excluded.used_ms`, key, p.day, ms); err != nil {
 			return err
 		}
@@ -186,7 +186,7 @@ func (h *wsHub) parentAccount(key string, p *parentRuntime, now time.Time, flush
 				}
 				var ms int64
 				if h.b.db != nil {
-					err := h.b.db.readDB().QueryRow(`SELECT used_ms FROM parent_usage WHERE device_id=? AND day=?`, key, day).Scan(&ms)
+					err := h.b.db.readDB().QueryRow(`SELECT used_ms FROM parent_usage WHERE companion_id=? AND day=?`, key, day).Scan(&ms)
 					if err != nil && !errors.Is(err, sql.ErrNoRows) {
 						return err
 					}
@@ -213,9 +213,19 @@ func (h *wsHub) parentAccount(key string, p *parentRuntime, now time.Time, flush
 	return nil
 }
 
-func (h *wsHub) parentUsing(d *wsDevice, p *parentRuntime) bool {
-	return p.reason == "" && (len(p.offline) != 0 || d != nil && h.active(d) &&
-		(d.recording.active() || d.busy || d.ttsStarted || d.awaitAck || d.app != nil && !d.asleep || d.callState == callActive))
+func (h *wsHub) parentUsing(key string, p *parentRuntime) bool {
+	if p.reason != "" {
+		return false
+	}
+	if len(p.offline) != 0 {
+		return true
+	}
+	for _, d := range h.terminals {
+		if d.companionID == key && h.active(d) && (d.recording.active() || d.busy || d.ttsStarted || d.awaitAck || d.app != nil && !d.asleep || d.callState == callActive) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *wsHub) parentRefresh(key string, now time.Time) parentReason {
@@ -240,17 +250,18 @@ func (h *wsHub) parentRefresh(key string, now time.Time) parentReason {
 	if err != nil {
 		log.Printf("Lark parent controls unavailable for %s: %v", key, err)
 	}
-	d := h.devices[key]
-	if d != nil && h.active(d) && d.parentReason != r {
-		h.applyParent(d, r, now)
+	for _, d := range h.terminals {
+		if d.companionID == key && h.active(d) && d.parentReason != r {
+			h.applyParent(d, r, now)
+		}
 	}
 	if p != nil {
-		p.using = h.parentUsing(d, p)
+		p.using = h.parentUsing(key, p)
 	}
 	return r
 }
 
-func (h *wsHub) applyParent(d *wsDevice, r parentReason, now time.Time) {
+func (h *wsHub) applyParent(d *wsTerminal, r parentReason, now time.Time) {
 	old := d.parentReason
 	d.parentReason = r
 	if r != "" {
@@ -279,8 +290,8 @@ func (h *wsHub) applyParent(d *wsDevice, r parentReason, now time.Time) {
 	}
 }
 
-func parentFrame(d *wsDevice) object {
-	f := object{"op": "parent_policy", "device_id": d.who.DeviceID, "reason": d.parentReason, "message": ""}
+func parentFrame(d *wsTerminal) object {
+	f := object{"op": "parent_policy", "companion_id": d.companionID, "reason": d.parentReason, "message": ""}
 	if d.parentReason != "" {
 		_, f["message"] = d.parentReason.notice()
 	}
@@ -292,16 +303,19 @@ func (h *wsHub) parentFinishActivity(key string, now time.Time) {
 		if err := h.parentAccount(key, p, now, true); err != nil {
 			log.Printf("Lark parent usage checkpoint for %s: %v", key, err)
 		}
-		p.using = h.parentUsing(h.devices[key], p)
+		p.using = h.parentUsing(key, p)
 	}
 }
 
-func (h *wsHub) parentObserve(d *wsDevice, now time.Time) {
-	if p := h.parents[d.key]; p != nil {
-		using := h.parentUsing(d, p)
+func (h *wsHub) parentObserve(d *wsTerminal, now time.Time) {
+	if d.companionID == "" {
+		return
+	}
+	if p := h.parents[d.companionID]; p != nil {
+		using := h.parentUsing(d.companionID, p)
 		if p.using != using {
-			if err := h.parentAccount(d.key, p, now, false); err != nil {
-				log.Printf("Lark parent usage for %s: %v", d.key, err)
+			if err := h.parentAccount(d.companionID, p, now, false); err != nil {
+				log.Printf("Lark parent usage for %s: %v", d.companionID, err)
 			}
 			p.using = using
 		}

@@ -170,10 +170,10 @@ func run() error {
 	worker := newSynthWorker(root, func() (speechEngine, error) {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
 	})
-	b := &larkServer{root: root, token: token, parentToken: parentToken, db: db, peers: peers{deviceStore(db)},
+	b := &larkServer{root: root, token: token, parentToken: parentToken, db: db, terminals: terminalStore(db),
 		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, pairPort: pairPort, worker: worker,
-		voices:  deviceVoiceStore(db, fallbackVoice),
-		virtual: virtualStore(db), history: &chatHistory{db},
+		voices:  companionVoiceStore(db, fallbackVoice),
+		history: &chatHistory{db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
 			generate: configuredPortraitGenerator(ocAPI, ocURL != "", os.Getenv("OPENCODE_API_KEY"))},
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},

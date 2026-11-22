@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -150,7 +149,13 @@ func (b *larkServer) saveCurrentApp(ctx context.Context, id string, raw any) (ob
 	}
 	h := b.ws
 	h.mu.Lock()
-	d := h.devices[strings.ToLower(id)]
+	var d *wsTerminal
+	for _, t := range h.terminalsFor(id) {
+		if t.app != nil {
+			d = t
+			break
+		}
+	}
 	if d == nil || !h.active(d) || d.app == nil {
 		h.mu.Unlock()
 		return nil, problem(409, "No running app on "+id)
@@ -160,7 +165,7 @@ func (b *larkServer) saveCurrentApp(ctx context.Context, id string, raw any) (ob
 	if title != "" {
 		a.Title = title
 	}
-	out := object{"ok": true, "devices": []string{d.who.DeviceID}, "title": d.app.spec.Title, "hit_ids": appHitIDs(d.appView),
+	out := object{"ok": true, "companions": []string{d.companionID}, "title": d.app.spec.Title, "hit_ids": appHitIDs(d.appView),
 		"saved_as": name}
 	if state := d.app.snapshot; state != nil {
 		out["state"] = state

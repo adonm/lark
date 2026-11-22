@@ -46,13 +46,13 @@ type historyCursor struct {
 }
 
 type historyPage struct {
-	DeviceID string         `json:"device_id"`
-	Messages []chatEntry    `json:"messages"`
-	HasMore  bool           `json:"has_more"`
-	Next     *historyCursor `json:"next_cursor,omitempty"`
+	CompanionID string         `json:"companion_id"`
+	Messages    []chatEntry    `json:"messages"`
+	HasMore     bool           `json:"has_more"`
+	Next        *historyCursor `json:"next_cursor,omitempty"`
 }
 
-const insertMessage = `INSERT INTO messages (id,device_id,role,sender,text,source,card_title,ts_ms)
+const insertMessage = `INSERT INTO messages (id,companion_id,role,sender,text,source,card_title,ts_ms)
 	VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`
 
 func canonicalMessage(e chatEntry) (chatEntry, bool) {
@@ -105,7 +105,7 @@ func (h *chatHistory) read(ctx context.Context, id string, limit int) ([]chatEnt
 }
 
 func (h *chatHistory) readBefore(ctx context.Context, id string, limit int, before *historyCursor) ([]chatEntry, error) {
-	query := `SELECT id,role,sender,text,source,card_title,ts_ms FROM messages WHERE device_id=?`
+	query := `SELECT id,role,sender,text,source,card_title,ts_ms FROM messages WHERE companion_id=?`
 	args := []any{strings.ToLower(id)}
 	if before != nil {
 		query += ` AND ts_ms<=? AND (ts_ms<? OR id<?)`
@@ -159,27 +159,19 @@ func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatE
 }
 
 func (h *wsHub) broadcastChat(id string, entry chatEntry) {
-	f := textFrame(object{"type": "chat", "device_id": id, "entry": entry})
+	f := textFrame(object{"type": "chat", "companion_id": id, "entry": entry})
 	key := strings.ToLower(id)
 	for c := range h.clients {
-		if c.watch == key || c.device != nil && c.device.key == key && c.device.virtual() {
+		if c.watch == key || c.terminal != nil && c.terminal.companionID == key && c.terminal.virtual() {
 			c.enqueue(f)
 		}
 	}
 }
 
-func messagesDevice(path string) (string, bool) {
-	suffix, ok := strings.CutPrefix(path, "/api/devices/")
-	if !ok {
-		return "", false
-	}
-	id, ok := strings.CutSuffix(suffix, "/messages")
-	return id, ok && deviceIDRE.MatchString(id)
-}
-
 func (b *larkServer) messages(r *http.Request, id string) (any, error) {
-	if !deviceIDRE.MatchString(id) {
-		return nil, problem(400, "Invalid device ID")
+	id = strings.ToLower(id)
+	if !validCompanionID(id) {
+		return nil, problem(400, "Invalid companion ID")
 	}
 	query := r.URL.Query()
 	limit := 100
@@ -203,7 +195,7 @@ func (b *larkServer) messages(r *http.Request, id string) (any, error) {
 }
 
 func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
-	out := historyPage{DeviceID: id, Messages: []chatEntry{}}
+	out := historyPage{CompanionID: id, Messages: []chatEntry{}}
 	if b.history == nil {
 		return out, nil
 	}
@@ -225,10 +217,10 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if scope != "" && str(obj["device_id"]) != scope {
-		return nil, problem(403, "Device out of scope")
+	if scope != "" && !strings.EqualFold(str(obj["companion_id"]), scope) {
+		return nil, problem(403, "Companion out of scope")
 	}
-	id, err := deviceID(r, obj, true)
+	id, err := companionIDArg(r, obj, true)
 	if err != nil {
 		return nil, err
 	}
@@ -238,9 +230,9 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 	if text == "" || len(text) > 4096 {
 		return nil, problem(400, "Expected nonempty text of at most 4096 bytes")
 	}
-	sender, err := b.lookupDevice(id)
-	if err != nil {
-		return nil, err
+	sender, ok := b.companionByID(id)
+	if !ok {
+		return nil, problem(404, "Companion not found")
 	}
 	minutes := childPauseMinutes(text)
 	if b.ws != nil {
@@ -250,27 +242,26 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 			b.ws.mu.Unlock()
 			return nil, r.err()
 		}
-		d := b.ws.devices[key]
-		if d != nil && b.ws.active(d) {
+		if t := b.ws.audioTerminal(key); t != nil {
 			if b.oc == nil && minutes == 0 {
 				b.ws.mu.Unlock()
 				return nil, problem(503, "Chat unavailable")
 			}
-			if d.callState != callNone {
+			if t.callState != callNone {
 				b.ws.mu.Unlock()
 				return nil, problem(409, "Companion is in a call")
 			}
-			b.ws.startTurn(d, now, false, "typed", func(ctx context.Context, turn uint64) {
-				b.ws.runTurn(ctx, d, turn, text, "typed", nil)
+			b.ws.startTurn(t, now, false, "typed", func(ctx context.Context, turn uint64) {
+				b.ws.runTurn(ctx, t, turn, text, "typed", nil)
 			})
 			b.ws.mu.Unlock()
-			return object{"ok": true, "device_id": sender.DeviceID}, nil
+			return object{"ok": true, "companion_id": sender.ID}, nil
 		}
 		if minutes > 0 {
 			err := b.ws.childPause(key, minutes, now)
 			b.ws.mu.Unlock()
 			_, reply := parentPause.notice()
-			return object{"ok": true, "device_id": sender.DeviceID, "reply": reply}, err
+			return object{"ok": true, "companion_id": sender.ID, "reply": reply}, err
 		}
 		if b.oc == nil {
 			b.ws.mu.Unlock()
@@ -297,14 +288,14 @@ func (b *larkServer) chatAPI(r *http.Request, scope string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := object{"ok": true, "device_id": sender.DeviceID, "reply": out.Reply, "session_id": out.SessionID}
+	result := object{"ok": true, "companion_id": sender.ID, "reply": out.Reply, "session_id": out.SessionID}
 	if scope == "" {
 		result["audio_url"] = out.AudioURL
 	}
 	return result, nil
 }
 
-func (b *larkServer) resetDevice(r *http.Request, id string) (any, error) {
+func (b *larkServer) resetCompanion(r *http.Request, id string) (any, error) {
 	var archiveHistory bool
 	if r.ContentLength != 0 {
 		args, err := jsonBody(r)
@@ -319,17 +310,16 @@ func (b *larkServer) resetDevice(r *http.Request, id string) (any, error) {
 	if b.oc == nil {
 		return nil, problem(503, "Chat unavailable")
 	}
-	who, err := b.lookupDevice(id)
-	if err != nil {
-		return nil, err
+	if _, ok := b.companionByID(id); !ok {
+		return nil, problem(404, "Companion not found")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
-	return object{"ok": true}, b.startNewCompanionSession(ctx, who, archiveHistory)
+	return object{"ok": true}, b.startNewCompanionSession(ctx, id, archiveHistory)
 }
 
 func resetCompanionSession(ctx context.Context, tx *sql.Tx, id string, archiveHistory bool) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE device_id=?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE companion_id=?`, id); err != nil {
 		return problem(502, "Cannot save sessions")
 	}
 	if !archiveHistory {
@@ -340,11 +330,11 @@ func resetCompanionSession(ctx context.Context, tx *sql.Tx, id string, archiveHi
 	for ts := time.Now().UnixMilli(); ; ts++ {
 		archive := fmt.Sprintf("archive-%s-%d", key, ts)
 		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM messages WHERE device_id=?)`, archive).Scan(&exists); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM messages WHERE companion_id=?)`, archive).Scan(&exists); err != nil {
 			return problem(502, "Cannot archive chat history")
 		}
 		if !exists {
-			if _, err := tx.ExecContext(ctx, `UPDATE messages SET device_id=? WHERE device_id=?`, archive, key); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET companion_id=? WHERE companion_id=?`, archive, key); err != nil {
 				return problem(502, "Cannot archive chat history")
 			}
 			return nil
@@ -352,27 +342,28 @@ func resetCompanionSession(ctx context.Context, tx *sql.Tx, id string, archiveHi
 	}
 }
 
-func (b *larkServer) startNewCompanionSession(ctx context.Context, who peer, archiveHistory bool) error {
-	run := b.oc.prepareMappingChange(who.DeviceID)
+func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, archiveHistory bool) error {
+	id = strings.ToLower(id)
+	run := b.oc.prepareMappingChange(id)
 	if b.ws != nil {
-		b.ws.stopCompanionTurns(who.DeviceID)
+		b.ws.stopCompanionTurns(id)
 	}
 	return run(ctx, func() error {
 		b.companionMu.Lock()
 		defer b.companionMu.Unlock()
-		companion, profilesChanged, err := b.changeCompanion(ctx, who, b.voiceTheme(who), "new_session", object{"archive_history": archiveHistory})
+		companion, err := b.changeCompanion(ctx, id, "new_session", object{"archive_history": archiveHistory})
 		if err != nil {
 			return err
 		}
 		if b.ws != nil {
 			b.ws.mu.Lock()
 			defer b.ws.mu.Unlock()
-			if d := b.ws.devices[strings.ToLower(who.DeviceID)]; d != nil {
-				b.ws.stopCompanionTurn(d)
+			for _, t := range b.ws.terminalsFor(id) {
+				b.ws.stopCompanionTurn(t)
 			}
-			b.ws.companionChanged(who.DeviceID, companion, profilesChanged)
+			b.ws.companionChanged(id, companion)
 			if archiveHistory {
-				b.ws.historyArchived(who.DeviceID)
+				b.ws.historyArchived(id)
 			}
 		}
 		return nil
@@ -381,9 +372,9 @@ func (b *larkServer) startNewCompanionSession(ctx context.Context, who peer, arc
 
 func (h *wsHub) historyArchived(id string) {
 	key := strings.ToLower(id)
-	f := textFrame(object{"op": "history_archived", "device_id": id})
+	f := textFrame(object{"op": "history_archived", "companion_id": id})
 	for c := range h.clients {
-		if c.role == "web" && (c.scope == nil || c.scope.ID == key) {
+		if c.role == "web" && (c.scope == nil || strings.EqualFold(c.scope.ID, key)) {
 			c.enqueue(f)
 		}
 	}

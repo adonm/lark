@@ -181,10 +181,10 @@ func isPlayback(f wsFrame) bool { return f.op == wsBinary && len(f.data) > 1 && 
 func (s *testWS) hello(t *testing.T, id, character string) wsFrame {
 	t.Helper()
 	role := "device"
-	if webDeviceID(id) {
+	if webTerminalID.MatchString(strings.ToLower(id)) {
 		role = "web"
 	}
-	s.json(t, object{"ev": "hello", "role": role, "device_id": id, "character": character, "firmware": "0.8.4", "proto": 2, "battery_pct": 100, "volume": 80})
+	s.json(t, object{"ev": "hello", "role": role, "terminal_id": id, "character": character, "firmware": "0.8.4", "proto": 2, "battery_pct": 100, "volume": 80})
 	if role == "web" {
 		return s.until(t, hasWS("svg", ""))
 	}
@@ -196,7 +196,7 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 	db := testDB(t, filepath.Join(dir, "lark.db"))
-	b := &larkServer{root: ctx, token: "unit", db: db, peers: peers{deviceStore(db)}, history: &chatHistory{db}}
+	b := &larkServer{root: ctx, token: "unit", db: db, terminals: terminalStore(db), history: &chatHistory{db}}
 	if setup != nil {
 		setup(b, dir)
 	}
@@ -237,7 +237,7 @@ func TestWSHandshakeAndRFC6455(t *testing.T) {
 	if pong.op != wsPong || string(pong.data) != "hi" {
 		t.Fatal("ping was not echoed during fragmentation")
 	}
-	c.until(t, hasWS("peers", `"devices":[]`))
+	c.until(t, hasWS("peers", `"terminals":[]`))
 	reply := wsCloseFrame(1000)
 	c.write(t, maskedFrame(wsClose, true, reply.data))
 	if got := c.read(t); got.op != wsClose || !bytes.Equal(got.data, reply.data) {
@@ -287,8 +287,8 @@ func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 	const id = "lark-hello"
 	dev.json(t, object{"ev": "hello", "role": "device", "proto": 1, "device_id": id, "character": "Cake"})
 	dev.until(t, hasWS("error", "firmware upgrade required"))
-	if list := apiObjects(t, base+"/api/devices", "devices"); len(list) != 0 {
-		t.Fatal("old firmware registered a device", list)
+	if list := apiObjects(t, base+"/api/terminals", "terminals"); len(list) != 0 {
+		t.Fatal("old firmware registered a terminal", list)
 	}
 	dev.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Cake",
 		"ip": "192.0.2.123", "port": 8080, "width": 320, "height": 240, "shape": "rect", "board": "esp-box-3"})
@@ -299,17 +299,17 @@ func TestWSHelloPersistsOnlyV2Hardware(t *testing.T) {
 	}
 	dev.conn.Close()
 	b.ws.sig.wait(t, func() bool {
-		list := apiObjects(t, base+"/api/devices", "devices")
+		list := apiObjects(t, base+"/api/terminals", "terminals")
 		return len(list) == 1 && list[0].(object)["ws_connected"] == false
 	})
-	p, ok, err := deviceStore(b.db).get(id)
-	if err != nil || !ok || p.Character != "Cake" || p.IP != "127.0.0.1" || p.Port != 8080 || p.LastSeen <= 0 {
+	p, ok, err := terminalStore(b.db).get(id)
+	if err != nil || !ok || p.Kind != "hardware" || p.IP != "127.0.0.1" || p.Port != 8080 || p.LastSeen <= 0 {
 		t.Fatalf("incorrect remembered identity: %+v (%v)", p, err)
 	}
 	web := testConnectWS(t, base, "unit", true)
-	web.hello(t, "phone-1234", "New Cat")
-	if _, exists, err := deviceStore(b.db).get("phone-1234"); exists || err != nil {
-		t.Fatal("web hello changed the physical device registry", err)
+	web.hello(t, "web-12345678", "New Companion")
+	if p2, exists, err := terminalStore(b.db).get("web-12345678"); !exists || err != nil || p2.Kind != "web" {
+		t.Fatal("web hello did not register a web terminal", err)
 	}
 }
 
@@ -332,7 +332,7 @@ func TestWSMirrorAndControls(t *testing.T) {
 	if f := web.until(t, hasWS("svg", "menu-stats")); !hasWS("svg", "menu-voice")(f) {
 		t.Fatal("menu did not mirror voice controls")
 	}
-	testRequest(t, "POST", base+"/api/devices/"+id+"/volume", "unit", object{"auto": false, "volume": 62}, 200)
+	testRequest(t, "POST", base+"/api/terminals/"+id+"/volume", "unit", object{"auto": false, "volume": 62}, 200)
 	for _, c := range []*testWS{dev, web} {
 		c.until(t, hasWS("volume", `"level":62`))
 	}
@@ -346,20 +346,24 @@ func TestWSMirrorAndControls(t *testing.T) {
 
 func TestWSWebOnlyDisplayAndIdenticalAppRender(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "phone-ab12"
+	const id = "web-ab120000"
+	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+		t.Fatal(err)
+	}
 	web := testConnectWS(t, base, "unit", true)
-	web.hello(t, id, "Cake")
+	web.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "cake"})
+	web.until(t, hasWS("svg", ""))
 	b.ws.mu.Lock()
-	d := b.ws.devices[id]
+	d := b.ws.terminals[id]
 	native := d.svg.fb != nil
 	b.ws.mu.Unlock()
 	if native {
-		t.Fatal("native framebuffer allocated for a browser cat")
+		t.Fatal("native framebuffer allocated for a browser terminal")
 	}
 	const code = `function render() {
 		return '<svg><circle data-id="app-dot" cx="180" cy="180" r="35" fill="#3579da"/></svg>';
 	} function onTap(s,p,id) { if (id === "app-dot") chime("tap"); }`
-	toolTest(t, base, "app", object{"devices": id, "code": code}, false)
+	toolTest(t, base, "app", object{"companions": "cake", "code": code}, false)
 	web.until(t, func(f wsFrame) bool {
 		if isDisplay(f) {
 			t.Fatal("web-only app received RGB565")
@@ -396,7 +400,7 @@ func TestWSRecordingLimits(t *testing.T) {
 		{"cross PCM cap", append(bytes.Repeat([]byte{12, 0}, (maxPCM-2)/2), 15, 0, 16, 0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			const id = "phone-a123"
+			const id = "web-a1230000"
 			pcm := tc.pcm[:min(len(tc.pcm), maxPCM)]
 			sttCalled := make(chan struct{}, 1)
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -412,8 +416,12 @@ func TestWSRecordingLimits(t *testing.T) {
 					return "", nil
 				}
 			})
+			if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake"}); err != nil {
+				t.Fatal(err)
+			}
 			dev := testConnectWS(t, base, "unit", false)
-			dev.hello(t, id, "Cake")
+			dev.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "cake"})
+			dev.until(t, hasWS("svg", ""))
 			dev.json(t, object{"ev": "rec_start"})
 			dev.until(t, hasWS("mode", `"mode":"listening"`))
 			for chunk := range slices.Chunk(tc.pcm, pcmPacket) {
@@ -423,7 +431,7 @@ func TestWSRecordingLimits(t *testing.T) {
 				// Wait for the server to consume the PCM before aging the recording.
 				dev.barrier(t)
 				b.ws.mu.Lock()
-				b.ws.devices[id].recording.started = time.Now().Add(-91 * time.Second)
+				b.ws.terminals[id].recording.started = time.Now().Add(-91 * time.Second)
 				b.ws.mu.Unlock()
 			}
 			dev.until(t, hasWS("rec", `"action":"stop","op":"rec","target":""`))
@@ -444,7 +452,7 @@ func TestWSRecordingLimits(t *testing.T) {
 				}
 			}
 			b.ws.mu.Lock()
-			d := b.ws.devices[id]
+			d := b.ws.terminals[id]
 			cleared := !d.recording.active() && len(d.recording.pcm) == 0 && !d.busy && d.view == nil
 			b.ws.mu.Unlock()
 			if !cleared {
@@ -485,7 +493,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			dev.json(t, object{"ev": "tap", "x": 247, "y": 310})
 			dev.until(t, hasWS("rec", `"action":"stop","op":"rec","target":""`))
 			b.ws.mu.Lock()
-			d := b.ws.devices[id]
+			d := b.ws.terminals[id]
 			stopping := d.recording.phase == captureStoppingOpen && d.recording.stopTimer != nil && bytes.Equal(d.recording.pcm, first) && !d.busy
 			b.ws.mu.Unlock()
 			if !stopping {
@@ -517,9 +525,9 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &larkServer{root: t.Context()}
 		c := &wsClient{role: "device", ctx: t.Context(), out: make(chan wsFrame, 8)}
-		d := &wsDevice{client: c, key: "lark-no-ack", screen: roundScreen, companion: blankCompanion()}
+		d := &wsTerminal{client: c, key: "lark-no-ack", id: "lark-no-ack", screen: roundScreen, companion: blankCompanion()}
 		d.recording.start(time.Now(), "", false)
-		h := &wsHub{b: b, devices: map[string]*wsDevice{d.key: d}}
+		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}}
 		h.mu.Lock()
 		h.recordingControl(d, time.Now(), false)
 		h.mu.Unlock()
@@ -544,7 +552,7 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 
 func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	allowSTT := make(chan struct{})
-	_, base := wsHarness(t, func(b *larkServer, dir string) {
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.stt = func(ctx context.Context, _ []byte) (string, error) {
 			select {
 			case <-allowSTT:
@@ -560,11 +568,15 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 			close(allowSTT)
 		}
 	}()
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint"}); err != nil {
+		t.Fatal(err)
+	}
 	from, to := testConnectWS(t, base, "unit", false), testConnectWS(t, base, "unit", true)
-	from.hello(t, "lark-a", "Cake")
-	to.hello(t, "phone-000b", "Mint")
+	from.hello(t, "vocat-000a", "Cake")
+	to.json(t, object{"ev": "hello", "role": "web", "terminal_id": "web-000b0000", "companion_id": "mint"})
+	to.until(t, hasWS("svg", ""))
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
-	from.json(t, object{"ev": "rec_start", "target": "phone-000b"})
+	from.json(t, object{"ev": "rec_start", "target": "mint"})
 	from.write(t, maskedFrame(wsBinary, true, append([]byte{micPrefix}, pcm[:100]...)))
 	from.write(t, maskedFrame(wsBinary, true, []byte{0x03, 1, 2})) // wrong audio direction is ignored
 	from.write(t, maskedFrame(wsBinary, false, append([]byte{micPrefix}, pcm[100:140]...)))
@@ -582,7 +594,7 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	closed = true
 	to.until(t, hasWS("svg", "Voice caption."))
 	to.json(t, object{"ev": "tap", "id": "reply", "x": 180, "y": 240})
-	to.until(t, hasWS("rec", `"target":"lark-a"`))
+	to.until(t, hasWS("rec", `"target":"cake"`))
 	to.json(t, object{"ev": "rec_end", "cancelled": true})
 }
 
@@ -608,8 +620,8 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		defer cancel()
 		c := &wsClient{wire: &websocket{conn: server}, ctx: ctx, cancel: cancel, out: make(chan wsFrame, 12)}
 		dev := &testWS{conn: client, in: bufio.NewReader(client)}
-		d := &wsDevice{client: c, key: "lark-slow", screen: roundScreen, companion: blankCompanion()}
-		h := &wsHub{devices: map[string]*wsDevice{d.key: d}}
+		d := &wsTerminal{client: c, key: "lark-slow", id: "lark-slow", screen: roundScreen, companion: blankCompanion()}
+		h := &wsHub{terminals: map[string]*wsTerminal{d.key: d}}
 		go c.write()
 		start := time.Now()
 		h.mu.Lock()
@@ -660,15 +672,15 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 
 func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	b, base := wsHarness(t, nil)
-	const id = "phone-a123"
+	const id = "web-a1230000"
 	phone := testConnectWS(t, base, "unit", true)
-	phone.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Plum"})
+	phone.json(t, object{"ev": "hello", "role": "web", "terminal_id": id})
 	phone.until(t, hasWS("svg", "companion-ring"))
 	stream := newAudioStream()
 	stream.append(bytes.Repeat([]byte{12, 0}, sampleRate))
 	stream.finish(nil)
 	b.ws.mu.Lock()
-	d := b.ws.devices[id]
+	d := b.ws.terminals[id]
 	b.ws.play(d, stream)
 	b.ws.mu.Unlock()
 	phone.until(t, hasWS("mode", `"mode":"speaking"`))
@@ -699,7 +711,7 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 		stream.append(bytes.Repeat([]byte{12, 0}, 800))
 		stream.finish(nil)
 		b.ws.mu.Lock()
-		d := b.ws.devices[id]
+		d := b.ws.terminals[id]
 		b.ws.play(d, stream)
 		audio := json.Number(strconv.FormatUint(d.audio, 10))
 		b.ws.mu.Unlock()
@@ -727,7 +739,7 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	awaiting := func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()
-		return b.ws.devices[id].awaitAck
+		return b.ws.terminals[id].awaitAck
 	}
 	if !awaiting() {
 		t.Fatal("aborted stream ACK cleared replacement playback")
@@ -811,7 +823,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 			case "/api/session/ses-ws/prompt":
 				var prompt struct{ Text string }
 				if err := json.NewDecoder(r.Body).Decode(&prompt); err != nil ||
-					prompt.Text != "[Cake (lark-a) · hardware · voice]\nWhat are stars?" {
+					prompt.Text != "[Cake (cake) · hardware · voice]\nWhat are stars?" {
 					t.Errorf("unexpected voice prompt: %q (%v)", prompt.Text, err)
 				}
 				close(kick)
@@ -862,7 +874,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		if testObject(t, abort.data)["audio"] != testObject(t, start.data)["audio"] {
 			t.Fatal("one Stop tap must abort the audio that is playing")
 		}
-		entries := apiObjects(t, base+"/api/devices/lark-a/messages", "messages")
+		entries := apiObjects(t, base+"/api/companions/cake/messages", "messages")
 		if len(entries) != 1 {
 			t.Fatal("Stop during eager playback must not commit a reply")
 		}
@@ -877,13 +889,13 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	dev.json(t, object{"ev": "tts_ack", "state": "done", "audio": testObject(t, end.data)["audio"]})
 	dev.barrier(t)
 	b.ws.mu.Lock()
-	d := b.ws.devices["lark-a"]
+	d := b.ws.terminals["lark-a"]
 	settled := !d.busy && !d.awaitAck && d.scene.title == ""
 	b.ws.mu.Unlock()
 	if !settled {
 		t.Fatal("device did not settle after tts_ack")
 	}
-	entries := apiObjects(t, base+"/api/devices/lark-a/messages", "messages")
+	entries := apiObjects(t, base+"/api/companions/cake/messages", "messages")
 	if len(entries) != 2 || !slices.ContainsFunc(entries, func(v any) bool {
 		e := v.(object)
 		return e["id"] == "msg2" && e["text"] == first+last
@@ -898,7 +910,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		t.Fatalf("one voice turn expected, got %+v", diag.Turns)
 	}
 	turn := diag.Turns[0]
-	if turn.Device != "lark-a" || turn.Source != "voice" || turn.STT == nil || turn.First == nil ||
+	if turn.Device != "cake" || turn.Source != "voice" || turn.STT == nil || turn.First == nil ||
 		turn.Total == nil || turn.TTS == nil || turn.E2E == nil || *turn.First > *turn.Total {
 		t.Fatalf("voice milestones missing or out of order: %+v", turn)
 	}

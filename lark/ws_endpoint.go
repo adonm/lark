@@ -39,7 +39,7 @@ type pauseTranscript struct {
 	stt  time.Duration
 }
 
-func (h *wsHub) startEndpoint(d *wsDevice) {
+func (h *wsHub) startEndpoint(d *wsTerminal) {
 	ctx, cancel := context.WithCancel(d.client.ctx)
 	c := &endpointCapture{ctx: ctx, cancel: cancel, packets: make(chan micPacket, 64), result: make(chan captureResult, 1), listening: make(chan struct{})}
 	d.recording.endpoint = c
@@ -53,7 +53,7 @@ func (h *wsHub) startEndpoint(d *wsDevice) {
 	go h.captureEndpoint(d, c)
 }
 
-func (h *wsHub) captureEndpoint(d *wsDevice, c *endpointCapture) {
+func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	defer close(c.result)
 	vad := h.b.endpoint.newVAD()
 	if vad != nil {
@@ -155,7 +155,7 @@ func (h *wsHub) captureEndpoint(d *wsDevice, c *endpointCapture) {
 	}
 }
 
-func (h *wsHub) finishEndpoint(d *wsDevice, now time.Time) {
+func (h *wsHub) finishEndpoint(d *wsTerminal, now time.Time) {
 	c := d.recording.endpoint
 	d.recording.endpoint = nil
 	c.deadline.Stop()
@@ -173,9 +173,9 @@ func (h *wsHub) finishEndpoint(d *wsDevice, now time.Time) {
 
 // Only one captured follow-up may wait for the current reply. It enters the
 // same regular prompt gate as any other turn, without interrupt or retry.
-func (h *wsHub) maybeStartVoice(d *wsDevice, now time.Time) bool {
+func (h *wsHub) maybeStartVoice(d *wsTerminal, now time.Time) bool {
 	c := d.queuedVoice
-	if c == nil || d.busy || d.stopAudio != nil || d.awaitAck || d.callState != callNone || !h.active(d) || h.parentRefresh(d.key, now) != "" {
+	if c == nil || d.busy || d.stopAudio != nil || d.awaitAck || d.callState != callNone || !h.active(d) || (d.companionID != "" && h.parentRefresh(d.companionID, now) != "") {
 		return false
 	}
 	d.queuedVoice = nil

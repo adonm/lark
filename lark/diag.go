@@ -203,7 +203,7 @@ func (b *larkServer) transcribe(ctx context.Context, pcm []byte) (string, error)
 	return text, err
 }
 
-func (h *wsHub) trackFrame(d *wsDevice, elapsed time.Duration, size, raw int, codec string) {
+func (h *wsHub) trackFrame(d *wsTerminal, elapsed time.Duration, size, raw int, codec string) {
 	d.frame = &diagFrame{milliseconds(elapsed), size, raw, codec}
 	if codec == "svg" {
 		return
@@ -262,7 +262,7 @@ type diagReport struct {
 	Generated time.Time              `json:"generated_at"`
 	Latency   map[string]diagSummary `json:"latency"`
 	Turns     []diagTurn             `json:"recent_turns"`
-	Devices   []diagDevice           `json:"devices"`
+	Terminals []diagTerminal         `json:"terminals"`
 	SVGCache  diagCache              `json:"svg_cache"`
 	Refresh   diagSchemaRefresh      `json:"mcp_contract_refresh"`
 	diagSystem
@@ -274,7 +274,7 @@ type diagCache struct {
 }
 
 func (b *larkServer) diagnosticReport() diagReport {
-	out := diagReport{Generated: time.Now().UTC(), Latency: make(map[string]diagSummary), Turns: []diagTurn{}, Devices: []diagDevice{}}
+	out := diagReport{Generated: time.Now().UTC(), Latency: make(map[string]diagSummary), Turns: []diagTurn{}, Terminals: []diagTerminal{}}
 	out.SVGCache.Hits, out.SVGCache.Misses = screens.stats()
 	b.diag.mu.Lock()
 	out.diagSystem = b.diag.system
@@ -294,14 +294,15 @@ func (b *larkServer) diagnosticReport() diagReport {
 	}
 	slices.Reverse(out.Turns)
 	if b.ws != nil {
-		out.Devices = b.ws.diagDevices()
+		out.Terminals = b.ws.diagTerminals()
 	}
 	return out
 }
 
-type diagDevice struct {
-	ID           string     `json:"device_id"`
-	Character    string     `json:"character"`
+type diagTerminal struct {
+	ID           string     `json:"terminal_id"`
+	CompanionID  string     `json:"companion_id,omitempty"`
+	Character    string     `json:"name"`
 	Kind         string     `json:"kind"`
 	Board        string     `json:"board,omitempty"`
 	Firmware     string     `json:"firmware,omitempty"`
@@ -318,51 +319,47 @@ type diagDevice struct {
 	wsStatus
 }
 
-func (d *wsDevice) diagDevice() diagDevice {
+func (d *wsTerminal) diagTerminal() diagTerminal {
 	s := d.telemetry
 	s.Volume = new(d.vol)
-	out := diagDevice{ID: d.who.DeviceID, Character: d.companion.Name, Kind: "physical", Board: d.board,
+	out := diagTerminal{ID: d.id, CompanionID: d.companionID, Character: d.companion.Name, Kind: d.kind, Board: d.board,
 		Firmware: d.firmware, OTA: s.Partition, WS: true, Mode: d.pose.mood, RTT: d.client.pingRTT(),
 		Frame: d.frame, Auto: d.autoVol, DeviceVol: d.telemetry.Volume, wsStatus: s}
-	if d.virtual() {
-		out.Kind = "virtual"
-	}
 	if d.hasAmbient {
 		out.Ambient = new(d.ambientEMA)
 	}
 	return out
 }
 
-func (h *wsHub) diagDevices() []diagDevice {
-	virtual, _ := h.b.virtualSnapshot()
+func (h *wsHub) diagTerminals() []diagTerminal {
+	terms, _ := h.b.terminalSnapshot()
 	roundOTA, boxOTA := fileBytes(h.b.ota.path) > 0, fileBytes(h.b.box3OTA.path) > 0
-	peers, _ := h.peerSnapshot("")
-	devices := make(map[string]diagDevice, len(peers)+len(virtual))
-	for _, p := range peers {
-		id := strings.ToLower(p.DeviceID)
-		devices[id] = diagDevice{ID: p.DeviceID, Character: p.Character, Kind: "physical", Mode: "offline"}
-	}
-	for id, v := range virtual {
-		devices[id] = diagDevice{ID: id, Character: h.b.companionFor(peer{DeviceID: id, Character: v.Character}).Name, Kind: "virtual", Mode: "offline"}
+	outMap := make(map[string]diagTerminal, len(terms))
+	for id, t := range terms {
+		name := ""
+		if t.CompanionID != "" {
+			name = h.b.companionFor(t.CompanionID).Name
+		}
+		outMap[id] = diagTerminal{ID: t.ID, CompanionID: t.CompanionID, Character: name, Kind: t.Kind, Mode: "offline"}
 	}
 	h.mu.Lock()
-	for id, d := range h.devices {
+	for id, d := range h.terminals {
 		if h.active(d) {
-			device := d.diagDevice()
-			device.NoteEndpoint = "client"
+			term := d.diagTerminal()
+			term.NoteEndpoint = "client"
 			if h.bridgeEndpoint(d) {
-				device.NoteEndpoint = "bridge"
+				term.NoteEndpoint = "bridge"
 			}
-			device.OTABundle = device.Board == "esp-box-3" && boxOTA || device.Board == "esp-vocat" && roundOTA
-			devices[id] = device
+			term.OTABundle = term.Board == "esp-box-3" && boxOTA || term.Board == "esp-vocat" && roundOTA
+			outMap[id] = term
 		}
 	}
 	h.mu.Unlock()
-	out := make([]diagDevice, 0, len(devices))
-	for _, d := range devices {
+	out := make([]diagTerminal, 0, len(outMap))
+	for _, d := range outMap {
 		out = append(out, d)
 	}
-	slices.SortFunc(out, func(a, b diagDevice) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(out, func(a, b diagTerminal) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
 

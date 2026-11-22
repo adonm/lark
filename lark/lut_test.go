@@ -18,10 +18,10 @@ func TestAtmospherePhasesAndContrast(t *testing.T) {
 		}
 	}
 	var hub wsHub
-	if g := hub.frameGrade(&wsDevice{}, at(23, 0)); g != gradeDay {
+	if g := hub.frameGrade(&wsTerminal{}, at(23, 0)); g != gradeDay {
 		t.Fatalf("unconfigured hub did not keep the identity grade: %d", g)
 	}
-	board := &wsDevice{key: "board", client: &wsClient{role: "device"}}
+	board := &wsTerminal{key: "board", companionID: "board", client: &wsClient{role: "device"}}
 	hub.atmosphere = true
 	hub.parents = map[string]*parentRuntime{"board": {loc: time.FixedZone("configured", 9*60*60), configured: true}}
 	if g := hub.frameGrade(board, at(13, 0)); g != gradeNight {
@@ -99,9 +99,9 @@ func TestAtmosphereCache(t *testing.T) {
 			t.Fatalf("grade cache: %d hits, %d misses", h, m)
 		}
 	}
-	dev := &wsDevice{screen: shape, client: &wsClient{role: "device"}}
+	dev := &wsTerminal{screen: shape, client: &wsClient{role: "device"}}
 	dev.grade.Store(uint32(gradeNight))
-	app, views, err := initApp(savedApp{SVG: raw}, []appPlayer{{id: "board"}}, nil, []*wsDevice{dev}, nil, buildScreen)
+	app, views, err := initApp(savedApp{SVG: raw}, []appPlayer{{id: "board"}}, nil, []*wsTerminal{dev}, nil, buildScreen)
 	if err != nil || views[0].grade != gradeNight {
 		t.Fatal("app did not use board grade", err)
 	}

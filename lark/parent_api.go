@@ -62,11 +62,11 @@ func (b *larkServer) parentAPI(r *http.Request, id string) (any, error) {
 		return b.parentOverview(r.Context())
 	}
 	if r.Method != http.MethodPost || id == "" {
-		return nil, problem(405, "Use GET for the overview or POST to change a device")
+		return nil, problem(405, "Use GET for the overview or POST to change a companion")
 	}
-	who, err := b.lookupDevice(id)
-	if err != nil {
-		return nil, err
+	c, ok := b.companionByID(id)
+	if !ok {
+		return nil, problem(404, "Companion not found")
 	}
 	readArgs := jsonBody
 	if parentFragmentRequest(r) {
@@ -79,7 +79,7 @@ func (b *larkServer) parentAPI(r *http.Request, id string) (any, error) {
 	h := b.ws
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	key := strings.ToLower(who.DeviceID)
+	key := strings.ToLower(c.ID)
 	p, err := h.parentLoad(key)
 	if err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (b *larkServer) parentAPI(r *http.Request, id string) (any, error) {
 	if err := h.parentSet(key, s, loc, now); err != nil {
 		return nil, err
 	}
-	return parentRow(who.DeviceID, who.Character, p), nil
+	return parentRow(c.ID, c.Name, p), nil
 }
 
 func editParent(s parentSettings, loc *time.Location, args object, now time.Time) (parentSettings, *time.Location, error) {
@@ -146,19 +146,19 @@ func editParent(s parentSettings, loc *time.Location, args object, now time.Time
 }
 
 func parentRow(id, name string, p *parentRuntime) object {
-	return object{"device_id": id, "character": name, "settings": p.settings,
+	return object{"companion_id": id, "name": name, "settings": p.settings,
 		"reason": p.reason, "used_seconds": int(p.used / time.Second), "day": p.day}
 }
 
 func (b *larkServer) parentOverview(ctx context.Context) (object, error) {
-	devices, err := b.deviceList()
+	companions, err := b.allCompanions(ctx)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	out := make([]object, 0, len(devices))
-	for _, d := range devices {
-		id, name := str(d["device_id"]), str(d["character"])
+	out := make([]object, 0, len(companions))
+	for _, c := range companions {
+		id, name := c.ID, c.Name
 		h, key := b.ws, strings.ToLower(id)
 		h.mu.Lock()
 		reason := h.parentRefresh(key, now)
@@ -177,12 +177,12 @@ func (b *larkServer) parentOverview(ctx context.Context) (object, error) {
 			COUNT(CASE WHEN source='call' THEN 1 END),
 			COUNT(CASE WHEN role='intercom' THEN 1 END),
 			COUNT(CASE WHEN source='timer' THEN 1 END)
-			FROM messages WHERE device_id=? AND ts_ms>=?`, key, now.Add(-7*24*time.Hour).UnixMilli()).Scan(&talk, &apps, &calls, &intercom, &timers)
+			FROM messages WHERE companion_id=? AND ts_ms>=?`, key, now.Add(-7*24*time.Hour).UnixMilli()).Scan(&talk, &apps, &calls, &intercom, &timers)
 		if err != nil {
 			return nil, err
 		}
 		row["recent"] = object{"talk_turns": talk, "app_launches": apps, "calls": calls, "intercom": intercom, "timer_cards": timers}
 		out = append(out, row)
 	}
-	return object{"devices": out}, nil
+	return object{"companions": out}, nil
 }

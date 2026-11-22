@@ -20,8 +20,8 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 	d.json(t, tap)
 	d.barrier(t)
 	b.ws.mu.Lock()
-	started := b.ws.devices[id].recording.active()
-	rev = b.ws.devices[id].nativeRev // An idle blink may have produced another revision.
+	started := b.ws.terminals[id].recording.active()
+	rev = b.ws.terminals[id].nativeRev // An idle blink may have produced another revision.
 	b.ws.mu.Unlock()
 	if started {
 		t.Fatal("missing or stale revision started recording")
@@ -32,7 +32,7 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 }
 
 func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
-	d := wsDevice{caps: deviceCaps{PointerRev: true}}
+	d := wsTerminal{caps: deviceCaps{PointerRev: true}}
 	for _, action := range []string{"stop", "rec-cancel", "rec-send", "listen", "reply", "call-peer",
 		"call-answer", "call-decline", "call-hangup", "call-mute"} {
 		wrapped, old := uint16(0), uint16(65535)
@@ -56,7 +56,7 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	_, idleRev, _ := decodeDisplay(t, d.until(t, isDisplay))
 
 	b.ws.mu.Lock()
-	dev := b.ws.devices[id]
+	dev := b.ws.terminals[id]
 	dev.busy = true
 	b.ws.render(dev, time.Now(), false)
 	b.ws.mu.Unlock()
@@ -96,7 +96,7 @@ func TestNativeWakeWordUsesTalkFlowOnlyWhenEnabled(t *testing.T) {
 	d.json(t, object{"ev": "wake_word"})
 	d.barrier(t)
 	b.ws.mu.Lock()
-	dev := b.ws.devices[id]
+	dev := b.ws.terminals[id]
 	started := dev.recording.active()
 	endpoint := dev.caps.BridgeEndpoint
 	b.ws.mu.Unlock()

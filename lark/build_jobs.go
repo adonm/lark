@@ -52,20 +52,24 @@ func (m *buildManager) signal() {
 	}
 }
 
-func (m *buildManager) enqueue(ctx context.Context, who peer, intent buildIntent, text string) (string, error) {
+func (m *buildManager) enqueue(ctx context.Context, companionID string, intent buildIntent, text string) (string, error) {
 	if len(text) > 4096 {
 		return "", problem(400, "Build requests can be at most 4096 bytes.")
 	}
-	id := strings.ToLower(who.DeviceID)
-	spec := buildSpec{Kind: intent.kind, Prompt: text, Character: who.Character}
+	id := strings.ToLower(companionID)
+	who := m.b.companionFor(id)
+	spec := buildSpec{Kind: intent.kind, Prompt: text, Character: who.Name}
 	switch intent.kind {
 	case "edit":
 		if intent.target == "" {
 			h := m.b.ws
 			if h != nil {
 				h.mu.Lock()
-				if d := h.devices[id]; d != nil && h.active(d) && d.app != nil && d.app.spec.Version > 0 {
-					intent.target = d.app.spec.Name
+				for _, d := range h.terminalsFor(id) {
+					if d.app != nil && d.app.spec.Version > 0 {
+						intent.target = d.app.spec.Name
+						break
+					}
 				}
 				h.mu.Unlock()
 			}
@@ -84,7 +88,7 @@ func (m *buildManager) enqueue(ctx context.Context, who peer, intent buildIntent
 			return "", err
 		}
 		defer tx.Rollback()
-		c, err := m.b.readActiveCompanion(ctx, tx, who)
+		c, err := readCompanionRow(tx.QueryRowContext(ctx, `SELECT `+companionColumns+` FROM companions WHERE id=?`, id))
 		if err != nil {
 			return "", err
 		}
@@ -114,9 +118,9 @@ func (m *buildManager) enqueue(ctx context.Context, who peer, intent buildIntent
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	out, err := m.b.db.ExecContext(ctx, `INSERT INTO build_jobs (id,device_id,state,spec,created_at)
+	out, err := m.b.db.ExecContext(ctx, `INSERT INTO build_jobs (id,companion_id,state,spec,created_at)
 		SELECT ?,?,'queued',?,? WHERE NOT EXISTS
-		(SELECT 1 FROM build_jobs WHERE device_id=? AND state IN ('queued','running'))
+		(SELECT 1 FROM build_jobs WHERE companion_id=? AND state IN ('queued','running'))
 		AND (SELECT count(*) FROM build_jobs WHERE state IN ('queued','running')) < ?`,
 		jobID, id, string(raw), time.Now().UnixMilli(), id, buildSlots)
 	if err != nil {
@@ -130,10 +134,10 @@ func (m *buildManager) enqueue(ctx context.Context, who peer, intent buildIntent
 	return "", err
 }
 
-func (m *buildManager) cancel(ctx context.Context, device, job string) (bool, error) {
+func (m *buildManager) cancel(ctx context.Context, companion, job string) (bool, error) {
 	var id string
 	err := m.b.db.QueryRowContext(ctx, `UPDATE build_jobs SET state='cancelled',spec='',announced=1
-		WHERE device_id=? AND (?='' OR id=?) AND state IN ('queued','running') RETURNING id`, strings.ToLower(device), job, job).Scan(&id)
+		WHERE companion_id=? AND (?='' OR id=?) AND state IN ('queued','running') RETURNING id`, strings.ToLower(companion), job, job).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -181,7 +185,7 @@ func (m *buildManager) run(ctx context.Context) {
 }
 
 func (m *buildManager) pump(ctx context.Context, now time.Time) {
-	rows, err := m.b.db.readDB().QueryContext(ctx, `SELECT id,device_id,state,spec,result,announced,cleanup,created_at FROM build_jobs
+	rows, err := m.b.db.readDB().QueryContext(ctx, `SELECT id,companion_id,state,spec,result,announced,cleanup,created_at FROM build_jobs
 		WHERE state='queued' OR (state<>'running' AND (announced=0 OR cleanup=1)) ORDER BY created_at,id`)
 	if err != nil {
 		return
@@ -301,6 +305,6 @@ func (m *buildManager) fail(ctx context.Context, id, message string) {
 }
 
 func faceVersion(ctx context.Context, q companionQuery, id string) (version int64, err error) {
-	err = q.QueryRowContext(ctx, `SELECT COALESCE((SELECT updated_at FROM companions WHERE device_id=?),0)`, id).Scan(&version)
+	err = q.QueryRowContext(ctx, `SELECT COALESCE((SELECT updated_at FROM companions WHERE id=?),0)`, id).Scan(&version)
 	return
 }

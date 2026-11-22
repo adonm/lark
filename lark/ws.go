@@ -17,30 +17,32 @@ const wsConnections = 64
 const wsCompanionOccupied = 4001
 
 type wsEvent struct {
-	Event     string  `json:"ev"`
-	Role      string  `json:"role"`
-	DeviceID  string  `json:"device_id"`
-	Character string  `json:"character"`
-	Firmware  string  `json:"firmware"`
-	Proto     int     `json:"proto"`
-	Port      *int    `json:"port"`
-	Width     *int    `json:"width"`
-	Height    *int    `json:"height"`
-	Shape     string  `json:"shape"`
-	Board     string  `json:"board"`
-	Caps      wsCaps  `json:"caps"`
-	ID        string  `json:"id"`
-	X         int     `json:"x"`
-	Y         int     `json:"y"`
-	RevLo     *uint16 `json:"rev_lo"`
-	Target    string  `json:"target"`
-	Text      string  `json:"text"`
-	State     string  `json:"state"`
-	Audio     uint64  `json:"audio"`
-	Call      uint32  `json:"call"`
-	Cancelled bool    `json:"cancelled"`
-	Enabled   *bool   `json:"enabled"`
-	IfFree    bool    `json:"if_free"` // A reconnect must not replace a live virtual companion.
+	Event       string  `json:"ev"`
+	Role        string  `json:"role"`
+	TerminalID  string  `json:"terminal_id"`
+	CompanionID string  `json:"companion_id"`
+	DeviceID    string  `json:"device_id"`
+	Character   string  `json:"character"`
+	Firmware    string  `json:"firmware"`
+	Proto       int     `json:"proto"`
+	Port        *int    `json:"port"`
+	Width       *int    `json:"width"`
+	Height      *int    `json:"height"`
+	Shape       string  `json:"shape"`
+	Board       string  `json:"board"`
+	Caps        wsCaps  `json:"caps"`
+	ID          string  `json:"id"`
+	X           int     `json:"x"`
+	Y           int     `json:"y"`
+	RevLo       *uint16 `json:"rev_lo"`
+	Target      string  `json:"target"`
+	Text        string  `json:"text"`
+	State       string  `json:"state"`
+	Audio       uint64  `json:"audio"`
+	Call        uint32  `json:"call"`
+	Cancelled   bool    `json:"cancelled"`
+	Enabled     *bool   `json:"enabled"`
+	IfFree      bool    `json:"if_free"` // A reconnect must not replace a live web terminal.
 	wsStatus
 }
 
@@ -57,8 +59,8 @@ type wsClient struct {
 	role       string
 	watch      string
 	lastPeers  wsFrame
-	device     *wsDevice
-	scope      *virtualClient
+	terminal   *wsTerminal
+	scope      *companionState
 	pingMu     sync.Mutex
 	pingSentAt time.Time
 	rtt        *float64
@@ -74,11 +76,12 @@ type wsHub struct {
 	conns         sync.WaitGroup
 	clients       map[*wsClient]struct{}
 	pending       int
-	devices       map[string]*wsDevice
+	terminals     map[string]*wsTerminal
 	parents       map[string]*parentRuntime
 	closed        bool
-	peers         string
-	storedPeers   []peerDisplay
+	peers            string
+	storedPeers      []peerDisplay
+	storedCompanions []companionState
 	refreshing    bool
 	refreshNeeded bool
 	nextCall      uint32
@@ -86,7 +89,7 @@ type wsHub struct {
 }
 
 func newWSHub(b *larkServer, atmosphere bool) *wsHub {
-	h := &wsHub{b: b, atmosphere: atmosphere, clients: make(map[*wsClient]struct{}), devices: make(map[string]*wsDevice)}
+	h := &wsHub{b: b, atmosphere: atmosphere, clients: make(map[*wsClient]struct{}), terminals: make(map[string]*wsTerminal)}
 	go h.animate(b.root)
 	return h
 }
@@ -116,7 +119,7 @@ func (h *wsHub) serve(w http.ResponseWriter, r *http.Request) error {
 	return h.serveScope(w, r, nil)
 }
 
-func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *virtualClient) error {
+func (h *wsHub) serveScope(w http.ResponseWriter, r *http.Request, scope *companionState) error {
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
 		if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" ||
@@ -300,10 +303,10 @@ func textFrame(v object) wsFrame {
 	return wsFrame{wsText, raw}
 }
 
-func (h *wsHub) mirrorWatchers(d *wsDevice, v object) {
+func (h *wsHub) mirrorWatchers(d *wsTerminal, v object) {
 	var f wsFrame
 	for c := range h.clients {
-		if c.watch == d.key {
+		if c.watch == d.companionID && d.companionID != "" || c.watch == d.key {
 			if f.data == nil {
 				f = textFrame(v)
 			}
@@ -312,16 +315,12 @@ func (h *wsHub) mirrorWatchers(d *wsDevice, v object) {
 	}
 }
 
-func (h *wsHub) pushWS(d *wsDevice, v object, mirror bool) {
+func (h *wsHub) pushWS(d *wsTerminal, v object, mirror bool) {
 	if d.client.native == nil {
 		f := textFrame(v)
 		d.client.enqueue(f)
 		if mirror {
-			for c := range h.clients {
-				if c.watch == d.key {
-					c.enqueue(f)
-				}
-			}
+			h.mirrorWatchers(d, v)
 		}
 		return
 	}
@@ -330,7 +329,7 @@ func (h *wsHub) pushWS(d *wsDevice, v object, mirror bool) {
 	}
 }
 
-func (h *wsHub) pushWakeWord(d *wsDevice, enabled bool) {
+func (h *wsHub) pushWakeWord(d *wsTerminal, enabled bool) {
 	if d.client.native != nil {
 		var b [1]byte
 		if enabled {
@@ -339,10 +338,10 @@ func (h *wsHub) pushWakeWord(d *wsDevice, enabled bool) {
 		d.client.native.enqueue(msgWakeWordCtrl, b[:])
 		return
 	}
-	d.client.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "device_id": d.who.DeviceID}))
+	d.client.enqueue(textFrame(object{"op": "wake_word", "enabled": enabled, "terminal_id": d.id, "companion_id": d.companionID}))
 }
 
-func (h *wsHub) pushRecStart(d *wsDevice, target string, bridgeEndpoint bool) {
+func (h *wsHub) pushRecStart(d *wsTerminal, target string, bridgeEndpoint bool) {
 	if d.client.native != nil {
 		var t uint8
 		if target != "" {
@@ -361,7 +360,7 @@ func (h *wsHub) pushRecStart(d *wsDevice, target string, bridgeEndpoint bool) {
 	d.client.enqueue(textFrame(start))
 }
 
-func (h *wsHub) pushRecStop(d *wsDevice, target string, cancelled bool) {
+func (h *wsHub) pushRecStop(d *wsTerminal, target string, cancelled bool) {
 	if d.client.native != nil {
 		op := recOpStop
 		if cancelled {
@@ -381,7 +380,7 @@ func (h *wsHub) pushRecStop(d *wsDevice, target string, cancelled bool) {
 	d.client.enqueue(textFrame(v))
 }
 
-func (h *wsHub) pushTTSAbort(d *wsDevice, audioID uint64) {
+func (h *wsHub) pushTTSAbort(d *wsTerminal, audioID uint64) {
 	if d.client.native != nil {
 		d.client.native.enqueue(msgTTSCtrl, encodeIDCtrl(ttsOpStop, audioID))
 		return
@@ -389,7 +388,7 @@ func (h *wsHub) pushTTSAbort(d *wsDevice, audioID uint64) {
 	d.client.enqueue(textFrame(object{"op": "tts", "state": "abort", "audio": audioID}))
 }
 
-func (h *wsHub) pushCallStart(d *wsDevice) {
+func (h *wsHub) pushCallStart(d *wsTerminal) {
 	if d.client.native != nil {
 		d.client.native.enqueue(msgCallCtrl, encodeIDCtrl(callOpStart, uint64(d.callID)))
 		return
@@ -401,7 +400,7 @@ func (h *wsHub) pushCallStart(d *wsDevice) {
 	d.client.enqueue(textFrame(msg))
 }
 
-func (h *wsHub) pushCallMute(d *wsDevice) {
+func (h *wsHub) pushCallMute(d *wsTerminal) {
 	if d.client.native != nil {
 		op := callOpUnmute
 		if d.callMuted {
@@ -413,7 +412,7 @@ func (h *wsHub) pushCallMute(d *wsDevice) {
 	d.client.enqueue(textFrame(object{"op": "call", "state": "mute", "call": d.callID, "muted": d.callMuted}))
 }
 
-func (h *wsHub) pushCallEnd(d *wsDevice, callID uint32, reason string) {
+func (h *wsHub) pushCallEnd(d *wsTerminal, callID uint32, reason string) {
 	if d.client.native != nil {
 		d.client.native.enqueue(msgCallCtrl, encodeIDCtrl(callOpEnd, uint64(callID)))
 		return
@@ -421,7 +420,7 @@ func (h *wsHub) pushCallEnd(d *wsDevice, callID uint32, reason string) {
 	d.client.enqueue(textFrame(object{"op": "call", "state": "end", "call": callID, "reason": reason}))
 }
 
-func (h *wsHub) pushChime(d *wsDevice, kind string) {
+func (h *wsHub) pushChime(d *wsTerminal, kind string) {
 	if d.client.native != nil {
 		if code, ok := encodeChimePayload(kind); ok {
 			d.client.native.enqueue(msgChime, []byte{code})
@@ -431,7 +430,7 @@ func (h *wsHub) pushChime(d *wsDevice, kind string) {
 	d.client.enqueue(textFrame(object{"op": "chime", "kind": kind}))
 }
 
-func (h *wsHub) pushPower(d *wsDevice, brightness int, mirror bool) {
+func (h *wsHub) pushPower(d *wsTerminal, brightness int, mirror bool) {
 	if d.client.native != nil {
 		d.client.native.enqueue(msgPower, []byte{encodePowerPayload(brightness)})
 	} else {
@@ -442,7 +441,7 @@ func (h *wsHub) pushPower(d *wsDevice, brightness int, mirror bool) {
 	}
 }
 
-func (h *wsHub) pushVolume(d *wsDevice, persist, mirror bool) {
+func (h *wsHub) pushVolume(d *wsTerminal, persist, mirror bool) {
 	if d.client.native != nil {
 		var p byte
 		if persist {
@@ -457,18 +456,45 @@ func (h *wsHub) pushVolume(d *wsDevice, persist, mirror bool) {
 	h.pushWS(d, d.volumeFrame(persist), mirror)
 }
 
-func (h *wsHub) active(d *wsDevice) bool {
-	return !h.closed && h.devices[d.key] == d && d.client.ctx.Err() == nil
+func (h *wsHub) active(d *wsTerminal) bool {
+	return d != nil && !h.closed && h.terminals[d.key] == d && d.client.ctx.Err() == nil
 }
 
-func (h *wsHub) teardownDevice(d *wsDevice) {
+func (h *wsHub) terminalsFor(companionID string) []*wsTerminal {
+	cid := strings.ToLower(companionID)
+	if cid == "" {
+		return nil
+	}
+	var out []*wsTerminal
+	for _, t := range h.terminals {
+		if h.active(t) && t.companionID == cid {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Voice ownership is single-terminal by most recent activity until protocol unification.
+func (h *wsHub) audioTerminal(companionID string) *wsTerminal {
+	var best *wsTerminal
+	for _, t := range h.terminalsFor(companionID) {
+		if best == nil || t.last.After(best.last) {
+			best = t
+		}
+	}
+	return best
+}
+
+func (h *wsHub) teardownTerminal(d *wsTerminal) {
 	h.endCall(d, "disconnected")
 	h.dropApp(d)
-	delete(h.devices, d.key)
+	delete(h.terminals, d.key)
 	d.recording.clear()
 	h.cancelTurn(d, "disconnect")
 	h.stopPlayback(d, false)
-	h.parentFinishActivity(d.key, time.Now())
+	if d.companionID != "" && len(h.terminalsFor(d.companionID)) == 0 {
+		h.parentFinishActivity(d.companionID, time.Now())
+	}
 	h.broadcastPeers()
 	h.sig.notify()
 }
@@ -477,16 +503,50 @@ func (h *wsHub) detach(c *wsClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.clients, c)
-	if d := c.device; d != nil && h.devices[d.key] == d {
-		h.teardownDevice(d)
+	if d := c.terminal; d != nil && h.terminals[d.key] == d {
+		h.teardownTerminal(d)
 	}
 }
 
-func (h *wsHub) disconnectDevice(id string) {
+func (h *wsHub) disconnectTerminal(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if d := h.devices[id]; d != nil {
+	if d := h.terminals[strings.ToLower(id)]; d != nil {
 		d.client.cancel()
-		h.teardownDevice(d)
+		h.teardownTerminal(d)
 	}
+}
+
+func (h *wsHub) attachTerminal(termID, compID string) {
+	termID = strings.ToLower(termID)
+	compID = strings.ToLower(compID)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	d := h.terminals[termID]
+	if d == nil || !h.active(d) {
+		h.broadcastPeers()
+		return
+	}
+	if d.companionID == compID {
+		return
+	}
+	h.endCall(d, "reassigned")
+	h.dropApp(d)
+	d.recording.clear()
+	h.cancelTurn(d, "reassigned")
+	h.stopPlayback(d, true)
+	d.companionID = compID
+	if compID != "" {
+		d.companion = h.b.companionFor(compID)
+		d.voice = h.b.voices.resolve(d.companion.Voice, companionTheme(d.companion.Name))
+	} else {
+		d.companion = blankCompanion()
+		d.voice = h.b.voices.defaultFor("")
+	}
+	h.clearView(d)
+	now := time.Now()
+	if compID == "" || h.parentRefresh(compID, now) == "" {
+		h.render(d, now, true)
+	}
+	h.broadcastPeers()
 }

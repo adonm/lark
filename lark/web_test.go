@@ -9,7 +9,7 @@ import (
 
 func TestAppCDNPolicy(t *testing.T) {
 	b := &larkServer{}
-	scoped := b.scoped(virtualClient{ID: "virt-12345678"}, "scoped-fixture")
+	scoped := b.scoped(companionState{ID: "cake"}, "scoped-fixture")
 	for _, view := range []struct {
 		path   string
 		scoped bool

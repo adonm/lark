@@ -668,7 +668,7 @@ func (s *e2eSuite) scopedTunnel(t *testing.T) {
 		!bytes.Contains(worker, []byte(`"/app/lark.svg"`)) {
 		t.Fatal("scoped app did not serve the restricted offline shell")
 	}
-	manifest := testObject(t, get(phonePWAPath+"manifest.webmanifest?token="+url.QueryEscape(scope.token), 200))
+	manifest := testObject(t, get(pwaPath+"manifest.webmanifest?token="+url.QueryEscape(scope.token), 200))
 	icons, _ := manifest["icons"].([]any)
 	if manifest["display"] != "standalone" || manifest["orientation"] != "portrait" || len(icons) != 3 {
 		t.Fatal("scoped Phone Lark did not serve an installable portrait manifest")

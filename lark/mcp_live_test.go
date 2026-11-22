@@ -56,16 +56,21 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	}
 	t.Logf("MCP catalog: %v", names)
 	const character = "LiveMCP"
-	const clients = "/api/virtual-clients"
-	v := testObject(t, testRequest(t, http.MethodPost, c.base+clients, c.token,
-		object{"character": character, "theme": "cake"}, http.StatusCreated))
+	v := testObject(t, testRequest(t, http.MethodPost, c.base+"/api/companions", c.token,
+		object{"name": character}, http.StatusCreated))
 	id := str(v["id"])
-	if !virtualID.MatchString(id) {
-		t.Fatal("unexpected virtual client ID")
+	term := testObject(t, testRequest(t, http.MethodPost, c.base+"/api/terminals", c.token,
+		object{"kind": "web", "companion_id": id}, http.StatusCreated))
+	termID := str(term["id"])
+	if !webTerminalID.MatchString(termID) {
+		t.Fatal("unexpected web terminal ID")
 	}
-	defer testRequest(t, http.MethodDelete, c.base+clients+"/"+id, c.token, nil, http.StatusNoContent)
+	defer func() {
+		testRequest(t, http.MethodDelete, c.base+"/api/terminals/"+termID, c.token, nil, http.StatusNoContent)
+		testRequest(t, http.MethodDelete, c.base+"/api/companions/"+id, c.token, nil, http.StatusNoContent)
+	}()
 	sock := testConnectWS(t, c.base, c.token, true)
-	sock.json(t, object{"ev": "hello", "role": "web", "device_id": id})
+	sock.json(t, object{"ev": "hello", "role": "web", "terminal_id": termID, "companion_id": id})
 	sock.until(t, hasWS("svg", "companion-ring"))
 	api := liveOpenCode(t, client, home, config)
 	type serverInfo struct {
@@ -114,10 +119,10 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := turnPrompt(peer{DeviceID: id, Character: character}, false, "typed",
-		"Run a live screen and controls check. Use Code Mode execute to call tools.lark.state({device_id:'"+id+
-			"',include:['devices']}), tools.lark.patch({device_id:'"+id+"',device:{sleep:false}}), tools.lark.emit({to:'"+id+
-			"',chime:'tap'}), and tools.lark.app({devices:'"+id+
+	prompt := turnPrompt(id, false, "typed",
+		"Run a live screen and controls check. Use Code Mode execute to call tools.lark.state({companion_id:'"+id+
+			"',include:['companions']}), tools.lark.patch({companion_id:'"+id+"',terminal:{sleep:false}}), tools.lark.emit({to:'"+id+
+			"',chime:'tap'}), and tools.lark.app({companions:'"+id+
 			"',exit:true}). Return all four tool results from execute, then say one short sentence. Do not call any other tool.",
 		blankCompanion())
 	turn, endTurn := context.WithTimeout(root, 60*time.Second)

@@ -119,9 +119,12 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 			return "", nil
 		}
 	})
-	const id = "phone-e021"
+	const id = "web-e0210000"
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+		t.Fatal(err)
+	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
+	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
 	start := func() {
 		d.json(t, object{"ev": "rec_request"})
@@ -157,7 +160,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	appendPCM(frame) // 4.4 seconds of silence is not an endpoint in unknown speech.
 	d.barrier(t)
 	b.ws.mu.Lock()
-	stillListening := b.ws.devices[id].recording.phase == captureOpen
+	stillListening := b.ws.terminals[id].recording.phase == captureOpen
 	b.ws.mu.Unlock()
 	if !stillListening {
 		t.Fatal("bridge stopped before the continuation")
@@ -211,9 +214,12 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 			}
 		}
 	})
-	const id = "phone-e025"
+	const id = "web-e0250000"
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+		t.Fatal(err)
+	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
+	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
 	d.json(t, object{"ev": "rec_request"})
 	d.until(t, hasWS("rec", `"endpoint":"bridge"`))
@@ -228,7 +234,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	}
 	expectValue(t, first, struct{}{})
 	b.ws.mu.Lock()
-	stillListening := b.ws.devices[id].recording.phase == captureOpen
+	stillListening := b.ws.terminals[id].recording.phase == captureOpen
 	b.ws.mu.Unlock()
 	if !stillListening {
 		t.Fatal("speculation changed the mic state")
@@ -283,7 +289,7 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 	d.json(t, object{"ev": "hello", "role": "device", "proto": 2, "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, isDisplay)
 	b.ws.mu.Lock()
-	dev := b.ws.devices[id]
+	dev := b.ws.terminals[id]
 	b.ws.startRecording(dev, "all", time.Now(), true)
 	b.ws.mu.Unlock()
 	start := d.until(t, hasWS("rec", `"target":"all"`))
@@ -294,9 +300,12 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 
 func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
-	const id = "phone-e023"
+	const id = "web-e0230000"
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+		t.Fatal(err)
+	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
+	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
 	d.json(t, object{"ev": "rec_request"})
 	d.until(t, hasWS("rec", `"endpoint":"bridge"`))
@@ -306,7 +315,7 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	stream.append([]byte{8, 0, 9, 0})
 	stream.finish(nil)
 	b.ws.mu.Lock()
-	dev := b.ws.devices[id]
+	dev := b.ws.terminals[id]
 	b.ws.play(dev, stream)
 	b.ws.mu.Unlock()
 	d.json(t, object{"ev": "rec_end", "cancelled": true})
@@ -324,11 +333,11 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 
 func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
-	const id = "phone-e024"
+	const id = "web-e0240000"
 	d := testConnectWS(t, base, "unit", false)
 	d.hello(t, id, "Echo")
 	b.ws.mu.Lock()
-	dev := b.ws.devices[id]
+	dev := b.ws.terminals[id]
 	ctx, cancel := context.WithCancel(dev.client.ctx)
 	dev.busy = true
 	dev.queuedVoice = &endpointCapture{ctx: ctx, cancel: cancel}
@@ -343,7 +352,7 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 }
 
 func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
-	const sid, id = "ses-followup", "phone-e022"
+	const sid, id = "ses-followup", "web-e0220000"
 	prompts := make(chan string, 2)
 	finishFirst := make(chan struct{})
 	var count atomic.Int32
@@ -381,8 +390,11 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 			}
 		})
 	})
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo"}); err != nil {
+		t.Fatal(err)
+	}
 	d := testConnectWS(t, base, "unit", false)
-	d.json(t, object{"ev": "hello", "role": "web", "device_id": id, "character": "Echo", "caps": object{"bridge_endpoint": true}})
+	d.json(t, object{"ev": "hello", "role": "web", "terminal_id": id, "companion_id": "echo", "caps": object{"bridge_endpoint": true}})
 	d.until(t, hasWS("capabilities", `"bridge_endpoint":true`))
 	d.json(t, object{"ev": "text", "text": "Draw a dragon"})
 	expectValue(t, prompts, "Draw a dragon")
@@ -403,7 +415,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	b.ws.sig.wait(t, func() bool {
 		b.ws.mu.Lock()
 		defer b.ws.mu.Unlock()
-		return !b.ws.devices[id].busy
+		return !b.ws.terminals[id].busy
 	})
 	if count.Load() != 2 {
 		t.Fatal("prompt was replayed")

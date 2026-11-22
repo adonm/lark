@@ -35,8 +35,9 @@ func facePoseSVGs() []string {
 
 func TestCallScreenTouchTargets(t *testing.T) {
 	companion := blankCompanion()
+	companion.ID = "mint"
 	companion.Name = "Mint & Friends"
-	card := intercomCard{sender: peer{DeviceID: "lark-mint", Character: companion.Name}, text: "A message for you!", companion: companion}
+	card := intercomCard{sender: companion, text: "A message for you!"}
 	for _, tc := range []struct {
 		name string
 		view sceneView
@@ -274,7 +275,7 @@ func TestSystemScreenPixelRegions(t *testing.T) {
 		rows = append(rows, reg("stats row "+strconv.Itoa(i+1), menuCard, 55, 106+27*i, 250, 18, 90, 6))
 	}
 	hub := &wsHub{b: &larkServer{}}
-	menu("stats", hub.statsScene(&wsDevice{client: &wsClient{role: "device"}, companion: companion, board: "esp-vocat", firmware: "0.9.1", vol: 55}), rows...)
+	menu("stats", hub.statsScene(&wsTerminal{client: &wsClient{role: "device"}, companion: companion, board: "esp-vocat", firmware: "0.9.1", vol: 55}), rows...)
 
 	for _, geometry := range []screenGeometry{roundScreen, {320, 240, "rect"}} {
 		for _, s := range scenes {
@@ -897,25 +898,24 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	if r, _, _ := decodeDisplay(t, round.helloV2(t, roundID, "Cake")); r != image.Rect(0, 0, 360, 360) {
 		t.Fatalf("legacy hello initial frame = %v", r)
 	}
-	devices := testObject(t, testRequest(t, "GET", base+"/api/devices", "unit", nil, 200))["devices"].([]any)
-	boxStatus := devices[0].(object)
-	if boxStatus["device_id"] != boxID || boxStatus["board"] != "esp-box-3" ||
-		boxStatus["character"] != "New Cat" || boxStatus["companion"].(object)["configured"] != false ||
+	terminals := testObject(t, testRequest(t, "GET", base+"/api/terminals", "unit", nil, 200))["terminals"].([]any)
+	boxStatus := terminals[0].(object)
+	if boxStatus["id"] != boxID || boxStatus["board"] != "esp-box-3" ||
 		boxStatus["ws_connected"] != true {
 		t.Fatal(boxStatus)
 	}
 
 	web.json(t, object{"ev": "hello", "role": "web"})
-	web.json(t, object{"ev": "watch", "device_id": boxID})
+	web.json(t, object{"ev": "watch", "terminal_id": boxID})
 	boxFrame := web.until(t, hasWS("svg", "companion-ring"))
-	if got := testObject(t, boxFrame.data)["device_id"]; got != boxID {
+	if got := testObject(t, boxFrame.data)["terminal_id"]; got != boxID {
 		t.Fatalf("BOX-3 mirror tag = %v", got)
 	}
 	code := `function init(){ return {hits:"untouched"} }
 	function render(s){ return '<svg><rect width="360" height="360" fill="#123456"/>'+
 		'<rect width="30" height="30" fill="red" data-id="corner"/><text x="100" y="180">'+s.hits+'</text></svg>' }
 	function onTap(s,p,id,x,y){ s.hits=id+":"+x+","+y; }`
-	toolTest(t, base, "app", object{"devices": []string{boxID, roundID}, "code": code}, false)
+	toolTest(t, base, "app", object{"companions": []string{"new-companion", "cake"}, "code": code}, false)
 	web.until(t, hasWS("svg", "untouched"))
 	if r, _, _ := decodeDisplay(t, box.until(t, isDisplay)); !r.In(image.Rect(0, 0, 320, 240)) {
 		t.Fatalf("BOX-3 app sent an out-of-bounds frame: %v", r)
@@ -924,8 +924,8 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	web.until(t, hasWS("svg", "corner:12,15"))
 	web.json(t, object{"ev": "tap", "x": 20, "y": 18})
 	web.until(t, hasWS("svg", "corner:20,18"))
-	web.json(t, object{"ev": "watch", "device_id": roundID})
-	web.until(t, hasWS("svg", `"device_id":"`+roundID+`"`))
+	web.json(t, object{"ev": "watch", "terminal_id": roundID})
+	web.until(t, hasWS("svg", `"terminal_id":"`+roundID+`"`))
 }
 
 func TestFrameCodecsAndSmartSelector(t *testing.T) {
