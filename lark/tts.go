@@ -206,6 +206,30 @@ func (c *speechClips) peek(voice, text string) []byte {
 	return nil
 }
 
+// await returns the PCM of an existing or in-flight clip. Unlike peek it waits
+// for a speculative synthesis to finish, so the first chunk is never queued
+// twice.
+func (c *speechClips) await(ctx context.Context, voice, text string) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	item := c.clips[clipKey{voice, text}]
+	c.mu.Unlock()
+	if item == nil {
+		return nil, false
+	}
+	select {
+	case <-item.done:
+		if item.err == nil {
+			return item.pcm, true
+		}
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
 func (c *speechClips) peekAny(voice string, phrases []string, seed uint64) []byte {
 	if c == nil || len(phrases) == 0 {
 		return nil
@@ -242,29 +266,50 @@ func (c *speechClips) get(ctx context.Context, w *synthWorker, voice, text strin
 }
 
 func (c *speechClips) getWith(ctx context.Context, synth func(context.Context, string, string) ([]byte, error), voice, text string) ([]byte, error) {
-	key := clipKey{voice, text}
-	c.mu.Lock()
-	if c.clips == nil {
-		c.clips = make(map[clipKey]*clip)
-	}
-	if existing := c.clips[key]; existing != nil {
-		c.mu.Unlock()
+	item, owner := c.reserve(voice, text)
+	if !owner {
 		select {
-		case <-existing.done:
-			return existing.pcm, existing.err
+		case <-item.done:
+			return item.pcm, item.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	item := &clip{done: make(chan struct{})}
+	item.pcm, item.err = synth(ctx, voice, text)
+	c.complete(voice, text, item)
+	return item.pcm, item.err
+}
+
+// reserve registers a clip so a concurrent turn can await it without starting
+// a second synthesis. The caller owns the item only when owner is true.
+func (c *speechClips) reserve(voice, text string) (item *clip, owner bool) {
+	key := clipKey{voice, text}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.clips == nil {
+		c.clips = make(map[clipKey]*clip)
+	}
+	if existing := c.clips[key]; existing != nil {
+		return existing, false
+	}
+	item = &clip{done: make(chan struct{})}
 	if len(c.clips) == 128 {
 		delete(c.clips, c.order[0])
 		c.order = c.order[1:]
 	}
 	c.clips[key] = item
 	c.order = append(c.order, key)
-	c.mu.Unlock()
-	item.pcm, item.err = synth(ctx, voice, text)
+	return item, true
+}
+
+// fill synthesizes a reserved clip and publishes it to awaiters.
+func (c *speechClips) fill(ctx context.Context, w *synthWorker, voice, text string, item *clip) {
+	item.pcm, item.err = w.warm(ctx, voice, text)
+	c.complete(voice, text, item)
+}
+
+func (c *speechClips) complete(voice, text string, item *clip) {
+	key := clipKey{voice, text}
 	if item.err != nil {
 		c.mu.Lock()
 		if c.clips[key] == item {
@@ -279,7 +324,6 @@ func (c *speechClips) getWith(ctx context.Context, synth func(context.Context, s
 		c.mu.Unlock()
 	}
 	close(item.done)
-	return item.pcm, item.err
 }
 
 type AudioStream struct {
@@ -526,6 +570,14 @@ func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorke
 				continue
 			}
 			text := item.text
+			if clips != nil {
+				if pcm, ok := clips.await(ctx, voice, text); ok {
+					if !emitPCM(pcm) {
+						return
+					}
+					continue
+				}
+			}
 			if first {
 				if openerPCM, rest, ok := splitCachedOpener(clips, voice, text); ok {
 					if !emitPCM(openerPCM) {

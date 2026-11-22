@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -70,13 +72,78 @@ func TestFirstChunkAndCachedOpener(t *testing.T) {
 	}
 }
 
+func TestSpeechTurnUsesPreSynthesizedFirstChunk(t *testing.T) {
+	ctx := t.Context()
+	clips := &speechClips{clips: map[clipKey]*clip{
+		{heartVoice, "A fresh answer"}: {done: make(chan struct{}), pcm: []byte{7, 8}},
+	}}
+	close(clips.clips[clipKey{heartVoice, "A fresh answer"}].done)
+	var calls atomic.Int32
+	w := fakeTTS(ctx, &calls)
+	turn := newSpeechTurn(ctx, func() {}, w, clips, heartVoice, nil)
+	if !turn.complete([]string{"A fresh answer"}) {
+		t.Fatal("speech turn rejected its final text")
+	}
+	first, err := turn.stream.chunk(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(first, []byte{7, 8}) {
+		t.Fatalf("first chunk was re-synthesized: %v", first)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("cached first chunk still queued %d TTS jobs", n)
+	}
+}
+
+func TestSpeechTurnAwaitsInFlightFirstChunk(t *testing.T) {
+	ctx := t.Context()
+	clips := &speechClips{}
+	var calls atomic.Int32
+	w := fakeTTS(ctx, &calls)
+	item, owner := clips.reserve(heartVoice, "A fresh answer")
+	if !owner {
+		t.Fatal("reserve did not claim a new clip")
+	}
+	go clips.fill(ctx, w, heartVoice, "A fresh answer", item)
+	turn := newSpeechTurn(ctx, func() {}, w, clips, heartVoice, nil)
+	if !turn.complete([]string{"A fresh answer"}) {
+		t.Fatal("speech turn rejected its final text")
+	}
+	first, err := turn.stream.chunk(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(first, []byte{1, 2, 3, 4}) {
+		t.Fatalf("unexpected first chunk: %v", first)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("in-flight first chunk synthesized %d times, want 1", n)
+	}
+}
+
 func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 	var prompts []string
 	var mu sync.Mutex
+	promptSeen := make(chan struct{})
 	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.worker = fakeTTS(b.root, nil)
 		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/event":
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, ": connected\n\n")
+				flusher := w.(http.Flusher)
+				flusher.Flush()
+				select {
+				case <-promptSeen:
+					_, _ = io.WriteString(w, `data: {"type":"session.text.delta","data":{"sessionID":"ses-spec","delta":"Speculative answer! "}}`+"\n\n")
+					_, _ = io.WriteString(w, `data: {"type":"session.execution.succeeded","data":{"sessionID":"ses-spec"}}`+"\n\n")
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+				<-r.Context().Done()
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-spec"}}`))
 			case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses-spec":
@@ -92,6 +159,9 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 				prompts = append(prompts, body.Text)
 				n := len(prompts)
 				mu.Unlock()
+				if n == 1 {
+					close(promptSeen)
+				}
 				_, _ = fmt.Fprintf(w, `{"data":{"id":"p-%d"}}`, n)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/experimental/session/ses-spec/wait":
 				w.WriteHeader(204)
@@ -104,19 +174,15 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 	})
 	comp := b.companionFor("cake")
 
-	// 1. Aborted speculative turn never writes to history.
-	aborted := b.startSpeculate("cake", "Set a", 100, "voice", turnChannel{})
-	aborted.abort()
-	entries, err := b.history.list(t.Context(), "cake")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("aborted speculative turn polluted history: %+v", entries)
-	}
-
-	// 2. Promoted speculative turn delivers reply, audio, and records history once.
+	// 1. Promoted speculative turn delivers reply, audio, and records history once.
 	hit := b.startSpeculate("cake", "What is two plus two?", 200, "voice", turnChannel{})
+	deadline := time.Now().Add(2 * time.Second)
+	for len(b.clips.peek(b.voiceFor("cake"), "Speculative answer!")) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("speculative turn did not pre-synthesize its first sentence")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	res, err := b.generateReply(t.Context(), b.root, comp, "What is two plus two?", turnOptions{
 		source:  "voice",
 		channel: turnChannel{spec: hit},
@@ -128,12 +194,23 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 	if res.reply != "Speculative answer!" || res.audio == nil {
 		t.Fatalf("unexpected promoted spec result: %+v", res)
 	}
-	entries, err = b.history.list(t.Context(), "cake")
+	entries, err := b.history.list(t.Context(), "cake")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 history entries (user + assistant) for promoted spec turn, got %d: %+v", len(entries), entries)
+	}
+
+	// 2. Aborted speculative turn never writes to history.
+	aborted := b.startSpeculate("mint", "Set a", 100, "voice", turnChannel{})
+	aborted.abort()
+	entries, err = b.history.list(t.Context(), "mint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("aborted speculative turn polluted history: %+v", entries)
 	}
 	_ = slices.Clone(entries)
 	_ = context.Canceled

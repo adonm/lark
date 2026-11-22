@@ -305,11 +305,14 @@ type turnOptions struct {
 type specTurn struct {
 	text     string
 	audioLen int
+	started  time.Time
 	cancel   context.CancelFunc
 
 	mu        sync.Mutex
 	promoted  bool
 	aborted   bool
+	warming   bool
+	firstAt   time.Time
 	onSent    func(string)
 	onTool    func()
 	onChat    func(chatEntry)
@@ -341,14 +344,53 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 	s := &specTurn{
 		text:     text,
 		audioLen: audioLen,
+		started:  time.Now(),
 		cancel:   cancel,
 		done:     make(chan specResult, 1),
+	}
+	// Pre-synthesize the first sentence while the turn is still speculative so a
+	// promoted reply can publish PCM immediately instead of waiting for TTS.
+	voice := b.voiceFor(companionID)
+	warm := func(sent string) {
+		if b.worker == nil || !b.worker.ready.Load() {
+			return
+		}
+		clean, err := spokenText(sent)
+		if err != nil || strings.TrimSpace(clean) == "" {
+			return
+		}
+		s.mu.Lock()
+		if s.aborted || s.warming {
+			s.mu.Unlock()
+			return
+		}
+		s.warming = true
+		s.mu.Unlock()
+		// Reserve synchronously so a promoted turn awaits this clip instead of
+		// queueing a duplicate synthesis for the same first chunk. The fill uses
+		// the server context: a speculative call may finish (and cancel its own
+		// context) before the promoted turn consumes the audio.
+		item, owner := b.clips.reserve(voice, clean)
+		if !owner {
+			return
+		}
+		go b.clips.fill(b.root, b.worker, voice, clean, item)
 	}
 	go func() {
 		defer cancel()
 		stream := turnStream{
 			firstChunk: true,
 			sentence: func(sent string) {
+				s.mu.Lock()
+				first := s.firstAt.IsZero()
+				if first {
+					s.firstAt = time.Now()
+				}
+				s.mu.Unlock()
+				if first {
+					b.diag.specFirst(time.Since(s.started))
+				}
+				warm(sent)
 				s.mu.Lock()
 				if s.aborted {
 					s.mu.Unlock()
