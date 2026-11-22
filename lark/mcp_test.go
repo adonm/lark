@@ -125,7 +125,7 @@ func TestMCPProtocol(t *testing.T) {
 			t.Fatal(tool)
 		}
 	}
-	if !slices.Equal(names, []string{"state", "patch", "emit"}) {
+	if !slices.Equal(names, []string{"state", "patch", "story", "emit"}) {
 		t.Fatal(names)
 	}
 	for _, name := range []string{"speak", "inspect", "act", "run_app", "store", "app", "build"} {

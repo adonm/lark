@@ -320,7 +320,7 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 	return "[" + prefix + "]"
 }
 
-func turnStateLine(now time.Time, companion companionState, terminals, timers, books string) string {
+func turnStateLine(now time.Time, companion companionState, terminals, timers, stories string) string {
 	parts := []string{"now: " + formatLocalTimeIn(now, now.Location())}
 	if companion.ListenSeconds > 0 {
 		parts = append(parts, fmt.Sprintf("listen: %ds", companion.ListenSeconds))
@@ -333,8 +333,8 @@ func turnStateLine(now time.Time, companion companionState, terminals, timers, b
 	if timers != "" {
 		parts = append(parts, "timers: "+timers)
 	}
-	if books != "" {
-		parts = append(parts, "books: "+books)
+	if stories != "" {
+		parts = append(parts, "stories: "+stories)
 	}
 	return "[state: " + strings.Join(parts, " · ") + "]"
 }
@@ -392,27 +392,22 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 		timers = strings.Join(timerParts, ",")
 	}
 
-	var bookParts []string
-	if apps, err := b.listApps(ctx, false); err == nil {
-		for _, a := range apps {
-			if str(a["kind"]) != "book" {
-				continue
-			}
-			slug := str(a["name"])
-			title := str(a["title"])
-			if title != "" && title != slug {
-				bookParts = append(bookParts, fmt.Sprintf("%s(%q)", slug, title))
+	var storyParts []string
+	if list, err := b.listStories(ctx); err == nil {
+		for _, s := range list {
+			if s.Title != "" && s.Title != s.ID {
+				storyParts = append(storyParts, fmt.Sprintf("%s(%q)", s.ID, s.Title))
 			} else {
-				bookParts = append(bookParts, slug)
+				storyParts = append(storyParts, s.ID)
 			}
 		}
 	}
-	books := "none"
-	if len(bookParts) > 0 {
-		books = strings.Join(bookParts, ",")
+	stories := "none"
+	if len(storyParts) > 0 {
+		stories = strings.Join(storyParts, ",")
 	}
 
-	return turnHeader(companionID, source, companion, ch, now) + "\n" + text + "\n" + turnStateLine(now, companion, terminals, timers, books)
+	return turnHeader(companionID, source, companion, ch, now) + "\n" + text + "\n" + turnStateLine(now, companion, terminals, timers, stories)
 }
 
 func isSilentReply(s string) bool {

@@ -21,7 +21,7 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact Lark companion IDs. Read keyed snapshots with state, change companions/terminals/memory/timers with patch, and send live audio with emit. Only final assistant prose is spoken."
+	mcpInstructions = "Use exact Lark companion IDs. Read keyed snapshots with state, change companions/terminals/memory/timers with patch, manage interactive Twee stories with story, and send live audio with emit. Only final assistant prose is spoken."
 )
 
 type rpcRequest struct {
@@ -219,6 +219,8 @@ var mcpTools = func() []object {
 					"listen_seconds": object{"type": "integer", "minimum": 0, "maximum": 300}}),
 				"memory": object{"anyOf": []object{memory, array(memory)}},
 				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag})})),
+		tool("story", "Create, update, get, or delete an interactive Twee 3 story. On write, validates links, reachability, non-ending dead ends, max 3 choices, and 600-char passage limit.",
+			schema(object{"op": enum("create", "update", "delete", "get"), "id": text, "twee": object{"type": "string", "maxLength": 65536}, "author": text}, "op", "id")),
 		tool("emit", "Send a Delta Chat message (intercom) to a contact by display name or companion ID (or all companions), speak aloud on a companion's terminals (say), or play notes/effects on terminals.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
@@ -329,6 +331,8 @@ func (b *larkServer) callMCP(ctx context.Context, name string, args object) (obj
 		return b.mcpState(ctx, args)
 	case "patch":
 		return b.mcpPatch(ctx, args)
+	case "story":
+		return b.mcpStory(ctx, args)
 	case "emit":
 		return b.mcpEmit(ctx, args)
 	default:

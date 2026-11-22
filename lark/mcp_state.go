@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var stateSlices = []string{"companions", "terminals", "timers", "memory", "messages", "diagnostics"}
+var stateSlices = []string{"companions", "terminals", "timers", "stories", "memory", "messages", "diagnostics"}
 
 func stringList(raw any, key string) ([]string, error) {
 	items, ok := raw.([]any)
@@ -55,6 +55,8 @@ func (b *larkServer) mcpState(ctx context.Context, args object) (object, error) 
 			continue
 		}
 		switch key {
+		case "stories":
+			out[key], err = b.storiesState(ctx)
 		case "timers":
 			out[key], err = b.timerState(ctx, id, now)
 		case "memory":
