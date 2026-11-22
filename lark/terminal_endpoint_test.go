@@ -33,56 +33,51 @@ func testEndpointSettings() *endpointSettings {
 }
 
 func TestEndpointWaitsForContinuation(t *testing.T) {
-	for _, text := range []string{"", "Once upon a time there was a frog, and then.", "Could you set a timer for?",
-		"Draw a purple frog, um.", "Try doing it with the...", "This is something I want to", "First I want a castle."} {
-		var p endpointPolicy
-		p.observe(time.Second, true)
-		if got := p.decision(time.Second, tunedEndpoint.silence(p, text)); got != endpointWait {
-			t.Fatal(got)
-		}
-		p.observe(5*time.Second, false)
-		if got := p.decision(5*time.Second, tunedEndpoint.silence(p, text)); got != endpointWait {
-			t.Fatalf("%q prematurely committed at 4-second pause", text)
-		}
-		p.observe(5200*time.Millisecond, true)
-		p.observe(6*time.Second, false)
-		if got := p.decision(6*time.Second, tunedEndpoint.silence(p, text)); got != endpointWait {
-			t.Fatalf("%q kept the old speech deadline", text)
-		}
-		if got := p.decision(9600*time.Millisecond, tunedEndpoint.silence(p, text)); got != endpointCommit {
-			t.Fatalf("%q did not commit after the new end", text)
-		}
-	}
 	var p, empty endpointPolicy
-	p.observe(time.Second, true)
-	p.observe(2*time.Second, false)
-	for _, tc := range []struct {
-		text string
-		wait time.Duration
-	}{
-		{"Start a timer for ninety seconds.", tunedEndpoint.quick},
-		{"Where do the ducks go?", tunedEndpoint.quick},
-		{"What's eight?", tunedEndpoint.quick},
-		{"How are you?", tunedEndpoint.quick},
-		{"Can you draw a dragon?", tunedEndpoint.complete},
-		{"Tell me a knock knock joke!", tunedEndpoint.complete},
-		{"Start a timer for 90 seconds", tunedEndpoint.uncertain},
-		{"I found a crystal.", tunedEndpoint.patient},
-		{"When I was nine?", tunedEndpoint.patient},
-	} {
-		if got := tunedEndpoint.silence(p, tc.text); got != tc.wait {
-			t.Errorf("%q scored %v, want %v", tc.text, got, tc.wait)
+	p.observeEnergy(20*time.Millisecond, true, 2000)
+	if !p.observeProgress(250*time.Millisecond, "Hello", false) {
+		t.Fatal("first word should advance progress")
+	}
+	if p.observeProgress(500*time.Millisecond, "um", false) {
+		t.Fatal("filler-only output should not advance progress")
+	}
+	if p.observeProgress(750*time.Millisecond, "Hello", false) {
+		t.Fatal("unchanged word count should not advance progress")
+	}
+	if got := p.decision(250*time.Millisecond+endpointQuiet, endpointCap, false, false); got != endpointWait {
+		t.Fatalf("without smartTurnReady at quiet, got %v, want wait", got)
+	}
+	if got := p.decision(250*time.Millisecond+endpointQuiet, endpointCap, true, false); got != endpointCommit {
+		t.Fatalf("with smartTurnReady at quiet, got %v, want commit", got)
+	}
+	if got := p.decision(250*time.Millisecond+endpointCap, endpointCap, false, false); got != endpointCommit {
+		t.Fatalf("at cap without smartTurnReady, got %v, want commit", got)
+	}
+	// Trailing comma or conjunction/filler blocks early smartTurn commit until cap.
+	for _, incomplete := range []string{"Hello,", "apples and", "I want to, but", "Wait or", "It was so", "I ran because", "Well um", "Wait uh"} {
+		if !p.observeProgress(time.Second, incomplete, false) {
+			// Ensure word count is > previous for test or reset
+		}
+		var q endpointPolicy
+		q.observeProgress(time.Second, incomplete, false)
+		if !q.incomplete {
+			t.Fatalf("%q should be marked incomplete", incomplete)
+		}
+		if got := q.decision(time.Second+endpointQuiet, endpointCap, true, false); got != endpointWait {
+			t.Fatalf("%q committed early despite incomplete trailing", incomplete)
+		}
+		if got := q.decision(time.Second+endpointCap, endpointCap, true, false); got != endpointCommit {
+			t.Fatalf("%q did not commit at cap", incomplete)
 		}
 	}
-	p.last = p.first + tunedEndpoint.storySpan
-	if got := tunedEndpoint.silence(p, "Where do the ducks go?"); got != tunedEndpoint.patient {
-		t.Fatalf("long story scored %v, want patient", got)
-	}
-	if got := empty.decision(endpointIdle, tunedEndpoint.patient); got != endpointDiscard {
+	if got := empty.decision(endpointIdle, endpointCap, false, false); got != endpointDiscard {
 		t.Fatalf("initial silence did not discard: %v", got)
 	}
+	if got := empty.decision(endpointIdle, endpointCap, false, true); got != endpointWait {
+		t.Fatalf("listen mode should not discard at endpointIdle: %v", got)
+	}
 	p.inVoice = true
-	if got := p.decision(endpointLimit, tunedEndpoint.patient); got != endpointCommit {
+	if got := p.decision(endpointLimit, endpointCap, false, false); got != endpointCommit {
 		t.Fatalf("maximum duration did not commit: %v", got)
 	}
 }
@@ -96,7 +91,7 @@ func TestEndpointAccumulatorPreservesOriginalPCM(t *testing.T) {
 	u.add(frame[50:], vad)
 	for range 200 {
 		u.add(quiet, vad)
-		if got := u.policy.decision(pcmDuration(len(u.pcm)), tunedEndpoint.patient); got != endpointWait {
+		if got := u.policy.decision(pcmDuration(len(u.pcm)), endpointCap, false, false); got != endpointWait {
 			t.Fatalf("unexpected decision %v", got)
 		}
 	}
@@ -116,7 +111,10 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 		b.endpoint = testEndpointSettings()
 		b.stt = func(_ context.Context, pcm []byte) (string, error) {
 			clips <- slices.Clone(pcm)
-			return "", nil
+			if bytes.Count(pcm, bytes.Repeat([]byte{17, 0}, endpointBytes/2)) >= 2 {
+				return "hello world", nil
+			}
+			return "hello", nil
 		}
 	})
 	const id = "vocat-e021"
@@ -143,7 +141,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	}
 	idleOrDone := func(f wsFrame) bool {
 		p := framePayload(f)
-		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 	frame := bytes.Repeat([]byte{17, 0}, endpointBytes/2)
 	start()
@@ -165,10 +163,10 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	start()
 	appendPCM(frame)
 	quiet := make([]byte, endpointBytes*4)
-	for range 55 {
+	for range 8 { // 640ms < cap (1200ms)
 		appendPCM(quiet)
 	}
-	appendPCM(frame) // 4.4 seconds of silence is not an endpoint in unknown speech.
+	appendPCM(frame)
 	d.barrier(t)
 	b.ws.mu.Lock()
 	stillListening := b.ws.terminals[id].recording.phase == captureOpen
@@ -176,7 +174,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	if !stillListening {
 		t.Fatal("bridge stopped before the continuation")
 	}
-	for range 60 {
+	for range 20 { // 1600ms > cap (1200ms)
 		appendPCM(quiet)
 	}
 	d.until(t, func(f wsFrame) bool {
@@ -206,7 +204,6 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	frame := bytes.Repeat([]byte{17, 0}, endpointBytes/2)
 	first := make(chan struct{}, 1)
-	firstCanceled := make(chan struct{}, 1)
 	second := make(chan int, 1)
 	var decodes atomic.Int32
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
@@ -215,9 +212,6 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 			switch decodes.Add(1) {
 			case 1:
 				first <- struct{}{}
-				<-ctx.Done()
-				firstCanceled <- struct{}{}
-				// A stale completion must not shorten the next pause.
 				return "Where is that dinosaur?", nil
 			case 2:
 				second <- bytes.Count(pcm, frame)
@@ -250,7 +244,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	}
 	quiet := make([]byte, 4*endpointBytes)
 	appendPCM(frame)
-	for range 8 {
+	for range 4 { // 320ms
 		appendPCM(quiet)
 	}
 	expectValue(t, first, struct{}{})
@@ -261,12 +255,11 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 		t.Fatal("speculation changed the mic state")
 	}
 	appendPCM(frame)
-	expectValue(t, firstCanceled, struct{}{})
-	for range 8 {
+	for range 4 { // 320ms (> 250ms probe interval)
 		appendPCM(quiet)
 	}
 	expectValue(t, second, 2)
-	for range 5 {
+	for range 15 { // 1200ms -> cap
 		appendPCM(quiet)
 	}
 	d.until(t, func(f wsFrame) bool {

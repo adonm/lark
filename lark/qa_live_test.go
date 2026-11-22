@@ -314,4 +314,90 @@ func TestQAHardwareSuite(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("box3-b324/AutoCommitNoisyMic", func(t *testing.T) {
+		body, _ := json.Marshal(object{"text": "What is two plus two?"})
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, c.base+"/api/tts", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Lark-Token", c.token)
+		req.Header.Set("Content-Type", jsonType)
+		res, err := c.http.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wavRaw := make([]byte, 0, 1<<20)
+		buf := make([]byte, 32<<10)
+		for {
+			n, rerr := res.Body.Read(buf)
+			if n > 0 {
+				wavRaw = append(wavRaw, buf[:n]...)
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		res.Body.Close()
+		if res.StatusCode != 200 {
+			t.Fatalf("TTS HTTP %d", res.StatusCode)
+		}
+		speechPCM, err := parseWAVPCM16k(wavRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Append 4 seconds of low-level ambient noise (~350 RMS) after speech.
+		noisePCM := make([]byte, sampleRate*2*4)
+		var seed uint32 = 12345
+		for i := 0; i < len(noisePCM); i += 2 {
+			seed = seed*1664525 + 1013904223
+			v := int16(int32(seed>>16)%1201 - 600)
+			noisePCM[i] = byte(v)
+			noisePCM[i+1] = byte(v >> 8)
+		}
+		noisyPath := filepath.Join(t.TempDir(), "noisy.wav")
+		if err := writeWAV16k(noisyPath, append(speechPCM, noisePCM...)); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.CommandContext(t.Context(), bin, "device", "box3-b324", "mic", noisyPath).CombinedOutput(); err != nil {
+			t.Fatalf("device mic: %v\n%s", err, out)
+		}
+		// Wake if asleep, then tap Home to start recording.
+		for range 2 {
+			if out, err := exec.CommandContext(t.Context(), bin, "device", "box3-b324", "tap", "160", "120").CombinedOutput(); err != nil {
+				t.Fatalf("device tap: %v\n%s", err, out)
+			}
+			time.Sleep(250 * time.Millisecond)
+			hits, err := c.do(t.Context(), http.MethodGet, "/api/terminals/box3-b324/hits", nil)
+			if err == nil && str(hits["state"]) == "listening" {
+				break
+			}
+		}
+		// Assert auto-commit without tapping Send.
+		deadline := time.Now().Add(10 * time.Second)
+		committed := false
+		for time.Now().Before(deadline) {
+			hits, err := c.do(t.Context(), http.MethodGet, "/api/terminals/box3-b324/hits", nil)
+			if err == nil {
+				st := str(hits["state"])
+				if st == "thinking" || st == "speaking" {
+					committed = true
+					break
+				}
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		if !committed {
+			t.Fatal("box3-b324 did not auto-commit under speech + noise without Send")
+		}
+		// Wait for turn to finish so cleanup can restore greg cleanly.
+		doneDeadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(doneDeadline) {
+			hits, err := c.do(t.Context(), http.MethodGet, "/api/terminals/box3-b324/hits", nil)
+			if err == nil && str(hits["state"]) == "idle" {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	})
 }

@@ -132,19 +132,16 @@ func TestEndpointReplay(t *testing.T) {
 		early, missed, probes int
 		total, short          []int
 	}
-	quickOnly := tunedEndpoint
-	quickOnly.complete = quickOnly.quick
 	methods := []struct {
-		name       string
-		legacy     bool
-		board      bool
-		thresholds *endpointThresholds
+		name   string
+		legacy bool
+		board  bool
+		hybrid bool
 	}{
 		{name: "board-rms", legacy: true, board: true},
 		{name: "browser-rms", legacy: true},
 		{name: "before/silero-no-text"},
-		{name: "comparison/quick-all-complete", thresholds: &quickOnly},
-		{name: "after/tuned", thresholds: &tunedEndpoint},
+		{name: "after/transcript-progress", hybrid: true},
 	}
 	scores := make([]score, len(methods))
 	for _, f := range endpointFixtures {
@@ -164,7 +161,7 @@ func TestEndpointReplay(t *testing.T) {
 				if m.legacy {
 					return replayLegacy(clip, m.board)
 				}
-				at, probes := replaySilero(t, clip, path, m.thresholds, parakeet)
+				at, probes := replaySilero(t, clip, path, m.hybrid, parakeet)
 				s.probes += probes
 				return at
 			}
@@ -247,7 +244,7 @@ func replaySpeak(t *testing.T, tts *sherpa.OfflineTts, text string, voice int) [
 	return pcm[start:end]
 }
 
-func replaySilero(t *testing.T, pcm []byte, path string, cfg *endpointThresholds, stt *parakeetSTT) (int, int) {
+func replaySilero(t *testing.T, pcm []byte, path string, hybrid bool, stt *parakeetSTT) (int, int) {
 	t.Helper()
 	vad := newSileroVAD(path)
 	if vad == nil {
@@ -255,32 +252,28 @@ func replaySilero(t *testing.T, pcm []byte, path string, cfg *endpointThresholds
 	}
 	defer vad.close()
 	var p endpointPolicy
-	var readyAt time.Duration
-	var text string
+	lastProbeAt := -endpointProbeEvery
+	var lastGateOpenAt time.Duration
 	var probes int
 	for i := endpointBytes; i <= len(pcm); i += endpointBytes {
 		at := time.Duration(i/endpointBytes) * endpointFrame
-		p.observe(at, vad.detect(pcm[i-endpointBytes:i]))
-		wait := tunedEndpoint.patient // The previous production policy had no partials.
-		if cfg != nil {
-			switch {
-			case p.inVoice:
-				readyAt, text = 0, ""
-			case readyAt == 0 && p.paused(at, cfg.probe):
-				start := time.Now()
-				var err error
-				text, err = stt.transcribe(t.Context(), pcm[:i])
-				if err != nil {
-					t.Fatal(err)
-				}
-				readyAt = at + time.Since(start)
-				probes++
-			}
-			if readyAt != 0 && at >= readyAt {
-				wait = cfg.silence(p, text)
-			}
+		frame := pcm[i-endpointBytes : i]
+		p.observeEnergy(at, vad.detect(frame), frameRMS(frame))
+		if p.inVoice {
+			lastGateOpenAt = at
 		}
-		switch p.decision(at, wait) {
+		if hybrid && p.voiced && at-lastProbeAt >= endpointProbeEvery && (p.inVoice || lastGateOpenAt > lastProbeAt) {
+			lastProbeAt = at
+			windowed := i > endpointProbeWindow
+			startOff := max(0, i-endpointProbeWindow)
+			text, err := stt.transcribe(t.Context(), pcm[startOff:i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			probes++
+			p.observeProgress(at, text, windowed)
+		}
+		switch p.decision(at, endpointCap, false, false) {
 		case endpointCommit:
 			return int(at.Milliseconds()), probes
 		case endpointDiscard:

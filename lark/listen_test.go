@@ -305,7 +305,7 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 	}
 
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
-	hw, _ := setupListenTerminal(t, b, base, "box3-fill", "Greg", 30)
+	hw, _ := setupListenTerminal(t, b, base, "box3-fill", "Greg", 1)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-fill", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	hw.until(t, isListenRecStart)
@@ -315,11 +315,8 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 	sendTestUtterance(t, hw)
 	hw.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 	})
-	hw.recEnd(t, "", false)
-
-	hw.until(t, isListenRecStart)
 	if len(*prompts) != 1 {
 		t.Fatalf("filler should not trigger LLM prompt, got %d prompts", len(*prompts))
 	}

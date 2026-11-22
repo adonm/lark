@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -14,13 +15,19 @@ import (
 )
 
 const (
-	endpointFrame = 20 * time.Millisecond
-	endpointBytes = sampleRate / 50 * 2
-	endpointLimit = 60 * time.Second
-	endpointIdle  = 7 * time.Second
-	vadTail       = 320 * time.Millisecond
-	sileroModel   = "silero_vad_v5.onnx"
-	sileroSHA256  = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
+	endpointFrame       = 20 * time.Millisecond
+	endpointBytes       = sampleRate / 50 * 2
+	endpointLimit       = 60 * time.Second
+	endpointIdle        = 6 * time.Second
+	endpointQuiet       = 400 * time.Millisecond
+	endpointCap         = 1200 * time.Millisecond
+	endpointProbeEvery  = 250 * time.Millisecond
+	endpointProbeWindow = 8 * sampleRate * 2 // last <= 8 s
+	vadTail             = 320 * time.Millisecond
+	speechEnergyRatio   = 0.20
+	smartTurnThreshold  = float32(0.90)
+	sileroModel         = "silero_vad_v5.onnx"
+	sileroSHA256        = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
 )
 
 // The native model is configured locally; do not download anything at startup.
@@ -83,133 +90,164 @@ const (
 )
 
 type endpointPolicy struct {
-	voiced  bool
-	inVoice bool
-	first   time.Duration
-	last    time.Duration // Estimated acoustic end (Silero includes a tail).
+	voiced     bool
+	inVoice    bool
+	speechRMS  float64
+	hasWords   bool
+	incomplete bool
+	wordCount  int
+	lastWordAt time.Duration
+	lastText   string
 }
 
-func (p *endpointPolicy) observe(at time.Duration, speech bool) {
-	p.inVoice = speech
-	if speech {
-		if !p.voiced {
-			p.first = at
-		}
-		p.voiced = true
-		p.last = max(0, at-vadTail)
+func frameRMS(pcm []byte) float64 {
+	n := len(pcm) / 2
+	if n == 0 {
+		return 0
 	}
+	var sum float64
+	for i := 0; i+1 < len(pcm); i += 2 {
+		s := float64(int16(le.Uint16(pcm[i:])))
+		sum += s * s
+	}
+	return math.Sqrt(sum / float64(n))
 }
 
-func (p endpointPolicy) decision(at, silence time.Duration) endpointDecision {
-	if at >= endpointLimit || !p.voiced && at >= endpointIdle {
-		if p.voiced {
+func (p *endpointPolicy) observeEnergy(_ time.Duration, vadSpeech bool, rms float64) {
+	if !vadSpeech {
+		p.inVoice = false
+		return
+	}
+	if !p.voiced {
+		p.voiced = true
+		p.speechRMS = rms
+		p.inVoice = true
+		return
+	}
+	if p.speechRMS > 0 && rms < p.speechRMS*speechEnergyRatio {
+		p.inVoice = false
+		return
+	}
+	if rms > p.speechRMS {
+		p.speechRMS = p.speechRMS*0.85 + rms*0.15
+	} else if rms > 0 {
+		p.speechRMS = p.speechRMS*0.95 + rms*0.05
+	}
+	p.inVoice = true
+}
+
+func isIncompleteWord(w string) bool {
+	switch w {
+	case "and", "but", "or", "so", "because", "um", "uh", "umm", "uhh", "er", "erm":
+		return true
+	}
+	return false
+}
+
+func inspectTranscript(s string) (words int, fillerOnly, incomplete bool) {
+	end := len(s)
+	for end > 0 && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
+		end--
+	}
+	if end == 0 {
+		return 0, true, false
+	}
+	incompleteComma := s[end-1] == ','
+	var buf [32]byte
+	var wlen int
+	var lastLen int
+	var lastBuf [32]byte
+	allFiller := true
+	flush := func() {
+		if wlen == 0 {
+			return
+		}
+		words++
+		w := string(buf[:wlen])
+		if !fillerWords[w] {
+			allFiller = false
+		}
+		copy(lastBuf[:], buf[:wlen])
+		lastLen = wlen
+		wlen = 0
+	}
+	for _, r := range s[:end] {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '\'' || r == '-' {
+			if r >= 'A' && r <= 'Z' {
+				r += 'a' - 'A'
+			}
+			if wlen < len(buf) {
+				if r < 128 {
+					buf[wlen] = byte(r)
+					wlen++
+				} else {
+					wlen += copy(buf[wlen:], string(unicode.ToLower(r)))
+				}
+			}
+		} else {
+			flush()
+		}
+	}
+	flush()
+	if words == 0 || (words <= 2 && allFiller) {
+		return 0, true, false
+	}
+	lastWord := string(lastBuf[:lastLen])
+	return words, false, incompleteComma || isIncompleteWord(lastWord)
+}
+
+func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, windowed bool) bool {
+	words, fillerOnly, incomplete := inspectTranscript(text)
+	if fillerOnly || words == 0 {
+		return false
+	}
+	p.incomplete = incomplete
+	if !p.hasWords {
+		p.hasWords = true
+		p.wordCount = words
+		p.lastWordAt = probeAt
+		p.lastText = text
+		return true
+	}
+	if !windowed {
+		if words > p.wordCount {
+			p.wordCount = words
+			p.lastWordAt = probeAt
+			p.lastText = text
+			return true
+		}
+		return false
+	}
+	if words != p.wordCount || text != p.lastText {
+		p.wordCount = words
+		p.lastWordAt = probeAt
+		p.lastText = text
+		return true
+	}
+	return false
+}
+
+func (p endpointPolicy) decision(at, capDur time.Duration, smartTurnReady, listen bool) endpointDecision {
+	if at >= endpointLimit {
+		if p.hasWords || p.voiced {
 			return endpointCommit
 		}
 		return endpointDiscard
 	}
-	if p.paused(at, silence) {
+	if !p.hasWords {
+		if !listen && at >= endpointIdle {
+			return endpointDiscard
+		}
+		return endpointWait
+	}
+	sinceWord := at - p.lastWordAt
+	if sinceWord >= capDur {
+		return endpointCommit
+	}
+	if sinceWord >= endpointQuiet && smartTurnReady && !p.incomplete {
 		return endpointCommit
 	}
 	return endpointWait
-}
-
-func (p endpointPolicy) paused(at, silence time.Duration) bool {
-	return p.voiced && !p.inVoice && at-p.last >= silence
-}
-
-const (
-	smartTurnPause     = 200 * time.Millisecond
-	smartTurnThreshold = float32(0.90)
-)
-
-type endpointThresholds struct {
-	probe, quick, complete, uncertain, patient, storySpan time.Duration
-	minWords, storyWords                                  int
-}
-
-var tunedEndpoint = endpointThresholds{
-	probe: 450 * time.Millisecond, quick: 650 * time.Millisecond,
-	complete: 1100 * time.Millisecond, uncertain: 1700 * time.Millisecond, patient: 4500 * time.Millisecond,
-	storySpan: 8 * time.Second, minWords: 3, storyWords: 23,
-}
-
-func (c endpointThresholds) silence(p endpointPolicy, text string) time.Duration {
-	text = strings.TrimSpace(text)
-	body := strings.TrimRight(text, `"'’”)]`)
-	if p.last-p.first >= c.storySpan || strings.HasSuffix(body, "..") || strings.HasSuffix(body, "…") {
-		return c.patient
-	}
-	words := strings.FieldsFunc(strings.ReplaceAll(strings.ToLower(body), "’", "'"), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\''
-	})
-	if len(words) < 2 || len(words) >= c.storyWords {
-		return c.patient
-	}
-	wordCount := len(words)
-	switch words[0] {
-	case "what's", "how's", "where's", "who's", "when's":
-		wordCount++ // The leading contraction includes the finite verb.
-	}
-	if wordCount < c.minWords {
-		return c.patient
-	}
-	normalized := strings.Join(words, " ")
-	for _, start := range []string{"once upon a time", "one day", "this is a story", "let me tell you", "here's a story",
-		"i have a story", "so there was", "there was", "there were", "and then", "yesterday", "last night",
-		"i found", "i saw", "i went", "i was", "if", "while", "because", "what if", "first", "the first"} {
-		if normalized == start || strings.HasPrefix(normalized, start+" ") {
-			return c.patient
-		}
-	}
-	switch words[len(words)-1] {
-	case "a", "an", "the", "and", "then", "or", "but", "so", "because", "when", "if",
-		"to", "of", "in", "on", "with", "for", "about", "at", "from", "by", "into", "that",
-		"who", "which", "named", "called", "like", "uh", "um", "er", "erm", "ah", "well", "hmm":
-		return c.patient
-	}
-	for _, tail := range []string{"you know", "i mean", "let's see", "let me think", "what was it", "sort of", "kind of"} {
-		if strings.HasSuffix(normalized, " "+tail) {
-			return c.patient
-		}
-	}
-	if words[0] == "when" {
-		switch words[1] {
-		case "is", "are", "was", "were", "will", "can", "do", "did", "does", "should":
-		default:
-			return c.patient // "When I was nine" is not a question.
-		}
-	}
-	if words[len(words)-2] == "and" || words[len(words)-2] == "or" {
-		return c.patient
-	}
-	switch {
-	case strings.HasSuffix(body, ".") || strings.HasSuffix(body, "?") || strings.HasSuffix(body, "!"):
-	case strings.HasSuffix(body, ",") || strings.HasSuffix(body, ":") || strings.HasSuffix(body, ";") ||
-		strings.HasSuffix(body, "-") || strings.HasSuffix(body, "—"):
-		return c.patient
-	default:
-		// Parakeet sometimes omits punctuation even on short finished turns.
-		// Wait longer than for a complete turn, without assuming a story.
-		return c.uncertain
-	}
-	// A possible sentence ("Can you draw a dragon?") may still take a
-	// modifier. Give requests and statements more room than explicit questions.
-	if strings.HasSuffix(body, "?") {
-		switch words[0] {
-		case "what", "why", "how", "where", "who", "which", "when", "what's", "how's", "where's", "who's", "when's":
-			return c.quick
-		}
-	}
-	switch words[len(words)-1] {
-	case "second", "seconds", "minute", "minutes", "hour", "hours":
-		for _, prefix := range []string{"could you ", "can you ", "please "} {
-			normalized = strings.TrimPrefix(normalized, prefix)
-		}
-		if len(words) >= 6 && (strings.HasPrefix(normalized, "start a timer for ") || strings.HasPrefix(normalized, "set a timer for ")) {
-			return c.quick
-		}
-	}
-	return c.complete
 }
 
 // One capture worker owns this accumulator. Keep the original clip for the
@@ -232,7 +270,7 @@ func (u *utterance) add(pcm []byte, vad endpointVAD) {
 	for vad != nil && u.scan+endpointBytes <= len(u.pcm) {
 		frame := u.pcm[u.scan : u.scan+endpointBytes]
 		u.scan += endpointBytes
-		u.policy.observe(pcmDuration(u.scan), vad.detect(frame))
+		u.policy.observeEnergy(pcmDuration(u.scan), vad.detect(frame), frameRMS(frame))
 	}
 }
 
@@ -296,7 +334,7 @@ func (u *utterance) addFor(pcm []byte, vad endpointVAD, listen bool) {
 		if u.vadLen == endpointBytes {
 			u.preScan += endpointBytes
 			u.vadLen = 0
-			u.policy.observe(pcmDuration(u.preScan), vad.detect(u.vadBuf[:]))
+			u.policy.observeEnergy(pcmDuration(u.preScan), vad.detect(u.vadBuf[:]), frameRMS(u.vadBuf[:]))
 			if u.policy.voiced {
 				u.flushPreRoll()
 				if pos < len(pcm) {
