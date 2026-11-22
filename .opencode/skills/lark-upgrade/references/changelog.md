@@ -4,6 +4,72 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-22 — Interactive Stories (Twee 3), Feature Cuts & Firmware (`0.18.0`)
+
+### Affects
+- Host / Config / SQLite / Lark Server & MCP / Agents / Webxdc / Firmware (`0.18.0`)
+
+### Breaking Changes
+- **Removed features**:
+  - Removed JS apps/games (`goja`, templates, `apps` table, `app` MCP tool, `app:*` and `game:*` memory scopes, `timer.app`, `Games` menu).
+  - Removed background build jobs (`build_jobs` table, `build` MCP tool, `lark-builder` agent).
+  - Removed weather service (`LARK_LOCATION`, screen weather tint/badge).
+  - Removed leftover `history` drawer, `lark eval` subcommand, and wake-word detection (`espressif/esp-sr`, `WAKE_WORD`, `WAKE_WORD_CTRL`, `LARK_CAP_WAKE_WORD`).
+- **Interactive stories (Twee 3 subset)**:
+  - Replaced `apps` and `Books` with `stories` and `story_progress` tables, `story` MCP tool (`create`, `update`, `get`, `delete`), `Stories` device menu & choice reader with voice-choice matching and lazy `bg` generation, Delta Chat `/stories`, `/story <name>`, `.twee` attachment import, and webxdc story player.
+  - Bumped `dcWelcomeVersion` and `dcPanelVersion` to `"2"`.
+- **OpenCode config**: Removed `setup-opencode-config.py` model-migration shim; existing installations on `opencode/gemini-4-hydrogen#low` should update `opencode.jsonc` once.
+- **Firmware `0.18.0`**: Removed `espressif/esp-sr` WakeNet and wake-word protocol messages.
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db ".tables"` still lists `apps` or `build_jobs`, or lacks `stories` / `story_progress`.
+- `grep -q LARK_LOCATION ~/.config/lark/lark.env` succeeds.
+- Terminals report firmware `< 0.18.0`.
+
+### Upgrade Steps
+1. Stop `lark.service` and back up `lark.db`, `lark.env`, and `opencode.jsonc`:
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   cp ~/.config/lark/lark.env ~/.config/lark/lark.env.bak.$(date +%Y%m%d-%H%M%S)
+   ```
+2. Apply SQLite schema & data upgrade:
+   ```sql
+   CREATE TABLE IF NOT EXISTS stories (id TEXT PRIMARY KEY, title TEXT NOT NULL, twee TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, passages INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE IF NOT EXISTS story_progress (companion_id TEXT NOT NULL, story_id TEXT NOT NULL, passage TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 0, flags_json TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL, PRIMARY KEY (companion_id, story_id));
+
+   INSERT OR REPLACE INTO stories (id, title, twee, author, updated_at, passages)
+   SELECT
+     name,
+     title,
+     CASE
+       WHEN length(coalesce(json_extract(data_json, '$.text'), '')) <= 600 THEN
+         ':: StoryTitle' || char(10) || title || char(10) || char(10) || ':: Start {"end":true}' || char(10) || coalesce(json_extract(data_json, '$.text'), '') || char(10)
+       ELSE
+         ':: StoryTitle' || char(10) || title || char(10) || char(10) ||
+         ':: Start' || char(10) || substr(json_extract(data_json, '$.text'), 1, 450) || char(10) || char(10) || '[[Next->Part 2]]' || char(10) || char(10) ||
+         ':: Part 2 {"end":true}' || char(10) || substr(json_extract(data_json, '$.text'), 451) || char(10)
+     END,
+     author,
+     updated_at,
+     CASE WHEN length(coalesce(json_extract(data_json, '$.text'), '')) <= 600 THEN 1 ELSE 2 END
+   FROM apps
+   WHERE kind = 'book';
+
+   DROP TABLE IF EXISTS build_jobs;
+   DROP TABLE IF EXISTS apps;
+   DELETE FROM memory WHERE scope LIKE 'app:%' OR scope LIKE 'game:%';
+   ```
+3. In `~/.local/share/lark/opencode/config/opencode/opencode.jsonc`, remove `agents.lark-builder` if present and ensure `agents.lark.model` is `opencode/claude-haiku-5-5#none` with fallback `opencode/gemini-3.8-flash#low` (if still on the old defaults).
+4. Run `./scripts/setup-host.sh --gpu-index 0`.
+5. Build and OTA firmware `0.18.0` to all boards (`vocat-33d8` → `vocat-2cac` → `box3-b324`).
+
+### Verification
+- `lark status` shows `ok=true` and all terminals online on `0.18.0`.
+- `sqlite3 ~/.local/share/lark/lark.db "SELECT id, title, passages FROM stories ORDER BY id;"` lists converted stories and no `apps` or `build_jobs` tables.
+
+---
+
 ## 2026-11-22 — Delta Chat Welcome Instructions (`dc_welcome` in `meta`)
 
 ### Affects
