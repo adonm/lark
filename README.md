@@ -114,8 +114,8 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    `--deployed` runs the older deployed-service and OTA probes (no upload or
    flash).
    `--qa` runs the repeatable `lark sim` QA suite (`lark/qa/*.sim`); `--qa-hw`
-   adds the live hardware QA suite. `--panel-ui` runs the headless-Chromium
-   webxdc panel tests (needs `playwright` or `playwright-core`; set
+   adds the live hardware QA suite. `--remote-ui` runs the headless-Chromium
+   remote-page tests (needs `playwright` or `playwright-core`; set
    `LARK_PLAYWRIGHT_MODULE` if it is not in a standard location).
 
 ## Controls, voice notes, and calls
@@ -160,6 +160,28 @@ reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM, Wi-Fi RSSI,
 and uptime every five seconds. Turn diagnostics separate
 OpenCode gate wait and first sentence, TTS queue and inference time, first frame
 render, and elapsed time to the first queued PCM.
+
+## Remote controls
+
+Send `/remote` to a companion from a verified Delta Chat contact and it replies
+with one tappable link. The link opens a phone-first control page over an
+OpenTunnel (`opentunnel.xyz`) subdomain and carries a scoped token for that
+companion. The page has live companion state, Say, listening mode, per-terminal
+volume, story progress with Continue and Start over, history with filters and
+cursor paging, and voice selection with an on-device preview. It also installs
+to a home screen with the companion's name and portrait.
+
+Each `/remote` request mints a fresh token and invalidates the previous one for
+that contact; `/remote off` revokes it. Tunnels start lazily on the first
+`/remote` and are remembered in `meta`, so saved links keep working after a
+restart. `lark tunnels` lists them and `lark tunnels stop <companion>` removes
+one. If the `opentunnel` binary is missing, `/remote` replies with an install
+hint instead of a link.
+
+The page uses one REST route per command under `/remote/api/...` and one
+Server-Sent Events stream at `/remote/events` for live state. There is no
+WebSocket and no custom framing; each request authenticates with the scoped
+token.
 
 ## Dedicated OpenCode
 
@@ -402,12 +424,17 @@ over SSE.
 | `POST /api/terminals/{id}/pair` | Generate and push a Delta Chat QR pairing card (`image/png`) to an attached terminal |
 | `GET /api/terminals/{id}/hits` | Live screen state, revision, and touch hit targets for a connected terminal |
 | `POST /api/tts` | `{"text":"Hello!"}`, optional `voice` → WAV audio (`audio/wav`) |
+| `GET /api/remote/tunnels`, `DELETE /api/remote/tunnels/{companion}` | List or stop saved scoped remote tunnels (no tokens exposed) |
+| `GET /remote?token=...` | Scoped control page (also served through the companion's OpenTunnel) |
+| `GET /remote/events?token=...` | Server-Sent Events stream for live state and story progress |
+| `POST /remote/api/say`, `listen`, `volume`, `voice`, `story/open`, `story/restart` | One scoped JSON command per route |
+| `GET /remote/api/history?cursor=...` | Scoped history page with channel, search, and cursor parameters |
 | `POST /mcp` | Loopback-only MCP JSON-RPC endpoint used by `lark mcp` |
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 
-Use `lark status`, `lark companions`, `lark terminals`, `lark sim`, `lark device`,
-`lark ota`, and `lark mcp` from the CLI to inspect and control the server.
+Use `lark status`, `lark companions`, `lark terminals`, `lark tunnels`, `lark sim`,
+`lark device`, `lark ota`, and `lark mcp` from the CLI to inspect and control the server.
 
 | Device · port 80 | Request → response |
 | --- | --- |

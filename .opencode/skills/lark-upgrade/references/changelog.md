@@ -4,6 +4,27 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-23 — Remote Controls Replace the Webxdc Panel
+
+### Affects
+- Lark Server / Delta Chat / Host (`opentunnel`)
+
+### Changes
+- Deleted `lark/webxdc/`, `webxdc.go`, the webxdc status-update handler, panel versioning, and the story-player webxdc. `/panel` is gone.
+- Added `/remote` for verified Delta Chat contacts: it replies with one tappable `https://<opentunnel-route>/remote?token=...` link. Each request mints a fresh scoped token for that contact and invalidates the previous one. `/remote off` revokes it and stops the tunnel when no contacts remain.
+- Added the phone-first remote page: live companion state over one SSE stream, Say, listening mode, per-terminal volume, stories with progress and Start over, history with filters/search/cursor paging, voice preview, and a PWA manifest with the companion's portrait.
+- Commands are plain JSON REST routes under `/remote/api/...`; there is no WebSocket. Tokens live in `meta` (`remote_token:<companion>:<contact>`), routes in `remote_route:<companion>`. Tunnels start lazily on the first `/remote` and restore saved routes on boot.
+- Added `lark tunnels` and `lark tunnels stop <companion>`; deleting a companion removes its route and tokens.
+- `/story <name>` now sends only the plain `.twee` attachment. Existing panel messages in chats are inert; the old delete-for-everyone machinery was removed, so they are left in place.
+- Bumped `dcWelcomeVersion` to `3`, so verified contacts receive the updated `/help` text once (`/remote — open my remote controls`).
+
+### Upgrade Steps
+1. Install `opentunnel` from https://opentunnel.xyz if it is not already available (or set `LARK_OPENTUNNEL_BIN`).
+2. Restart `lark.service`.
+3. Send `/remote` from a verified contact to mint the first link. Old `/panel` messages can be deleted manually; they no longer receive updates.
+
+---
+
 ## 2026-11-23 — Silent Story Opens
 
 ### Affects
