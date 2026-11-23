@@ -83,15 +83,6 @@ func randomHexFrom(r io.Reader, n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// loopbackRequest reports whether the connection came from this host. The
-// HTTP listener is LAN-reachable for firmware OTA, so admin routes must check
-// the peer address as well as the token.
-func loopbackRequest(r *http.Request) bool {
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 func sendBytes(w http.ResponseWriter, status int, kind string, data []byte) {
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
