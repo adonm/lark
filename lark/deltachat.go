@@ -427,6 +427,17 @@ func (s *dcService) autoPairAll(ctx context.Context) {
 	}
 }
 
+func (s *dcService) forget(companionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.addrs, companionID)
+	for acc, cid := range s.byAcc {
+		if cid == companionID {
+			delete(s.byAcc, acc)
+		}
+	}
+}
+
 func (s *dcService) accountForCompanion(companionID string) uint32 {
 	if s.b != nil {
 		c := s.b.companionFor(companionID)

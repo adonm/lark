@@ -569,6 +569,8 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 		`DELETE FROM timers WHERE companion_id=?`,
 		`DELETE FROM story_progress WHERE companion_id=?`,
 		`DELETE FROM memory WHERE scope=?`,
+		`DELETE FROM meta WHERE key LIKE 'dc_welcome:' || ? || ':%'`,
+		`DELETE FROM meta WHERE key LIKE 'dc_story_msgs:' || ? || ':%'`,
 		`DELETE FROM companions WHERE id=?`,
 	} {
 		arg := id
@@ -586,6 +588,9 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 		if err := b.remote.stopCompanion(ctx, id); err != nil {
 			log.Printf("Lark could not stop remote controls for %s: %v", id, err)
 		}
+	}
+	if b.dc != nil {
+		b.dc.forget(id)
 	}
 	if b.ws != nil {
 		b.ws.mu.Lock()

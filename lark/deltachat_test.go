@@ -1034,6 +1034,56 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 	}
 }
 
+func TestDeltaChatDeleteForgetsAccountAndWelcome(t *testing.T) {
+	b, _, stub := dcTestHarness(t)
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accID := greg.DCAccountID
+	stub.mu.Lock()
+	stub.contacts[accID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.mu.Unlock()
+	b.dc.syncWelcomes(t.Context())
+	stub.mu.Lock()
+	if len(stub.sent) != 1 {
+		t.Fatalf("expected one welcome before delete, got %d", len(stub.sent))
+	}
+	stub.mu.Unlock()
+
+	if err := b.deleteCompanion(t.Context(), "greg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.dc.addrs["greg"]; ok {
+		t.Fatal("delete left the companion address mapping")
+	}
+	b.dc.mu.Lock()
+	for acc, cid := range b.dc.byAcc {
+		if cid == "greg" {
+			t.Fatalf("delete left account %d mapped to greg", acc)
+		}
+	}
+	b.dc.mu.Unlock()
+
+	// Recreating the slug starts clean: a fresh account and a fresh welcome.
+	reborn, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reborn.DCAccountID == accID {
+		t.Fatal("recreated companion reused the deleted account")
+	}
+	stub.mu.Lock()
+	stub.contacts[reborn.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+	stub.mu.Unlock()
+	b.dc.syncWelcomes(t.Context())
+	stub.mu.Lock()
+	if len(stub.sent) != 2 {
+		t.Fatalf("expected a second welcome after recreate, got %d", len(stub.sent))
+	}
+	stub.mu.Unlock()
+}
+
 func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
 	b, _, stub := dcTestHarness(t)
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
