@@ -169,48 +169,11 @@ install_deltachat_rpc
 
 lark_bin="$data/lark"
 build_tmp=$(mktemp "$lark_bin.XXXXXXXX")
-stt_stage=$(mktemp -d)
-trap 'rm -f -- "$build_tmp"; rm -rf -- "$stt_stage"' EXIT
-"$REPO_DIR/scripts/build-parakeet.sh" "$stt_stage" "$data/stt-models"
-(
-    cd -- "$REPO_DIR/lark"
-    export CGO_ENABLED=1
-    export CGO_CFLAGS="\"-I$stt_stage/native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}"
-    export CGO_LDFLAGS="\"-L$stt_stage/native/lib\" -Wl,-rpath,\$ORIGIN/lib${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
-    "$GO_BIN" mod download github.com/k2-fsa/sherpa-onnx-go-linux
-    "$GO_BIN" mod verify
-    "$GO_BIN" build -tags parakeet,sqlite_fts5 -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$build_tmp" .
-    case $("$GO_BIN" env GOARCH) in
-        amd64) native=x86_64-unknown-linux-gnu ;;
-        arm64) native=aarch64-unknown-linux-gnu ;;
-        arm) native=arm-unknown-linux-gnueabihf ;;
-        *) printf 'Unsupported Linux architecture for Kokoro.\n' >&2; exit 1 ;;
-    esac
-    module=$("$GO_BIN" list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-linux)
-    libs=$module/lib/$native
-    files=(libsherpa-onnx-c-api.so libonnxruntime.so)
-    if [[ -f "$libs/libsherpa-onnx-cxx-api.so" ]]; then
-        files+=(libsherpa-onnx-cxx-api.so)
-    fi
-    install -d -m 700 -- "$data/lib"
-    (
-        cd -- "$libs"
-        sha256sum -- "${files[@]}" > "$stt_stage/SHA256SUMS.sherpa"
-        for lib in "${files[@]}"; do
-            install -m 755 -- "$lib" "$data/lib/.$lib.new"
-            mv -fT -- "$data/lib/.$lib.new" "$data/lib/$lib"
-        done
-    )
-    (cd -- "$data/lib"; sha256sum --check --status "$stt_stage/SHA256SUMS.sherpa")
-    install -m 644 -- "$stt_stage/SHA256SUMS.sherpa" "$data/lib/SHA256SUMS.sherpa"
-    notices="$data/lib/licenses/parakeet"
-    install -D -m 644 -- "$stt_stage/source/LICENSE" "$notices/transcribe.cpp.txt"
-    install -D -m 644 -- "$stt_stage/source/ggml/LICENSE" "$notices/ggml.txt"
-    install -D -m 644 -- "$stt_stage/native/share/licenses/transcribe/LICENSE.silero_vad" "$notices/silero-vad.txt"
-)
-chmod 700 -- "$build_tmp"
+trap 'rm -f -- "$build_tmp"' EXIT
+# shellcheck source=scripts/build-lark.sh
+source "$REPO_DIR/scripts/build-lark.sh"
+lark_build "$build_tmp"
 mv -f -- "$build_tmp" "$lark_bin"
-rm -rf -- "$stt_stage"
 trap - EXIT
 
 mkdir -p -- "$oc_root"/{config/opencode/agents,config/opencode/plugins,data/opencode,state,cache,workspace} \

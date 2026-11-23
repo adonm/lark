@@ -12,9 +12,18 @@ model_sha=4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795
 model_rev=7e948f21b7bdbac698d3318db9d350f1096f3b6c
 source_sha=54fe2a5b2fb43662e6d5034585dd44012a67876ae382a49d124ab02d92162a88
 source_rev=bcb639faa4c74a2300ba19e30360cb2355b1663a
+# Bump when the CMake flags or patches below change; a stale cache is rebuilt.
+cache_rev=1
 
 verify() { printf '%s  %s\n' "$1" "$2" | sha256sum --check --status; }
 download() { curl --fail --silent --show-error --location --output "$1" "$2"; }
+
+if [[ -f $build/cache-rev && $(<"$build/cache-rev") == "$cache_rev-$source_rev" &&
+    -f $build/native/lib/libtranscribe.a ]] &&
+    (cd -- "$build/native" && sha256sum --check --status SHA256SUMS); then
+    printf 'Parakeet native bridge up to date (%s)\n' "$build/native"
+    exit 0
+fi
 
 command -v glslc >/dev/null || {
     printf 'glslc is required on PATH for Parakeet Vulkan shader compilation.\n' >&2
@@ -45,10 +54,14 @@ if [[ "$spirv_prefix" != /usr && -d "$spirv_prefix/include" ]]; then
     export CPLUS_INCLUDE_PATH="$spirv_prefix/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 fi
 
-download "$build/source.tar.gz" "https://codeload.github.com/anomalyco/transcribe.cpp/tar.gz/$source_rev"
-if ! verify "$source_sha" "$build/source.tar.gz"; then
-    printf 'transcribe.cpp source archive failed SHA-256 verification.\n' >&2
-    exit 1
+rm -rf -- "$build/source" "$build/build" "$build/native" "$build/cache-rev"
+if ! [[ -f $build/source.tar.gz ]] || ! verify "$source_sha" "$build/source.tar.gz"; then
+    rm -f -- "$build/source.tar.gz"
+    download "$build/source.tar.gz" "https://codeload.github.com/anomalyco/transcribe.cpp/tar.gz/$source_rev"
+    if ! verify "$source_sha" "$build/source.tar.gz"; then
+        printf 'transcribe.cpp source archive failed SHA-256 verification.\n' >&2
+        exit 1
+    fi
 fi
 mkdir -- "$build/source"
 tar -xzf "$build/source.tar.gz" -C "$build/source" --strip-components=1
@@ -59,6 +72,7 @@ cmake -S "$build/source" -B "$build/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build "$build/build" --parallel 4
 cmake --install "$build/build" --prefix "$build/native"
 (cd -- "$build/native"; sha256sum lib/*.a > SHA256SUMS)
+printf '%s' "$cache_rev-$source_rev" > "$build/cache-rev"
 
 mkdir -p -- "$models"
 if [[ -f $models/$model ]] && verify "$model_sha" "$models/$model"; then
