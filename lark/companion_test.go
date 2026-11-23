@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -93,6 +96,87 @@ func TestCompanionLifecycleAndValidation(t *testing.T) {
 	testRequest(t, "DELETE", base+"/api/companions/"+id, "unit", nil, 204)
 	if len(apiObjects(t, base+"/api/companions", "companions")) != 0 {
 		t.Fatal("companion was not deleted")
+	}
+}
+
+func TestCompanionIdentityEntryRefreshesOnEdit(t *testing.T) {
+	t.Parallel()
+	const id, sid = "lark-entry", "ses-entry"
+	var mu sync.Mutex
+	var entries []object
+	b, base := wsHarness(t, func(b *larkServer, dir string) {
+		b.voices = companionVoiceStore(b.db, heartVoice)
+		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/event":
+				w.WriteHeader(404)
+			case r.Method == http.MethodPut && r.URL.Path == "/api/experimental/session/"+sid+"/instructions/entries/lark.companion":
+				var in struct{ Value object }
+				if json.NewDecoder(r.Body).Decode(&in) != nil {
+					t.Error("invalid instruction entry body")
+				}
+				mu.Lock()
+				entries = append(entries, in.Value)
+				mu.Unlock()
+				w.WriteHeader(204)
+			case r.Method == http.MethodGet && r.URL.Path == "/api/session/"+sid:
+				sendJSON(w, 200, object{"data": object{"id": sid}})
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/session/"+sid:
+				w.WriteHeader(200)
+			default:
+				t.Errorf("unexpected OpenCode work: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(404)
+			}
+		})
+	})
+	snapshot := func() []object {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(entries)
+	}
+	patch := func(args object) object {
+		t.Helper()
+		return toolTest(t, base, "patch", object{"companion_id": id, "companion": args}, false)["companion"].(object)
+	}
+	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
+		"id": id, "name": "Plum", "form": "a cat", "personality": "calm",
+	}, 201))
+	if str(created["id"]) != id {
+		t.Fatalf("unexpected companion id %v", created["id"])
+	}
+	// No bound session: the next create writes the fresh identity, so no entry call.
+	patch(object{"personality": "brave"})
+	if got := snapshot(); len(got) != 0 {
+		t.Fatalf("entry refreshed without a session: %+v", got)
+	}
+	if err := b.oc.save(id, sid); err != nil {
+		t.Fatal(err)
+	}
+	// Same values, or fields outside the entry, leave it alone.
+	patch(object{"personality": "brave", "form": "a bigger cat", "voice": fableVoice})
+	if got := snapshot(); len(got) != 0 {
+		t.Fatalf("unchanged identity refreshed the entry: %+v", got)
+	}
+	patch(object{"personality": "stargazer"})
+	want := object{"id": id, "name": "Plum", "personality": "stargazer"}
+	got := snapshot()
+	if len(got) != 1 || !maps.Equal(got[0], want) {
+		t.Fatalf("personality edit entry = %+v, want %+v", got, want)
+	}
+	if _, form := got[0]["form"]; form {
+		t.Fatal("entry must not carry live form state")
+	}
+	// The next turn reuses the bound session, whose entry now has the new value.
+	if next, err := b.oc.ensureSession(t.Context(), b.companionFor(id), false); err != nil || next != sid {
+		t.Fatalf("next turn session = %q, %v", next, err)
+	}
+	if got = snapshot(); len(got) != 1 {
+		t.Fatalf("next turn rewrote the identity entry: %+v", got)
+	}
+	patch(object{"name": "Cosmo"})
+	got = snapshot()
+	if len(got) != 2 || got[1]["name"] != "Cosmo" || got[1]["personality"] != "stargazer" {
+		t.Fatalf("rename entry = %+v", got)
 	}
 }
 

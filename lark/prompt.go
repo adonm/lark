@@ -18,8 +18,9 @@ func formatLocalTimeIn(t time.Time, loc *time.Location) string {
 	return t.In(loc).Format("2006-01-02 15:04 MST (-07:00)")
 }
 
-// The companion's identity lives in the session instruction entry, written once
-// when the session is created. Headers carry only the live speaker and channel.
+// The companion's identity lives in the session instruction entry, written when
+// the session is created and refreshed on rename or personality edits. Headers
+// carry only the live speaker and channel.
 func turnHeader(source string, companion companionState, ch turnChannel) string {
 	var prefix string
 	switch {

@@ -50,8 +50,8 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 
 func TestTurnHeaderOmitsStaticIdentity(t *testing.T) {
 	t.Parallel()
-	// Identity is written once to the session instruction entry, so no header
-	// branch may repeat the companion name.
+	// Identity lives in the session instruction entry, so no header branch may
+	// repeat the companion name.
 	comp := companionState{companionLook: companionLook{Name: "Cake", Configured: true, Personality: "curious fox"}}
 	for _, tc := range []struct {
 		source string

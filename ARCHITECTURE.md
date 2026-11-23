@@ -138,8 +138,9 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 - **One session per companion, cache-friendly prompts.** Context has four
   layers: the static agent prompt plus MCP `instructions` (tool and
   library/story policy); one session instruction entry `lark.companion`
-  (`{id, name, personality}`) written once at session create and never updated
-  per turn; the stored transcript; and one live `[state: … now: …]` line on the
+  (`{id, name, personality}`) written at session create and refreshed when a
+  name or personality edit lands, never per turn; the stored transcript; and
+  one live `[state: … now: …]` line on the
   current user message. Stored turns keep their historical state rows for
   auditing, but the `lark.context` plugin removes them from the model request
   (keeping the current user message, dropping all during compaction), so the

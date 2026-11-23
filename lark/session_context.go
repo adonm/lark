@@ -126,9 +126,10 @@ func (o *openCode) seedDialogue(ctx context.Context, sid, excerpt string) error 
 	return nil
 }
 
-// putCompanionEntry writes the companion's static identity once, at session
-// creation. Per-turn state stays in the user message; updating an entry appends
-// a persisted system row and only reaches the model a step late.
+// putCompanionEntry writes the companion's static identity: at session creation
+// and after a rename or personality edit. Per-turn state stays in the user
+// message; updating an entry appends a persisted system row and only reaches
+// the model a step late, which is acceptable for a rare config change.
 func (o *openCode) putCompanionEntry(ctx context.Context, sid string, companion companionState) error {
 	value := object{"id": companion.ID, "name": companion.Name}
 	if companion.Personality != "" {
@@ -136,4 +137,15 @@ func (o *openCode) putCompanionEntry(ctx context.Context, sid string, companion 
 	}
 	return o.jsonCall(ctx, http.MethodPut,
 		"/api/experimental/session/"+sid+"/instructions/entries/lark.companion", object{"value": value}, nil)
+}
+
+// refreshCompanionEntry re-sends the identity entry on the companion's current
+// session. No binding means the next session create writes the fresh values
+// anyway, so skip silently.
+func (o *openCode) refreshCompanionEntry(ctx context.Context, companion companionState) error {
+	binding, err := o.readBinding(ctx, companion.ID)
+	if err != nil || binding.sid == "" {
+		return err
+	}
+	return o.putCompanionEntry(ctx, binding.sid, companion)
 }

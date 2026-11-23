@@ -11,7 +11,7 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ### Breaking Changes
 - Turn headers no longer begin with `You are <name> (<id>).`; they start with `Speaker: …` or `Event: timer`.
-- Companion identity is the session instruction entry `lark.companion` (`{id,name,personality}`), written once at session create with `PUT /api/experimental/session/<sid>/instructions/entries/lark.companion`; session create metadata is `{"lark":{"companion":"<id>"}}`. The route is experimental and must be re-checked on OpenCode upgrades.
+- Companion identity is the session instruction entry `lark.companion` (`{id,name,personality}`), written with `PUT /api/experimental/session/<sid>/instructions/entries/lark.companion` at session create and re-sent when a name or personality edit lands (the update appends a system row and reaches the model a step late); session create metadata is `{"lark":{"companion":"<id>"}}`. The route is experimental and must be re-checked on OpenCode upgrades.
 - `[library: …]` / `[story: …]` hints left the per-turn prompt; that policy now lives in the MCP `instructions` (system prompt).
 - The `lark.context` OpenCode plugin strips stored `[state: …]` blocks from model requests, keeping only the current user message (and none during compaction). Stored history still contains them.
 - The OpenCode contract hash changes, so existing sessions roll over on the next user turn; no manual reset is needed.
@@ -27,7 +27,7 @@ jq -r '.plugins[].package' ~/.local/share/lark/opencode/config/opencode/opencode
 
 ### Verification
 - A new turn's prompt starts with `[Speaker: …]` or `[Event: timer]` and ends with exactly one `[state: …]` line.
-- `GET /api/experimental/session/<sid>/instructions/entries` lists `lark.companion` with the companion's id and name; `GET /api/session/<sid>/context` still shows historical `[state:` rows.
+- `GET /api/experimental/session/<sid>/instructions/entries` lists `lark.companion` with the companion's id and name; editing the name or personality refreshes that entry on the bound session; `GET /api/session/<sid>/context` still shows historical `[state:` rows.
 - `GET /health` reports `"ok": true`; plugin tests (`node --test config/opencode/*.test.mjs`) pass.
 
 ---

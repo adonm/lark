@@ -425,8 +425,11 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		}
 		return nil, err
 	}
-	if op != "get" && c.Name != before.Name && b.oc != nil {
-		b.syncCompanionTitle(ctx, id)
+	if op != "get" && b.oc != nil && (c.Name != before.Name || c.Personality != before.Personality) {
+		if c.Name != before.Name {
+			b.syncCompanionTitle(ctx, id)
+		}
+		b.syncCompanionEntry(ctx, c)
 	}
 	if op != "get" && b.dc != nil && b.dc.ready.Load() && c.DCAccountID != 0 {
 		go b.dc.syncProfile(c, c.DCAccountID)
@@ -461,6 +464,14 @@ func (b *larkServer) syncCompanionTitle(ctx context.Context, companionID string)
 	title := larkTitle(companionID, b.companionFor(companionID).Name)
 	if err := b.oc.jsonCall(ctx, http.MethodPatch, "/api/session/"+sid, object{"title": title}, nil); err != nil {
 		log.Print("Lark could not update a companion session title")
+	}
+}
+
+func (b *larkServer) syncCompanionEntry(ctx context.Context, c companionState) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := b.oc.refreshCompanionEntry(ctx, c); err != nil {
+		log.Print("Lark could not refresh a companion identity entry")
 	}
 }
 
