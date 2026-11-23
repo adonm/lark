@@ -335,6 +335,9 @@ func (h *terminalHub) broadcastChat(id string, entry chatEntry) {}
 
 func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
 	out := historyPage{CompanionID: id, Messages: []chatEntry{}}
+	if limit < 1 {
+		return out, problem(400, "Expected a positive history limit")
+	}
 	if b.history == nil {
 		return out, nil
 	}
