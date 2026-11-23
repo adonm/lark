@@ -169,7 +169,7 @@ before(async () => {
     if (pathname.startsWith("/remote/pwa/")) {
       if (pathname.endsWith(".png")) { res.writeHead(200, { "content-type": "image/png" }); res.end(imagePNG()); return; }
       res.writeHead(200, { "content-type": "application/manifest+json" });
-      res.end(JSON.stringify({ name: "greg", start_url: `/remote?token=${TOKEN}` }));
+      res.end(JSON.stringify({ name: "greg", start_url: "/remote", icons: [{ src: "/remote/pwa/icon-192.png" }] }));
       return;
     }
     if (pathname.startsWith("/remote/api/")) {
@@ -390,5 +390,47 @@ test("tabs support keyboard navigation and controls are labelled", async () => {
     assert.equal(await p.page.getAttribute('#body-history .pill-group', "aria-label"), "Filter by channel");
     await p.tab("settings");
     assert.equal(await p.page.getAttribute("#body-settings .voice-grid", "aria-label"), "Voice selection");
+  } finally { await p.close(); }
+});
+
+test("state pushes keep in-progress input and pending controls", async () => {
+  const p = await open();
+  try {
+    await p.page.fill("#say-input", "half typed");
+    await p.page.focus("#say-input");
+    p.deliver(stateUpdate({}, { live_state: "thinking" }));
+    await p.page.waitForFunction(() => document.querySelector("#live-state-text").textContent === "Thinking");
+    assert.equal(await p.page.inputValue("#say-input"), "half typed");
+    assert.equal(await p.page.evaluate(() => document.activeElement.id), "say-input");
+
+    await p.page.click('#body-status button[type="submit"]');
+    const say = await p.waitForRequest((r) => r.path === "/remote/api/say");
+    assert.deepEqual(say.request.body, { text: "half typed" });
+    await p.page.evaluate(() => { document.querySelector('#body-status button[type="submit"]').dataset.marker = "kept"; });
+    p.deliver(stateUpdate({}, { live_state: "speaking" }));
+    await p.page.waitForFunction(() => document.querySelector("#live-state-text").textContent === "Speaking");
+    assert.equal(await p.page.getAttribute('#body-status button[type="submit"]', "data-marker"), "kept");
+    assert.equal(await p.page.getAttribute('#body-status button[type="submit"]', "aria-busy"), "true");
+    p.answer(say.index, { ok: true, message: "Said it.", state: stateUpdate() });
+    await p.page.waitForFunction(() => document.querySelector("#feedback").textContent === "Said it.");
+    await p.page.waitForTimeout(50);
+    assert.equal(await p.page.getAttribute('#body-status button[type="submit"]', "data-marker"), "kept");
+    assert.equal(await p.page.getAttribute('#body-status button[type="submit"]', "aria-busy"), null);
+  } finally { await p.close(); }
+});
+
+test("inactive panels stay findable instead of display:none", async () => {
+  const p = await open();
+  try {
+    const inactive = await p.page.evaluate(() => {
+      const panel = document.getElementById("panel-stories");
+      const style = getComputedStyle(panel);
+      return { hidden: panel.getAttribute("hidden"), display: style.display, contentVisibility: style.contentVisibility };
+    });
+    assert.equal(inactive.hidden, "until-found");
+    assert.notEqual(inactive.display, "none");
+    assert.equal(inactive.contentVisibility, "hidden");
+    await p.tab("stories");
+    assert.equal(await p.page.evaluate(() => getComputedStyle(document.getElementById("panel-stories")).contentVisibility), "visible");
   } finally { await p.close(); }
 });

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"image/png"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -419,5 +420,42 @@ func TestRemoteMissingOpentunnelAndCompanionDelete(t *testing.T) {
 	}
 	if len(b.remote.routes) != 0 || len(b.remote.tokens) != 0 {
 		t.Fatalf("companion delete left remote state: routes=%v tokens=%v", b.remote.routes, b.remote.tokens)
+	}
+}
+
+func TestRemoteManifestIsTokenFree(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	b.serveRemotePWA(rec, httptest.NewRequest(http.MethodGet, "/remote/pwa/manifest.webmanifest", nil),
+		"/remote/pwa/manifest.webmanifest", remoteToken{CompanionID: "greg"}, "secret-token-value")
+	if rec.Code != 200 {
+		t.Fatalf("manifest status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "token") || strings.Contains(body, "secret-token-value") {
+		t.Fatalf("manifest leaks the link token: %s", body)
+	}
+	var manifest struct {
+		StartURL string `json:"start_url"`
+		Icons    []struct {
+			Src string `json:"src"`
+		} `json:"icons"`
+	}
+	if err := json.Unmarshal([]byte(body), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.StartURL != "/remote" {
+		t.Fatalf("start_url = %q", manifest.StartURL)
+	}
+	if len(manifest.Icons) == 0 {
+		t.Fatal("manifest has no icons")
+	}
+	for _, icon := range manifest.Icons {
+		if !strings.HasPrefix(icon.Src, "/remote/pwa/") {
+			t.Fatalf("icon src = %q", icon.Src)
+		}
 	}
 }

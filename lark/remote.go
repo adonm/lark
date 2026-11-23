@@ -597,7 +597,6 @@ func (b *larkServer) serveRemotePWA(w http.ResponseWriter, r *http.Request, path
 	name := remoteDisplayName(c)
 	switch path {
 	case remotePath + "/pwa/manifest.webmanifest":
-		query := url.QueryEscape(raw)
 		icons := []object{}
 		for _, icon := range []struct {
 			name string
@@ -609,15 +608,17 @@ func (b *larkServer) serveRemotePWA(w http.ResponseWriter, r *http.Request, path
 			{"maskable-512.png", 512, "maskable"},
 		} {
 			icons = append(icons, object{
-				"src":     fmt.Sprintf("%s/pwa/%s?token=%s", remotePath, icon.name, query),
+				"src":     remotePath + "/pwa/" + icon.name,
 				"type":    "image/png",
 				"sizes":   fmt.Sprintf("%dx%d", icon.size, icon.size),
 				"purpose": icon.use,
 			})
 		}
+		// The installed app starts without a query token and relies on the
+		// lark_remote cookie set when the page was first opened.
 		data, _ := json.Marshal(object{
 			"id":               remotePath + "?companion=" + url.QueryEscape(c.ID),
-			"start_url":        remotePath + "?token=" + query,
+			"start_url":        remotePath,
 			"scope":            remotePath,
 			"name":             name,
 			"short_name":       name,

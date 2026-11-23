@@ -88,6 +88,7 @@
     try {
       const data = await call(path, body);
       showBanner(data.message || "Done.", "ok");
+      clearPending();
       renderAll();
       return data;
     } catch (err) {
@@ -125,71 +126,134 @@
     }
   }
 
+  function keyed(parent, selector, key, make) {
+    let node = parent.querySelector(`${selector}[data-key="${CSS.escape(key)}"]`);
+    if (!node) { node = make(); node.dataset.key = key; parent.appendChild(node); }
+    return node;
+  }
+
+  function prune(parent, selector, keys) {
+    for (const node of [...parent.querySelectorAll(selector)]) {
+      if (!keys.has(node.dataset.key)) node.remove();
+    }
+  }
+
   function renderStatus() {
     const root = document.getElementById("body-status");
-    root.innerHTML = "";
-    const sayInput = el("input", { id: "say-input", type: "text", placeholder: "Say something aloud…", maxlength: 500 });
-    const sayBtn = el("button", { type: "submit", text: "Say" });
-    const sayForm = el("form", { class: "inline-form", onsubmit: (e) => {
-      e.preventDefault();
-      const text = sayInput.value.trim();
-      if (!text) return;
-      sayInput.value = "";
-      runCommand("say", { text }, "Speaking on device…", sayBtn);
-    } }, [el("label", { for: "say-input", class: "visually-hidden", text: "Words to say aloud" }), sayInput, sayBtn]);
-
-    const pills = el("div", { class: "pill-group", role: "group", "aria-label": "Listening duration" });
+    let quick = root.querySelector("section.status-quick");
+    if (!quick) {
+      root.replaceChildren();
+      const sayInput = el("input", { id: "say-input", type: "text", placeholder: "Say something aloud…", maxlength: 500 });
+      const sayBtn = el("button", { type: "submit", text: "Say" });
+      const sayForm = el("form", { class: "inline-form", onsubmit: (e) => {
+        e.preventDefault();
+        const text = sayInput.value.trim();
+        if (!text) return;
+        sayInput.value = "";
+        runCommand("say", { text }, "Speaking on device…", sayBtn);
+      } }, [el("label", { for: "say-input", class: "visually-hidden", text: "Words to say aloud" }), sayInput, sayBtn]);
+      const pills = el("div", { class: "pill-group", role: "group", "aria-label": "Listening duration" });
+      for (const opt of LISTEN_OPTIONS) {
+        const btn = el("button", {
+          type: "button", class: "pill-btn", "aria-pressed": "false", text: opt.label,
+          onclick: () => runCommand("listen", { seconds: opt.seconds }, `Listening: ${opt.label}…`, btn),
+        });
+        btn.dataset.seconds = String(opt.seconds);
+        pills.appendChild(btn);
+      }
+      quick = el("section", { class: "card-box status-quick" }, [
+        el("div", { class: "row-title", text: "Quick actions" }), sayForm,
+        el("div", { class: "row-sub", text: "Listening mode" }), pills,
+        el("div", { id: "volume-rows", class: "volume-rows" }),
+      ]);
+      root.append(quick, el("p", { class: "section-label", text: "Devices" }), el("div", { id: "device-list", class: "panel-list" }));
+    }
     const currentSec = Number(state.companion.listen_seconds || 0);
-    for (const opt of LISTEN_OPTIONS) {
-      const btn = el("button", {
-        type: "button", class: "pill-btn", "aria-pressed": opt.seconds === currentSec ? "true" : "false", text: opt.label,
-        onclick: () => runCommand("listen", { seconds: opt.seconds }, `Listening: ${opt.label}…`, btn),
+    for (const btn of quick.querySelectorAll(".pill-btn")) {
+      btn.setAttribute("aria-pressed", Number(btn.dataset.seconds) === currentSec ? "true" : "false");
+    }
+    const volumes = quick.querySelector("#volume-rows");
+    const terminalKeys = new Set(state.terminals.map((t) => t.id));
+    prune(volumes, ".volume-row", terminalKeys);
+    for (const t of state.terminals) {
+      const row = keyed(volumes, ".volume-row", t.id, () => {
+        const valLabel = el("span", { class: "row-sub" });
+        const slider = el("input", { type: "range", min: 0, max: 100, step: 5, "aria-label": `Volume for ${t.name || t.id}` });
+        slider.addEventListener("input", () => { valLabel.textContent = `${slider.value}%`; });
+        slider.addEventListener("change", () => runCommand("volume", { terminal: t.id, volume: Number(slider.value) }, "Setting volume…", slider.form || undefined));
+        return el("div", { class: "volume-row", "data-terminal": t.id }, [
+          el("div", { class: "row-sub", text: `Volume · ${t.name || t.id}` }), el("div", { class: "range-row" }, [slider, valLabel]),
+        ]);
       });
-      pills.appendChild(btn);
+      const slider = row.querySelector('input[type="range"]');
+      const valLabel = row.querySelector(".row-sub + .range-row .row-sub");
+      slider.setAttribute("aria-label", `Volume for ${t.name || t.id}`);
+      if (document.activeElement !== slider && !row.querySelector(".is-pending")) slider.value = t.volume ?? 60;
+      if (valLabel) valLabel.textContent = `${slider.value}%`;
     }
-    const quick = el("section", { class: "card-box" }, [
-      el("div", { class: "row-title", text: "Quick actions" }), sayForm,
-      el("div", { class: "row-sub", text: "Listening mode" }), pills,
-    ]);
-    for (const t of state.terminals) {
-      const valLabel = el("span", { class: "row-sub", text: `${t.volume ?? 60}%` });
-      const slider = el("input", { type: "range", min: 0, max: 100, step: 5, value: t.volume ?? 60, "aria-label": `Volume for ${t.name || t.id}` });
-      slider.addEventListener("input", () => { valLabel.textContent = `${slider.value}%`; });
-      slider.addEventListener("change", () => runCommand("volume", { terminal: t.id, volume: Number(slider.value) }, "Setting volume…"));
-      quick.appendChild(el("div", { class: "row-sub", text: `Volume · ${t.name || t.id}` }));
-      quick.appendChild(el("div", { class: "range-row" }, [slider, valLabel]));
+    const list = root.querySelector("#device-list");
+    prune(list, ".row-card", terminalKeys);
+    if (!state.terminals.length) {
+      if (!list.querySelector(".empty")) list.replaceChildren(el("p", { class: "empty", text: "No devices attached." }));
+      return;
     }
-    root.appendChild(quick);
-    root.appendChild(el("p", { class: "section-label", text: "Devices" }));
-    if (!state.terminals.length) { root.appendChild(el("p", { class: "empty", text: "No devices attached." })); return; }
+    list.querySelector(".empty")?.remove();
     for (const t of state.terminals) {
+      const card = keyed(list, ".row-card", t.id, () => el("article", { class: "row-card" }, [
+        el("div", { class: "row-info" }, [el("div", { class: "row-title" }), el("div", { class: "row-sub" })]),
+        el("span", { class: "state-pill" }, [el("span", { class: "state-dot", "aria-hidden": "true" }), el("span")]),
+      ]));
       const parts = [t.online ? "Online" : "Offline"];
       if (typeof t.battery_pct === "number" && t.battery_pct >= 0) parts.push(`${t.battery_pct}%${t.charging ? " charging" : ""}`);
-      root.appendChild(el("article", { class: "row-card" }, [
-        el("div", { class: "row-info" }, [el("div", { class: "row-title", text: t.name || t.id }), el("div", { class: "row-sub", text: parts.join(" · ") })]),
-        el("span", { class: "state-pill", "data-state": t.online ? "idle" : "offline" }, [el("span", { class: "state-dot", "aria-hidden": "true" }), el("span", { text: t.online ? "Ready" : "Away" })]),
-      ]));
+      card.querySelector(".row-title").textContent = t.name || t.id;
+      card.querySelector(".row-sub").textContent = parts.join(" · ");
+      const pill = card.querySelector(".state-pill");
+      pill.dataset.state = t.online ? "idle" : "offline";
+      pill.lastElementChild.textContent = t.online ? "Ready" : "Away";
     }
   }
 
   function renderStories() {
     const root = document.getElementById("body-stories");
-    root.innerHTML = "";
-    if (!state.stories.length) { root.appendChild(el("p", { class: "empty", text: "No stories saved yet." })); return; }
+    let list = root.querySelector(".panel-list.stories");
+    if (!list) {
+      root.replaceChildren();
+      list = el("div", { class: "panel-list stories" });
+      root.appendChild(list);
+    }
+    const keys = new Set(state.stories.map((s) => s.name));
+    prune(list, "article.story-card", keys);
+    list.querySelector(".empty")?.remove();
+    if (!state.stories.length) {
+      if (!list.querySelector(".empty")) list.appendChild(el("p", { class: "empty", text: "No stories saved yet." }));
+      return;
+    }
     for (const s of state.stories) {
+      const card = keyed(list, "article.story-card", s.name, () => {
+        const openBtn = el("button", { type: "button", class: "btn-compact", onclick: () => runCommand("story/open", { story: s.name }, `Opening ${s.title || s.name}…`, openBtn) });
+        return el("article", { class: "card-box story-card" }, [
+          el("div", { class: "row-info" }, [el("div", { class: "row-title" }), el("div", { class: "row-sub" })]),
+          el("progress", { class: "story-bar", max: 100 }),
+          el("div", { class: "btn-row" }, [openBtn]),
+        ]);
+      });
       const pct = Number(s.progress || 0);
       const status = pct >= 100 ? "Finished" : pct > 0 ? `In progress · ${pct}%` : "Not started";
-      const openBtn = el("button", { type: "button", class: "btn-compact", text: pct > 0 ? "Continue on device" : "Open on device", onclick: () => runCommand("story/open", { story: s.name }, `Opening ${s.title || s.name}…`, openBtn) });
-      const actions = [openBtn];
-      if (pct > 0) {
-        const resetBtn = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Start over", onclick: () => runCommand("story/restart", { story: s.name }, `Starting ${s.title || s.name} over…`, resetBtn) });
-        actions.push(resetBtn);
+      const title = s.title || s.name;
+      card.querySelector(".row-title").textContent = title;
+      card.querySelector(".row-sub").textContent = `${s.passages ? s.passages + " passages · " : ""}${status}`;
+      const bar = card.querySelector("progress");
+      bar.value = pct;
+      bar.setAttribute("aria-label", `${title} progress: ${pct}%`);
+      card.querySelector(".btn-row button").textContent = pct > 0 ? "Continue on device" : "Open on device";
+      let resetBtn = card.querySelector(".story-reset");
+      if (pct > 0 && !resetBtn) {
+        resetBtn = el("button", { type: "button", class: "btn-compact btn-ghost story-reset", text: "Start over" });
+        resetBtn.addEventListener("click", () => runCommand("story/restart", { story: s.name }, `Starting ${title} over…`, resetBtn));
+        card.querySelector(".btn-row").appendChild(resetBtn);
+      } else if (pct === 0 && resetBtn) {
+        resetBtn.remove();
       }
-      root.appendChild(el("article", { class: "card-box" }, [
-        el("div", { class: "row-info" }, [el("div", { class: "row-title", text: s.title || s.name }), el("div", { class: "row-sub", text: `${s.passages ? s.passages + " passages · " : ""}${status}` })]),
-        el("progress", { class: "story-bar", max: 100, value: pct, "aria-label": `${s.title || s.name} progress: ${pct}%` }),
-        el("div", { class: "btn-row" }, actions),
-      ]));
     }
   }
 
@@ -221,47 +285,92 @@
 
   function renderHistory() {
     const root = document.getElementById("body-history");
-    root.innerHTML = "";
-    const chips = el("div", { class: "pill-group", role: "group", "aria-label": "Filter by channel" });
-    for (const ch of HISTORY_CHANNELS) {
-      chips.appendChild(el("button", { type: "button", class: "pill-btn", "aria-pressed": hist.channel === ch.id ? "true" : "false", text: ch.label, onclick: () => { hist.channel = ch.id; loadHistory(false); } }));
+    let controls = root.querySelector("section.hist-controls");
+    if (!controls) {
+      root.replaceChildren();
+      const chips = el("div", { class: "pill-group", role: "group", "aria-label": "Filter by channel" });
+      for (const ch of HISTORY_CHANNELS) {
+        const btn = el("button", { type: "button", class: "pill-btn", "aria-pressed": "false", text: ch.label });
+        btn.dataset.channel = ch.id;
+        btn.addEventListener("click", () => { hist.channel = ch.id; loadHistory(false); });
+        chips.appendChild(btn);
+      }
+      const qInput = el("input", { id: "hist-search", type: "search", placeholder: "Search history…", maxlength: 100 });
+      const searchForm = el("form", { class: "inline-form", onsubmit: (e) => { e.preventDefault(); hist.q = qInput.value.trim(); loadHistory(false); } }, [
+        el("label", { for: "hist-search", class: "visually-hidden", text: "Search history" }), qInput, el("button", { type: "submit", text: "Find" }),
+      ]);
+      controls = el("section", { class: "card-box hist-controls" }, [chips, searchForm]);
+      root.append(controls, el("ul", { class: "hist-list" }), el("div", { id: "hist-footer" }));
     }
-    const qInput = el("input", { id: "hist-search", type: "search", value: hist.q, placeholder: "Search history…", maxlength: 100 });
-    const searchForm = el("form", { class: "inline-form", onsubmit: (e) => { e.preventDefault(); hist.q = qInput.value.trim(); loadHistory(false); } }, [
-      el("label", { for: "hist-search", class: "visually-hidden", text: "Search history" }), qInput, el("button", { type: "submit", text: "Find" }),
-    ]);
-    root.appendChild(el("section", { class: "card-box" }, [chips, searchForm]));
-    if (hist.loading && !hist.items.length) { root.appendChild(el("p", { class: "empty", text: "Loading history…" })); return; }
-    if (!hist.items.length) { root.appendChild(el("p", { class: "empty", text: "No matching messages." })); return; }
-    const list = el("ul", { class: "hist-list" });
+    for (const btn of controls.querySelectorAll(".pill-btn")) {
+      btn.setAttribute("aria-pressed", hist.channel === btn.dataset.channel ? "true" : "false");
+    }
+    const qInput = controls.querySelector("#hist-search");
+    if (document.activeElement !== qInput && qInput.value !== hist.q) qInput.value = hist.q;
+    const list = root.querySelector(".hist-list");
+    const keys = new Set(hist.items.map((item) => item.id));
+    prune(list, ".hist-item", keys);
     for (const item of hist.items) {
-      const when = item.ts_ms ? new Date(item.ts_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
-      list.appendChild(el("li", { class: "hist-item" }, [
-        el("div", { class: "hist-meta" }, [el("span", { class: "hist-speaker", text: item.speaker || "Unknown" }), el("span", { text: [chanLabels[item.channel] || item.channel, when].filter(Boolean).join(" · ") })]),
-        el("div", { class: "hist-text", text: item.text || "" }),
+      const li = keyed(list, ".hist-item", item.id, () => el("li", { class: "hist-item" }, [
+        el("div", { class: "hist-meta" }, [el("span", { class: "hist-speaker" }), el("span")]),
+        el("div", { class: "hist-text" }),
       ]));
+      list.appendChild(li);
+      const when = item.ts_ms ? new Date(item.ts_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+      li.querySelector(".hist-speaker").textContent = item.speaker || "Unknown";
+      li.querySelector(".hist-meta span:last-child").textContent = [chanLabels[item.channel] || item.channel, when].filter(Boolean).join(" · ");
+      li.querySelector(".hist-text").textContent = item.text || "";
     }
-    root.appendChild(list);
-    if (hist.has_more) root.appendChild(el("button", { type: "button", class: "btn-compact btn-ghost", text: hist.loading ? "Loading…" : "Load more", onclick: () => loadHistory(true) }));
+    const footer = root.querySelector("#hist-footer");
+    let foot = footer.firstElementChild;
+    if (hist.loading && !hist.items.length) {
+      if (!foot || !foot.classList.contains("empty")) footer.replaceChildren(el("p", { class: "empty", text: "Loading history…" }));
+    } else if (!hist.items.length) {
+      if (!foot || !foot.classList.contains("empty")) footer.replaceChildren(el("p", { class: "empty", text: "No matching messages." }));
+    } else if (hist.has_more) {
+      if (!foot || foot.tagName !== "BUTTON") {
+        const more = el("button", { type: "button", class: "btn-compact btn-ghost", onclick: () => loadHistory(true) });
+        footer.replaceChildren(more);
+        foot = more;
+      }
+      foot.textContent = hist.loading ? "Loading…" : "Load more";
+    } else {
+      footer.replaceChildren();
+    }
   }
 
   function renderSettings() {
     const root = document.getElementById("body-settings");
-    root.innerHTML = "";
-    const grid = el("div", { class: "voice-grid", role: "group", "aria-label": "Voice selection" });
-    for (const v of state.voices) {
-      const active = v.id === state.companion.voice;
-      const btn = el("button", { type: "button", class: "voice-btn", "aria-pressed": active ? "true" : "false", onclick: () => runCommand("voice", { voice: v.id }, `Previewing ${v.name}…`, btn) }, [el("span", { text: v.name }), active ? el("span", { class: "row-sub", text: "Active" }) : null]);
-      grid.appendChild(btn);
+    let section = root.querySelector("section.voice-section");
+    if (!section) {
+      root.replaceChildren();
+      section = el("section", { class: "card-box voice-section" }, [
+        el("div", { class: "row-title", text: "Voice" }), el("div", { class: "row-sub", text: "Tap a voice to save and preview it on the device." }),
+        el("div", { class: "voice-grid", role: "group", "aria-label": "Voice selection" }),
+      ]);
+      const revoke = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Forget this link" });
+      revoke.addEventListener("click", () => {
+        runCommand("revoke", {}, "Turning off remote controls…", revoke).then((data) => { if (data && data.ok) window.location.href = "/remote"; });
+      });
+      root.append(section, el("section", { class: "card-box" }, [
+        el("div", { class: "row-title", text: "This link" }),
+        el("div", { class: "row-sub", text: "Ask the companion for /remote again to get a fresh link." }), revoke,
+      ]));
     }
-    root.appendChild(el("section", { class: "card-box" }, [el("div", { class: "row-title", text: "Voice" }), el("div", { class: "row-sub", text: "Tap a voice to save and preview it on the device." }), grid]));
-    const revoke = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Forget this link", onclick: () => {
-      runCommand("revoke", {}, "Turning off remote controls…", revoke).then((data) => { if (data && data.ok) window.location.href = "/remote"; });
-    } });
-    root.appendChild(el("section", { class: "card-box" }, [
-      el("div", { class: "row-title", text: "This link" }),
-      el("div", { class: "row-sub", text: "Ask the companion for /remote again to get a fresh link." }), revoke,
-    ]));
+    const grid = section.querySelector(".voice-grid");
+    const keys = new Set(state.voices.map((v) => v.id));
+    prune(grid, ".voice-btn", keys);
+    for (const v of state.voices) {
+      const btn = keyed(grid, ".voice-btn", v.id, () => el("button", { type: "button", class: "voice-btn", onclick: () => runCommand("voice", { voice: v.id }, `Previewing ${v.name}…`, btn) }, [
+        el("span", { class: "voice-name" }),
+      ]));
+      const active = v.id === state.companion.voice;
+      btn.querySelector(".voice-name").textContent = v.name;
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      let label = btn.querySelector(".row-sub");
+      if (active && !label) btn.appendChild(el("span", { class: "row-sub", text: "Active" }));
+      else if (!active && label) label.remove();
+    }
   }
 
   function renderAll() { renderHeader(); renderStatus(); renderStories(); renderSettings(); }
