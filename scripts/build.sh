@@ -17,10 +17,12 @@ fi
 
 if command -v podman >/dev/null 2>&1; then
     podman=(podman)
+elif command -v docker >/dev/null 2>&1; then
+    podman=(docker)
 elif command -v host-spawn >/dev/null 2>&1; then
     podman=(host-spawn podman)
 else
-    echo "Podman is required to build the firmware." >&2
+    echo "Podman or Docker is required to build the firmware." >&2
     exit 1
 fi
 

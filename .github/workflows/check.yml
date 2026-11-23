@@ -1,16 +1,22 @@
-name: Offline checks
+name: CI
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    name: Offline checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -26,10 +32,77 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc shellcheck
-      - name: Run offline checks (no Vulkan toolchain or GPU)
-        # sherpa-onnx-go-linux supplies the CGO libraries and their RUNPATH.
-        # Kokoro and Parakeet weights are absent; GPU tests run via --live on a Vulkan host.
+      - name: Run offline checks
+        # Mirrors ./scripts/check.sh: shell, Node, Go vet and race tests, and
+        # the host C tests with ASan/UBSan. sherpa-onnx-go-linux supplies the
+        # CGO libraries and their RUNPATH; no Vulkan toolchain or GPU is needed.
         env:
           TTS_MODEL_DIR: ${{ runner.temp }}/no-kokoro-model-pack
           GOFLAGS: ''
         run: ./scripts/check.sh
+
+  remote-ui:
+    name: Remote UI (Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-audit --no-fund playwright@1.65.1
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Run remote UI tests
+        env:
+          LARK_PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
+        run: ./scripts/check.sh --remote-ui
+
+  firmware:
+    name: Firmware build
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Restore ESP-IDF image
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/idf.tar
+          key: idf-release-v5.5-882e5083f193
+      - name: Load ESP-IDF image
+        run: |
+          if [[ -s "$RUNNER_TEMP/idf.tar" ]]; then
+              docker load -i "$RUNNER_TEMP/idf.tar"
+          else
+              docker pull docker.io/espressif/idf:release-v5.5
+              docker save -o "$RUNNER_TEMP/idf.tar" docker.io/espressif/idf:release-v5.5
+          fi
+      - name: Restore managed components
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            firmware/managed_components
+            firmware/boards/box3/managed_components
+          key: idf-components-${{ hashFiles('firmware/dependencies.lock', 'firmware/boards/box3/dependencies.lock') }}
+      - name: Use placeholder build credentials
+        run: cp firmware/sdkconfig.local.example firmware/sdkconfig.local
+      - name: Build vocat and box3
+        run: |
+          ./scripts/build.sh vocat
+          ./scripts/build.sh box3
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: firmware
+          path: |
+            firmware/build/lark.bin
+            firmware/build-box3/lark_box3.bin
+          if-no-files-found: error
