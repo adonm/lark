@@ -16,7 +16,7 @@ usage() {
     printf '%s\n' 'Usage: setup-host.sh [--gpu-index INDEX] [--library]' \
         '       setup-host.sh --models-only  # Kokoro and Silero; no service changes' \
         '--library downloads and indexes the local text library in the background' \
-        '(~80 GB; needs space under ~/.local/share/lark/library).' \
+        '(~140 GB after the full Wikipedia index; needs space under ~/.local/share/lark/library).' \
         'Run vulkaninfo --summary to find the intended Vulkan GPU index.'
 }
 while (($#)); do
@@ -369,8 +369,8 @@ PY
 if "$library"; then
     mkdir -p -- "$data/library"
     avail_kb=$(df -Pk -- "$data" | awk 'NR==2 {print $4}')
-    if [[ -z $avail_kb || $avail_kb -lt 104857600 ]]; then
-        printf 'The local library needs about 100 GB free under %s.\n' "$data/library" >&2
+    if [[ -z $avail_kb || $avail_kb -lt 146800640 ]]; then
+        printf 'The local library needs about 140 GB free under %s.\n' "$data/library" >&2
         exit 1
     fi
     if systemctl --user is-active --quiet lark-library.service; then
