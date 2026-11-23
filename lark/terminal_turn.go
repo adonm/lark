@@ -858,7 +858,7 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 		return errTTS
 	}
 	// A fast client can acknowledge as soon as the end frame is queued.
-	d.audioUntil, d.awaitAck = until, true
+	d.audioUntil, d.awaitAck, d.ackClient = until, true, d.client
 	h.mu.Unlock()
 	if !control("end") {
 		return context.Canceled
@@ -874,7 +874,7 @@ func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 	if notify && (d.ttsStarted || d.awaitAck) {
 		h.pushTTSAbort(d, d.audio)
 	}
-	d.ttsStarted, d.awaitAck = false, false
+	d.ttsStarted, d.awaitAck, d.ackClient = false, false, nil
 	d.replyAudio = nil
 	d.audio++
 }
@@ -884,7 +884,7 @@ func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bo
 		h.freeFollowUpsLocked(d, now)
 		d.armReplyTTL(now)
 	}
-	d.awaitAck = false
+	d.awaitAck, d.ackClient = false, nil
 	if d.pending != nil {
 		d.view, d.pending = d.pending, nil
 	}

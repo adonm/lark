@@ -155,3 +155,23 @@ func TestRTPDropsDuplicatesAndReordering(t *testing.T) {
 		}
 	}
 }
+
+func TestLosslessTTSAcksByFirmware(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		firmware string
+		want     bool
+	}{
+		{"0.21.0", true},
+		{"0.21.0-test", true},
+		{"0.22.1", true},
+		{"0.20.9", false},
+		{"sim-0.19.0", false},
+		{"", false},
+		{"0.21", true},
+	} {
+		if got := losslessTTSAcks(tc.firmware); got != tc.want {
+			t.Fatalf("losslessTTSAcks(%q) = %v, want %v", tc.firmware, got, tc.want)
+		}
+	}
+}

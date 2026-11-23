@@ -15,9 +15,10 @@ const (
 	// A non-listening capture that the board never ends (or a browser tab that
 	// vanished) is force-stopped so the companion cannot stay in "listening".
 	captureFailsafe = 90 * time.Second
-	// Playback acks are lossless once the firmware reports consumed audio; the
-	// timer only rescues an ack that never arrives. It must never fire while
-	// the device is still consuming audio (see animate).
+	// The firmware acks every accepted stream over TCP (retried every 20 ms) and
+	// reports consumed samples. Only a socket-session change can lose that ack,
+	// so the timer never opens the mic on the same session while audio may
+	// still be playing.
 	ttsAckFallback = 4 * time.Second
 	// Peer cards refresh on this cadence while something is connected.
 	peerRefreshEvery = 15 * time.Second
@@ -120,6 +121,7 @@ type terminalSession struct {
 	ttsStarted bool
 	awaitAck   bool
 	audioUntil time.Time
+	ackClient  *terminalClient // connection that owes the playback ack
 }
 
 func (c *terminalClient) pingRTT() *float64 {
@@ -723,7 +725,8 @@ func (h *terminalHub) animate(ctx context.Context) {
 				switch {
 				case d.recording.active() && !d.recording.listen && d.recording.stopTimer == nil && now.Sub(d.recording.started) > captureFailsafe:
 					h.stopRecordingAtLimit(d, now)
-				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(ttsAckFallback)):
+				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(ttsAckFallback)) &&
+				(!losslessTTSAcks(d.firmware) || d.ackClient != d.client):
 					h.playbackDone(d, now, false)
 				case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
@@ -743,6 +746,29 @@ func (h *terminalHub) animate(ctx context.Context) {
 			h.mu.Unlock()
 		}
 	}
+}
+
+// losslessTTSAcks reports whether the firmware retries one ack per accepted
+// stream. Before 0.21.0 an ack could be lost, so the timer still rescues the
+// same connection; newer firmware only needs it after a session change.
+func losslessTTSAcks(firmware string) bool {
+	parts := strings.Split(strings.TrimSpace(firmware), ".")
+	want := [...]int{0, 21, 0}
+	for i := range want {
+		n := 0
+		if i < len(parts) {
+			for _, r := range parts[i] {
+				if r < '0' || r > '9' {
+					break
+				}
+				n = n*10 + int(r-'0')
+			}
+		}
+		if n != want[i] {
+			return n > want[i]
+		}
+	}
+	return true
 }
 
 func (h *terminalHub) companionTerminals(companionID string) []object {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -735,5 +736,23 @@ func TestRecordingSessionsGateAcksAndEnds(t *testing.T) {
 	d.barrier(t)
 	if got := phase(); got != captureIdle {
 		t.Fatalf("failed start stayed active: phase = %v", got)
+	}
+}
+
+// Endpoint diagnostics are verbose but a journal outlives the conversation, so
+// transcript text may only appear when LARK_DEBUG_TRANSCRIPTS opts in.
+func TestEndpointLogsRedactTranscripts(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("terminal_endpoint.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"text=%q", "spec=%q", "final=%q"} {
+		if bytes.Contains(src, []byte(raw)) {
+			t.Fatalf("endpoint log still prints raw transcript text (%s); use redactTranscript", raw)
+		}
+	}
+	if !bytes.Contains(src, []byte("redactTranscript")) {
+		t.Fatal("endpoint logging lost transcript redaction")
 	}
 }

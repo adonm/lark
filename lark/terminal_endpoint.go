@@ -265,14 +265,14 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				if spec != nil {
 					h.b.diag.spec.abortWords.Add(1)
 					if debugEndpoint {
-						log.Printf("endpoint speculate abort_words term=%s text=%q", d.id, result.text)
+						log.Printf("endpoint speculate abort_words term=%s text=%s", d.id, redactTranscript(result.text))
 					}
 					abortSpec()
 				}
 			}
 			if debugEndpoint && !spoken && !fillerOnly && wordCount > 0 {
-				log.Printf("endpoint probe ignored_unvoiced term=%s at=%v text=%q from=%v lastVoicedAt=%v",
-					d.id, result.at, result.text, result.from, u.policy.lastVoicedAt)
+				log.Printf("endpoint probe ignored_unvoiced term=%s at=%v text=%s from=%v lastVoicedAt=%v",
+					d.id, result.at, redactTranscript(result.text), result.from, u.policy.lastVoicedAt)
 			}
 			cached = result
 		}
@@ -351,7 +351,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					if result.err != nil || len(result.pcm) == 0 || normalizeSpecText(result.text) != normalizeSpecText(spec.text) {
 						h.b.diag.spec.abortMismatch.Add(1)
 						if debugEndpoint {
-							log.Printf("endpoint speculate abort_mismatch term=%s spec=%q final=%q", d.id, spec.text, result.text)
+							log.Printf("endpoint speculate abort_mismatch term=%s spec=%s final=%s", d.id, redactTranscript(spec.text), redactTranscript(result.text))
 						}
 						abortSpec()
 					} else {
@@ -360,7 +360,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 							h.b.diag.spec.overlapMS.Add(lead)
 						}
 						if debugEndpoint {
-							log.Printf("endpoint speculate hit term=%s text=%q", d.id, result.text)
+							log.Printf("endpoint speculate hit term=%s text=%s", d.id, redactTranscript(result.text))
 						}
 						result.spec = spec
 						spec = nil
@@ -386,7 +386,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			return
 		case result := <-probe:
 			if debugEndpoint {
-				log.Printf("endpoint probe term=%s at=%v text=%q err=%v", d.id, result.at, result.text, result.err)
+				log.Printf("endpoint probe term=%s at=%v text=%s err=%v", d.id, result.at, redactTranscript(result.text), result.err)
 			}
 			accept(result)
 		case turn := <-smartTurnCh:
@@ -518,7 +518,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					h.b.diag.spec.started.Add(1)
 				}
 				if debugEndpoint && spec != nil {
-					log.Printf("endpoint speculate start term=%s prob=%.3f quiet=%v text=%q", d.id, lastSmartTurnProb, at-u.policy.lastVoicedAt, cached.text)
+					log.Printf("endpoint speculate start term=%s prob=%.3f quiet=%v text=%s", d.id, lastSmartTurnProb, at-u.policy.lastVoicedAt, redactTranscript(cached.text))
 				}
 			}
 		}
