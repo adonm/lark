@@ -34,6 +34,44 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-23 — Manual Volume Only
+
+### Affects
+- Server / SQLite (`~/.local/share/lark/lark.db`) / Lark API & MCP / Web (`/remote`) / On-device Volume menu / Agent prompt
+
+### Breaking Changes
+- Automatic volume is gone. Each terminal has one manual level; the server no longer derives it from ambient noise or time.
+- `terminal_prefs` drops `auto_volume` and renames `manual_volume` to `volume`. The server renames first, then drops the retired column at startup, guarded.
+- `patch.terminal.auto_volume` is rejected. `POST /api/terminals/{id}/volume` and `/remote/api/volume` take `{"volume":0..100}` only; `PATCH /api/terminals/{id}` ignores `auto`.
+- `state` terminal volume objects, `/api/terminals`, and diagnostics no longer carry `auto_volume`; diagnostics loses `ambient_rms`.
+- The on-device Volume menu has Quieter/Louder only; the Mode toggle is gone.
+- `VOLUME` keeps its 5-byte payload with the auto byte retired (always 0), so firmware `0.20.0` keeps working without an OTA.
+
+### How to Detect
+```sh
+sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(terminal_prefs);" | grep -E 'auto_volume|manual_volume'
+curl -s -H "X-Lark-Token: $LARK_TOKEN" http://127.0.0.1:8765/api/terminals | grep -o auto_volume
+```
+Any hit means the upgrade is pending.
+
+### Upgrade Steps
+1. Stop the service, back up, and apply the schema step (the server also does it at startup):
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   sqlite3 ~/.local/share/lark/lark.db "ALTER TABLE terminal_prefs DROP COLUMN auto_volume; ALTER TABLE terminal_prefs RENAME COLUMN manual_volume TO volume;"
+   ```
+2. Run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart.
+3. No firmware change is needed on `0.20.0`.
+
+### Verification
+- `GET /api/terminals` shows one `volume` per terminal and no `auto_volume`.
+- `sqlite3 ... "SELECT terminal_id,volume FROM terminal_prefs;"` keeps the former manual levels.
+- The device Volume menu lists Quieter and Louder only; a change persists to `volume` and survives a reconnect.
+- `patch({terminal:{volume:40}})` and the `/remote` slider both apply immediately; `auto_volume` is rejected as an unknown argument.
+
+---
+
 ## 2026-11-23 — Remote microphone capture
 
 ### Affects

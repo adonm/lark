@@ -80,7 +80,7 @@ are no runtime migrations.
 | --- | --- |
 | `companions` | Name, setup state, personality/vibe, voice, form, portrait id, listening on/off, Delta Chat account id. |
 | `terminals` | Connected board id, kind, attached companion, last IP/port, last-seen time. |
-| `terminal_prefs` | Per-terminal auto-volume and manual volume. |
+| `terminal_prefs` | Per-terminal volume level. |
 | `sessions` | Companion → OpenCode session id, contract hash, last binding write, context cutoff. |
 | `messages` | Canonical chat history: user, companion, intercom, and cards, with source, channel, title, timestamp. |
 | `memory` | Versioned key/value notes in `companion:<id>` or `shared` scopes. |

@@ -147,11 +147,9 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
 - The display dims after 120 seconds idle. Tap the touchscreen to wake it.
 - The on-device **Menu** provides touch controls:
   **Memories** shows the companion's saved memories, **Stories** opens the
-  Twee reader, **Talk to…** opens intercom, **Volume** sets the level or enables
-  **Auto**, **Voice** pages through the eight curated voices, and **Stats**
-  opens the diagnostics HUD.
-  Auto-volume estimates ambient noise from recordings and adjusts the DAC in RAM
-  without writing to flash. **Home** returns to the companion.
+  Twee reader, **Talk to…** opens intercom, **Volume** sets the level,
+  **Voice** pages through the eight curated voices, and **Stats**
+  opens the diagnostics HUD. **Home** returns to the companion.
 - Say “Tell Mint dinner is ready,” “Intercom Cake, come play,” or “Tell everyone
   good morning.” Lark bypasses OpenCode and relays a chime, sender announcement, and normalized voice.
 - Tap **Reply to \<Sender\>** on a message card or choose a peer in
@@ -393,7 +391,7 @@ over SSE.
 | `GET /api/terminals` | List all terminals |
 | `GET /api/terminals/{id}`, `PATCH /api/terminals/{id}`, `DELETE /api/terminals/{id}` | Read, update terminal volume/attachment, or delete a terminal |
 | `POST /api/terminals/{id}/attach`, `POST /api/terminals/{id}/detach` | Attach a terminal to `{"companion_id":"..."}` or detach it |
-| `POST /api/terminals/{id}/volume` | `{"auto":true}` or `{"auto":false,"volume":55}` |
+| `POST /api/terminals/{id}/volume` | `{"volume":55}` |
 | `POST /api/terminals/{id}/pair` | Generate and push a Delta Chat QR pairing card (`image/png`) to an attached terminal |
 | `GET /api/terminals/{id}/hits` | Live screen state, revision, and touch hit targets for a connected terminal |
 | `POST /api/tts` | `{"text":"Hello!"}`, optional `voice` → WAV audio (`audio/wav`) |
