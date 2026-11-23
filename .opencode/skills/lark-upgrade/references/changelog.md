@@ -4,7 +4,29 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-23 — Firmware `0.20.0` Cleanup, Wake and Stop Fixes
+
+### Affects
+- Firmware (`0.20.0`), BOX-3 dependency lock
+
+### Changes
+- **Wake race**: the loopback wake socket is drained to EWOULDBLOCK before its pending flag clears, so a request racing the drain can no longer strand input until the next 5 s status tick. A failed wake send clears the flag and retries later; if the wake socket cannot be created, the service loop polls every 50 ms.
+- **Pairing brightness**: `POWER` levels 0–100 are accepted, so the pairing QR screen reaches 100%; idle sleep and touch wake still restore the 12/85% UI range.
+- **Stop**: aborting speech still writes the BSP's bounded 90 ms TX tail, so the next chime or reply never starts behind stale speech.
+- **Memory**: the 320 KiB `/debug/mic` buffer allocates on first upload, and the send-only RTP UDP socket no longer reserves a receive buffer.
+- **Dependencies**: BOX-3 builds against `esp-box-3_noglib` 3.2.1 and no longer locks `esp_lvgl_port`/`lvgl`. VoCat keeps `esp_vocat` 1.1.0 because the published `esp_vocat_noglib` 1.1.0 does not compile (an `lv_indev_t` declaration sits outside its LVGL guard).
+- **Removed**: `echo_suppress.c` and its host test, `LARK_MSG_MEDIA`, `LARK_MSG_SET_VOLUME`, `LARK_MSG_VOICE_OWNER`, `LARK_HELLO_FLAG_IF_FREE`, `LARK_REJECT_OCCUPIED`, the blocked state, `LARK_TELEMETRY_SLEEPING`, `BOARD_SHAPE`, `BOARD_HAS_DRAG`, `AUDIO_CALL_SAMPLES`.
+- **Protocol**: terminals stop sending and consuming state sequence numbers. `RESUME.last_seq` is always 0 and the wire layout is unchanged, so 0.19.0 and newer servers both work; `STATUS` is read for its state byte only and may drop text/progress/kind. Server-side seq removal and the 12 s → 30 s sleeping ping backoff follow in a separate push; both sides tolerate the other.
+- **Tests**: new wake-drain ordering test and a 120x160 dirty-rectangle commit/strip-copy test on both board geometries.
+
+### Upgrade Steps
+1. `lark ota --board vocat 192.168.1.120`, then `lark ota --board vocat 192.168.1.183`, then `lark ota --board box3 192.168.1.100`.
+2. Check `/status` reports `0.20.0` with a healthy `min_free_heap`, then run one tap-to-talk turn and one TTS reply.
+
+---
+
 ## 2026-11-23 — Library Auto-Provisioning by Disk Budget
+
 
 ### Affects
 - Host / `~/.local/share/lark/library/`, `lark.service`, `setup-host.sh`
