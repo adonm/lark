@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"slices"
@@ -8,6 +9,25 @@ import (
 	"syscall"
 	"testing"
 )
+
+// createPackDB writes a minimal valid index so health checks see real rows.
+func createPackDB(t *testing.T, path, table string) {
+	t.Helper()
+	db, err := sql.Open("lark-sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE ` + table + ` (id INTEGER PRIMARY KEY, title TEXT NOT NULL, text TEXT NOT NULL DEFAULT '')`,
+		`INSERT INTO ` + table + ` (id,title) VALUES (1,'one')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func fakeVolume(total, free int64) func(string) (int64, int64, error) {
 	return func(string) (int64, int64, error) { return total, free, nil }
@@ -94,10 +114,13 @@ func TestLibraryPlanPicksTiersBySpace(t *testing.T) {
 func TestLibraryPlanSkipsInstalledPacks(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	for _, name := range []string{"gutenberg.db", "simple.db"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("index"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	createPackDB(t, filepath.Join(dir, "gutenberg.db"), "books")
+	createPackDB(t, filepath.Join(dir, "simple.db"), "pages")
+	if err := os.MkdirAll(filepath.Join(dir, "books"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "books", "00001.txt"), []byte("text"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	packs := planPacks(t, dir, 1024*gib, 1000*gib)
 	if packs["gutenberg"].State != packStateInstalled || packs["simple"].State != packStateInstalled {
@@ -164,6 +187,58 @@ func TestLibraryPlanCountsExistingDump(t *testing.T) {
 	}
 }
 
+func TestLibraryPlanRejectsBrokenInstalledPacks(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "simple.db"), []byte("not sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A Gutenberg index with rows but no book files is not usable either.
+	createPackDB(t, filepath.Join(dir, "gutenberg.db"), "books")
+	writePackError(dir, "enwiki", os.ErrDeadlineExceeded)
+	packs := planPacks(t, dir, 1024*gib, 1000*gib)
+	if packs["simple"].State == packStateInstalled {
+		t.Fatalf("unreadable index counted as installed: %+v", packs["simple"])
+	}
+	if packs["simple"].Reason == "" {
+		t.Fatalf("broken index has no reason: %+v", packs["simple"])
+	}
+	if packs["gutenberg"].State == packStateInstalled {
+		t.Fatalf("Gutenberg index without books counted as installed: %+v", packs["gutenberg"])
+	}
+	if packs["enwiki"].LastError == "" {
+		t.Fatalf("last provisioning error was not surfaced: %+v", packs["enwiki"])
+	}
+}
+
+func TestLibraryPlanCountsPartialDownloads(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "raw")
+	if err := os.MkdirAll(raw, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dump := filepath.Join(raw, wikiDumpName("enwiki"))
+	file, err := os.OpenFile(dump+".part", os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(3 * gib); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// 62 GiB planned minus 3 GiB staged leaves 59 GiB; with 150 GiB free the
+	// budget cannot hold enwiki, but a plan that ignored .part would report a
+	// larger need and skip at a different threshold.
+	got := planPacks(t, dir, 400*gib, 150*gib)["enwiki"]
+	if got.State != packStatePending || got.NeededBytes > 62*gib-3*gib+1 {
+		t.Fatalf("staged bytes were not credited: %+v", got)
+	}
+}
+
 func TestLibraryProvisionOrderIsSmallestFirst(t *testing.T) {
 	t.Parallel()
 	plan, err := planLibrary(t.TempDir(), fakeVolume(1024*gib, 1000*gib))
@@ -173,5 +248,48 @@ func TestLibraryProvisionOrderIsSmallestFirst(t *testing.T) {
 	want := []string{"simple", "gutenberg", "enwiki"}
 	if got := plan.provisionOrder(); !slices.Equal(got, want) {
 		t.Fatalf("provision order = %v, want %v", got, want)
+	}
+}
+
+func TestPinnedGutenbergIDsResolveFromRepoRoot(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "scripts", "gutenberg-ids.txt"), []byte("11\n# a comment\n22\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LARK_GUTENBERG_IDS", "")
+	t.Setenv("LARK_REPO_DIR", repo)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pinnedGutenbergIDs()
+	if err != nil || !slices.Equal(ids, []int64{11, 22}) {
+		t.Fatalf("pinnedGutenbergIDs = %v, %v; want [11 22] from %s", ids, err, repo)
+	}
+}
+
+// A permission error opening a lock file must read as locked, not free.
+func TestLibraryLockHeldTreatsErrorsAsLocked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "enwiki.db.build.lock")
+	if err := os.WriteFile(path, nil, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if !libraryLockHeld(path) {
+		t.Fatal("unreadable lock file reported as free")
+	}
+	if libraryLockHeld(filepath.Join(dir, "missing.lock")) {
+		t.Fatal("missing lock file reported as locked")
 	}
 }

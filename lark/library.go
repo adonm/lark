@@ -143,15 +143,10 @@ type libraryHit struct {
 	Rank    float64 `json:"rank"`
 }
 
-func normalizeTitle(title string) string {
-	title = strings.ToLower(strings.TrimSpace(title))
-	title = strings.TrimPrefix(title, "the ")
-	title = strings.Trim(title, " .,:;!?\"'()[]")
-	return strings.Join(strings.Fields(title), " ")
-}
+var ftsWordRE = regexp.MustCompile(`[[:alnum:]]+`)
 
 func ftsQuery(query string) string {
-	words := regexp.MustCompile(`[[:alnum:]]+`).FindAllString(strings.ToLower(query), -1)
+	words := ftsWordRE.FindAllString(strings.ToLower(query), -1)
 	stop := map[string]bool{"a": true, "an": true, "and": true, "are": true, "as": true, "at": true,
 		"be": true, "by": true, "for": true, "from": true, "how": true, "in": true, "is": true,
 		"it": true, "of": true, "on": true, "or": true, "that": true, "the": true, "this": true,
@@ -209,7 +204,7 @@ func (b *larkServer) librarySearch(ctx context.Context, args object) (object, er
 	for _, name := range names {
 		list, ok, err := searchLibrarySource(ctx, b, dir, name, query, limit)
 		if err != nil {
-			return nil, err
+			return nil, libraryProblem(err, "Cannot search the library")
 		}
 		if ok {
 			available = append(available, name)
@@ -497,7 +492,7 @@ func (b *larkServer) libraryRead(ctx context.Context, args object) (object, erro
 				return out, nil
 			}
 			if !errors.Is(err, errLibraryNotFound) {
-				return nil, err
+				return nil, libraryProblem(err, "Cannot read library text")
 			}
 		}
 		return nil, problem(404, "Library text not found")
@@ -505,7 +500,11 @@ func (b *larkServer) libraryRead(ctx context.Context, args object) (object, erro
 	if _, ok := librarySources[source]; !ok {
 		return nil, fieldError("source", "expected auto, simple, enwiki, or gutenberg")
 	}
-	return readLibraryText(ctx, b, b.libraryDir(), source, ref, args)
+	out, err := readLibraryText(ctx, b, b.libraryDir(), source, ref, args)
+	if err != nil {
+		return nil, libraryProblem(err, "Cannot read library text")
+	}
+	return out, nil
 }
 
 var errLibraryNotFound = errors.New("library text not found")
@@ -661,7 +660,7 @@ func (b *larkServer) libraryList(ctx context.Context, args object) (object, erro
 		for _, name := range librarySourceOrder {
 			list, err := libraryListSource(ctx, b, b.libraryDir(), name, limit)
 			if err != nil {
-				return nil, err
+				return nil, libraryProblem(err, "Cannot list the library")
 			}
 			out["sources"].(map[string]any)[name] = list
 		}
@@ -672,7 +671,7 @@ func (b *larkServer) libraryList(ctx context.Context, args object) (object, erro
 	}
 	list, err := libraryListSource(ctx, b, b.libraryDir(), source, limit)
 	if err != nil {
-		return nil, err
+		return nil, libraryProblem(err, "Cannot list the library")
 	}
 	return object{"ok": true, "source": source, "items": list}, nil
 }
@@ -744,7 +743,7 @@ func (b *larkServer) libraryImport(ctx context.Context, args object) (object, er
 				return res, nil
 			}
 			if !errors.Is(err, errLibraryNotFound) {
-				return nil, err
+				return nil, libraryProblem(err, "Cannot import library text")
 			}
 		}
 		return nil, problem(404, "Library text not found")
@@ -752,11 +751,25 @@ func (b *larkServer) libraryImport(ctx context.Context, args object) (object, er
 	if _, ok := librarySources[source]; !ok {
 		return nil, fieldError("source", "expected auto, simple, enwiki, or gutenberg")
 	}
-	return b.libraryImportSourceArgs(ctx, source, ref, args)
+	out, err := b.libraryImportSourceArgs(ctx, source, ref, args)
+	if err != nil && !errors.Is(err, errLibraryNotFound) {
+		return nil, libraryProblem(err, "Cannot import library text")
+	}
+	return out, err
 }
 
-func (b *larkServer) libraryImportSource(ctx context.Context, source, ref string) (object, error) {
-	return b.libraryImportSourceArgs(ctx, source, ref, object{})
+// libraryProblem logs the underlying SQLite or filesystem detail and returns
+// the server's stable problem shape to the agent.
+func libraryProblem(err error, message string) error {
+	if err == nil || errors.Is(err, errLibraryNotFound) {
+		return err
+	}
+	var api *apiError
+	if errors.As(err, &api) {
+		return err
+	}
+	log.Printf("library: %s: %v", message, err)
+	return problem(502, message)
 }
 
 func (b *larkServer) libraryImportSourceArgs(ctx context.Context, source, ref string, args object) (object, error) {
@@ -951,19 +964,32 @@ func (b *larkServer) libraryReport() object {
 func libraryStatus(ctx context.Context, dir string) object {
 	out := object{"dir": dir, "sources": object{}}
 	for _, name := range librarySourceOrder {
-		meta := librarySources[name]
-		path := filepath.Join(dir, meta.db)
-		info, err := os.Stat(path)
-		entry := object{"available": err == nil, "path": path}
-		if err == nil {
+		pack, _ := libraryPackByName(name)
+		path := filepath.Join(dir, librarySources[name].db)
+		entry := object{"path": path}
+		available, reason := libraryPackHealth(dir, pack)
+		entry["available"] = available
+		if reason != "" {
+			entry["error"] = reason
+		}
+		if info, err := os.Stat(path); err == nil {
 			entry["db_bytes"] = info.Size()
-			if db, err := openLibraryDB(path, true); err == nil {
-				var total int
+		} else if !errors.Is(err, os.ErrNotExist) {
+			entry["error"] = err.Error()
+		}
+		if available {
+			db, err := openLibraryDB(path, true)
+			if err != nil {
+				entry["available"], entry["error"] = false, err.Error()
+			} else {
 				table := "pages"
 				if name == "gutenberg" {
 					table = "books"
 				}
-				if db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&total) == nil {
+				var total int
+				if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&total); err != nil {
+					entry["available"], entry["error"] = false, err.Error()
+				} else {
 					entry["items"] = total
 				}
 				var built string
@@ -972,6 +998,9 @@ func libraryStatus(ctx context.Context, dir string) object {
 				}
 				db.Close()
 			}
+		}
+		if lastErr := readPackError(dir, name); lastErr != "" {
+			entry["last_error"] = lastErr
 		}
 		if name == "gutenberg" {
 			if books, err := os.ReadDir(filepath.Join(dir, "books")); err == nil {
@@ -1490,8 +1519,7 @@ func downloadWikipedia(ctx context.Context, dir, wiki string, out io.Writer) err
 		return err
 	}
 	libraryLog(out, "%s verified (%s)", name, humanBytes(fileSize(dest)))
-	recordChecksum(dir, name, fileHash(dest, "sha256"))
-	return nil
+	return recordChecksum(dir, name, fileHash(dest, "sha256"))
 }
 
 func fetchWikiSHA1(ctx context.Context, wiki string) (map[string]string, error) {
@@ -1534,9 +1562,9 @@ func fetchText(ctx context.Context, url string, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, limit))
 }
 
-func recordChecksum(dir, name, sum string) {
+func recordChecksum(dir, name, sum string) error {
 	if sum == "" {
-		return
+		return nil
 	}
 	path := filepath.Join(dir, "SHA256SUMS")
 	lines := map[string]string{}
@@ -1546,12 +1574,14 @@ func recordChecksum(dir, name, sum string) {
 				lines[fields[1]] = fields[0]
 			}
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	lines[name] = sum
-	writeChecksums(path, lines)
+	return writeChecksums(path, lines)
 }
 
-func writeChecksums(path string, lines map[string]string) {
+func writeChecksums(path string, lines map[string]string) error {
 	names := make([]string, 0, len(lines))
 	for name := range lines {
 		names = append(names, name)
@@ -1562,9 +1592,14 @@ func writeChecksums(path string, lines map[string]string) {
 		fmt.Fprintf(&b, "%s  %s\n", lines[name], name)
 	}
 	tmp := path + ".tmp"
-	if os.WriteFile(tmp, []byte(b.String()), 0o600) == nil {
-		_ = os.Rename(tmp, path)
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
+		return err
 	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 type gutenbergRecord struct {
@@ -1608,6 +1643,8 @@ func downloadGutenberg(ctx context.Context, dir string, limit, jobs int, out io.
 	}
 	libraryLog(out, "gutenberg: %d selected titles, %d already recorded", len(ids), len(records))
 	var mu sync.Mutex
+	var errMu sync.Mutex
+	var errs []error
 	jobsCh := make(chan int64)
 	var wg sync.WaitGroup
 	for range jobs {
@@ -1640,7 +1677,11 @@ func downloadGutenberg(ctx context.Context, dir string, limit, jobs int, out io.
 				rec = gutenbergRecord{ID: id, Title: meta.title, Author: meta.author, Path: path, SHA256: sum}
 				mu.Lock()
 				records[id] = rec
-				appendLine(manifestPath, rec)
+				if err := appendLine(manifestPath, rec); err != nil {
+					errMu.Lock()
+					errs = append(errs, err)
+					errMu.Unlock()
+				}
 				mu.Unlock()
 				libraryLog(out, "gutenberg %d: %s", id, meta.title)
 			}
@@ -1657,9 +1698,11 @@ func downloadGutenberg(ctx context.Context, dir string, limit, jobs int, out io.
 			sums[filepath.Base(rec.Path)] = rec.SHA256
 		}
 	}
-	writeChecksums(filepath.Join(dir, "books", "SHA256SUMS"), sums)
+	if err := writeChecksums(filepath.Join(dir, "books", "SHA256SUMS"), sums); err != nil {
+		errs = append(errs, err)
+	}
 	libraryLog(out, "gutenberg: %d files recorded", len(records))
-	return nil
+	return errors.Join(errs...)
 }
 
 func downloadSmall(ctx context.Context, client *http.Client, url, dest string) error {
@@ -1718,17 +1761,20 @@ func downloadSmall(ctx context.Context, client *http.Client, url, dest string) e
 	return last
 }
 
-func appendLine(path string, value any) {
+func appendLine(path string, value any) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return
+		return err
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return
+		return err
 	}
-	defer file.Close()
-	_, _ = file.Write(append(raw, '\n'))
+	if _, err := file.Write(append(raw, '\n')); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 type gutenbergMeta struct{ title, author string }
@@ -1744,7 +1790,9 @@ func loadGutenbergCatalog(ctx context.Context, dir string, out io.Writer) (map[i
 		if err := os.Rename(path+".part", path); err != nil {
 			return nil, err
 		}
-		recordChecksum(dir, "pg_catalog.csv.gz", fileHash(path, "sha256"))
+		if err := recordChecksum(dir, "pg_catalog.csv.gz", fileHash(path, "sha256")); err != nil {
+			return nil, err
+		}
 	}
 	catalog := map[int64]gutenbergMeta{}
 	file, err := os.Open(path)
@@ -1785,9 +1833,20 @@ func loadGutenbergCatalog(ctx context.Context, dir string, out io.Writer) (map[i
 }
 
 func pinnedGutenbergIDs() ([]int64, error) {
-	path := env("LARK_GUTENBERG_IDS", filepath.Join("scripts", "gutenberg-ids.txt"))
+	path := env("LARK_GUTENBERG_IDS", "")
+	if path == "" {
+		// Resolve relative to the checkout, not the process CWD: under systemd
+		// the server starts from / and a relative path silently selected the
+		// catalog keyword fallback instead of the curated list.
+		if repo, err := repoRoot(); err == nil {
+			path = filepath.Join(repo, "scripts", "gutenberg-ids.txt")
+		} else {
+			path = filepath.Join("scripts", "gutenberg-ids.txt")
+		}
+	}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		log.Printf("library: pinned Gutenberg ids not found at %s; falling back to catalog keywords", path)
 		return nil, nil
 	}
 	if err != nil {
@@ -1857,15 +1916,15 @@ func buildWikipedia(ctx context.Context, dir, wiki string, force bool, out io.Wr
 		libraryLog(out, "%s: index exists", wiki)
 		return nil
 	}
-	lock, err := os.OpenFile(dbPath+".build.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	release, err := libraryBuildLock(dbPath)
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if release == nil {
 		libraryLog(out, "%s: another index build is already running", wiki)
 		return nil
 	}
+	defer release()
 	tmp := dbPath + ".building"
 	_ = os.Remove(tmp)
 	db, err := sql.Open("lark-sqlite3", tmp+"?_journal_mode=OFF&_synchronous=OFF&_busy_timeout=5000&_cache_size=-1000000")
@@ -2160,6 +2219,15 @@ func buildGutenberg(ctx context.Context, dir string, force bool, out io.Writer) 
 		libraryLog(out, "gutenberg: index exists")
 		return nil
 	}
+	release, err := libraryBuildLock(dbPath)
+	if err != nil {
+		return err
+	}
+	if release == nil {
+		libraryLog(out, "gutenberg: another index build is already running")
+		return nil
+	}
+	defer release()
 	raw, err := os.ReadFile(filepath.Join(dir, "raw", "gutenberg.jsonl"))
 	if err != nil {
 		return err

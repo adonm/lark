@@ -56,6 +56,9 @@ type larkServer struct {
 	companionTitles sync.Mutex
 	storyBGMu       sync.Mutex
 	storyBGInflight map[string]bool
+	storyCache      storyCompileCache
+	portraitBGMu    sync.Mutex
+	portraitBG      map[string]*portraitBGQueue
 	emits           emitTracker // Successful emit calls, to detect explicit reply routing.
 }
 

@@ -136,7 +136,7 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 	}
 
 	var storyParts []string
-	if list, err := b.listStories(ctx); err == nil {
+	if list, err := b.listStorySummaries(ctx); err == nil {
 		for _, s := range list {
 			if s.Title != "" && s.Title != s.ID {
 				storyParts = append(storyParts, fmt.Sprintf("%s(%q)", s.ID, s.Title))

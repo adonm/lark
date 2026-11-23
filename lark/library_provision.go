@@ -24,6 +24,16 @@ func (b *larkServer) provisionLibrary(ctx context.Context) {
 			return
 		}
 	}
+	releaseProvision, err := provisionLock(dir)
+	if err != nil {
+		log.Printf("library: provisioning disabled: %v", err)
+		return
+	}
+	if releaseProvision == nil {
+		log.Printf("library: another provisioning run holds %s", filepath.Join(dir, "provision.lock"))
+		return
+	}
+	defer releaseProvision()
 	logFile, err := os.OpenFile(filepath.Join(dir, "setup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		log.Printf("library: provisioning disabled: %v", err)
@@ -87,8 +97,10 @@ func (b *larkServer) provisionLibrary(ctx context.Context) {
 				return
 			}
 			libraryLog(out, "%s: failed: %v", name, err)
+			writePackError(dir, name, err)
 			continue
 		}
+		writePackError(dir, name, nil)
 		if fallback, ok := libraryPackByName(name); ok && !libraryPackInstalled(dir, fallback) {
 			libraryLog(out, "%s: build is still running elsewhere; leaving it alone", name)
 			continue

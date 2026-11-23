@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -742,6 +743,7 @@ func (b *larkServer) saveStory(ctx context.Context, id, twee, author string, cre
 	if err != nil {
 		return savedStory{}, nil, problem(502, "Cannot save story")
 	}
+	b.invalidateStoryCache(saved.ID)
 	return saved, cs, nil
 }
 
@@ -782,6 +784,102 @@ func (b *larkServer) listStories(ctx context.Context) ([]savedStory, error) {
 	return out, rows.Err()
 }
 
+// listStorySummaries lists stories without their Twee source. Prompt building,
+// remote snapshots, and device menus only need metadata, and loading every
+// story body on each 750 ms poll dominated remote snapshot time.
+func (b *larkServer) listStorySummaries(ctx context.Context) ([]savedStory, error) {
+	if b.db == nil {
+		return nil, nil
+	}
+	rows, err := b.db.readDB().QueryContext(ctx, `SELECT id,title,author,updated_at,passages FROM stories ORDER BY title, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []savedStory
+	for rows.Next() {
+		var s savedStory
+		if err := rows.Scan(&s.ID, &s.Title, &s.Author, &s.UpdatedAt, &s.Passages); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (b *larkServer) storySummary(ctx context.Context, id string) (savedStory, bool, error) {
+	var s savedStory
+	if b.db == nil {
+		return s, false, nil
+	}
+	err := b.db.readDB().QueryRowContext(ctx, `SELECT id,title,author,updated_at,passages FROM stories WHERE id=?`, id).
+		Scan(&s.ID, &s.Title, &s.Author, &s.UpdatedAt, &s.Passages)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s, false, nil
+	}
+	if err != nil {
+		return s, false, err
+	}
+	return s, true, nil
+}
+
+type storyCompileEntry struct {
+	rev int64
+	cs  *compiledStory
+}
+
+type storyCompileCache struct {
+	mu      sync.Mutex
+	entries map[string]storyCompileEntry
+}
+
+// compiledStory caches parses by story revision; the remote page polls every
+// 750 ms and must not re-parse the same Twee each time.
+func (b *larkServer) compiledStory(st savedStory) (*compiledStory, error) {
+	b.storyCache.mu.Lock()
+	if entry, ok := b.storyCache.entries[st.ID]; ok && entry.rev == st.UpdatedAt {
+		b.storyCache.mu.Unlock()
+		return entry.cs, nil
+	}
+	b.storyCache.mu.Unlock()
+	cs, err := parseTwee(st.Twee)
+	if err != nil {
+		return nil, err
+	}
+	b.storyCache.mu.Lock()
+	if b.storyCache.entries == nil {
+		b.storyCache.entries = map[string]storyCompileEntry{}
+	}
+	b.storyCache.entries[st.ID] = storyCompileEntry{rev: st.UpdatedAt, cs: cs}
+	b.storyCache.mu.Unlock()
+	return cs, nil
+}
+
+// compiledStoryByID loads the body only when the cached revision is stale.
+func (b *larkServer) compiledStoryByID(ctx context.Context, id string) (*compiledStory, error) {
+	st, ok, err := b.storySummary(ctx, id)
+	if err != nil || !ok {
+		return nil, err
+	}
+	b.storyCache.mu.Lock()
+	entry, cached := b.storyCache.entries[st.ID]
+	b.storyCache.mu.Unlock()
+	if cached && entry.rev == st.UpdatedAt {
+		return entry.cs, nil
+	}
+	full, err := b.loadStory(ctx, st.ID)
+	if err != nil {
+		return nil, err
+	}
+	return b.compiledStory(full)
+}
+
+func (b *larkServer) invalidateStoryCache(storyID string) {
+	b.storyCache.mu.Lock()
+	delete(b.storyCache.entries, storyID)
+	b.storyCache.mu.Unlock()
+}
+
 func (b *larkServer) deleteStory(ctx context.Context, id string) (bool, error) {
 	if b.db == nil {
 		return false, problem(503, "Stories unavailable")
@@ -806,6 +904,7 @@ func (b *larkServer) deleteStory(ctx context.Context, id string) (bool, error) {
 	if err := tx.Commit(); err != nil {
 		return false, problem(502, "Cannot delete story")
 	}
+	b.invalidateStoryCache(id)
 	if b.portraits != nil && b.portraits.dir != "" {
 		if err := os.RemoveAll(filepath.Join(filepath.Dir(b.portraits.dir), "story-bg", id)); err != nil {
 			log.Printf("Lark could not delete story background for %s: %v", id, err)
@@ -908,7 +1007,7 @@ func (b *larkServer) mcpStory(ctx context.Context, args object) (object, error) 
 }
 
 func (b *larkServer) storiesState(ctx context.Context) (object, error) {
-	list, err := b.listStories(ctx)
+	list, err := b.listStorySummaries(ctx)
 	if err != nil {
 		return nil, err
 	}

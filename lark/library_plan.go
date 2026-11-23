@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -62,6 +63,7 @@ type libraryPackPlan struct {
 	NeededBytes    int64   `json:"needed_bytes,omitempty"`
 	Percent        float64 `json:"percent,omitempty"`
 	Reason         string  `json:"reason,omitempty"`
+	LastError      string  `json:"last_error,omitempty"`
 }
 
 type libraryPlan struct {
@@ -122,23 +124,134 @@ func libraryPackDump(dir string, pack libraryPack) string {
 }
 
 // libraryLockHeld reports whether another process (or goroutine) holds the
-// flock at path. Missing lock files mean nothing is running.
+// flock at path. Missing lock files mean nothing is running; any other open or
+// flock error is treated as locked, because a permission or I/O problem must
+// never start a rival build.
 func libraryLockHeld(path string) bool {
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
-		return false
+		return !errors.Is(err, os.ErrNotExist)
 	}
 	defer file.Close()
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.Is(err, syscall.EWOULDBLOCK)
+		return true
 	}
 	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	return false
 }
 
+// libraryBuildLock acquires the per-pack build lock. A nil release means the
+// lock is held elsewhere and the caller should leave the build alone.
+func libraryBuildLock(dbPath string) (release func(), err error) {
+	file, err := os.OpenFile(dbPath+".build.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}
+
+// provisionLock keeps two servers from provisioning the same library at once.
+func provisionLock(dir string) (release func(), err error) {
+	file, err := os.OpenFile(filepath.Join(dir, "provision.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}
+
 func libraryPackInstalled(dir string, pack libraryPack) bool {
-	_, err := os.Stat(libraryPackDB(dir, pack))
-	return err == nil
+	ok, _ := libraryPackHealth(dir, pack)
+	return ok
+}
+
+// libraryPackHealth validates an installed pack instead of trusting a file's
+// existence: the index must open, contain its expected table and at least one
+// row, and Gutenberg must still have book files to read.
+func libraryPackHealth(dir string, pack libraryPack) (bool, string) {
+	dbPath := libraryPackDB(dir, pack)
+	info, err := os.Stat(dbPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, ""
+	}
+	if err != nil {
+		return false, err.Error()
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return false, "index file is empty"
+	}
+	db, err := openLibraryDB(dbPath, true)
+	if err != nil {
+		return false, "index cannot be opened: " + err.Error()
+	}
+	defer db.Close()
+	table := "pages"
+	if pack.name == "gutenberg" {
+		table = "books"
+	}
+	var found int
+	if err := db.QueryRow(`SELECT 1 FROM ` + table + ` LIMIT 1`).Scan(&found); err != nil {
+		return false, "index is missing rows in " + table
+	}
+	if pack.name == "gutenberg" {
+		books, err := os.ReadDir(filepath.Join(dir, "books"))
+		if err != nil {
+			return false, "book directory is missing"
+		}
+		var files int
+		for _, book := range books {
+			if book.Type().IsRegular() && strings.HasSuffix(book.Name(), ".txt") {
+				files++
+			}
+		}
+		if files == 0 {
+			return false, "no book files"
+		}
+	}
+	return true, ""
+}
+
+func libraryPackErrorPath(dir, name string) string {
+	return filepath.Join(dir, "errors", name+".txt")
+}
+
+func writePackError(dir, name string, err error) {
+	if err == nil {
+		_ = os.Remove(libraryPackErrorPath(dir, name))
+		return
+	}
+	path := libraryPackErrorPath(dir, name)
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(err.Error()+"\n"), 0o600)
+}
+
+func readPackError(dir, name string) string {
+	raw, err := os.ReadFile(libraryPackErrorPath(dir, name))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func libraryPackBuilding(dir string, pack libraryPack) bool {
@@ -168,17 +281,24 @@ func libraryPackInstalledBytes(dir string, pack libraryPack) int64 {
 func libraryPackExistingBytes(dir string, pack libraryPack) int64 {
 	if pack.name == "gutenberg" {
 		total := fileSize(filepath.Join(dir, "raw", "gutenberg.jsonl")) +
-			fileSize(filepath.Join(dir, "raw", "pg_catalog.csv.gz"))
-		if books, err := os.ReadDir(filepath.Join(dir, "books")); err == nil {
-			for _, book := range books {
-				if info, err := book.Info(); err == nil {
-					total += info.Size()
-				}
+			fileSize(filepath.Join(dir, "raw", "pg_catalog.csv.gz")) +
+			fileSize(filepath.Join(dir, "raw", "pg_catalog.csv.gz.part")) +
+			fileSize(libraryPackDB(dir, pack)+".building")
+		books, _ := os.ReadDir(filepath.Join(dir, "books"))
+		for _, book := range books {
+			if info, err := book.Info(); err == nil {
+				total += info.Size()
 			}
+		}
+		partial, _ := filepath.Glob(filepath.Join(dir, "books", "*.part"))
+		for _, path := range partial {
+			total += fileSize(path)
 		}
 		return total
 	}
-	total := fileSize(libraryPackDB(dir, pack) + ".building")
+	total := fileSize(libraryPackDB(dir, pack)+".building") +
+		fileSize(libraryPackDB(dir, pack)+".building-journal") +
+		fileSize(libraryPackDB(dir, pack)+".building-wal")
 	dump := libraryPackDump(dir, pack)
 	if dump == "" {
 		return total
@@ -231,15 +351,21 @@ func planLibrary(dir string, statfs func(string) (int64, int64, error)) (library
 	}
 	budget := plan.BudgetBytes
 	for _, pack := range libraryPacks {
-		entry := libraryPackPlan{Name: pack.name, Label: pack.label, PlannedBytes: pack.plannedBytes}
-		switch {
-		case libraryPackInstalled(dir, pack):
+		entry := libraryPackPlan{Name: pack.name, Label: pack.label, PlannedBytes: pack.plannedBytes,
+			LastError: readPackError(dir, pack.name)}
+		if ok, reason := libraryPackHealth(dir, pack); ok {
 			entry.State = packStateInstalled
 			entry.InstalledBytes = libraryPackInstalledBytes(dir, pack)
-		case libraryPackBuilding(dir, pack):
+		} else if libraryPackBuilding(dir, pack) {
+			if reason != "" {
+				entry.Reason = reason
+			}
 			entry.State = packStateBuilding
 			entry.Percent = libraryPackPercent(dir, pack)
-		default:
+		} else {
+			if reason != "" {
+				entry.Reason = reason
+			}
 			entry.NeededBytes = libraryPackNeededBytes(dir, pack)
 			if entry.NeededBytes <= budget {
 				entry.State = packStatePending
