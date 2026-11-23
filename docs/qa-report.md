@@ -370,3 +370,39 @@ jsDelivr; `--remote-ui` stubs the CDN and passes offline.
 
 Gates: `./scripts/check.sh`, `--e2e-stub`, `--qa`, `--remote-ui` all pass. Not
 deployed; the endpoint workstream deploys last.
+
+### Endpoint, speculation, and terminal fix pass, 2026-11-24
+
+Fixed on `fix-endpoint` (rebased onto `main` at `4b6f3fb`):
+
+- The listening pre-roll now carries the discarded span as a policy-clock
+  offset, so the 20 s monologue cap and `speechSpan` no longer depend on a
+  10 s window having been scanned; the splice stores whole VAD frames only,
+  so an unaligned packet cannot duplicate audio. A terminal `.?!` closes the
+  thought (trailing fillers still leave it open), and two-letter names match.
+- Speculative turns defer mutating MCP tools (`patch`, `emit`, story
+  writes/imports) until promotion; an aborted guess executes nothing, while
+  reads answer immediately. The gate attributes calls by companion argument.
+- Recorder session ids are matched on ack and end, so a stale ack cannot
+  open the next capture and a failed start's cancelled end releases the
+  board. Pointer revisions fingerprint action values, not just rectangles.
+  The name rule uses the first voiced packet, reply TTL starts at playback
+  completion (1 min; the earlier QA note said 2), and follow-up grace is
+  refreshed under the hub lock on every reply.
+- Transport drops (and counts) overflowing control frames instead of
+  disconnecting, flushes a display frame after each PCM packet, and drops
+  duplicate/reordered RTP. Silero consumes whole 512-sample windows from a
+  pooled detector; partial portraits are cached for 2 s behind an
+  invalidation epoch; playback buffers 1 s (capped at 500 ms) before
+  `TTS_CTRL start`.
+- Endpoint debug logs redact transcript text unless `LARK_DEBUG_TRANSCRIPTS`
+  is set. Firmware 0.21.0's lossless acks gate the 4 s rescue on a socket
+  session change; older clients keep the same-connection timer.
+- Removed the unreachable early-commit layer (`endpointEarlyQuiet` equalled
+  `endpointQuiet`, so `terminalPunctuation`/`smartTurnCommit` never ran).
+  Speculation still starts at the documented 180 ms quiet.
+
+Measured: `newSileroVAD` 22.6 ms/op to load vs 0.5 ms or less pooled
+(`BenchmarkSileroVADLoad`/`Acquire`); deferred tool handoff 626–674 ns vs
+12.3 ns direct over 500 turns; Kokoro first-audio 294.5 ms with and without
+the 1 s prefill for a normal opening sentence (`BenchmarkTTSFirstAudioPrefill`).
