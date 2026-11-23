@@ -118,17 +118,34 @@ func TestVoiceFixtureManifestIsSynthetic(t *testing.T) {
 	if len(m.Fixtures) == 0 {
 		t.Fatal("no committed voice fixtures")
 	}
+	dir := filepath.Join("qa", "fixtures", "voice")
+	listed := map[string]bool{}
 	var total int64
 	for _, f := range m.Fixtures {
 		if f.Origin != "synthetic" {
 			// Real household audio must stay in the gitignored local directory.
 			t.Fatalf("fixture %s has origin %q; only synthetic clips may be tracked", f.Name, f.Origin)
 		}
-		info, err := os.Stat(filepath.Join("qa", "fixtures", "voice", f.File))
+		listed[f.File] = true
+		info, err := os.Stat(filepath.Join(dir, f.File))
 		if err != nil {
 			t.Fatalf("fixture %s: %v", f.Name, err)
 		}
+		if info.Size() > 2<<20 {
+			t.Fatalf("fixture %s is %d bytes; keep individual clips under 2 MiB", f.File, info.Size())
+		}
 		total += info.Size()
+	}
+	// An unlisted clip would be replayed by nothing and its provenance is
+	// unknown, so every tracked voice file must come from the manifest.
+	files, err := filepath.Glob(filepath.Join(dir, "*.wav"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range files {
+		if base := filepath.Base(path); !listed[base] {
+			t.Errorf("voice fixture %s is not listed in manifest.json (missing origin)", base)
+		}
 	}
 	if total > 5<<20 {
 		t.Fatalf("committed voice fixtures are %d bytes; keep the set under 5 MiB", total)

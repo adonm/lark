@@ -42,7 +42,7 @@ lark_build() {
             amd64) native=x86_64-unknown-linux-gnu ;;
             arm64) native=aarch64-unknown-linux-gnu ;;
             arm) native=arm-unknown-linux-gnueabihf ;;
-            *) printf 'Unsupported Linux architecture for Kokoro.\n' >&2; exit 1 ;;
+            *) printf 'Unsupported Linux architecture for the sherpa-onnx native libraries.\n' >&2; exit 1 ;;
         esac
         local module libs
         module=$("$GO_BIN" list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-linux)

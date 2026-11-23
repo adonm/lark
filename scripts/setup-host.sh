@@ -43,19 +43,9 @@ if ! "$models_only"; then
     for cmd in gcc c++ cmake glslc ninja opencode python3 systemctl ffmpeg; do
         command -v "$cmd" >/dev/null || { echo "Install $cmd before running setup." >&2; exit 1; }
     done
-    spirv_found=false
-    IFS=: read -ra prefix_dirs <<<"${CMAKE_PREFIX_PATH:-}:/usr:/usr/local:/home/linuxbrew/.linuxbrew/opt/spirv-headers"
-    for dir in "${prefix_dirs[@]}" /run/host/*/*/linuxbrew/.linuxbrew/opt/spirv-headers; do
-        [[ -n "$dir" ]] || continue
-        if [[ -f "$dir/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
-              -f "$dir/lib/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
-              -f "$dir/lib64/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ]]; then
-            export CMAKE_PREFIX_PATH="$dir${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-            spirv_found=true
-            break
-        fi
-    done
-    if ! "$spirv_found"; then
+    # shellcheck source=scripts/lib/spirv.sh
+    source "$REPO_DIR/scripts/lib/spirv.sh"
+    if ! use_spirv_headers; then
         echo "Install SPIRV-Headers (or set CMAKE_PREFIX_PATH) before running setup." >&2
         exit 1
     fi
@@ -191,141 +181,14 @@ link_file() {
 }
 link_file "$REPO_DIR/agents/lark.md" "$oc_root/config/opencode/agents/lark.md"
 python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$lark_bin"
-
-python3 - "$env_file" "$pin_gpu" <<'PY'
-import os
-import re
-import secrets
-import sys
-import tempfile
-from pathlib import Path
-
-path = Path(sys.argv[1])
-old = path.read_text() if path.exists() else (
-    "LARK_HOST=0.0.0.0\nLARK_PORT=8765\nLARK_DEVICE_PORT=8766\n"
-    f"LARK_TOKEN={secrets.token_hex(32)}\n"
-)
-prior = re.findall(r"^LARK_OPENCODE_PASSWORD=([a-f0-9]{64})$", old, re.M)
-password = prior[-1] if prior else secrets.token_hex(32)
-settings = {
-    "LARK_OPENCODE_URL": "http://127.0.0.1:49375",
-    "LARK_OPENCODE_PASSWORD": password,
-    "OPENCODE_SERVER_PASSWORD": password,
-}
-if not re.search(r"^LARK_CHATMAIL_RELAY=", old, re.M):
-    settings["LARK_CHATMAIL_RELAY"] = "nine.testrun.org"
-if sys.argv[2] != "false":
-    settings["GGML_VK_VISIBLE_DEVICES"] = sys.argv[2]
-kept = [line for line in old.splitlines(keepends=True)
-        if line.strip().partition("=")[0].rstrip() not in settings.keys()]
-text = "".join(kept)
-if text and not text.endswith("\n"):
-    text += "\n"
-text += "".join(f"{key}={value}\n" for key, value in settings.items())
-with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
-    try:
-        f.write(text)
-        f.close()
-        os.replace(f.name, path)
-    finally:
-        Path(f.name).unlink(missing_ok=True)
-PY
-
-python3 - "$REPO_DIR" "$data_home" "$lark_bin" "$units" \
-    "$(type -P opencode)" "$env_file" "$oc_root" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-def escape(value):
-    return value.translate(str.maketrans({
-        "\\": "\\\\", '"': '\\"', "%": "%%", "\n": "\\n", "\r": "\\r", "\t": "\\t",
-    }))
-
-repo, data, binary, directory, opencode, env_file, oc_root = sys.argv[1:]
-units = Path(directory)
-paths = {"REPO_DIR": repo, "DATA_HOME": data, "LARK_BIN": binary,
-         "OPENCODE_BIN": opencode, "ENV_FILE": env_file}
-for name in ("lark.service", "lark-opencode.service"):
-    template = Path(repo, "lark", name).read_text()
-    rendered = re.sub(r"@([A-Z_]+)@", lambda m: escape(paths[m[1]]), template)
-    if name == "lark-opencode.service":
-        if Path(oc_root) != Path.home() / ".local/share/lark/opencode":
-            rendered = rendered.replace("%h/.local/share/lark/opencode", escape(oc_root))
-            rendered = rendered.replace(f"WorkingDirectory={escape(oc_root)}/workspace",
-                                        f'WorkingDirectory="{escape(oc_root)}/workspace"')
-        if Path(env_file) != Path.home() / ".config/lark/lark.env":
-            rendered = rendered.replace("EnvironmentFile=%h/.config/lark/lark.env",
-                                        f"EnvironmentFile={escape(env_file)}")
-    path = units / name
-    path.write_text(rendered)
-    path.chmod(0o644)
-
-PY
-
+python3 "$REPO_DIR/scripts/setup/lark_env.py" "$env_file" "$pin_gpu"
+python3 "$REPO_DIR/scripts/setup/systemd_units.py" "$REPO_DIR" "$data_home" "$lark_bin" \
+    "$units" "$(type -P opencode)" "$env_file" "$oc_root"
 systemctl --user daemon-reload
 systemctl --user enable lark-opencode.service lark.service
 systemctl --user restart lark-opencode.service lark.service
-
-python3 - "$env_file" "$oc_root" "$(type -P opencode)" <<'PY'
-import base64
-import json
-import os
-import re
-import subprocess
-import sys
-import time
-import urllib.request
-from pathlib import Path
-
-env_file, root, opencode = sys.argv[1:]
-settings = dict(re.findall(r"^\s*(LARK_OPENCODE_\w+)\s*=([^\n]*)", Path(env_file).read_text(), re.M))
-url = settings["LARK_OPENCODE_URL"]
-password = settings["LARK_OPENCODE_PASSWORD"]
-auth = base64.b64encode(f"opencode:{password}".encode()).decode()
-client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-def get(path):
-    request = urllib.request.Request(f"{url}{path}", headers={"Authorization": f"Basic {auth}"})
-    with client.open(request, timeout=5) as response:
-        return json.load(response)
-
-deadline = time.monotonic() + 10
-while True:
-    try:
-        agent = get("/api/agent/lark")
-        break
-    except OSError:
-        if time.monotonic() >= deadline:
-            sys.exit("Dedicated OpenCode API did not become ready with Basic auth")
-        time.sleep(0.2)
-
-try:
-    primary = agent["data"]["model"]["providerID"]
-    target_config = Path(root, "config/opencode/opencode.jsonc").resolve()
-    router = next(p for entry in get("/api/config")
-                  if entry.get("path") and Path(entry["path"]).resolve() == target_config
-                  for p in entry["info"].get("plugins") or ()
-                  if isinstance(p, dict) and p.get("package") == "./lark-model-router")
-    fallback = router["options"]["fallback"].split("/", 1)[0]
-except (OSError, KeyError, StopIteration, TypeError, ValueError) as err:
-    sys.exit(f"Could not read the Lark model settings from the dedicated OpenCode config: {err}")
-for provider in sorted({primary, fallback}):
-    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", provider):
-        sys.exit("Invalid Lark model provider")
-    marker = Path(root, "state", f"imported-provider-{provider}")
-    if not marker.exists():
-        try:
-            credentials = subprocess.run([opencode, "auth", "export", provider], check=True,
-                                         capture_output=True, timeout=20).stdout
-            if json.loads(credentials):
-                subprocess.run([opencode, "--server", url, "auth", "import"], input=credentials,
-                               env={**os.environ, "OPENCODE_SERVER_PASSWORD": password}, check=True,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-                marker.touch()
-        except (OSError, ValueError, subprocess.SubprocessError):
-            sys.exit("Could not import the configured providers' OpenCode credentials")
-PY
+python3 "$REPO_DIR/scripts/setup/import_credentials.py" \
+    "$env_file" "$oc_root" "$(type -P opencode)"
 
 printf '%s\n' 'Default voices: Heart (af_heart); Mint uses Fable (bm_fable).'
 printf '%s\n' 'Lark MCP includes control for volume and sleep on connected devices.'

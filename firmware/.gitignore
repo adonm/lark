@@ -5,6 +5,7 @@
 /boards/box3/managed_components/
 /boards/box3/sdkconfig
 /boards/box3/sdkconfig.old
+/boards/*/sdkconfig.local
 /sdkconfig
 /sdkconfig.old
 /sdkconfig.local

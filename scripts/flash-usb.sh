@@ -7,7 +7,7 @@ source "$scripts/uvx.sh"
 # shellcheck source=scripts/board.sh
 source "$scripts/board.sh"
 if (( $# > 1 )); then
-    echo "Usage: $0 [port]" >&2
+    echo "Usage: $0 [serial-device]  # default /dev/ttyACM0 when unambiguous" >&2
     exit 2
 fi
 port=${1-}

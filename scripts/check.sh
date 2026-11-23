@@ -14,95 +14,24 @@ if [[ $mode == --e2e-stub ]]; then
     exec ./scripts/e2e-stub.sh
 fi
 
-check_start=$(date +%s%3N)
-timings=()
-timeit() {
-    local name=$1 start ms
-    shift
-    start=$(date +%s%3N)
-    "$@"
-    ms=$(( $(date +%s%3N) - start ))
-    timings+=("$name $(printf '%d.%01ds' $((ms / 1000)) $(((ms % 1000) / 100)))")
-}
-summary() {
-    local ms=$(( $(date +%s%3N) - check_start ))
-    timings+=("total $(printf '%d.%01ds' $((ms / 1000)) $(((ms % 1000) / 100)))")
-    printf 'check: %s\n' "${timings[*]}"
-}
+# shellcheck source=scripts/lib/timeit.sh
+source scripts/lib/timeit.sh
 
-host_tests=$(mktemp -d "${TMPDIR:-/tmp}/lark-check.XXXXXXXX")
-trap 'rm -rf -- "$host_tests"' EXIT
-host_cc=(gcc -std=c11 -Wall -Wextra -Werror -I firmware/main "-fsanitize=address,undefined"
-         -fno-sanitize-recover=all -fno-pie -no-pie)
+# --fast lives in its own script so the gate stays small. It sources the same
+# phases and timer as this one.
+if [[ $mode == --fast ]]; then
+    exec ./scripts/check-fast.sh "${2-}"
+fi
 
-phase_shell() {
-    local script
-    for script in scripts/*.sh; do
-        bash -n "$script"
-    done
-    if command -v shellcheck >/dev/null; then
-        shellcheck -x scripts/*.sh
-    fi
-    printf 'PASS shell checks\n'
-}
-
-phase_node() { node --test config/opencode/*.test.mjs; }
-
-phase_vet() {
-    (
-        cd lark
-        "$GO_BIN" mod verify
-        # No Vulkan toolchain, weights or GPU are needed for the offline suite.
-        "$GO_BIN" vet ./...
-    )
-}
-
-phase_race() { (cd lark && "$GO_BIN" test -race -tags sqlite_fts5 ./...); }
-
-phase_live_compile() {
-    # Compile the live suite so build-tag drift cannot land unnoticed.
-    (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -run '^$' -count=1 .)
-}
-
-phase_c_host() {
-    "${host_cc[@]}" firmware/tests/vad_test.c firmware/main/vad.c -o "$host_tests/vad"
-    "$host_tests/vad"
-    printf 'PASS host VAD tests\n'
-
-    "${host_cc[@]}" firmware/tests/touch_gesture_test.c firmware/main/touch_gesture.c -o "$host_tests/touch_gesture"
-    "$host_tests/touch_gesture"
-
-    "${host_cc[@]}" firmware/tests/proto_test.c -o "$host_tests/proto"
-    "$host_tests/proto"
-
-    "${host_cc[@]}" firmware/tests/wake_gate_test.c -o "$host_tests/wake_gate"
-    "$host_tests/wake_gate"
-
-    "${host_cc[@]}" firmware/tests/net_logic_test.c firmware/main/net_logic.c -o "$host_tests/net_logic"
-    "$host_tests/net_logic"
-
-    "${host_cc[@]}" firmware/tests/audio_logic_test.c firmware/main/audio_logic.c -o "$host_tests/audio_logic"
-    "$host_tests/audio_logic"
-
-    "${host_cc[@]}" firmware/tests/debug_parse_test.c -o "$host_tests/debug_parse"
-    "$host_tests/debug_parse"
-
-    local board flags
-    for board in vocat box3; do
-        flags=()
-        if [[ "$board" == box3 ]]; then flags+=(-DLARK_BOX3=1); fi
-        printf 'Host frame and graphics tests (%s)\n' "$board"
-        "${host_cc[@]}" "${flags[@]}" firmware/tests/frame_test.c firmware/main/frame.c -o "$host_tests/frame"
-        "$host_tests/frame"
-        "${host_cc[@]}" "${flags[@]}" firmware/tests/gfx_test.c firmware/main/gfx.c -o "$host_tests/gfx"
-        "$host_tests/gfx"
-        "${host_cc[@]}" "${flags[@]}" firmware/tests/display_logic_test.c firmware/main/display_logic.c -o "$host_tests/display_logic"
-        "$host_tests/display_logic"
-    done
-}
+# shellcheck source=scripts/go-bin.sh
+source scripts/go-bin.sh
+GO_BIN=$(resolve_go)
+export CGO_ENABLED=1
+# shellcheck source=scripts/lib/phases.sh
+source scripts/lib/phases.sh
 
 phase_hygiene() {
-    local view status
+    local view status path size magic total
     if [[ -n $(git ls-files -- ':(glob)**/sdkconfig.local' ':(glob)**/lark.env') ]]; then
         printf 'sdkconfig.local and lark.env must not be tracked\n' >&2
         exit 1
@@ -116,178 +45,36 @@ phase_hygiene() {
             exit 1
         fi
     done
+    # Tracked binaries and large blobs do not belong in git: they bloat every
+    # clone and bypass review. Fixtures have their own cap below.
+    total=0
+    while IFS= read -r -d '' path; do
+        size=$(wc -c <"$path")
+        if [[ $path == lark/qa/fixtures/* ]]; then
+            total=$((total + size))
+        elif ((size > 2 * 1024 * 1024)); then
+            printf 'tracked file %s is %d bytes; keep files over 2 MiB out of git\n' "$path" "$size" >&2
+            exit 1
+        fi
+        magic=$(od -An -tx1 -N4 -- "$path" | tr -d ' \n')
+        if [[ $magic == 7f454c46 || $magic == feedface || $magic == cefaedfe ||
+              $magic == feedfacf || $magic == cffaedfe || $magic == cafebabe ||
+              $magic == 4d5a* ]]; then
+            printf 'tracked binary %s (magic %s) must not be committed\n' "$path" "$magic" >&2
+            exit 1
+        fi
+    done < <(git ls-files -z)
+    if ((total > 5 * 1024 * 1024)); then
+        printf 'tracked fixtures are %d bytes; keep lark/qa/fixtures under 5 MiB\n' "$total" >&2
+        exit 1
+    fi
+    ./scripts/lint-shims.sh
     printf 'PASS tracked-file hygiene\n'
 }
 
-# --fast: build + vet + the tests plausibly affected by the diff against a
-# base ref. See docs/testing.md. Never the gate; CI runs the full script.
-fast_base() {
-    local green
-    if [[ -n ${1-} ]]; then printf '%s\n' "$1"; return; fi
-    if [[ -n ${LARK_FAST_BASE-} ]]; then printf '%s\n' "$LARK_FAST_BASE"; return; fi
-    green=$(git rev-parse --git-dir)/lark-check-green
-    if [[ -s $green && $(<"$green") =~ ^[0-9a-f]{40}$ ]] &&
-       git merge-base --is-ancestor "$(<"$green")" HEAD 2>/dev/null; then
-        printf '%s\n' "$(<"$green")"
-        return
-    fi
-    printf 'origin/main\n'
-}
-
-# Symbols defined (or redefined) by the Go diff. Call sites and locals are not
-# enough to justify a run; declarations are the honest signal.
-fast_identifiers() {
-    git diff -U0 "$1" -- 'lark/*.go' |
-        grep -E '^[+-][^+-]' |
-        sed -nE \
-            -e 's/^[+-][[:space:]]*func[[:space:]]+(\([^)]*\)[[:space:]]*)?([A-Za-z_][A-Za-z0-9_]*).*/\2/p' \
-            -e 's/^[+-][[:space:]]*(type|var|const)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\2/p' |
-        grep -vxE 'func|string|error|int|bool|byte|rune|float64|struct|interface|any|nil|true|false|main|init|_|T|E' |
-        sort -u || true
-}
-
-# Tests whose bodies mention a symbol defined in the diff: TestName<TAB>symbol.
-fast_symbol_tests() {
-    awk -v idfile="$1" '
-        BEGIN { n = 0; while ((getline w < idfile) > 0) ids[++n] = w }
-        function flush(  i) {
-            if (name == "") return
-            for (i = 1; i <= n; i++)
-                if (body ~ ("(^|[^A-Za-z0-9_])" ids[i] "([^A-Za-z0-9_]|$)"))
-                    print name "\t" ids[i]
-            name = ""
-        }
-        /^func / {
-            flush()
-            body = $0
-            if ($0 ~ /^func Test[A-Za-z0-9_]+\(/) {
-                name = $2
-                sub(/\(.*/, "", name)
-            } else {
-                name = ""
-            }
-            next
-        }
-        name != "" { body = body " " $0 }
-        END { flush() }
-    ' lark/*_test.go
-}
-
-phase_build() { (cd lark && "$GO_BIN" build -tags sqlite_fts5 ./...); }
-
-phase_fast_go() {
-    if [[ -n ${fast_pattern-} ]]; then
-        (cd lark && "$GO_BIN" test -race -tags sqlite_fts5 -count=1 -run "^(${fast_pattern})$" .)
-    else
-        (cd lark && "$GO_BIN" test -race -tags sqlite_fts5 -count=1 .)
-    fi
-}
-
-fast_mode() {
-    local base merge f stem camel name broad
-    local -a changed=() ids=() names=()
-    local -A tests=()
-    local all_go=0 node=0 c_host=0 shell=0
-
-    base=$(fast_base "${1-}")
-    merge=$(git merge-base "$base" HEAD) || {
-        printf 'fast: cannot find a merge base for %s\n' "$base" >&2
-        exit 2
-    }
-    mapfile -t changed < <({ git diff --name-only "$merge" -- .; git ls-files --others --exclude-standard; } | sort -u)
-    printf 'fast: %d changed file(s) since %s (%.12s)\n' "${#changed[@]}" "$base" "$merge"
-    if ((${#changed[@]} == 0)); then
-        printf 'fast: nothing changed; run ./scripts/check.sh before any push\n'
-        return
-    fi
-
-    for f in "${changed[@]}"; do
-        case $f in
-            lark/go.mod|lark/go.sum) all_go=1 ;;
-            lark/*_test.go)
-                while IFS= read -r name; do tests[$name]="changed ${f##*/}"; done \
-                    < <(grep -oE '^func (Test[A-Za-z0-9_]+)' "$f" | cut -d' ' -f2)
-                ;;
-            lark/*.go)
-                stem=${f##*/}
-                stem=${stem%.go}
-                camel=$(sed -E 's/(^|_)([a-z])/\U\2/g' <<<"$stem")
-                while IFS= read -r name; do
-                    tests[$name]="stem ${stem}.go"
-                done < <(grep -hoE "^func (Test[A-Za-z0-9_]*${camel}[A-Za-z0-9_]*)" lark/*_test.go |
-                         cut -d' ' -f2 | sort -u)
-                ;;
-            config/opencode/*) node=1 ;;
-            firmware/*) c_host=1 ;;
-            scripts/*.sh) shell=1 ;;
-        esac
-    done
-
-    if ! ((all_go)) && ((${#changed[@]})); then
-        mapfile -t ids < <(fast_identifiers "$merge")
-        if ((${#ids[@]})); then
-            printf '%s\n' "${ids[@]}" > "$host_tests/idents"
-            fast_symbol_tests "$host_tests/idents" > "$host_tests/refs"
-            # A symbol used by many tests is a common word (start, status,
-            # c), not a signal. Keep symbols that pin at most 4 tests.
-            awk -F'\t' '{ n[$2]++ } END { for (i in n) if (n[i] <= 4) print i }' \
-                "$host_tests/refs" | sort > "$host_tests/keep"
-            awk -F'\t' 'NR == FNR { keep[$1] = 1; next } ($2 in keep)' \
-                "$host_tests/keep" "$host_tests/refs" > "$host_tests/picked"
-            while IFS=$'\t' read -r name id; do
-                [[ -n $name ]] && tests[$name]="references $id"
-            done < "$host_tests/picked"
-            broad=$(awk -F'\t' '{ n[$2]++ } END { c = 0; for (i in n) if (n[i] > 4) c++; print c }' "$host_tests/refs")
-            if ((broad > 0)); then
-                printf 'fast: ignored %d common symbol(s) referenced by more than 4 tests\n' "$broad"
-            fi
-        fi
-    fi
-
-    timeit build phase_build
-    timeit vet phase_vet
-
-    if ((all_go)); then
-        printf 'fast: go.mod/go.sum changed; running every Go test\n'
-        fast_pattern=
-        timeit go-test-all phase_fast_go
-    elif ((${#tests[@]})); then
-        mapfile -t names < <(printf '%s\n' "${!tests[@]}" | sort)
-        printf 'fast: %d related Go test(s)\n' "${#names[@]}"
-        for name in "${names[@]}"; do
-            printf 'fast:   %s (%s)\n' "$name" "${tests[$name]}"
-        done
-        fast_pattern=$(printf '%s\n' "${names[@]}" | paste -sd'|' -)
-        timeit go-test phase_fast_go
-    else
-        printf 'fast: no Go test names related to the change\n'
-    fi
-
-    if ((shell)); then timeit shell phase_shell; else printf 'fast: skip shell checks (no scripts/*.sh change)\n'; fi
-    if ((node)); then timeit node phase_node; else printf 'fast: skip node tests (config/opencode unchanged)\n'; fi
-    if ((c_host)); then timeit c-host phase_c_host; else printf 'fast: skip host C tests (firmware unchanged)\n'; fi
-
-    printf 'fast: subset only, not the gate; run ./scripts/check.sh before push\n'
-}
-
-if [[ $mode == --fast ]]; then
-    # shellcheck source=scripts/go-bin.sh
-    source scripts/go-bin.sh
-    GO_BIN=$(resolve_go)
-    export CGO_ENABLED=1
-    fast_mode "${2-}"
-    summary
-    exit 0
-fi
-
 timeit shell phase_shell
-
-# shellcheck source=scripts/go-bin.sh
-source scripts/go-bin.sh
-GO_BIN=$(resolve_go)
-export CGO_ENABLED=1
-
 timeit node phase_node
+timeit python phase_python
 timeit vet phase_vet
 timeit go-race phase_race
 timeit go-live-compile phase_live_compile
@@ -383,4 +170,4 @@ if [[ $# == 0 ]]; then
     git rev-parse HEAD > "$(git rev-parse --git-dir)/lark-check-green"
 fi
 
-summary
+time_summary

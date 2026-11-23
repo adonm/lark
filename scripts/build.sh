@@ -4,15 +4,13 @@ set -euo pipefail
 scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 firmware=$(cd -- "$scripts/../firmware" && pwd -P)
 force=false
-watch=false
 board_arg=""
 for arg in "$@"; do
     case $arg in
         vocat|box3) board_arg=$arg ;;
         --force) force=true ;;
-        --watch) watch=true ;;
         *)
-            printf 'Usage: %s [vocat|box3] [--force] [--watch]\n' "$0" >&2
+            printf 'Usage: %s [vocat|box3] [--force]\n' "$0" >&2
             exit 2
             ;;
     esac
@@ -40,26 +38,28 @@ else
     exit 1
 fi
 
-# Everything that changes the image: board sources and config plus this recipe.
+# Everything that changes the image: tracked board sources and config, any
+# new unignored source, the local credentials, and this recipe. Generated
+# directories (managed_components, build*) are ignored by git and stay out.
 source_hash() {
     {
         cd -- "$firmware"
-        find main boards CMakeLists.txt partitions.csv dependencies.lock sdkconfig.defaults \
-            -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum
-        if [[ -f sdkconfig.local ]]; then sha256sum sdkconfig.local; fi
+        {
+            git ls-files -z --cached --others --exclude-standard -- \
+                main boards CMakeLists.txt partitions.csv dependencies.lock sdkconfig.defaults
+            if [[ -f sdkconfig.local ]]; then printf 'sdkconfig.local\0'; fi
+        } | sort -zu | while IFS= read -r -d '' file; do sha256sum -- "$file"; done
         sha256sum -- "$scripts/build.sh"
         printf 'board=%s image=%s\n' "$BOARD" "$idf_image"
     } | sha256sum | cut -d' ' -f1
 }
 
 build_once() {
-    local quiet=${1-} started=$SECONDS hash stamp
+    local started=$SECONDS hash stamp
     hash=$(source_hash)
     stamp="$firmware/$build_dir/.lark-source-hash"
     if ! "$force" && [[ -f $stamp && $(<"$stamp") == "$hash" && -f "$firmware/$build_dir/$board_image" ]]; then
-        if [[ -z $quiet ]]; then
-            printf '%s: up to date (%s, source %s)\n' "$BOARD" "$board_image" "${hash:0:12}"
-        fi
+        printf '%s: up to date (%s, source %s)\n' "$BOARD" "$board_image" "${hash:0:12}"
         return 0
     fi
     install -d -m 700 -- "$ccache_dir"
@@ -93,12 +93,4 @@ build_once() {
     printf '%s: built in %ss (%s)\n' "$BOARD" "$((SECONDS - started))" "$board_image"
 }
 
-if "$watch"; then
-    printf 'Watching firmware sources for %s; Ctrl-C to stop. Ccache: %s\n' "$BOARD" "$ccache_dir"
-    build_once
-    while sleep 2; do
-        build_once quiet
-    done
-else
-    build_once
-fi
+build_once

@@ -67,6 +67,71 @@ func TestREADMERoutesRegistered(t *testing.T) {
 	}
 }
 
+// TestREADMELoopbackClaims holds the README's "loopback + token only" promise
+// for /mcp and /debug/pprof to the handler. A remote peer must see the same
+// generic 404 as an unknown route, never a token challenge or profile.
+func TestREADMELoopbackClaims(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "loopback") {
+			continue
+		}
+		for _, path := range []string{"/mcp", "/debug/pprof"} {
+			if strings.Contains(line, path) {
+				documented[path] = true
+			}
+		}
+	}
+	for _, path := range []string{"/mcp", "/debug/pprof"} {
+		if !documented[path] {
+			t.Errorf("README's API table does not call %s loopback-only", path)
+		}
+	}
+
+	b, _ := wsHarness(t, nil)
+	requests := []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`},
+		{http.MethodGet, "/debug/pprof/", ""},
+	}
+	for _, rt := range requests {
+		remote := httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body))
+		remote.RemoteAddr = "198.51.100.7:23456"
+		remote.Header.Set("X-Lark-Token", b.token)
+		if rt.body != "" {
+			remote.Header.Set("Content-Type", "application/json")
+		}
+		res := httptest.NewRecorder()
+		b.ServeHTTP(res, remote)
+		if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), "Not found") {
+			t.Errorf("%s %s from a non-loopback peer = %d %q; want the generic 404",
+				rt.method, rt.path, res.Code, res.Body.String())
+		}
+
+		local := httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body))
+		local.RemoteAddr = "127.0.0.1:23456"
+		local.Header.Set("X-Lark-Token", b.token)
+		if rt.body != "" {
+			local.Header.Set("Content-Type", "application/json")
+		}
+		res = httptest.NewRecorder()
+		b.ServeHTTP(res, local)
+		if res.Code == http.StatusNotFound {
+			t.Errorf("%s %s from loopback = 404; documented as reachable", rt.method, rt.path)
+		}
+	}
+}
+
 // TestREADMEListsEveryRoute guards the other direction: a route the server
 // registers must appear in README's API table.
 func TestREADMEListsEveryRoute(t *testing.T) {

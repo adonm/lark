@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -77,7 +78,22 @@ func validRPCID(id json.RawMessage) bool {
 	return false
 }
 
+// loopbackRequest reports whether the request came from this host, matching
+// the README's "loopback + token only" contract for /mcp and /debug/pprof.
+func loopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (b *larkServer) serveMCP(w http.ResponseWriter, r *http.Request) {
+	if !loopbackRequest(r) {
+		sendError(w, problem(404, "Not found"))
+		return
+	}
 	if b.token == "" || !tokenHeaderMatches(r.Header, "Token", b.token) &&
 		!tokenMatches(r.Header.Values("Authorization"), "Bearer "+b.token) {
 		sendError(w, problem(401, "Unauthorized"))

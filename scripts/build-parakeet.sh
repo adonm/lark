@@ -30,28 +30,11 @@ command -v glslc >/dev/null || {
     exit 1
 }
 
-find_spirv_headers() {
-    local IFS=:
-    local dir
-    for dir in ${CMAKE_PREFIX_PATH:-} /usr /usr/local /home/linuxbrew/.linuxbrew/opt/spirv-headers /run/host/*/*/linuxbrew/.linuxbrew/opt/spirv-headers; do
-        [[ -n "$dir" ]] || continue
-        if [[ -f "$dir/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
-              -f "$dir/lib/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ||
-              -f "$dir/lib64/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" ]]; then
-            printf '%s\n' "$dir"
-            return 0
-        fi
-    done
-    return 1
-}
-
-if ! spirv_prefix=$(find_spirv_headers); then
+# shellcheck source=scripts/lib/spirv.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/spirv.sh"
+if ! use_spirv_headers; then
     printf 'SPIRV-HeadersConfig.cmake not found (install spirv-headers or set CMAKE_PREFIX_PATH).\n' >&2
     exit 1
-fi
-export CMAKE_PREFIX_PATH="${spirv_prefix}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-if [[ "$spirv_prefix" != /usr && -d "$spirv_prefix/include" ]]; then
-    export CPLUS_INCLUDE_PATH="$spirv_prefix/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 fi
 
 rm -rf -- "$build/source" "$build/build" "$build/native" "$build/cache-rev"
