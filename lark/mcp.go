@@ -325,12 +325,12 @@ func checkMCPFields(value any, schema object, path string) error {
 
 func (h *terminalHub) terminalStatus(entry object, id string, full bool) {
 	key := strings.ToLower(id)
-	entry["connected"], entry["mode"] = false, "offline"
+	entry["mode"] = "offline"
 	entry["battery_pct"], entry["volume"], entry["scene_rev"] = nil, nil, uint64(0)
 	entry["sleeping"] = false
 	h.mu.Lock()
 	if d := h.terminals[key]; d != nil && h.active(d) {
-		entry["connected"], entry["online"], entry["mode"] = true, true, d.pose.mood
+		entry["online"], entry["mode"] = true, d.pose.mood
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
 		entry["sleeping"] = d.asleep

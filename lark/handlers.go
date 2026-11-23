@@ -256,14 +256,20 @@ func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
 }
 
 func intercomConfirmation(target string, recipients []companionTarget, sent, partial bool) (title, reply string) {
-	if broadcast(target) {
+	broadcastTarget := broadcast(target)
+	if broadcastTarget {
 		target = "everyone"
 	} else if len(recipients) != 0 {
 		target = recipients[0].Name
 	}
 	switch {
+	case !sent && len(recipients) == 0:
+		if broadcastTarget {
+			return "Not delivered", "No one is paired yet."
+		}
+		return "Not delivered", target + " isn't paired yet."
 	case !sent:
-		return "Not delivered", "I couldn't reach " + target + " right now."
+		return "Not delivered", "I couldn't reach " + target + "."
 	case partial:
 		return "Partly delivered", "I sent your message, but couldn't reach everyone."
 	default:

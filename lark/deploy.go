@@ -334,7 +334,7 @@ func connectedTerminals(ctx context.Context, c *cliClient) map[string]bool {
 	for _, item := range list {
 		term, _ := item.(object)
 		id := str(term["id"])
-		if id != "" && boolOf(term["connected"]) {
+		if id != "" && boolOf(term["online"]) {
 			connected[id] = true
 		}
 	}
@@ -381,7 +381,7 @@ func waitTerminals(ctx context.Context, c *cliClient, before map[string]bool, ou
 			for _, item := range list {
 				term, _ := item.(object)
 				id := str(term["id"])
-				connected := boolOf(term["connected"])
+				connected := boolOf(term["online"])
 				if connected {
 					online++
 				}

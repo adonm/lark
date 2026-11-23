@@ -409,7 +409,7 @@ func TestTerminalHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	dev.conn.Close()
 	b.hub.sig.wait(t, func() bool {
 		list := apiObjects(t, base+"/api/terminals", "terminals")
-		return len(list) == 1 && list[0].(object)["connected"] == false
+		return len(list) == 1 && list[0].(object)["online"] == false
 	})
 	p, ok, err := terminalStore(b.db).get(id)
 	if err != nil || !ok || p.Kind != "hardware" || p.IP != "127.0.0.1" || p.Port != 80 || p.LastSeen <= 0 {

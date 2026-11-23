@@ -168,7 +168,7 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	terminals := testObject(t, testRequest(t, "GET", base+"/api/terminals", "unit", nil, 200))["terminals"].([]any)
 	boxStatus := terminals[0].(object)
 	if boxStatus["id"] != boxID || boxStatus["board"] != "esp-box-3" ||
-		boxStatus["connected"] != true {
+		boxStatus["online"] != true {
 		t.Fatal(boxStatus)
 	}
 }

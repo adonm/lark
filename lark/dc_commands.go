@@ -259,8 +259,9 @@ func welcomeText(c companionState) string {
 		"/say <words> — I'll say it out loud exactly",
 		"/private <words> — just between us",
 		"/stories — list interactive stories",
-		"/story <name> — download a story as a .twee file",
+		"/story <name> — open a story on my device",
 		"/remote — open my remote controls",
+		"/remote off — turn off my remote link",
 		"/help — this message",
 		"Send a .twee file to import a story. When listening mode is on, people at home can answer you out loud.",
 	}, "\n")
@@ -502,7 +503,7 @@ func (s *dcService) contactName(ct deltachat.Contact) string {
 }
 
 func (s *dcService) sendStoriesList(ctx context.Context, rpc dcRPC, accID, chatID uint32) {
-	stories, err := s.b.listStories(ctx)
+	stories, err := s.b.listStorySummaries(ctx)
 	if err != nil {
 		msg := "Could not load stories."
 		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})

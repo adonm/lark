@@ -55,7 +55,6 @@ func (b *larkServer) terminalEntry(t terminalRecord, full bool) object {
 		"companion_id": t.CompanionID,
 		"volume":       b.volumePref(t.ID),
 		"online":       false,
-		"connected":    false,
 		"mode":         "offline",
 		"sleeping":     false,
 	}
