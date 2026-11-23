@@ -126,7 +126,10 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 	for _, mode := range []string{"matching", "divergent", "tool"} {
 		t.Run(mode, func(t *testing.T) {
 			const id, sid = "lark-eager", "ses-eager"
-			const prefix, tail = "Ready? ", "Here is another sentence."
+			// The opener alone must fill the playback prefill so the test can
+			// still prove that audio starts before the SSE stream finishes.
+			const prefix = "Ready? Here is the first part of my answer and it keeps going for a moment. "
+			const tail = "Here is another sentence."
 			final := prefix + tail
 			if mode == "divergent" {
 				final = "A different first sentence. " + tail

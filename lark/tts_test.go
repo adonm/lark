@@ -242,3 +242,88 @@ func TestSpeechSilenceChunkIsShared(t *testing.T) {
 		t.Fatal("silence was copied instead of referencing the shared chunk")
 	}
 }
+
+// playbackGaps replays a short opening sentence followed by longer sentences
+// that reach the stream every 500 ms (Kokoro's RTF is ~0.11, but the first
+// sentence's inference latency lands on the boundary) and sums the time
+// playback had no audio. It mirrors the pump in streamPlayback.
+func playbackGaps(t *testing.T, prefill time.Duration) time.Duration {
+	t.Helper()
+	stream := newAudioStream()
+	short := make([]byte, sampleRate*2*300/1000)
+	long := make([]byte, sampleRate*2*1000/1000)
+	go func() {
+		stream.append(short)
+		for range 5 {
+			time.Sleep(500 * time.Millisecond)
+			stream.append(long)
+		}
+		stream.finish(nil)
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if prefill > 0 {
+		if err := stream.waitBytes(ctx, utteranceBytes(prefill), ttsPrefillMax); err != nil {
+			t.Fatalf("prefill: %v", err)
+		}
+	}
+	start := time.Now()
+	var played, gap time.Duration
+	for i := 0; ; i++ {
+		pcm, err := stream.chunk(ctx, i)
+		if err != nil {
+			t.Fatalf("chunk %d: %v", i, err)
+		}
+		if len(pcm) == 0 {
+			return gap
+		}
+		if now := time.Now(); now.After(start.Add(played)) {
+			gap += now.Sub(start.Add(played))
+		}
+		played += pcmDuration(len(pcm))
+	}
+}
+
+func TestStreamPrefillAvoidsSentenceGaps(t *testing.T) {
+	t.Parallel()
+	if gap := playbackGaps(t, 0); gap < 100*time.Millisecond {
+		t.Fatalf("unprefilled stream had %v of gaps; the fixture does not exercise an underrun", gap)
+	}
+	if gap := playbackGaps(t, ttsPrefill); gap > 20*time.Millisecond {
+		t.Fatalf("prefilled stream starved for %v", gap)
+	}
+}
+
+// First-audio cost of the playback prefill: synthesising until 1 s is buffered
+// instead of starting on the first sentence alone. Skips without the model.
+func BenchmarkTTSFirstAudioPrefill(b *testing.B) {
+	k, err := openKokoro(kokoroTestDir(b), 8)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer k.close()
+	voice := voiceCatalog[0]
+	first := "Ready? Here is my answer."
+	second := "It keeps going for a little while so the buffer fills before playback."
+	ctx := b.Context()
+	b.ResetTimer()
+	var firstTotal, prefillTotal time.Duration
+	for b.Loop() {
+		start := time.Now()
+		pcm, err := synthesizePCM(ctx, k, voice.ID, first)
+		if err != nil {
+			b.Fatal(err)
+		}
+		firstTotal += time.Since(start)
+		for len(pcm) < utteranceBytes(ttsPrefill) {
+			more, err := synthesizePCM(ctx, k, voice.ID, second)
+			if err != nil {
+				b.Fatal(err)
+			}
+			pcm = append(pcm, more...)
+		}
+		prefillTotal += time.Since(start)
+	}
+	b.ReportMetric(float64(firstTotal.Microseconds())/float64(b.N)/1000, "first_ms")
+	b.ReportMetric(float64(prefillTotal.Microseconds())/float64(b.N)/1000, "prefill_ms")
+}

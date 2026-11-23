@@ -9,9 +9,16 @@ import (
 )
 
 const (
-	micPrefix      = 0x01
-	pcmPrefix      = 0x02
-	pcmPacket      = 4 << 10
+	micPrefix = 0x01
+	pcmPrefix = 0x02
+	pcmPacket = 4 << 10
+	// Start playback with at least one second buffered. Sixteen 60 ms gaps
+	// (the cake/mint underruns) begin at a sentence boundary where only the
+	// short first sentence was available. Kokoro fills 1 s in roughly 110 ms,
+	// so the cap only delays a reply whose stream stays short; it bounds the
+	// first-audio delay at half a second.
+	ttsPrefill    = time.Second
+	ttsPrefillMax = 500 * time.Millisecond
 	maxAudioLead   = 8 * time.Second
 	recStopWait    = 450 * time.Millisecond
 	deviceReplyTTL = time.Minute
@@ -784,6 +791,9 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 			break
 		}
 		if i == 0 {
+			if err := stream.waitBytes(ctx, utteranceBytes(ttsPrefill), ttsPrefillMax); err != nil {
+				return err
+			}
 			stream.traceFirst(trace, ttsStart)
 			h.mu.Lock()
 			for h.active(d) && d.audio == id && ctx.Err() == nil && d.recording.endpoint != nil {

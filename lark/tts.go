@@ -479,6 +479,44 @@ func (s *AudioStream) chunk(ctx context.Context, i int) ([]byte, error) {
 	return s.waitChunk(ctx, i, ttsWait)
 }
 
+// waitBytes holds playback until enough audio is buffered, the stream ends, or
+// limit elapses. A sub-second opening sentence otherwise leaves the board with
+// nothing to play while the next sentence is still synthesising, and the
+// firmware counts one underrun per sentence boundary. The limit bounds the
+// delay to the first audio for a short reply whose stream never fills.
+func (s *AudioStream) waitBytes(ctx context.Context, n int, limit time.Duration) error {
+	s.cond.L.Lock()
+	defer s.cond.L.Unlock()
+	expired := false
+	if s.size < n && !s.done {
+		timeout := time.AfterFunc(ttsWait, func() { s.finish(errors.New("TTS stream timed out")) })
+		defer timeout.Stop()
+		var hold *time.Timer
+		if limit > 0 {
+			hold = time.AfterFunc(limit, func() {
+				s.cond.L.Lock()
+				expired = true
+				s.cond.Broadcast()
+				s.cond.L.Unlock()
+			})
+			defer hold.Stop()
+		}
+		wake := context.AfterFunc(ctx, func() {
+			s.cond.L.Lock()
+			s.cond.Broadcast()
+			s.cond.L.Unlock()
+		})
+		defer wake()
+		for s.size < n && !s.done && !expired && ctx.Err() == nil {
+			s.cond.Wait()
+		}
+	}
+	if s.err != nil {
+		return s.err
+	}
+	return ctx.Err()
+}
+
 func (s *AudioStream) waitChunk(ctx context.Context, i int, wait time.Duration) ([]byte, error) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
