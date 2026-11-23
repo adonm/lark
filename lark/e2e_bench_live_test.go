@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +71,15 @@ func TestTurnBench(t *testing.T) {
 		}
 	}()
 
-	const runs = 3
+	const defaultRuns = 3
+	runs := defaultRuns
+	if raw := os.Getenv("LARK_TURN_BENCH_RUNS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 20 {
+			t.Fatalf("LARK_TURN_BENCH_RUNS=%q: expected 1..20", raw)
+		}
+		runs = n
+	}
 	var labels []string
 	var seq uint16
 	for run := 1; run <= runs; run++ {
@@ -116,13 +126,34 @@ func TestTurnBench(t *testing.T) {
 
 	report := liveJSON[diagReport](t, s.liveClient, "/api/diagnostics", nil, nil, "", nil)
 	turns := report.Turns
-	// report.Turns is newest-first; reverse to match execution order.
-	if len(turns) < len(labels) {
-		t.Fatalf("got %d diag turns, want at least %d", len(turns), len(labels))
+	// report.Turns is newest-first; reverse to match execution order. A turn
+	// with no transcript leaves no diagnostic row, so align the tail and warn.
+	n := min(len(labels), len(turns))
+	if n == 0 {
+		t.Fatal("no diagnostic turns recorded")
 	}
-	ordered := make([]diagTurn, len(labels))
-	for i := range labels {
-		ordered[i] = turns[len(labels)-1-i]
+	if n < len(labels) {
+		t.Logf("bench: %d of %d utterances produced turns; keeping the newest", n, len(labels))
+		labels = labels[len(labels)-n:]
+	}
+	ordered := make([]diagTurn, n)
+	for i := range ordered {
+		ordered[i] = turns[n-1-i]
+	}
+	byKind := map[string][]float64{}
+	for i, tr := range ordered {
+		kind := labels[i]
+		if _, rest, ok := strings.Cut(kind, "-"); ok {
+			kind = rest
+		}
+		if tr.E2E != nil {
+			byKind[kind] = append(byKind[kind], *tr.E2E)
+		}
+	}
+	for kind, vals := range byKind {
+		slices.Sort(vals)
+		p := func(q int) float64 { return vals[(len(vals)*q+99)/100-1] }
+		t.Logf("bench %s: n=%d e2e p50=%.0fms p95=%.0fms", kind, len(vals), p(50), p(95))
 	}
 
 	fmtMS := func(v *float64) string {

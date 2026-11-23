@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +23,18 @@ import (
 )
 
 const e2eDedicated = "http://127.0.0.1:49375"
+
+// e2ePromptLimit caps model calls per live suite; the turn bench raises it so a
+// longer sample can measure speculation under real latency.
+func e2ePromptLimit() int32 {
+	limit := int64(12)
+	if raw := os.Getenv("LARK_E2E_MAX_PROMPTS"); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 32); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	return int32(limit)
+}
 const e2eModelReply = "The sky looks blue because air scatters sunlight."
 
 type e2eModel struct {
@@ -89,7 +103,7 @@ func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		t.Logf("dedicated model: %s/%s (%s); at most twelve model prompts", m.settings.Model.Provider, m.settings.Model.ID, m.settings.Model.Variant)
+		t.Logf("dedicated model: %s/%s (%s); at most %d model prompts", m.settings.Model.Provider, m.settings.Model.ID, m.settings.Model.Variant, e2ePromptLimit())
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.real(w, r, s) })
 		t.Cleanup(func() { m.cleanup(t) })
 	}
@@ -268,7 +282,7 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		case "POST /prompt":
 			in := readInput()
 			text := str(in["text"])
-			if len(text) == 0 || len(text) > 16000 || m.prompts.Add(1) > 12 {
+			if len(text) == 0 || len(text) > 16000 || m.prompts.Add(1) > e2ePromptLimit() {
 				w.WriteHeader(429)
 				return
 			}

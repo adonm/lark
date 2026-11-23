@@ -23,7 +23,7 @@ const (
 	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
 	// call overlaps the remaining quiet window instead of racing the commit.
 	endpointSpecQuiet           = 180 * time.Millisecond
-	endpointEarlyQuiet          = 300 * time.Millisecond
+	endpointEarlyQuiet          = 400 * time.Millisecond
 	endpointCap                 = 1200 * time.Millisecond
 	endpointProbeEvery          = 250 * time.Millisecond
 	endpointProbeWindow         = 4 * sampleRate * 2 // last <= 4 s
