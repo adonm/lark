@@ -19,6 +19,7 @@ const (
 // acknowledged rec_start.
 type deviceCapture struct {
 	phase       capturePhase
+	session     uint16 // rec_start session this capture was requested with
 	started     time.Time
 	target      string
 	pcm         []byte
@@ -44,6 +45,7 @@ func (c *deviceCapture) start(now time.Time, target string, request bool) {
 	}
 	c.started, c.target, c.pcm, c.ignoreStart = now, target, nil, false
 	c.nameGate = false
+	c.session = 0
 }
 
 func (c *deviceCapture) acceptsStart() bool { return !c.open() && !c.ignoreStart }
@@ -98,4 +100,5 @@ func (c *deviceCapture) clear() {
 	}
 	c.phase, c.started, c.target, c.pcm = captureIdle, time.Time{}, "", nil
 	c.listen, c.listenUntil, c.listenSpan, c.debug, c.nameGate = false, time.Time{}, 0, false, false
+	c.session = 0
 }

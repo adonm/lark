@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -660,5 +661,79 @@ func TestInspectTranscriptTerminalPunctuation(t *testing.T) {
 		if incomplete != tc.incomplete {
 			t.Fatalf("inspectTranscript(%q).incomplete = %v, want %v", tc.text, incomplete, tc.incomplete)
 		}
+	}
+}
+
+// A capture belongs to the session the bridge requested. A stale ack must not
+// open the next capture, and a cancelled end for a start the board never
+// acknowledged must still close it.
+func TestRecordingSessionsGateAcksAndEnds(t *testing.T) {
+	t.Parallel()
+	b, base := wsHarness(t, func(*larkServer, string) {})
+	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
+		t.Fatal(err)
+	}
+	const id = "vocat-e022"
+	d := testConnectWS(t, base, "unit", false)
+	d.helloHardware(t, id, "echo", capDrag)
+	phase := func() capturePhase {
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		return b.hub.terminals[id].recording.phase
+	}
+	start := func() {
+		b.hub.mu.Lock()
+		b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+		b.hub.mu.Unlock()
+		if got := phase(); got != captureRequested {
+			t.Fatalf("phase after request = %v, want captureRequested", got)
+		}
+	}
+	ack := func(session uint16) {
+		p := binary.LittleEndian.AppendUint16(nil, session)
+		d.sendProto(t, msgRecStart, appendStr8(p, ""))
+	}
+	end := func(session uint16, cancelled bool) {
+		p := binary.LittleEndian.AppendUint16(nil, session)
+		var c byte
+		if cancelled {
+			c = 1
+		}
+		d.sendProto(t, msgRecEnd, append(append(p, c), appendStr8(nil, "")...))
+	}
+
+	start()
+	ack(1)
+	d.barrier(t)
+	if got := phase(); got != captureOpen {
+		t.Fatalf("phase after matching ack = %v, want captureOpen", got)
+	}
+	end(1, true)
+	d.barrier(t)
+	if got := phase(); got != captureIdle {
+		t.Fatalf("phase after cancelled end = %v, want idle", got)
+	}
+
+	start() // session 2
+	ack(1)  // stale ack from the previous capture
+	d.barrier(t)
+	if got := phase(); got != captureRequested {
+		t.Fatalf("stale ack opened the capture: phase = %v", got)
+	}
+	ack(2)
+	d.barrier(t)
+	if got := phase(); got != captureOpen {
+		t.Fatalf("matching ack did not open the capture: phase = %v", got)
+	}
+	end(2, true)
+	d.barrier(t)
+
+	// The board failed to open the mic: it reports a cancelled end while the
+	// host is still waiting for the start ack.
+	start() // session 3
+	end(3, true)
+	d.barrier(t)
+	if got := phase(); got != captureIdle {
+		t.Fatalf("failed start stayed active: phase = %v", got)
 	}
 }

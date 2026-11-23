@@ -87,6 +87,10 @@ type testWS struct {
 	menuHub  *terminalHub
 	menuTerm string
 	menuSVG  string
+	// recSession mirrors the host's rec_start session so rec_start acks and
+	// rec_end match the capture the bridge actually requested.
+	recSession uint16
+	recAcked   uint16
 }
 
 func apiObjects(t *testing.T, url, field string) []any {
@@ -184,14 +188,18 @@ func (s *testWS) tapMenu(t *testing.T) {
 
 func (s *testWS) recStart(t *testing.T, target string) {
 	t.Helper()
-	b := binary.LittleEndian.AppendUint16(nil, 1)
+	if s.recSession <= s.recAcked {
+		s.recSession = s.recAcked + 1
+	}
+	s.recAcked = s.recSession
+	b := binary.LittleEndian.AppendUint16(nil, s.recSession)
 	b = appendStr8(b, target)
 	s.sendProto(t, msgRecStart, b)
 }
 
 func (s *testWS) recEnd(t *testing.T, target string, cancelled bool) {
 	t.Helper()
-	b := binary.LittleEndian.AppendUint16(nil, 1)
+	b := binary.LittleEndian.AppendUint16(nil, s.recSession)
 	var c byte
 	if cancelled {
 		c = 1
@@ -225,6 +233,11 @@ func (s *testWS) read(t *testing.T) protocolFrame {
 	copy(pkt[:protoHeaderSize], hdr[:])
 	if _, err := io.ReadFull(s.in, pkt[protoHeaderSize:]); err != nil {
 		t.Fatal("cannot read terminal payload:", err)
+	}
+	if pkt[1] == msgRecCtrl && len(pkt) > protoHeaderSize {
+		if m, ok := decodeProtoRecCtrl(pkt[protoHeaderSize:]); ok && m.op == recOpStart && m.session > s.recSession {
+			s.recSession = m.session
+		}
 	}
 	return protocolFrame{wsBinary, pkt}
 }

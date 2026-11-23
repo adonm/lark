@@ -102,3 +102,33 @@ func TestAcceptPointerRevisionAllowsAnimationFrames(t *testing.T) {
 		t.Fatal("expected pre-action revision to be rejected for Stop")
 	}
 }
+
+// The reply box keeps its rectangle when the card retargets to a different
+// peer. The revision must move with the action value, not just the geometry.
+func TestPointerRevisionTracksActionValues(t *testing.T) {
+	t.Parallel()
+	hits := []hitBox{{id: "close", x1: 0, y1: 0, x2: 99, y2: 49}, {id: "reply", x1: 100, y1: 0, x2: 199, y2: 49}}
+	first := pointerKey(hits, map[string]sceneAction{
+		"close": {"close-card", ""}, "reply": {"reply", "mint"},
+	})
+	second := pointerKey(hits, map[string]sceneAction{
+		"close": {"close-card", ""}, "reply": {"reply", "cake"},
+	})
+	if first == second {
+		t.Fatal("same rectangles with a different reply target share a pointer revision")
+	}
+	d := terminalSession{caps: terminalCaps{PointerRev: true}, nativeRev: 10, actionRev: 10, hasActionRev: true, actionHitsKey: first}
+	// A render at nativeRev 11 sees the new action map.
+	d.nativeRev = 11
+	if second != d.actionHitsKey {
+		d.actionHitsKey, d.actionRev = second, d.nativeRev
+	}
+	stale := uint16(10)
+	if d.acceptPointerRevision("reply", &stale) {
+		t.Fatal("a tap from the old card revision ran the retargeted reply")
+	}
+	current := uint16(11)
+	if !d.acceptPointerRevision("reply", &current) {
+		t.Fatal("the current reply revision was rejected")
+	}
+}

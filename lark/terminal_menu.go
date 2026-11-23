@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"image"
 	imagecolor "image/color"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +44,7 @@ func (h *terminalHub) handleProto(c *terminalClient, msgType uint8, payload []by
 			h.pointer(d, evName, x, y, rev, now)
 		}
 	case msgRecStart:
-		_, target, ok := parseRecStart(payload)
+		session, target, ok := parseRecStart(payload)
 		if !ok {
 			return
 		}
@@ -53,21 +55,27 @@ func (h *terminalHub) handleProto(c *terminalClient, msgType uint8, payload []by
 			}
 			if d.recording.acceptsStart() {
 				if d.recording.active() {
-					d.recording.acknowledge()
+					// An acknowledgement only belongs to the session this
+					// capture requested. A stale ack must not open the next one.
+					if session == d.recording.session {
+						d.recording.acknowledge()
+					}
 				} else {
 					h.startRecording(d, tgt, now, false)
+					d.recording.session = session
 				}
 			}
 		}
 	case msgRecEnd:
-		_, cancelled, target, ok := parseRecEnd(payload)
+		session, cancelled, target, ok := parseRecEnd(payload)
 		if !ok {
 			return
 		}
 		// A late rec_end from the previous recording can arrive right after a
-		// new rec_start. Only an open/stopping capture owns this end; dropping
-		// it here prevents a one-second capture from committing empty.
-		if d.recording.active() && d.recording.phase != captureRequested {
+		// new rec_start. Match the session; a cancelled end is also valid while
+		// the start is still unacknowledged (the board failed to open the mic).
+		if d.recording.active() && session == d.recording.session &&
+			(d.recording.phase != captureRequested || cancelled) {
 			d.recording.receivedEnd()
 			h.endRecording(d, target, cancelled, now)
 		}
@@ -328,10 +336,17 @@ func (d *terminalSession) acceptPointerRevision(action string, rev *uint16) bool
 	}
 }
 
-func hitsLayoutKey(hits []hitBox) string {
+// pointerKey fingerprints both hit rectangles and the actions behind them.
+// Rectangles alone let a stale tap run a new action under the same box, such
+// as "reply" retargeted to the next peer.
+func pointerKey(hits []hitBox, actions map[string]sceneAction) string {
 	var b strings.Builder
 	for _, h := range hits {
 		fmt.Fprintf(&b, "%s:%d,%d,%d,%d;", h.id, h.x1, h.y1, h.x2, h.y2)
+	}
+	for _, id := range slices.Sorted(maps.Keys(actions)) {
+		a := actions[id]
+		fmt.Fprintf(&b, "%s=%s:%s;", id, a.kind, a.value)
 	}
 	return b.String()
 }

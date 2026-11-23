@@ -631,7 +631,6 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 		if result.reply == nil {
 			h.dropStaleReply(d, c.started)
 		}
-		h.freeFollowUps(d, time.Now())
 		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{reply: result.reply, spec: result.spec})
 	})
 	return true

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -186,5 +187,33 @@ func TestListenNamePresentButUnusableSaysDidntCatch(t *testing.T) {
 		if got := b.diag.listen.nameRequired.Load(); got != 0 {
 			t.Fatalf("%q counted as missing name", stt)
 		}
+	}
+}
+
+// freeFollowUps is called from the turn goroutine and from playback under the
+// hub lock; the clock must not be written without it. Run with -race.
+func TestFollowUpGraceConcurrentAccess(t *testing.T) {
+	t.Parallel()
+	h := &terminalHub{}
+	d := &terminalSession{}
+	now := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			h.freeFollowUps(d, now.Add(time.Duration(i)*time.Millisecond))
+		}(i)
+		go func() {
+			defer wg.Done()
+			h.nameRequired(d, now.Add(5*time.Second))
+		}()
+	}
+	wg.Wait()
+	// Refreshing an existing grace must move it forward, not keep the first.
+	d.nameFreeUntil = now
+	h.freeFollowUps(d, now.Add(time.Second))
+	if got := d.nameFreeUntil; !got.Equal(now.Add(time.Second + followUpGrace)) {
+		t.Fatalf("nameFreeUntil = %v, want a refreshed %v", got, now.Add(time.Second+followUpGrace))
 	}
 }

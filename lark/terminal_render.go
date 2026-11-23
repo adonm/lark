@@ -307,7 +307,7 @@ func (h *terminalHub) renderFrames(d *terminalSession) {
 			d.rev = rev
 			d.client.enqueueProto(msgFrame, native.data)
 			d.nativeRev = uint16(rev)
-			hk := hitsLayoutKey(screen.hits)
+			hk := pointerKey(screen.hits, r.view.actions)
 			if !d.hasActionRev || hk != d.actionHitsKey {
 				d.actionHitsKey = hk
 				d.actionRev = d.nativeRev

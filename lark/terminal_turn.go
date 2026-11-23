@@ -53,6 +53,7 @@ func (h *terminalHub) startRecording(d *terminalSession, target string, now time
 	if request {
 		d.recSession++
 	}
+	d.recording.session = d.recSession
 	if w := h.b.worker; target != "" && w != nil && w.ready.Load() {
 		// A voice note can use the cached introduction without waiting on
 		// synthesis. Warm it while its sender is recording, not on every hello.
@@ -90,6 +91,7 @@ func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bo
 	d.recording.listenUntil = now.Add(span)
 	d.recording.nameGate = true
 	d.recSession++
+	d.recording.session = d.recSession
 	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
@@ -116,6 +118,7 @@ func (h *terminalHub) startCaptureWindow(d *terminalSession, now time.Time, span
 	d.recording.listenUntil = now.Add(span)
 	d.recording.debug = true
 	d.recSession++
+	d.recording.session = d.recSession
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
 	h.setCompanionStatus(d.companionID, statusListening)
@@ -139,6 +142,7 @@ func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) 
 	d.recording.listenUntil = now.Add(span)
 	d.recording.nameGate = true
 	d.recSession++
+	d.recording.session = d.recSession
 	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
@@ -367,9 +371,6 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 	d.finished++
 	now := time.Now()
 	d.last = now
-	if d.nameFreeUntil.IsZero() {
-		d.nameFreeUntil = now.Add(followUpGrace)
-	}
 	if audio != nil {
 		switch a := d.replyAudio; {
 		case a == nil || a.stream != audio:
@@ -379,6 +380,11 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 		default:
 			d.replyAudio = nil
 		}
+	}
+	if (view != nil || audio != nil) && d.nameFreeUntil.IsZero() {
+		// A visible reply grants follow-ups now; spoken replies refresh the
+		// grace again when their playback completes.
+		h.freeFollowUpsLocked(d, now)
 	}
 	if view != nil && !d.agentSetScene {
 		if d.stopAudio != nil || d.awaitAck {
@@ -865,7 +871,8 @@ func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 
 func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bool) {
 	if !aborted {
-		h.freeFollowUps(d, now)
+		h.freeFollowUpsLocked(d, now)
+		d.armReplyTTL(now)
 	}
 	d.awaitAck = false
 	if d.pending != nil {
@@ -890,7 +897,15 @@ func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bo
 }
 
 // A spoken reply buys free follow-ups without the companion's name.
+// freeFollowUps refreshes the no-name window. The turn goroutine and the
+// playback handler both call it, so it takes the hub lock itself.
 func (h *terminalHub) freeFollowUps(d *terminalSession, now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.freeFollowUpsLocked(d, now)
+}
+
+func (h *terminalHub) freeFollowUpsLocked(d *terminalSession, now time.Time) {
 	d.nameFreeUntil = now.Add(followUpGrace)
 }
 
@@ -1064,8 +1079,10 @@ func (h *terminalHub) deliverNoticeNowLocked(d *terminalSession, now time.Time, 
 	d.drawer, d.pending = "", nil
 	d.reply = q.reply
 	if q.reply != nil {
+		// Playing the read-out is not the same as having heard it; the TTL
+		// starts when playback completes (see armReplyTTL).
 		d.replySpoken = now
-		d.replyUntil = now.Add(deviceReplyTTL)
+		d.replyUntil = time.Time{}
 	}
 	if q.view != nil {
 		d.view, d.card = q.view, nil
@@ -1242,12 +1259,21 @@ var nameLeadWords = map[string]bool{
 func splitName(text, name string) (rest string, ok bool) {
 	fields := strings.Fields(text)
 	limit := min(len(fields), namePrefixWords)
+	lowerName := strings.ToLower(name)
+	nameLen := len([]rune(lowerName))
+	minLen := max(2, nameLen-nameMaxDistance)
 	for i := range limit {
 		candidate := strings.ToLower(strings.Trim(fields[i], ".,!?;:'\""))
-		if len(candidate) < max(3, len(name)-nameMaxDistance) {
+		if len([]rune(candidate)) < minLen {
 			continue
 		}
-		if editDistance(candidate, strings.ToLower(name)) > nameMaxDistance {
+		if nameLen <= 3 {
+			// Two- and three-letter names tolerate no edit: "Bo" is not "bo",
+			// "no", or "go".
+			if candidate != lowerName {
+				continue
+			}
+		} else if editDistance(candidate, lowerName) > nameMaxDistance {
 			continue
 		}
 		rest = strings.Join(fields[i+1:], " ")

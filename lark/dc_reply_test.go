@@ -485,3 +485,26 @@ func TestDeviceReplyContextExpires(t *testing.T) {
 		t.Fatalf("consumed reply context was reused: %+v", got)
 	}
 }
+
+// The answer window opens when the read-out finishes playing, not when it was
+// queued; a long notice would otherwise spend its TTL on its own playback.
+func TestDeviceReplyTTLStartsAtPlaybackDone(t *testing.T) {
+	t.Parallel()
+	live := &turnReply{name: "Mum", companionID: "greg", chatID: 200}
+	now := time.Now()
+	d := &terminalSession{reply: live, replySpoken: now}
+	if got := d.pendingReply(now.Add(5 * time.Second)); got != nil {
+		t.Fatalf("read-out answered before its playback finished: %+v", got)
+	}
+	done := now.Add(40 * time.Second)
+	d.armReplyTTL(done)
+	if !d.replySpoken.Equal(now) {
+		t.Fatalf("replySpoken = %v, want the delivery time %v", d.replySpoken, now)
+	}
+	if got := d.pendingReply(done.Add(time.Second)); got != live {
+		t.Fatalf("answer within the TTL lost the context: %+v", got)
+	}
+	if got := d.pendingReply(done.Add(deviceReplyTTL + time.Second)); got != nil {
+		t.Fatalf("TTL did not start at playback completion: %+v", got)
+	}
+}

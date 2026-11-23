@@ -493,6 +493,11 @@ func (d *terminalSession) pendingReply(now time.Time) *turnReply {
 	if d.reply == nil {
 		return nil
 	}
+	// A read-out still playing has no TTL yet; a capture that starts now cannot
+	// be its answer.
+	if d.replyUntil.IsZero() {
+		return nil
+	}
 	if now.Before(d.replyUntil) && !now.Before(d.replySpoken) {
 		return d.reply
 	}
@@ -500,6 +505,15 @@ func (d *terminalSession) pendingReply(now time.Time) *turnReply {
 		d.clearReply()
 	}
 	return nil
+}
+
+// armReplyTTL starts the read-out answer window when its playback finishes.
+// replySpoken keeps the delivery time so a capture opened before the notice
+// is still recognised as stale.
+func (d *terminalSession) armReplyTTL(now time.Time) {
+	if d.reply != nil && !d.replySpoken.IsZero() && d.replyUntil.IsZero() {
+		d.replyUntil = now.Add(deviceReplyTTL)
+	}
 }
 
 func (d *terminalSession) clearReply() {
