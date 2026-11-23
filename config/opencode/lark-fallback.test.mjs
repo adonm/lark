@@ -2,18 +2,18 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import plugin from "./lark-fallback.js"
 
-const gemini = { providerID: "opencode", id: "gemini-4-hydrogen", variant: "low" }
-const haiku = { providerID: "opencode", id: "claude-haiku-5-5" }
+const primary = { providerID: "opencode", id: "deepseek-v4.1-flash", variant: "low" }
+const backup = { providerID: "opencode", id: "glm-5.3-flash", variant: "low" }
 const rateLimit = { status: 429, type: "provider.rate-limit" }
-const base = { sessionID: "ses_smoke", agent: "lark", kind: "primary", model: gemini }
+const base = { sessionID: "ses_smoke", agent: "lark", kind: "primary", model: primary }
 const user = { id: "msg_user", type: "user", metadata: { larkSource: "typed" } }
 
-async function setup(initial = [user], primary = gemini, fallback = "opencode/claude-haiku-5-5") {
+async function setup(initial = [user], model = primary, fallback = "opencode/glm-5.3-flash#low") {
   const hooks = new Map()
   const rows = [...initial]
   const settled = Promise.withResolvers()
   await plugin.setup({
-    agent: { get: async () => ({ model: primary }) },
+    agent: { get: async () => ({ model }) },
     options: { fallback },
     session: {
       hook: (name, callback) => {
@@ -61,19 +61,19 @@ test("routes a configured primary to a fallback with a nested model ID and varia
 })
 
 test("identical references and different providers do not retry as a fallback", async () => {
-  for (const fallback of ["opencode/gemini-4-hydrogen#low", "external/haiku"]) {
-    const h = await setup([user], gemini, fallback)
+  for (const fallback of ["opencode/deepseek-v4.1-flash#low", "external/backup"]) {
+    const h = await setup([user], primary, fallback)
     await h.response(429)
     assert.deepEqual(await h.retry(rateLimit), { retry: true, delay: 2000 })
-    assert.deepEqual(await h.resolve(), gemini)
+    assert.deepEqual(await h.resolve(), primary)
   }
 })
 
 test("healthy Gemini stays primary without touching the prompt", async () => {
   const h = await setup()
-  assert.deepEqual(await h.resolve(), gemini)
+  assert.deepEqual(await h.resolve(), primary)
   await h.response(200)
-  assert.deepEqual(await h.resolve(), gemini)
+  assert.deepEqual(await h.resolve(), primary)
   assert.deepEqual(h.rows, [user])
 })
 
@@ -81,26 +81,26 @@ test("Gemini HTTP 429 retries the same user message on Haiku immediately", async
   const h = await setup()
   await h.response(429)
   assert.deepEqual(await h.retry(rateLimit), { retry: true, delay: 0 })
-  assert.deepEqual(await h.resolve({ kind: "title" }), gemini)
-  assert.deepEqual(await h.resolve(), haiku)
+  assert.deepEqual(await h.resolve({ kind: "title" }), primary)
+  assert.deepEqual(await h.resolve(), backup)
   const answer = { id: "msg_assistant", type: "assistant", content: [{ type: "tool" }] }
   h.rows.push(answer)
-  assert.deepEqual(await h.resolve(), haiku)
+  assert.deepEqual(await h.resolve(), backup)
   assert.deepEqual(h.rows, [user, answer])
   h.rows.push({ ...user, id: "msg_next" })
-  assert.deepEqual(await h.resolve(), gemini)
+  assert.deepEqual(await h.resolve(), primary)
 })
 
 test("Gemini HTTP 503 switches immediately; a Haiku limit is terminal", async () => {
   const h = await setup()
   await h.response(503)
   assert.deepEqual(await h.retry({ type: "provider.internal", status: 503 }), { retry: true, delay: 0 })
-  assert.deepEqual(await h.resolve(), haiku)
-  assert.deepEqual(await h.retry(rateLimit, { model: haiku }), { retry: false })
-  assert.deepEqual(await h.retry({ type: "provider.transport" }, { model: haiku }), { retry: false })
+  assert.deepEqual(await h.resolve(), backup)
+  assert.deepEqual(await h.retry(rateLimit, { model: backup }), { retry: false })
+  assert.deepEqual(await h.retry({ type: "provider.transport" }, { model: backup }), { retry: false })
   assert.deepEqual(h.rows, [user])
   await h.settle()
-  assert.deepEqual(await h.retry(rateLimit, { model: haiku }), { retry: true, delay: 2000 })
+  assert.deepEqual(await h.retry(rateLimit, { model: backup }), { retry: true, delay: 2000 })
 })
 
 test("only the exact Console endpoint-unavailable 403 switches", async () => {
@@ -112,7 +112,7 @@ test("only the exact Console endpoint-unavailable 403 switches", async () => {
     const decision = await h.retry(error, { decision: { retry: false } })
     const unavailable = message.includes("unavailable")
     assert.deepEqual(decision, unavailable ? { retry: true, delay: 0 } : { retry: false })
-    assert.deepEqual(await h.resolve(), unavailable ? haiku : gemini)
+    assert.deepEqual(await h.resolve(), unavailable ? backup : primary)
   }
 })
 
@@ -121,7 +121,7 @@ test("published text and possible tool effects block a Gemini replay", async () 
     const h = await setup([user, { id: "msg_earlier", type: "assistant", content }])
     await h.response(429)
     assert.deepEqual(await h.retry(rateLimit), { retry: false })
-    assert.deepEqual(await h.resolve(), gemini)
+    assert.deepEqual(await h.resolve(), primary)
   }
 })
 
@@ -137,7 +137,7 @@ test("ambiguous errors, policy failures, auxiliary calls and unmarked input do n
     const h = await setup([input ?? user])
     await h.response(status, values)
     assert.deepEqual(await h.retry(error), { retry: true, delay: 2000 })
-    assert.deepEqual(await h.resolve(), gemini)
+    assert.deepEqual(await h.resolve(), primary)
   }
 })
 
@@ -146,6 +146,6 @@ test("cancellation clears a selected fallback when execution settles", async () 
   await h.response(429)
   assert.deepEqual(await h.retry(rateLimit), { retry: true, delay: 0 })
   await h.settle() // Cancelled before OpenCode dispatches the next physical request.
-  assert.deepEqual(await h.resolve(), gemini)
+  assert.deepEqual(await h.resolve(), primary)
   assert.deepEqual(h.rows, [user])
 })
