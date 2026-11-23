@@ -59,8 +59,11 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 
 func turnStateLine(now time.Time, companion companionState, terminals, timers, stories string) string {
 	parts := []string{"now: " + formatLocalTimeIn(now, now.Location())}
+	if companion.Form != "" {
+		parts = append(parts, "form: "+companion.Form)
+	}
 	if companion.ListenSeconds > 0 {
-		parts = append(parts, fmt.Sprintf("listen: %ds", companion.ListenSeconds))
+		parts = append(parts, fmt.Sprintf("listen: on (%ds spans)", companion.ListenSeconds))
 	} else {
 		parts = append(parts, "listen: off")
 	}
@@ -102,18 +105,27 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 	var termParts []string
 	if terms, err := b.terminalList(false); err == nil {
 		for _, t := range terms {
-			if str(t["companion"]) != companionID {
+			if !strings.EqualFold(str(t["companion_id"]), companionID) || str(t["kind"]) != "hardware" {
 				continue
 			}
-			status := "offline"
-			if b, _ := t["online"].(bool); b {
-				status = "online"
+			if online, _ := t["online"].(bool); !online {
+				continue
 			}
-			vol := fmt.Sprintf("vol:%v", t["volume"])
-			if auto, _ := t["auto_volume"].(bool); auto {
-				vol += ",auto"
+			fields := []string{str(t["id"])}
+			if board := str(t["board"]); board != "" {
+				fields = append(fields, board)
 			}
-			termParts = append(termParts, fmt.Sprintf("%s(%s,%s)", str(t["id"]), status, vol))
+			fields = append(fields, "online")
+			if pct, ok := t["battery_pct"].(int); ok && pct >= 0 {
+				fields = append(fields, fmt.Sprintf("battery:%d", pct))
+			}
+			if sleeping, _ := t["sleeping"].(bool); sleeping {
+				fields = append(fields, "sleeping")
+			}
+			if vol := t["volume"]; vol != nil {
+				fields = append(fields, fmt.Sprintf("vol:%v", vol))
+			}
+			termParts = append(termParts, fields[0]+"("+strings.Join(fields[1:], ",")+")")
 		}
 	}
 	terminals := "none"
@@ -158,7 +170,7 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 	if b.libraryInstalled() {
 		hint := "[library: search before facts]"
 		if storyRequest(text) {
-			hint = "[library: import the requested story with companion_id]"
+			hint = "[story: story get a listed story and read its passages aloud; library import only when absent; say so if a book will not open]"
 		}
 		prompt += "\n" + hint
 	}
