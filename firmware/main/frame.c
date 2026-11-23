@@ -26,6 +26,23 @@ void frame_union(frame_bounds_t *dirty, frame_rect_t r)
     if (empty || y1 > dirty->y1) dirty->y1 = y1;
 }
 
+bool frame_copy_strip(uint16_t *dst, const uint16_t *fb, frame_bounds_t area, int y, int rows)
+{
+    if (!dst || !fb || rows <= 0 || area.x0 < 0 || area.x0 >= area.x1 || area.x1 > FRAME_WIDTH ||
+        area.y0 < 0 || y < area.y0 || y >= area.y1 || rows > area.y1 - y || area.y1 > FRAME_HEIGHT) {
+        return false;
+    }
+    size_t width = (size_t)(area.x1 - area.x0);
+    if (area.x0 == 0 && area.x1 == FRAME_WIDTH) {
+        memcpy(dst, fb + (size_t)y * FRAME_WIDTH, (size_t)rows * FRAME_WIDTH * sizeof(*dst));
+        return true;
+    }
+    for (int row = 0; row < rows; ++row) {
+        memcpy(dst + (size_t)row * width, fb + ((size_t)y + row) * FRAME_WIDTH + area.x0, width * sizeof(*dst));
+    }
+    return true;
+}
+
 static uint16_t le16(const uint8_t *p)
 {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);

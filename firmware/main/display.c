@@ -53,18 +53,12 @@ static bool color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data
     return awaken == pdTRUE;
 }
 
-static void copy_strip(uint16_t *dst, frame_bounds_t area, int y, int rows)
+static esp_err_t copy_strip(uint16_t *dst, frame_bounds_t area, int y, int rows)
 {
-    int width = area.x1 - area.x0;
     xSemaphoreTake(fb_lock, portMAX_DELAY);
-    if (width == FRAME_WIDTH) {
-        memcpy(dst, fb + y * FRAME_WIDTH, (size_t)rows * FRAME_WIDTH * sizeof(*dst));
-    } else {
-        for (int row = 0; row < rows; ++row) {
-            memcpy(dst + row * width, fb + (y + row) * FRAME_WIDTH + area.x0, (size_t)width * sizeof(*dst));
-        }
-    }
+    bool ok = frame_copy_strip(dst, fb, area, y, rows);
     xSemaphoreGive(fb_lock);
+    return ok ? ESP_OK : ESP_ERR_INVALID_ARG;
 }
 
 static esp_err_t blit(frame_bounds_t area)
@@ -77,7 +71,7 @@ static esp_err_t blit(frame_bounds_t area)
     for (int y = area.y0; y < area.y1; y += STRIP_ROWS) {
         int rows = area.y1 - y < STRIP_ROWS ? area.y1 - y : STRIP_ROWS;
         // Copy the next strip into strip[cur] while strip[cur ^ 1] transfers over SPI DMA.
-        copy_strip(strip[cur], area, y, rows);
+        if ((err = copy_strip(strip[cur], area, y, rows)) != ESP_OK) break;
         if (in_flight) {
             xSemaphoreTake(drawn, portMAX_DELAY);
             in_flight = false;

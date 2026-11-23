@@ -264,6 +264,60 @@ static void test_dirty_union(void)
     assert(dirty.x0 == 0 && dirty.x1 == FRAME_WIDTH && dirty.y0 == 0 && dirty.y1 == FRAME_HEIGHT);
 }
 
+static void test_strip_copy(void)
+{
+    // A 120x160 rect (the bridge's coarse frame grid) committed at an odd x
+    // coordinate, then copied out strip by strip exactly like the painter.
+    enum { ROWS = 24, W = 120, H = 160 };
+    const unsigned x = FRAME_WIDTH - W - 3, y = FRAME_HEIGHT - H - 7;
+    assert(x < FRAME_WIDTH && x + W <= FRAME_WIDTH && y + H <= FRAME_HEIGHT);
+    header(raw, x, y, W, H, 0);
+    for (unsigned i = 0; i < W * H; ++i) {
+        raw[FRAME_HEADER_SIZE + i * 2] = (uint8_t)(i * 7);
+        raw[FRAME_HEADER_SIZE + i * 2 + 1] = (uint8_t)(i * 13);
+    }
+    memset(fb, SENTINEL, sizeof(fb));
+    frame_rect_t rect;
+    assert(frame_apply(fb, raw, FRAME_HEADER_SIZE + W * H * 2, &rect));
+    frame_bounds_t area = { 0 };
+    frame_union(&area, rect);
+
+    uint16_t *strip = malloc(ROWS * FRAME_WIDTH * sizeof(*strip));
+    assert(strip);
+    int width = area.x1 - area.x0;
+    int copied = 0;
+    for (int sy = area.y0; sy < area.y1; sy += ROWS) {
+        int rows = area.y1 - sy < ROWS ? area.y1 - sy : ROWS;
+        assert(frame_copy_strip(strip, fb, area, sy, rows));
+        for (int row = 0; row < rows; ++row) {
+            assert(memcmp(strip + row * width, fb + ((size_t)sy + row) * FRAME_WIDTH + area.x0,
+                          (size_t)width * sizeof(*strip)) == 0);
+        }
+        copied += rows * width;
+    }
+    assert(copied == (area.y1 - area.y0) * width);
+    assert(width >= W && area.y1 - area.y0 == H);
+    free(strip);
+
+    // Out-of-range requests are refused instead of reading outside the framebuffer.
+    uint16_t small[ROWS * FRAME_WIDTH];
+    frame_bounds_t whole = { 0, 0, FRAME_WIDTH, FRAME_HEIGHT };
+    assert(frame_copy_strip(small, fb, whole, 0, ROWS));
+    assert(frame_copy_strip(small, fb, (frame_bounds_t){ 0, 0, FRAME_WIDTH, 1 }, 0, 1));
+    assert(!frame_copy_strip(NULL, fb, whole, 0, 1));
+    assert(!frame_copy_strip(small, NULL, whole, 0, 1));
+    assert(!frame_copy_strip(small, fb, whole, 0, 0));
+    assert(!frame_copy_strip(small, fb, whole, FRAME_HEIGHT, 1));
+    assert(!frame_copy_strip(small, fb, (frame_bounds_t){ 0, 0, FRAME_WIDTH, ROWS }, 0, ROWS + 1));
+    assert(!frame_copy_strip(small, fb, area, area.y0 - 1, 1));
+    assert(!frame_copy_strip(small, fb, area, area.y1 - 1, 2));
+    assert(!frame_copy_strip(small, fb, (frame_bounds_t){ 2, 0, 2, FRAME_HEIGHT }, 0, 1));
+    assert(!frame_copy_strip(small, fb, (frame_bounds_t){ -2, 0, 2, FRAME_HEIGHT }, 0, 1));
+    assert(!frame_copy_strip(small, fb, (frame_bounds_t){ 0, 0, FRAME_WIDTH + 2, FRAME_HEIGHT }, 0, 1));
+    assert(!frame_copy_strip(small, fb, (frame_bounds_t){ 0, 0, FRAME_WIDTH, FRAME_HEIGHT + 2 }, 0, 1));
+    assert(!frame_copy_strip(small, fb, (frame_bounds_t){ 0, -1, FRAME_WIDTH, FRAME_HEIGHT }, 0, 1));
+}
+
 int main(void)
 {
     test_raw();
@@ -278,4 +332,6 @@ int main(void)
     puts("PASS malformed frames rejected without framebuffer or dirty-rect changes");
     test_dirty_union();
     puts("PASS dirty bounds union and word alignment");
+    test_strip_copy();
+    puts("PASS 120x160 commit and strip copy, out-of-range strips refused");
 }

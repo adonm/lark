@@ -30,6 +30,9 @@ typedef struct {
 
 void frame_union(frame_bounds_t *dirty, frame_rect_t rect);
 
+// Packs rows [y, y+rows) of the dirty area into a strip for SPI DMA.
+bool frame_copy_strip(uint16_t *dst, const uint16_t *fb, frame_bounds_t area, int y, int rows);
+
 // Pixels are stored in LCD wire byte order. Invalid packets leave fb and dirty untouched.
 bool frame_decode(const uint8_t *data, size_t len, frame_decoded_t *out);
 void frame_commit(uint16_t *fb, const frame_decoded_t *decoded);
