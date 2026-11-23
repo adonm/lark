@@ -44,6 +44,10 @@ jq -r '.plugins[].package' ~/.local/share/lark/opencode/config/opencode/opencode
 - `scripts/build.sh` skips a board whose sources and `sdkconfig*` are unchanged
   since its last successful build; use `--force` to rebuild.
 
+### How to Detect
+- `GET /health` lacks `models` or `models_ready`, or `lark status` prints no
+  `Models:` line.
+
 ### Upgrade Steps
 1. Back up `lark.db` and `lark.env`.
 2. Install the new server with `./scripts/setup-host.sh --gpu-index 0` once.
@@ -69,34 +73,41 @@ jq -r '.plugins[].package' ~/.local/share/lark/opencode/config/opencode/opencode
 
 ### Breaking Changes
 - Automatic volume is gone. Each terminal has one manual level; the server no longer derives it from ambient noise or time.
-- `terminal_prefs` drops `auto_volume` and renames `manual_volume` to `volume`. The server renames first, then drops the retired column at startup, guarded.
-- `patch.terminal.auto_volume` is rejected. `POST /api/terminals/{id}/volume` and `/remote/api/volume` take `{"volume":0..100}` only; `PATCH /api/terminals/{id}` ignores `auto`.
-- `state` terminal volume objects, `/api/terminals`, and diagnostics no longer carry `auto_volume`; diagnostics loses `ambient_rms`.
+- `terminal_prefs` drops the retired automatic-volume column and renames `manual_volume` to `volume`. The server renames first, then drops the retired column at startup, guarded.
+- The retired automatic-volume `patch` argument is rejected. `POST /api/terminals/{id}/volume` and `/remote/api/volume` take `{"volume":0..100}` only; `PATCH /api/terminals/{id}` ignores `auto`.
+- `state` terminal volume objects, `/api/terminals`, and diagnostics no longer carry the automatic-volume flag; diagnostics loses `ambient_rms`.
 - The on-device Volume menu has Quieter/Louder only; the Mode toggle is gone.
 - `VOLUME` keeps its 5-byte payload with the auto byte retired (always 0), so firmware `0.20.0` keeps working without an OTA.
 
 ### How to Detect
 ```sh
-sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(terminal_prefs);" | grep -E 'auto_volume|manual_volume'
+sqlite3 ~/.local/share/lark/lark.db "SELECT group_concat(name) FROM pragma_table_info('terminal_prefs') WHERE name IN ('auto_volume','manual_volume','volume');"
 curl -s -H "X-Lark-Token: $LARK_TOKEN" http://127.0.0.1:8765/api/terminals | grep -o auto_volume
 ```
-Any hit means the upgrade is pending.
+`volume` alone means upgraded. A retired column name, or any hit from `curl`, means the upgrade is pending.
 
 ### Upgrade Steps
-1. Stop the service, back up, and apply the schema step (the server also does it at startup):
+1. Stop the service, back up, and apply the schema step (the server also does it at startup). The guard makes a re-run safe:
    ```sh
    systemctl --user stop lark.service
-   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
-   sqlite3 ~/.local/share/lark/lark.db "ALTER TABLE terminal_prefs DROP COLUMN auto_volume; ALTER TABLE terminal_prefs RENAME COLUMN manual_volume TO volume;"
+   db=~/.local/share/lark/lark.db
+   sqlite3 "$db" ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   has() { sqlite3 "$db" "SELECT count(*) FROM pragma_table_info('terminal_prefs') WHERE name='$1';"; }
+   if [ "$(has manual_volume)" = 1 ]; then
+     sqlite3 "$db" "ALTER TABLE terminal_prefs RENAME COLUMN manual_volume TO volume;"
+   fi
+   if [ "$(has auto_volume)" = 1 ]; then
+     sqlite3 "$db" "ALTER TABLE terminal_prefs DROP COLUMN auto_volume;"
+   fi
    ```
 2. Run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart.
 3. No firmware change is needed on `0.20.0`.
 
 ### Verification
-- `GET /api/terminals` shows one `volume` per terminal and no `auto_volume`.
+- `GET /api/terminals` shows one `volume` per terminal and no automatic-volume flag.
 - `sqlite3 ... "SELECT terminal_id,volume FROM terminal_prefs;"` keeps the former manual levels.
 - The device Volume menu lists Quieter and Louder only; a change persists to `volume` and survives a reconnect.
-- `patch({terminal:{volume:40}})` and the `/remote` slider both apply immediately; `auto_volume` is rejected as an unknown argument.
+- `patch({terminal:{volume:40}})` and the `/remote` slider both apply immediately; the retired automatic-volume argument is rejected as unknown.
 
 ---
 
@@ -107,6 +118,9 @@ Any hit means the upgrade is pending.
 
 ### Breaking Changes
 - None. This adds scoped routes and a Diagnostics tab; no schema, wire, or config change.
+
+### How to Detect
+- None; additive. `GET /remote/api/captures` returns 404 on an older server.
 
 ### Upgrade Steps
 1. Back up `lark.db` and `lark.env`, then run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart `lark.service`.
@@ -126,30 +140,38 @@ Any hit means the upgrade is pending.
 - Server / SQLite (`~/.local/share/lark/lark.db`) / Lark API & MCP / Web (`/remote`) / Agent prompt
 
 ### Breaking Changes
-- `companions.listen_seconds` (0–300) is gone. `companions.listening` is a boolean on/off setting; the window length is one server constant (30 s).
-- `patch.companion.listen_seconds` is rejected. Use `patch.companion.listening: true|false`. `/remote/api/listen` takes `{"listening":true|false}`; the six duration pills and "Off" pill are replaced by one Listen toggle.
-- `state` returns `me.companion.listening` instead of `listen_seconds`; the turn state line says `listen: on` / `listen: off`.
+- The old per-window duration column (0–300 s) is gone. Listening is a boolean on/off setting; the window length is one server constant (30 s).
+- The retired duration `patch` argument is rejected. Use `patch.companion.listening: true|false`. `/remote/api/listen` takes `{"listening":true|false}`; the six duration pills and "Off" pill are replaced by one Listen toggle.
+- `state` returns `me.companion.listening` instead of the duration; the turn state line says `listen: on` / `listen: off`.
 - The server performs the one-time backfill and drop at startup, guarded like other retired columns.
 
 ### How to Detect
 ```sh
-sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(companions);" | grep -E 'listen_seconds|listening'
-curl -s -H "X-Lark-Token: $LARK_TOKEN" http://127.0.0.1:8765/api/companions
+sqlite3 ~/.local/share/lark/lark.db "SELECT group_concat(name) FROM pragma_table_info('companions') WHERE name IN ('listen_seconds','listening');"
+curl -s -H "X-Lark-Token: $LARK_TOKEN" http://127.0.0.1:8765/api/companions | grep -o '"listen_seconds"'
 ```
-A `listen_seconds` column or any `listen_seconds` JSON key means the upgrade is pending.
+`listening` alone means upgraded. The retired column or JSON key means the upgrade is pending.
 
 ### Upgrade Steps
-1. Stop the service, back up, and apply the schema step (the server also does it at startup):
+1. Stop the service, back up, and apply the schema step (the server also does it at startup). The guard makes a re-run safe:
    ```sh
    systemctl --user stop lark.service
-   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
-   sqlite3 ~/.local/share/lark/lark.db "ALTER TABLE companions ADD COLUMN listening INTEGER NOT NULL DEFAULT 0; UPDATE companions SET listening = CASE WHEN listen_seconds > 0 THEN 1 ELSE 0 END; ALTER TABLE companions DROP COLUMN listen_seconds;"
+   db=~/.local/share/lark/lark.db
+   sqlite3 "$db" ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   has() { sqlite3 "$db" "SELECT count(*) FROM pragma_table_info('companions') WHERE name='$1';"; }
+   if [ "$(has listen_seconds)" = 1 ]; then
+     if [ "$(has listening)" = 0 ]; then
+       sqlite3 "$db" "ALTER TABLE companions ADD COLUMN listening INTEGER NOT NULL DEFAULT 0;"
+     fi
+     sqlite3 "$db" "UPDATE companions SET listening=1 WHERE listen_seconds>0;"
+     sqlite3 "$db" "ALTER TABLE companions DROP COLUMN listen_seconds;"
+   fi
    ```
 2. Run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart.
 3. No firmware change is needed on `0.20.0`.
 
 ### Verification
-- `GET /api/companions` shows boolean `listening` for every companion and no `listen_seconds`.
+- `GET /api/companions` shows boolean `listening` for every companion and no duration key.
 - `sqlite3 ... "SELECT id,listening FROM companions;"` matches the old durations (`>0` becomes `1`).
 - `/remote` shows one Listen toggle; no duration pills.
 - A window with quiet speech commits within ~1.6 s of the last voiced frame; noise-only windows close at 30 s without a turn.
@@ -163,6 +185,9 @@ A `listen_seconds` column or any `listen_seconds` JSON key means the upgrade is 
 
 ### Breaking Changes
 - None. No schema or wire change; companion IDs, forms, voices and accounts are preserved.
+
+### How to Detect
+- None; additive. An affected prompt lists `terminals: none` while an online hardware terminal is attached.
 
 ### Upgrade Steps
 1. Back up `lark.db` and `lark.env`, then install the new `lark` binary and restart `lark.service` and `lark-opencode.service`.
@@ -229,7 +254,7 @@ Non-zero for either means the upgrade below is pending. Older firmware reports a
 - **Stop**: aborting speech still writes the BSP's bounded 90 ms TX tail, so the next chime or reply never starts behind stale speech.
 - **Memory**: the 320 KiB `/debug/mic` buffer allocates on first upload, and the send-only RTP UDP socket no longer reserves a receive buffer.
 - **Dependencies**: BOX-3 builds against `esp-box-3_noglib` 3.2.1 and no longer locks `esp_lvgl_port`/`lvgl`. VoCat keeps `esp_vocat` 1.1.0 because the published `esp_vocat_noglib` 1.1.0 does not compile (an `lv_indev_t` declaration sits outside its LVGL guard).
-- **Removed**: `echo_suppress.c` and its host test, `LARK_MSG_MEDIA`, `LARK_MSG_SET_VOLUME`, `LARK_MSG_VOICE_OWNER`, `LARK_HELLO_FLAG_IF_FREE`, `LARK_REJECT_OCCUPIED`, the blocked state, `LARK_TELEMETRY_SLEEPING`, `BOARD_SHAPE`, `BOARD_HAS_DRAG`, `AUDIO_CALL_SAMPLES`.
+- **Removed**: `echo_suppress.c` and its host test, `LARK_MSG_MEDIA`, `LARK_MSG_SET_VOLUME`, `LARK_MSG_VOICE_OWNER`, `LARK_HELLO_FLAG_IF_FREE`, `LARK_REJECT_OCCUPIED`, the blocked state, `LARK_TELEMETRY_SLEEPING`, `BOARD_SHAPE`, `BOARD_HAS_DRAG`, the retired audio-call sample constant.
 - **Protocol**: terminals stop sending and consuming state sequence numbers. `RESUME.last_seq` is always 0 and the wire layout is unchanged, so 0.19.0 and newer servers both work; `STATUS` is read for its state byte only and may drop text/progress/kind. Server-side seq removal and the 12 s → 30 s sleeping ping backoff follow in a separate push; both sides tolerate the other.
 - **Tests**: new wake-drain ordering test and a 120x160 dirty-rectangle commit/strip-copy test on both board geometries.
 
@@ -250,15 +275,17 @@ Non-zero for either means the upgrade below is pending. Older firmware reports a
 - Host / `~/.local/share/lark/library/`, `lark.service`, `setup-host.sh`
 
 ### Breaking Changes
-- `setup-host.sh` no longer accepts `--library`; the server provisions the content library itself. Manual `lark library --download --build --force` remains.
-- Provisioning decides by free disk: Gutenberg, then Simple English Wikipedia, then full English Wikipedia when it fits within a 20% reserve plus 10% margin. There is no fixed 100 GB/140 GB requirement.
+- The installer no longer accepts a library flag; the server provisions the content library itself. Manual `lark library --download --build --force` remains.
+- Provisioning decides by free disk, pending packs smallest first: Simple English Wikipedia, then Project Gutenberg, then full English Wikipedia when it fits within a 20% reserve plus 10% margin. There is no fixed 100 GB/140 GB requirement.
 
 ### How to Detect
-- `./scripts/setup-host.sh --library` errors with an unknown-option message.
-- `~/.local/share/lark/lark status` has no `Library` section.
+```sh
+./scripts/setup-host.sh --library  # must fail with an unknown option
+```
+- `lark status` prints no `Library (...)` section.
 
 ### Upgrade Steps
-1. Run `./scripts/setup-host.sh --gpu-index 0` (no `--library`). It restarts `lark.service`, which plans against the current disk.
+1. Run `./scripts/setup-host.sh --gpu-index 0`. It restarts `lark.service`, which plans against the current disk.
 2. Check `~/.local/share/lark/lark status`; packs already installed stay installed and an in-progress build is reported as `building`.
 3. Expect the existing enwiki dump to disappear after its index is present (`df` gains about 24 GB).
 
@@ -274,18 +301,18 @@ Non-zero for either means the upgrade below is pending. Older firmware reports a
 - Server / Delta Chat / Host (`opentunnel`)
 
 ### Breaking Changes
-- Deleted `lark/webxdc/`, `webxdc.go`, the webxdc status-update handler, panel versioning, and the story-player webxdc. `/panel` is gone; existing panel messages are inert.
+- Deleted the old Delta Chat panel implementation: its status-update handler, versioning, story player, and command. Remaining panel messages are inert.
 - `/remote` replaces it: one scoped `https://<opentunnel-route>/remote?token=...` link per verified contact. Each request mints a fresh token and invalidates the previous one; `/remote off` revokes it.
-- Panel feature entries below are superseded by this one and kept for history only.
+- Earlier panel feature entries are superseded by this one and kept for history only.
 
 ### How to Detect
-- Sending `/panel` to a companion gets no new panel message.
+- `GET /api/remote/tunnels` is empty before the first `/remote`.
 - `/remote` gets the "not configured" reply when `opentunnel` is missing.
 
 ### Upgrade Steps
 1. Install `opentunnel` from https://opentunnel.xyz if it is not already available (or set `LARK_OPENTUNNEL_BIN`).
 2. Restart `lark.service`.
-3. Send `/remote` from a verified contact to mint the first link. Old `/panel` messages can be deleted manually.
+3. Send `/remote` from a verified contact to mint the first link. Old panel messages can be deleted manually.
 
 ### Verification
 - The `/remote` link loads the companion page, shows live state, and accepts Say/listen/volume/story/history/voice commands.
@@ -293,19 +320,19 @@ Non-zero for either means the upgrade below is pending. Older firmware reports a
 
 ---
 
-## 2026-11-23 — Offline Content Library
+## 2026-11-23 — Offline Content Library (superseded)
 
 ### Affects
 - Host / `~/.local/share/lark/library/`, `lark.service`, `lark-opencode.service`, `check.sh`, `setup-host.sh`
 
 ### Breaking Changes
-- Superseded by Library Auto-Provisioning above: `setup-host.sh --library` and the fixed free-space check are gone; the planner decides what fits. The 100 GB/140 GiB figures below are historical measurements, not requirements.
+- Superseded by Library Auto-Provisioning above: the installer's library flag and the fixed free-space check are gone; the planner decides what fits. The 100 GB/140 GiB figures below are historical measurements, not requirements.
 - Adds `library` tool, FTS5 indexes and a prompt hint; existing installations gain them after provisioning.
 - `enwiki.db` is renamed into place only when its FTS5 build finishes, so search uses it without a restart.
 
 ### How to Detect
 - `~/.local/share/lark/lark library --status` reports no installed packs.
-- `./scripts/setup-host.sh --library` is no longer a valid invocation.
+- The installer rejects the removed library flag.
 
 ### Upgrade Steps
 1. Run `./scripts/setup-host.sh --gpu-index 0` and let the server provision what the disk allows.
@@ -454,7 +481,12 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 
 ---
 
-## 2026-11-22 — Interactive Stories (Twee 3), Feature Cuts & Firmware (`0.18.0`)
+## 2026-11-22 — Interactive Stories (Twee 3), Feature Cuts & Firmware (`0.18.0`) (superseded)
+
+**Superseded — no action.** The apps, games, build-job, weather, and wake-word
+features described below were deleted. The story tables and tool remain; their
+later changes appear in newer entries. Do not run the app conversions or the
+destructive SQL on a current installation.
 
 ### Affects
 - Host / Config / SQLite / Lark Server & MCP / Agents / Webxdc / Firmware (`0.18.0`)
@@ -527,8 +559,8 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 
 ### Breaking Changes
 - **Welcome & `/help` versioning**: Added `dcWelcomeVersion` (`"1"`), tracked per companion and verified human contact in `meta` (`dc_welcome:<companion_id>:<contact_addr>`).
-- **Webxdc control panel**: Added `dcPanelVersion` (`"1"`), tracked in `meta` (`dc_panel:<companion_id>:<contact_addr>` and `dc_panel_serial:<acc_id>:<msg_id>`). Sent via `/panel` and automatically on startup/SecureJoin when the panel version changes.
-- **Startup & SecureJoin delivery**: On startup (`syncWelcomes`) and on SecureJoin verification (`EventTypeSecurejoinInviterProgress`), companions send the welcome message and control panel once per version to verified human contacts (never to companions).
+- **Panel versioning (historical)**: a per-contact panel version was tracked in `meta` (`dc_panel:<companion_id>:<contact_addr>` and `dc_panel_serial:<acc_id>:<msg_id>`) and re-sent on startup or SecureJoin when it changed. The panel was later deleted.
+- **Startup & SecureJoin delivery**: On startup (`syncWelcomes`) and on SecureJoin verification (`EventTypeSecurejoinInviterProgress`), companions send the welcome message once per version to verified human contacts (never to companions).
 
 ### How to Detect
 - `sqlite3 ~/.local/share/lark/lark.db "SELECT key, value FROM meta WHERE key LIKE 'dc_welcome:%';"` is empty when no welcomes have been recorded.
@@ -594,7 +626,11 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 
 ---
 
-## 2026-11-22 — Listening Mode & Firmware (`0.15.0`)
+## 2026-11-22 — Listening Mode & Firmware (`0.15.0`) (historical)
+
+**Historical.** The duration column added here was replaced by the boolean
+`listening` setting in the 2026-11-23 entry above; that entry migrates a
+database that still has the old column, so no separate action is needed.
 
 ### Affects
 - SQLite / Lark Server & MCP / Agents / Firmware (`0.15.0`)
@@ -624,7 +660,11 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 
 ---
 
-## 2026-11-22 — Pixel Overhaul, Books as Data, Weather & Firmware (`0.14.0`)
+## 2026-11-22 — Pixel Overhaul, Books as Data, Weather & Firmware (`0.14.0`) (superseded)
+
+**Superseded — no action.** The weather service, JS apps, and SVG look path
+were removed by later entries. The steps below are historical and must not run
+on a current installation.
 
 ### Affects
 - Host / Config / SQLite / Lark Server & MCP / Agents / Firmware (`0.14.0`)
@@ -685,7 +725,7 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 - Host / Config / Systemd / SQLite / Lark Server / Firmware (`0.13.0`)
 
 ### Breaking Changes
-- **Messaging moved to Delta Chat**: Removed live calls (`CALL_REQ`, `CALL_CTRL`, RTP PT 97/98), in-house intercom, and chat/history/apps/timers/memory/portraits/tunnels HTTP routes.
+- **Messaging moved to Delta Chat**: Removed live calls (their call request and control messages, RTP payload types 97/98), in-house intercom, and chat/history/apps/timers/memory/portraits/tunnels HTTP routes.
 - **Web UI & parental controls removed**: Removed `lark/web/`, browser `/ws`, PWA, `FRAME_SVG`, `WATCH`, `TEXT_INPUT`, `PROMPT*`, `PEERS`, `EVENT`, `kind='web'` terminals, `/api/opencode/pair`, `lark-opencode-lan.{socket,service}`, `parent_settings`, and `parent_usage`.
 - **CLI admin**: Added `lark status`, `lark companions [add|rm]`, `lark terminals [attach|detach]`.
 - **QR Pairing**: Pair phones by scanning the QR on the device's **Pair** menu screen; remove contacts via **Unpair**.
@@ -719,7 +759,10 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 
 ---
 
-## 2026-11-22 — Unified Binary Terminal Protocol `v1` (`0.12.0`)
+## 2026-11-22 — Unified Binary Terminal Protocol `v1` (`0.12.0`) (historical)
+
+**Historical.** The browser client described below was later deleted; current
+firmware uses only TCP and UDP on the device port. No browser step applies.
 
 ### Affects
 - Lark Server (`:8766` & `/ws`) / Web (`/app`) / Firmware (`0.12.0`)
@@ -1066,7 +1109,13 @@ Devices running legacy `0.9.5` built before `f48ed64` only accept `echoear` / `e
 
 ---
 
-## 2026-11-22 — EchoEar → Lark Rename, Compat-Shim Removal, and Companion Unification (`e95476d`, `f4a5912`, `206da8c`)
+## 2026-11-22 — EchoEar → Lark Rename, Compat-Shim Removal, and Companion Unification (`e95476d`, `f4a5912`, `206da8c`) (historical)
+
+**Historical — no action on a Lark installation.** This entry converts a
+pre-rename EchoEar install.
+
+### Affects
+- Host / Config / Systemd / SQLite / OpenCode / Firmware
 
 ### Breaking Changes
 
@@ -1131,6 +1180,9 @@ Config/data moved from `~/.config/echoear` and `~/.local/share/echoear` to `~/.c
 
 ## 2026-11-22 — Native SQLite WAL and Split Reader/Writer Pools
 
+### Affects
+- Host / SQLite
+
 ### Breaking Changes
 - Additive: WAL mode with a writer connection and read-only readers; no data change.
 
@@ -1154,6 +1206,9 @@ sqlite3 ~/.local/share/lark/bridge.db "PRAGMA journal_mode;" # expect: wal
 ---
 
 ## 2026-11-22 — Remove Photo Uploads, Ente Photo Library, and ML Photo Indexing
+
+### Affects
+- Host / SQLite / Config
 
 ### Breaking Changes
 - Removed the photo pipeline and `photos` storage; superseded by companion backgrounds (`form` + generated `bg.png`).
@@ -1183,6 +1238,9 @@ systemctl --user start lark-bridge.service
 ---
 
 ## 2026-11-22 — Message Channel Column
+
+### Affects
+- SQLite / Lark Server
 
 ### Breaking Changes
 - Added `messages.channel`; pre-column rows are backfilled by "Server Cleanup" above.
