@@ -35,6 +35,7 @@ Apply entries chronologically from the installation's starting state to latest. 
 - **Tool**: `tools.lark.library` (`search`, `read`, `list`, `import`) is available to `lark` and `deep`. Search uses FTS5 bm25 with short snippets; read returns 3.2 KB sections; import builds a validated Twee story (60 passages max, 575 characters each) with attribution and can open it silently on the reader. Call counts and recent timings are under `library` in `/api/diagnostics`.
 - **Prompt**: lark checks the library first for facts, stories, and books. The static prompt grew from 3,928 to 4,214 bytes (about +72 tokens), and real turns carry a trailing `[library: search before facts]` hint, plus a targeted story-import hint on story-shaped turns. `deep` gets short grounded-answer guidance and only lark/websearch permissions.
 - **Setup**: `./scripts/setup-host.sh --library` checks for 100 GB free, then downloads and indexes in the background (`systemctl --user status lark-library`; log at `library/setup.log`). Builds now include `sqlite_fts5`, and `check.sh` adds it for the test suite.
+- **Atomic switch**: `enwiki.db` is renamed into place only when its FTS5 build finishes, so search uses it without a restart.
 
 ### Upgrade Steps
 1. Run `./scripts/setup-host.sh --gpu-index 0 --library`. Expect about 140 GB under `~/.local/share/lark/library`; the job continues after the script exits.
