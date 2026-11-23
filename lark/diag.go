@@ -126,6 +126,8 @@ type diagTurn struct {
 	STTRun        *float64 `json:"stt_run_ms"`
 	Resample      *float64 `json:"resample_ms"`
 	Error         bool     `json:"error,omitempty"`
+	Silent        bool     `json:"silent,omitempty"`
+	ToolErrors    []string `json:"tool_errors,omitempty"`
 }
 
 type diagFrame struct {
@@ -245,6 +247,44 @@ func (t *turnTrace) audioEnqueued(at time.Time) {
 func (t *turnTrace) firstPCM(at time.Time) {
 	if t != nil {
 		t.measure(diagFirstPCM, at.Sub(t.start))
+	}
+}
+
+func (t *turnTrace) silent() {
+	if t == nil {
+		return
+	}
+	t.d.mu.Lock()
+	t.record.Silent = true
+	t.d.mu.Unlock()
+}
+
+// toolError attaches a failed MCP call to the turn that issued it. The HTTP
+// tool request carries no turn context, so match the speaking companion's most
+// recent turn, or the latest turn when no companion is speaking.
+func (d *diagnostics) toolError(companion, message string) {
+	if message == "" {
+		return
+	}
+	cutoff := time.Now().Add(-2 * time.Minute).UnixMilli()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var pick *diagTurn
+	d.turns.each(func(t *diagTurn) {
+		if t.TS < cutoff {
+			return
+		}
+		if companion != "" && !strings.EqualFold(t.Terminal, companion) {
+			return
+		}
+		pick = t
+	})
+	if pick == nil {
+		return
+	}
+	pick.ToolErrors = append(pick.ToolErrors, message)
+	if len(pick.ToolErrors) > 4 {
+		pick.ToolErrors = pick.ToolErrors[len(pick.ToolErrors)-4:]
 	}
 }
 

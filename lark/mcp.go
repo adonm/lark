@@ -376,22 +376,37 @@ func mcpUint(args object, key string) (*uint64, error) {
 
 func (b *larkServer) callMCP(ctx context.Context, name string, args object) (object, error) {
 	if err := checkMCPFields(args, mcpInputSchema(name), ""); err != nil {
+		b.noteMCPError(name, err)
 		return nil, err
 	}
+	var out object
+	var err error
 	switch name {
 	case "state":
-		return b.mcpState(ctx, args)
+		out, err = b.mcpState(ctx, args)
 	case "patch":
-		return b.mcpPatch(ctx, args)
+		out, err = b.mcpPatch(ctx, args)
 	case "story":
-		return b.mcpStory(ctx, args)
+		out, err = b.mcpStory(ctx, args)
 	case "library":
-		return b.mcpLibrary(ctx, args)
+		out, err = b.mcpLibrary(ctx, args)
 	case "emit":
-		return b.mcpEmit(ctx, args)
+		out, err = b.mcpEmit(ctx, args)
 	default:
-		return nil, problem(400, "Unknown tool")
+		err = problem(400, "Unknown tool")
 	}
+	if err != nil {
+		b.noteMCPError(name, err)
+	}
+	return out, err
+}
+
+func (b *larkServer) noteMCPError(name string, err error) {
+	companion := ""
+	if b.hub != nil {
+		companion = b.hub.speakingCompanion()
+	}
+	b.diag.toolError(companion, name+": "+err.Error())
 }
 
 func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {

@@ -367,6 +367,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	reply := strings.TrimSpace(fenced.ReplaceAllString(raw, ""))
 	routed := b.emits.routed(emitBase, sender.ID)
 	if isSilentReply(reply) {
+		traceFrom(ctx).silent()
 		drop(true)
 		return generatedReply{sid: sid, routed: routed}, nil
 	}

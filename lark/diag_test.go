@@ -15,6 +15,24 @@ import (
 	"time"
 )
 
+func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
+	b := &larkServer{}
+	now := time.Now()
+	traceFrom(b.traceTurn(t.Context(), "cake", "Cake", "voice", now)).silent()
+	b.diag.toolError("cake", "patch: terminal_id required: no online terminal for companion cake")
+	b.diag.toolError("mint", "story: unknown story")
+
+	report := b.diagnosticReport()
+	if len(report.Turns) != 1 {
+		t.Fatalf("turns = %+v", report.Turns)
+	}
+	turn := report.Turns[0]
+	if !turn.Silent || len(turn.ToolErrors) != 1 ||
+		turn.ToolErrors[0] != "patch: terminal_id required: no online terminal for companion cake" {
+		t.Fatalf("silent/error diagnostics missing: %+v", turn)
+	}
+}
+
 func TestDiagnosticsMetricWindowAndTurns(t *testing.T) {
 	b := &larkServer{}
 	t0 := time.Now()
