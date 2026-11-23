@@ -23,8 +23,8 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, library=instant books/facts, emit=Delta Chat/say/audio. Only final prose is spoken. " +
-		"For facts, stories, and books, call library search before answering, then read or import. For a listed story, story get it and read its passages aloud; import only when absent, and say so if a book will not open. Never paste long text."
+	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, library=instant books/facts, emit=Delta Chat/say/audio. " +
+		"For facts, stories, and books, call library search before answering, then read or import. For a listed story, story get it and read its passages aloud; import only when absent, and say so if a book will not open."
 )
 
 // emitTracker counts successful emit calls per companion so a device turn can
@@ -272,7 +272,7 @@ var mcpTools = func() []object {
 			schema(object{"op": enum("search", "read", "list", "import"), "query": text,
 				"source": enum("auto", "simple", "enwiki", "gutenberg"), "title": text, "ref": text,
 				"section": object{"type": "integer", "minimum": 0}, "companion_id": text, "open": flag,
-				"limit": object{"type": "integer", "minimum": 1, "maximum": 200}}, "op")),
+				"limit": object{"type": "integer", "minimum": 1, "maximum": 20, "description": "Search hits; list accepts up to 200"}}, "op")),
 		tool("emit", "Send Delta Chat intercom (to: a contact name or ID from me.contacts), speak aloud on terminals (say), or play notes/sfx/chime.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),

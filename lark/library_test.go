@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -269,8 +270,39 @@ func TestLibraryPromptBudget(t *testing.T) {
 	if !strings.Contains(prompt, "library") {
 		t.Fatal("agent prompt does not mention the library")
 	}
-	// ~4 bytes/token; keep the static prompt under ~1000 tokens (~4000 bytes).
-	if len(prompt) > 4000 {
-		t.Fatalf("agent prompt grew to %d bytes (budget 4000)", len(prompt))
+	// ~4 bytes/token. Both strings are part of the model's system prompt, so
+	// the budget covers agent prompt + MCP instructions.
+	total := len(prompt) + len(mcpInstructions)
+	if total > 4250 {
+		t.Fatalf("static prompt grew to %d bytes (agent %d + MCP instructions %d); budget 4250",
+			total, len(prompt), len(mcpInstructions))
 	}
+	t.Logf("static prompt %d bytes (agent %d + MCP instructions %d)", total, len(prompt), len(mcpInstructions))
+}
+
+func TestTurnStateBudget(t *testing.T) {
+	t.Parallel()
+	// turnStateLine lists every attached online terminal, pending timer, and
+	// story with no server-side entry cap. Pin a realistic envelope so growth
+	// is deliberate: 3 terminals, 5 timers, 5 stories, 60-byte labels/titles.
+	terminals := strings.Join([]string{
+		"vocat-33d8(esp-vocat,online,battery:100,vol:100)",
+		"box3-b324(esp32-s3-box3,online,battery:100,vol:100)",
+		"vocat-2cac(esp-vocat,online,battery:100,sleeping,vol:100)",
+	}, ",")
+	timerParts := make([]string, 0, 5)
+	storyParts := make([]string, 0, 5)
+	for i := range 5 {
+		label := strings.Repeat("t", 60)
+		timerParts = append(timerParts, fmt.Sprintf("%024x(%q,3600s)", i, label))
+		storyParts = append(storyParts, fmt.Sprintf("story-%d(%q)", i, strings.Repeat("s", 60)))
+	}
+	line := turnStateLine(time.Now(),
+		companionState{companionLook: companionLook{Form: strings.Repeat("f", 60)}, Listening: true},
+		terminals, strings.Join(timerParts, ","), strings.Join(storyParts, ","))
+	const stateBudget = 1280
+	if len(line) > stateBudget {
+		t.Fatalf("state line grew to %d bytes (budget %d): %s", len(line), stateBudget, line)
+	}
+	t.Logf("worst-case state line %d bytes", len(line))
 }
