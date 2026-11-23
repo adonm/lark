@@ -8,6 +8,7 @@ import (
 	"image"
 	imagecolor "image/color"
 	"image/png"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ import (
 
 const (
 	defaultChatmailRelay = "nine.testrun.org"
-	dcWelcomeVersion     = "2"
+	dcWelcomeVersion     = "3"
 )
 
 type dcRPC interface {
@@ -47,11 +48,8 @@ type dcRPC interface {
 	GetChatContacts(accID uint32, chatID uint32) ([]uint32, error)
 	GetMessage(accID uint32, msgID uint32) (deltachat.Message, error)
 	GetChatMedia(accID uint32, chatID *uint32, msgType deltachat.Viewtype, or2 *deltachat.Viewtype, or3 *deltachat.Viewtype) ([]uint32, error)
-	GetWebxdcInfo(accID uint32, instanceMsgID uint32) (deltachat.WebxdcMessageInfo, error)
 	SendMsg(accID uint32, chatID uint32, data deltachat.MessageData) (uint32, error)
 	DeleteMessagesForAll(accID uint32, msgIDs []uint32) error
-	GetWebxdcStatusUpdates(accID uint32, instanceMsgID uint32, lastKnownSerial uint32) (string, error)
-	SendWebxdcStatusUpdate(accID uint32, instanceMsgID uint32, updateStr string, descr *string) error
 }
 
 type dcContact struct {
@@ -72,12 +70,10 @@ type dcService struct {
 	rpc       dcRPC
 	transport *deltachat.IOTransport
 	bot       *deltachat.Bot
-	addrs             map[string]string // companionID -> email address
-	byAcc             map[uint32]string // dc_account_id -> companionID
-	activePanels      map[panelWatchKey]*panelWatch
-	panelWatchRunning bool
-	stopCh            chan struct{}
-	doneCh            chan struct{}
+	addrs     map[string]string // companionID -> email address
+	byAcc     map[uint32]string // dc_account_id -> companionID
+	stopCh    chan struct{}
+	doneCh    chan struct{}
 }
 
 func newDCService(b *larkServer, bin, accountsDir, relay string) *dcService {
@@ -172,14 +168,6 @@ func (s *dcService) runOnce(ctx context.Context) error {
 		}
 		s.handleSecureJoinVerified(ctx, accID, p.ContactId)
 	})
-	bot.On(&deltachat.EventTypeWebxdcStatusUpdate{}, func(_ *deltachat.Bot, accID uint32, ev deltachat.EventType) {
-		u, ok := ev.(*deltachat.EventTypeWebxdcStatusUpdate)
-		if !ok {
-			return
-		}
-		s.handleWebxdcUpdate(ctx, accID, u.MsgId)
-	})
-
 	s.mu.Lock()
 	s.transport = tr
 	s.rpc = rpc
@@ -771,7 +759,6 @@ func (s *dcService) syncWelcomes(ctx context.Context) {
 		}
 		for _, ct := range contacts {
 			s.sendWelcomeIfNeeded(ctx, c, c.DCAccountID, ct)
-			s.sendPanelIfNeeded(ctx, c, c.DCAccountID, ct)
 		}
 	}
 }
@@ -791,7 +778,6 @@ func (s *dcService) handleSecureJoinVerified(ctx context.Context, accID, contact
 	}
 	c := s.b.companionFor(companionID)
 	s.sendWelcomeIfNeeded(ctx, c, accID, ct)
-	s.sendPanelIfNeeded(ctx, c, accID, ct)
 }
 
 func (s *dcService) sendWelcomeIfNeeded(ctx context.Context, c companionState, accID uint32, ct deltachat.Contact) {
@@ -899,7 +885,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
 				return
 			}
-			s.sayOnCompanion(ctx, companionID, senderName, arg)
+			s.b.sayOnCompanion(ctx, companionID, senderName, arg)
 			ack := "Said it."
 			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &ack}); err != nil {
 				log.Printf("Delta Chat SendMsg error: %v", err)
@@ -919,10 +905,34 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				log.Printf("Delta Chat SendMsg error: %v", err)
 			}
 			return
-		case "/panel":
-			if err := s.sendPanelXDC(ctx, who, accID, msg.ChatId, &contact); err != nil {
-				log.Printf("Delta Chat /panel error: %v", err)
+		case "/remote":
+			if s.b.remote == nil {
+				hint := "Remote controls unavailable."
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
+				return
 			}
+			contactKey := dcContactKey(contact)
+			if strings.EqualFold(arg, "off") {
+				_, err := s.b.remote.revokeContact(ctx, companionID, contactKey)
+				reply := "Remote controls off."
+				if err != nil && !errors.Is(err, context.Canceled) {
+					reply = err.Error()
+				}
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &reply})
+				return
+			}
+			if arg != "" {
+				hint := "Usage: /remote [off]"
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
+				return
+			}
+			link, err := s.b.remote.issue(ctx, companionID, contactKey)
+			if err != nil {
+				errText := err.Error()
+				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &errText})
+				return
+			}
+			_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &link})
 			return
 		case "/stories":
 			s.sendStoriesList(ctx, rpc, accID, msg.ChatId)
@@ -936,7 +946,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			s.sendStoryFiles(ctx, rpc, companionID, accID, msg.ChatId, arg)
 			return
 		default:
-			hint := "Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /panel, or /help."
+			hint := "Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /remote, or /help."
 			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint}); err != nil {
 				log.Printf("Delta Chat SendMsg error: %v", err)
 			}
@@ -1047,11 +1057,131 @@ func welcomeText(c companionState) string {
 		"/say <words> — I'll say it out loud exactly",
 		"/private <words> — just between us",
 		"/stories — list interactive stories",
-		"/story <name> — play and download a story",
-		"/panel — open my panel",
+		"/story <name> — download a story as a .twee file",
+		"/remote — open my remote controls",
 		"/help — this message",
 		"Send a .twee file to import a story. When listening mode is on, people at home can answer you out loud.",
 	}, "\n")
+}
+
+func (s *dcService) sendStoriesList(ctx context.Context, rpc dcRPC, accID, chatID uint32) {
+	stories, err := s.b.listStories(ctx)
+	if err != nil {
+		msg := "Could not load stories."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	if len(stories) == 0 {
+		msg := "No stories yet."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	lines := []string{"Stories:"}
+	for _, st := range stories {
+		lines = append(lines, fmt.Sprintf("- %s (%s, %d passages)", st.Title, st.ID, st.Passages))
+	}
+	out := strings.Join(lines, "\n")
+	_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &out})
+}
+
+func (s *dcService) sendStoryFiles(ctx context.Context, rpc dcRPC, companionID string, accID, chatID uint32, query string) {
+	stories, err := s.b.listStories(ctx)
+	if err != nil {
+		msg := "Could not load stories."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	var found *savedStory
+	for i := range stories {
+		st := &stories[i]
+		if st.ID == q || strings.EqualFold(st.Title, query) {
+			found = st
+			break
+		}
+	}
+	if found == nil {
+		msg := fmt.Sprintf("Story %q not found. Try /stories to see available stories.", query)
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	tmpDir, err := os.MkdirTemp("", "lark-story-*")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	var oldIDs []uint32
+	metaKey := fmt.Sprintf("dc_story_msgs:%s:%d:%s", companionID, chatID, found.ID)
+	if s.b != nil && s.b.db != nil {
+		if raw, err := s.b.db.getMeta(ctx, metaKey); err == nil {
+			for _, part := range strings.Split(raw, ",") {
+				if parsed, err := strconv.ParseUint(strings.TrimSpace(part), 10, 32); err == nil && parsed > 0 {
+					oldIDs = append(oldIDs, uint32(parsed))
+				}
+			}
+		}
+	}
+
+	tweePath := filepath.Join(tmpDir, found.ID+".twee")
+	var newID uint32
+	if err := os.WriteFile(tweePath, []byte(found.Twee), 0o600); err == nil {
+		vtFile := deltachat.ViewtypeFile
+		caption := found.Title + " (.twee)"
+		if mid, err := rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &caption, File: &tweePath, Viewtype: &vtFile}); err == nil {
+			newID = mid
+		}
+	}
+	if newID > 0 && s.b != nil && s.b.db != nil {
+		_ = s.b.db.setMeta(ctx, metaKey, strconv.FormatUint(uint64(newID), 10))
+	}
+	var toDelete []uint32
+	for _, oldID := range oldIDs {
+		if oldID != newID {
+			toDelete = append(toDelete, oldID)
+		}
+	}
+	if len(toDelete) > 0 {
+		if err := rpc.DeleteMessagesForAll(accID, toDelete); err != nil {
+			log.Printf("Delta Chat delete old story files error (%s/%s): %v", companionID, found.ID, err)
+		}
+	}
+}
+
+func (s *dcService) importTweeAttachment(ctx context.Context, rpc dcRPC, accID, chatID uint32, senderName, filePath string) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		msg := "Could not read .twee attachment."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 64*1024+1))
+	if err != nil {
+		msg := "Could not read .twee attachment."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	if len(raw) > 64*1024 {
+		msg := "Story file exceeds 64 KiB limit."
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	cs, err := parseTwee(string(raw))
+	if err != nil {
+		msg := fmt.Sprintf("Could not import story:\n%s", err.Error())
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	slug := s.b.nextAvailableStorySlug(ctx, cs.Title)
+	saved, _, err := s.b.saveStory(ctx, slug, string(raw), senderName, true)
+	if err != nil {
+		msg := fmt.Sprintf("Could not save story: %s", err.Error())
+		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		return
+	}
+	msg := fmt.Sprintf("Imported story %q (%s, %d passages).", saved.Title, saved.ID, saved.Passages)
+	_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
 }
 
 func decodeAudioToPCM16k(ctx context.Context, path string) ([]byte, error) {

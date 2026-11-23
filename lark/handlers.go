@@ -45,6 +45,7 @@ type larkServer struct {
 	libraryStats    libraryStats
 	libraryMu       sync.Mutex
 	libraryDBs      map[string]*sql.DB
+	remote          *remoteManager
 	diag            diagnostics
 	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
@@ -832,6 +833,11 @@ func (b *larkServer) ttsAPI(w http.ResponseWriter, r *http.Request) error {
 func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
 	switch {
+	case path == "/remote" || strings.HasPrefix(path, "/remote/"):
+		b.remoteHTTP(w, r, path)
+		return nil, nil
+	case path == "/api/remote/tunnels" || strings.HasPrefix(path, "/api/remote/tunnels/"):
+		return b.remoteTunnelAPI(w, r, path)
 	case path == "/api/companions" || strings.HasPrefix(path, "/api/companions/"):
 		return b.companionAPI(w, r, path)
 	case path == "/api/terminals" || strings.HasPrefix(path, "/api/terminals/"):

@@ -48,6 +48,44 @@ type chatEntry struct {
 	ToolSummary string    `json:"-"`
 }
 
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
+func historySpeaker(role, sender, channel, companionName string) string {
+	switch role {
+	case "companion":
+		if companionName != "" {
+			return companionName
+		}
+		if sender != "" {
+			return sender
+		}
+		return "Companion"
+	case "user":
+		if channel == "in_person" || sender == "" || sender == "You" {
+			return "Someone in person"
+		}
+		return sender
+	case "intercom":
+		if sender != "" {
+			return sender
+		}
+		return "Intercom"
+	case "card":
+		if companionName != "" {
+			return companionName
+		}
+		return sender
+	default:
+		if sender != "" {
+			return sender
+		}
+		return role
+	}
+}
+
 func channelForSource(source string) string {
 	switch source {
 	case "deltachat":

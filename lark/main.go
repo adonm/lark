@@ -182,6 +182,9 @@ func run() error {
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.ws = newWSHub(b, true)
+	b.remote = newRemoteManager(b, findTunnelCLI(home))
+	b.remote.restore(root)
+	defer b.remote.close()
 	oc.flushHistory = b.history.flush
 	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
 	go b.dc.start(root)
@@ -280,7 +283,7 @@ func productionDB(path string) bool {
 
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: lark <command> [args]")
-	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, sim, device, ota, mcp, library")
+	fmt.Fprintln(w, "Commands: serve, status, companions, terminals, tunnels, sim, device, ota, mcp, library")
 }
 
 func main() {
@@ -296,7 +299,7 @@ func main() {
 			os.Exit(2)
 		}
 		err = run()
-	case "status", "companions", "terminals":
+	case "status", "companions", "terminals", "tunnels":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		err = runCLI(ctx, os.Args[1], os.Args[2:], os.Stdout, os.Stderr)
 		cancel()

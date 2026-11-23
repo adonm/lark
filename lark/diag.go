@@ -576,6 +576,7 @@ func (b *larkServer) sampleDiagnostics(start time.Time, path string) func() {
 			}
 			report.Services.STT = b.stt != nil
 			report.Services.STTEngine = sttEngine
+			report.Services.OpenTunnel = b.remote != nil && b.remote.available()
 			b.diag.mu.Lock()
 			b.diag.system = report
 			b.diag.mu.Unlock()

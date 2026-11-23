@@ -582,6 +582,11 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	if err := tx.Commit(); err != nil {
 		return problem(502, "Cannot delete companion")
 	}
+	if b.remote != nil {
+		if err := b.remote.stopCompanion(ctx, id); err != nil {
+			log.Printf("Lark could not stop remote controls for %s: %v", id, err)
+		}
+	}
 	if b.ws != nil {
 		b.ws.mu.Lock()
 		b.ws.broadcastPeers()

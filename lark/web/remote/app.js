@@ -1,19 +1,22 @@
 (function () {
   "use strict";
 
-  const codec = window.LarkPanelCodec;
+  const token = document.body.dataset.token || new URLSearchParams(location.search).get("token") || "";
   const tabs = ["status", "stories", "history", "settings"];
   const stateLabels = { idle: "Idle", listening: "Listening", thinking: "Thinking", speaking: "Speaking", sleeping: "Sleeping", offline: "Offline" };
   const chanLabels = { in_person: "In person", deltachat: "Delta Chat", intercom: "Intercom", timer: "Timer" };
+  const LISTEN_OPTIONS = [
+    { seconds: 0, label: "Off" }, { seconds: 30, label: "30s" },
+    { seconds: 60, label: "1m" }, { seconds: 120, label: "2m" }, { seconds: 300, label: "5m" },
+  ];
+  const HISTORY_CHANNELS = [
+    { id: "all", label: "All" }, { id: "in_person", label: "In person" },
+    { id: "deltachat", label: "Delta Chat" }, { id: "intercom", label: "Intercom" },
+  ];
+
   let state = { companion: {}, terminals: [], stories: [], voices: [] };
-  // sid identifies this panel instance. History responses are only rendered when
-  // they answer a request from this instance, so replayed or cross-filter
-  // responses cannot replace the list.
-  const historySession = typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
-    : Math.random().toString(16).slice(2, 14);
-  let hist = { loaded: false, loading: false, channel: "all", q: "", items: [], has_more: false, next_cursor: null, sid: historySession, seq: 0 };
-  let bannerTimer = null, pendingBtn = null;
+  let hist = { loaded: false, loading: false, channel: "all", q: "", items: [], has_more: false, next_cursor: null, seq: 0 };
+  let bannerTimer = null, pendingBtn = null, reconnecting = false;
 
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -43,14 +46,55 @@
     bannerTimer = setTimeout(() => { b.dataset.visible = "false"; }, 4000);
   }
 
-  function sendOp(op, fields, pendingMsg, btn) {
-    let payload;
-    try { payload = codec.encodeCommand(op, fields); }
-    catch (err) { showBanner(err.message || "Invalid input.", "error"); return; }
+  function applyState(prev, next) {
+    if (!next) return prev || { companion: {}, terminals: [], stories: [], voices: [] };
+    const oldComp = (prev && prev.companion) || {};
+    const companion = Object.assign({}, oldComp, next.companion || {});
+    if (!next.companion || !next.companion.portrait) {
+      if (oldComp.portrait) companion.portrait = oldComp.portrait;
+    }
+    return {
+      companion,
+      terminals: Array.isArray(next.terminals) ? next.terminals : [],
+      stories: Array.isArray(next.stories) ? next.stories : [],
+      voices: Array.isArray(next.voices) ? next.voices : [],
+    };
+  }
+
+  function apiURL(path, params) {
+    const url = new URL(path, location.origin);
+    url.searchParams.set("token", token);
+    if (params) for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    return url.pathname + url.search;
+  }
+
+  async function call(path, body) {
+    const init = { method: body === undefined ? "GET" : "POST", headers: { "X-Lark-Remote-Token": token } };
+    if (body !== undefined) {
+      init.headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    const res = await fetch(apiURL("/remote/api/" + path), init);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Request failed.");
+    if (data.state) state = applyState(state, data.state);
+    return data;
+  }
+
+  async function runCommand(path, body, pendingMsg, btn) {
     clearPending();
     if (btn) { pendingBtn = btn; btn.classList.add("is-pending"); btn.setAttribute("aria-busy", "true"); }
     if (pendingMsg) showBanner(pendingMsg, "info");
-    if (window.webxdc && typeof window.webxdc.sendUpdate === "function") window.webxdc.sendUpdate({ payload }, pendingMsg || op);
+    try {
+      const data = await call(path, body);
+      showBanner(data.message || "Done.", "ok");
+      renderAll();
+      return data;
+    } catch (err) {
+      showBanner(err.message || "Failed.", "error");
+    } finally {
+      clearPending();
+    }
   }
 
   function renderHeader() {
@@ -90,16 +134,16 @@
       e.preventDefault();
       const text = sayInput.value.trim();
       if (!text) return;
-      sendOp("say", { text }, "Speaking on device…", sayBtn);
       sayInput.value = "";
+      runCommand("say", { text }, "Speaking on device…", sayBtn);
     } }, [el("label", { for: "say-input", class: "visually-hidden", text: "Words to say aloud" }), sayInput, sayBtn]);
 
     const pills = el("div", { class: "pill-group", role: "group", "aria-label": "Listening duration" });
     const currentSec = Number(state.companion.listen_seconds || 0);
-    for (const opt of codec.LISTEN_OPTIONS) {
+    for (const opt of LISTEN_OPTIONS) {
       const btn = el("button", {
         type: "button", class: "pill-btn", "aria-pressed": opt.seconds === currentSec ? "true" : "false", text: opt.label,
-        onclick: () => sendOp("set_listen", { seconds: opt.seconds }, `Listening: ${opt.label}…`, btn),
+        onclick: () => runCommand("listen", { seconds: opt.seconds }, `Listening: ${opt.label}…`, btn),
       });
       pills.appendChild(btn);
     }
@@ -111,7 +155,7 @@
       const valLabel = el("span", { class: "row-sub", text: `${t.volume ?? 60}%` });
       const slider = el("input", { type: "range", min: 0, max: 100, step: 5, value: t.volume ?? 60, "aria-label": `Volume for ${t.name || t.id}` });
       slider.addEventListener("input", () => { valLabel.textContent = `${slider.value}%`; });
-      slider.addEventListener("change", () => sendOp("set_volume", { terminal: t.id, volume: Number(slider.value) }, "Setting volume…"));
+      slider.addEventListener("change", () => runCommand("volume", { terminal: t.id, volume: Number(slider.value) }, "Setting volume…"));
       quick.appendChild(el("div", { class: "row-sub", text: `Volume · ${t.name || t.id}` }));
       quick.appendChild(el("div", { class: "range-row" }, [slider, valLabel]));
     }
@@ -135,10 +179,10 @@
     for (const s of state.stories) {
       const pct = Number(s.progress || 0);
       const status = pct >= 100 ? "Finished" : pct > 0 ? `In progress · ${pct}%` : "Not started";
-      const openBtn = el("button", { type: "button", class: "btn-compact", text: pct > 0 ? "Continue on device" : "Open on device", onclick: () => sendOp("open_story", { app: s.name }, `Opening ${s.title || s.name}…`, openBtn) });
+      const openBtn = el("button", { type: "button", class: "btn-compact", text: pct > 0 ? "Continue on device" : "Open on device", onclick: () => runCommand("story/open", { story: s.name }, `Opening ${s.title || s.name}…`, openBtn) });
       const actions = [openBtn];
       if (pct > 0) {
-        const resetBtn = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Start over", onclick: () => sendOp("restart_story", { app: s.name }, `Starting ${s.title || s.name} over…`, resetBtn) });
+        const resetBtn = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Start over", onclick: () => runCommand("story/restart", { story: s.name }, `Starting ${s.title || s.name} over…`, resetBtn) });
         actions.push(resetBtn);
       }
       root.appendChild(el("article", { class: "card-box" }, [
@@ -149,20 +193,37 @@
     }
   }
 
-  function loadHistory(append) {
+  async function loadHistory(append) {
     hist.loading = true;
     hist.seq += 1;
+    const seq = hist.seq;
+    const params = { channel: hist.channel };
+    if (hist.q) params.q = hist.q;
+    params.limit = 20;
+    if (append && hist.next_cursor) params.cursor = hist.next_cursor;
     renderHistory();
-    const fields = { channel: hist.channel, q: hist.q, limit: 20, sid: hist.sid, seq: hist.seq };
-    if (append && hist.next_cursor) { fields.before_ts = hist.next_cursor.ts_ms; fields.before_id = hist.next_cursor.id; }
-    sendOp("history", fields);
+    try {
+      const data = await call("history?" + new URLSearchParams(params).toString());
+      if (seq !== hist.seq) return;
+      hist.loaded = true;
+      hist.loading = false;
+      hist.has_more = !!data.has_more;
+      hist.next_cursor = data.next_cursor || null;
+      hist.items = append ? hist.items.concat(data.items || []) : (data.items || []);
+      renderHistory();
+    } catch (err) {
+      if (seq !== hist.seq) return;
+      hist.loading = false;
+      renderHistory();
+      showBanner(err.message || "Could not load history.", "error");
+    }
   }
 
   function renderHistory() {
     const root = document.getElementById("body-history");
     root.innerHTML = "";
     const chips = el("div", { class: "pill-group", role: "group", "aria-label": "Filter by channel" });
-    for (const ch of codec.HISTORY_CHANNELS) {
+    for (const ch of HISTORY_CHANNELS) {
       chips.appendChild(el("button", { type: "button", class: "pill-btn", "aria-pressed": hist.channel === ch.id ? "true" : "false", text: ch.label, onclick: () => { hist.channel = ch.id; loadHistory(false); } }));
     }
     const qInput = el("input", { id: "hist-search", type: "search", value: hist.q, placeholder: "Search history…", maxlength: 100 });
@@ -190,10 +251,17 @@
     const grid = el("div", { class: "voice-grid", role: "group", "aria-label": "Voice selection" });
     for (const v of state.voices) {
       const active = v.id === state.companion.voice;
-      const btn = el("button", { type: "button", class: "voice-btn", "aria-pressed": active ? "true" : "false", onclick: () => sendOp("set_voice", { voice: v.id }, `Previewing ${v.name}…`, btn) }, [el("span", { text: v.name }), active ? el("span", { class: "row-sub", text: "Active" }) : null]);
+      const btn = el("button", { type: "button", class: "voice-btn", "aria-pressed": active ? "true" : "false", onclick: () => runCommand("voice", { voice: v.id }, `Previewing ${v.name}…`, btn) }, [el("span", { text: v.name }), active ? el("span", { class: "row-sub", text: "Active" }) : null]);
       grid.appendChild(btn);
     }
     root.appendChild(el("section", { class: "card-box" }, [el("div", { class: "row-title", text: "Voice" }), el("div", { class: "row-sub", text: "Tap a voice to save and preview it on the device." }), grid]));
+    const revoke = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Forget this link", onclick: () => {
+      runCommand("revoke", {}, "Turning off remote controls…", revoke).then((data) => { if (data && data.ok) window.location.href = "/remote"; });
+    } });
+    root.appendChild(el("section", { class: "card-box" }, [
+      el("div", { class: "row-title", text: "This link" }),
+      el("div", { class: "row-sub", text: "Ask the companion for /remote again to get a fresh link." }), revoke,
+    ]));
   }
 
   function renderAll() { renderHeader(); renderStatus(); renderStories(); renderSettings(); }
@@ -211,10 +279,7 @@
       if (id === name) panel.removeAttribute("hidden");
       else panel.setAttribute("hidden", "until-found");
     }
-    if (name === "history" && !hist.loaded && !hist.loading) {
-      if (window.webxdc && typeof window.webxdc.sendUpdate === "function") loadHistory(false);
-      else renderHistory();
-    }
+    if (name === "history" && !hist.loaded && !hist.loading) loadHistory(false);
   }
 
   const tabBtns = Array.from(document.querySelectorAll(".tab-btn"));
@@ -227,46 +292,23 @@
   });
   for (const id of tabs) document.getElementById("panel-" + id).addEventListener("beforematch", () => switchTab(id, false));
 
-  if (window.webxdc && typeof window.webxdc.setUpdateListener === "function") {
-    window.webxdc.setUpdateListener((update) => {
-      const msg = codec.decodeUpdate(update && update.payload);
-      if (!msg) return;
-      if (msg.op === "state" || msg.op === "live_state") {
-        state = codec.applyStateUpdate(state, msg);
-        if (msg.op === "live_state") renderHeader();
-        else renderAll();
-      } else if (msg.op === "history") {
-        // Delta Chat also delivers the panel's own updates back to this
-        // listener. Only accept the server's answer to this instance's latest
-        // request: replayed updates, our own command, and responses to
-        // superseded filters must not touch the list.
-        if (msg.dir !== "out" || msg.sid !== hist.sid || Number(msg.seq) !== hist.seq) return;
-        clearPending();
-        hist.loaded = true; hist.loading = false; hist.has_more = !!msg.has_more; hist.next_cursor = msg.next_cursor || null;
-        hist.items = msg.append ? hist.items.concat(msg.items || []) : (msg.items || []);
-        renderHistory();
-      } else if (msg.op === "ack") {
-        clearPending();
-        if (msg.req_op === "history" && !msg.ok) { hist.loading = false; renderHistory(); }
-        if (typeof msg.voice === "string" && msg.voice) {
-          const voice = msg.voice;
-          if (voice !== state.companion.voice) {
-            state = Object.assign({}, state, { companion: Object.assign({}, state.companion, { voice }) });
-            renderSettings();
-          }
-        }
-        showBanner(msg.message || (msg.ok ? "Done." : "Failed."), msg.ok ? "ok" : "error");
-      }
-    }, 0).then(() => sendOp("sync"));
-  } else {
-    state = codec.applyStateUpdate(state, {
-      v: 1, op: "state", companion: { id: "greg", name: "Greg", form: "an old chameleon", voice: "bf_lily", listen_seconds: 60, live_state: "idle" },
-      terminals: [{ id: "box3-b324", name: "BOX-3", online: true, volume: 60, battery_pct: 84, charging: true }],
-      stories: [{ name: "lost_island", title: "Lost Island", passages: 12, progress: 42 }],
-      voices: [{ id: "af_heart", name: "Heart" }, { id: "bf_lily", name: "Lily" }],
-    });
-    renderAll();
-    const q = new URLSearchParams(location.search).get("tab");
-    if (tabs.includes(q)) switchTab(q, false);
+  if (!token) {
+    showBanner("This remote link is missing its token. Ask the companion for /remote again.", "error");
+    return;
   }
+
+  const source = new EventSource(apiURL("/remote/events"));
+  source.addEventListener("state", (event) => {
+    const next = JSON.parse(event.data);
+    state = applyState(state, next);
+    reconnecting = false;
+    renderAll();
+  });
+  source.onerror = () => {
+    if (reconnecting) return;
+    reconnecting = true;
+    showBanner("Reconnecting to the companion…", "info");
+  };
+  const q = new URLSearchParams(location.search).get("tab");
+  if (tabs.includes(q)) switchTab(q, false);
 })();
