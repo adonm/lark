@@ -56,20 +56,8 @@ func TestQADeltaChatDeviceReplyLive(t *testing.T) {
 		}
 		return out
 	}
-	waitCount := func(n int, timeout time.Duration) []deltachat.Message {
-		t.Helper()
-		deadline := time.Now().Add(timeout)
-		for time.Now().Before(deadline) {
-			if got := incoming(); len(got) >= n {
-				return got
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		t.Fatalf("timed out waiting for %d incoming messages", n)
-		return nil
-	}
 	// Wait for the welcome so pairing and key exchange have settled.
-	deadline := time.Now().Add(40 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		ok := slices.ContainsFunc(incoming(), func(m deltachat.Message) bool { return strings.Contains(m.Text, "/say") })
 		if ok {
@@ -132,7 +120,20 @@ func TestQADeltaChatDeviceReplyLive(t *testing.T) {
 			t.Fatalf("SendMsg: %v", sendErr)
 		}
 	}
-	replied := waitCount(settled+1, 40*time.Second)
+	debugDeadline := time.Now().Add(40 * time.Second)
+	for {
+		if got := incoming(); len(got) > settled {
+			break
+		}
+		if time.Now().After(debugDeadline) {
+			for _, m := range incoming() {
+				t.Logf("incoming id=%d from=%d view=%v text=%q", m.Id, m.FromId, m.ViewType, m.Text)
+			}
+			t.Fatalf("no DC reply after the read-out")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	replied := incoming()
 	lastID := replied[len(replied)-1].Id
 
 	// The read-out and the companion's reply leave a card with a Reply button.
@@ -192,5 +193,4 @@ func TestQADeltaChatDeviceReplyLive(t *testing.T) {
 	if strings.Contains(strings.ToLower(spoke), "couldn't reach") || strings.Contains(strings.ToLower(spoke), "can't reach") {
 		t.Fatalf("device reply claimed it could not reach the sender: %q", spoke)
 	}
-
 }

@@ -1,5 +1,38 @@
 # Lark QA Report
 
+## 2026-11-23 — Device replies to Delta Chat read-outs
+
+**Symptom:** after a Delta Chat message was read out, answering by voice on the device produced "I couldn't reach greg/cake right now" instead of delivering to the sender.
+
+### Root causes
+
+1. **The card Reply button addressed the card title, and voice notes never used Delta Chat.** `/say` and "I told <name>: …" cards are sent by the companion itself, so tapping Reply recorded a clip addressed to that companion. The card path (`runVoice`, `target != ""`) also delivered only to online LAN peers; `dc.sendIntercom` was never called. With no peer online, `intercomConfirmation` spoke exactly "I couldn't reach greg right now." The same happened on an incoming human card: the target was the human, but there was still no Delta Chat delivery.
+2. **Tap-to-talk dropped the read-out context.** The "replying to <Name> (Delta Chat)" label was kept only for a listening window; `playbackDone` and `startRecording` cleared it. With `listen: off` (the default) the model saw a plain in-person turn and never knew a Delta Chat sender was waiting. Even with the label, delivery depended on the model choosing `emit.intercom`.
+3. **The explicit emit path was narrower than `me.contacts`.** A contact with no display/book name (shown by its address) did not match, and the substring fallback could address the wrong contact.
+
+### Fix
+
+- Read-outs arm a `turnReply{name, companionID, chatID}` on the terminal for 2 minutes. Both tap-to-talk and listening windows capture it, and one turn consumes it. On completion the server sends the final reply text into the originating chat unless that turn called `emit` (per-companion emit counter, including speculative turns). `[silent]`/empty sends nothing, and explicit routing wins.
+- The card Reply target is the conversation partner, not the card sender. When no peer terminal is online, the clip is sent with `dc.sendIntercom` (voice note), and the confirmation uses the Delta Chat contact name ("Sent to Mum!").
+- `emit.intercom` matches exactly what `me.contacts` shows: display name, address-book name, address fallback, and a peer's current ID/name. Substring matching is gone.
+- `agents/lark.md`: a reply to a read-out goes back automatically; `emit` is only for deliberately messaging elsewhere; never claim a Delta Chat sender is unreachable.
+
+### Tests
+
+- `TestDeviceReplyToDeltaChatHuman`, `TestDeviceReplyToDeltaChatCompanion` — a read-out then a spoken reply delivers exactly one DC message to the original sender with the reply text and the `replying to …` label; a follow-up turn is not forwarded.
+- `TestDeviceReplyExplicitEmitWins`, `TestDeviceReplySilentSendsNothing`, `TestDeviceTurnWithoutReadoutNotForwarded`.
+- `TestSayReadoutCardRepliesToHumanSender` — the `/say` card's reply target is the human, its voice note reaches that contact, and the confirmation is "Sent to Mum!" rather than a reach failure.
+- `TestIntercomCardReplyTargetsConversationPartner`, `TestEmitIntercomMatchesContactAddress` (address-only contact matches; partial names are rejected).
+- Reproduction before the fix: a scratch test showed `d.reply == nil` after the read-out finished playing and the card's reply action targeted the companion itself, so the turn had no sender and the voice note hit no contact.
+
+### Verification (2026-11-23)
+
+- `./scripts/check.sh`: pass (one pre-existing `TestEndpointWebSendCancelAndAuto` i/o timeout under load; passes alone 3/3).
+- `./scripts/check.sh --qa`: `TestQASimSuite` pass (9.3 s).
+- Live-tag compile (`go vet -tags=live`, `go test -tags=live -run '^$'`): pass.
+- `TestQADeltaChatDeviceReplyLive` (throwaway `qa-dc-reply` companion + temporary Delta Chat account): 25.1 s, pass — DC text read out on the sim device, its card Reply tapped, spoken answer arrived back in the sender's chat with no "couldn't reach" text. One earlier attempt timed out on the pairing welcome (relay) and passed on retry.
+- `lark status`: `ok=true`, `deltachat=true`.
+
 ## 2026-11-23 — Remote Controls (REST + SSE)
 
 - `/remote` from a verified Delta Chat contact returned one bare `https://…opentunnel.xyz/remote?token=…` link. The page loaded through the real tunnel; `/help` advertised `/remote` and no longer mentioned `/panel`.
