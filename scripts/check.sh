@@ -42,6 +42,9 @@ printf 'PASS host VAD tests\n'
 "${host_cc[@]}" firmware/tests/proto_test.c -o "$host_tests/proto"
 "$host_tests/proto"
 
+"${host_cc[@]}" firmware/tests/wake_gate_test.c -o "$host_tests/wake_gate"
+"$host_tests/wake_gate"
+
 "${host_cc[@]}" firmware/tests/debug_parse_test.c -o "$host_tests/debug_parse"
 "$host_tests/debug_parse"
 

@@ -26,10 +26,12 @@
 #include "proto.h"
 #include "sdkconfig.h"
 #include "telemetry.h"
+#include "wake_gate.h"
 #include "wifi.h"
 
 enum {
     STATUS_MS = 5000,
+    WAKE_POLL_MS = 50,
     INPUT_CAP = 24,
     TCP_BUF_BYTES = 64 * 1024,
     UDP_BUF_BYTES = 16 * 1024,
@@ -90,7 +92,7 @@ static int tcp_fd = -1;
 static int udp_fd = -1;
 static int wake_rx_fd = -1;
 static int wake_tx_fd = -1;
-static atomic_bool wake_pending;
+static wake_gate_t wake_gate;
 static struct sockaddr_in bridge_udp_addr;
 static uint32_t active_ssrc;
 static uint16_t rtp_rec_seq;
@@ -171,9 +173,12 @@ static bool send_tcp_frame(uint32_t session, uint8_t type, const void *payload, 
 static void wake_service(void)
 {
     if (service) xTaskNotifyGive(service);
-    if (wake_tx_fd >= 0 && !atomic_exchange_explicit(&wake_pending, true, memory_order_acq_rel)) {
+    if (wake_tx_fd >= 0 && wake_gate_request(&wake_gate)) {
         uint8_t b = 1;
-        lwip_send(wake_tx_fd, &b, sizeof(b), 0);
+        if (lwip_send(wake_tx_fd, &b, sizeof(b), 0) <= 0) {
+            // Retry on the next request instead of coalescing into a lost datagram.
+            wake_gate_clear(&wake_gate);
+        }
     }
 }
 
@@ -753,12 +758,18 @@ static bool open_connection(uint32_t *out_session)
     return true;
 }
 
+static int wake_recv(void *ctx, void *buf, size_t len)
+{
+    return lwip_recv((int)(intptr_t)ctx, buf, len, 0);
+}
+
 static void drain_wake_socket(void)
 {
-    atomic_store_explicit(&wake_pending, false, memory_order_release);
-    if (wake_rx_fd < 0) return;
-    uint8_t buf[16];
-    while (lwip_recv(wake_rx_fd, buf, sizeof(buf), 0) > 0) {}
+    if (wake_rx_fd < 0) {
+        wake_gate_clear(&wake_gate);
+        return;
+    }
+    wake_gate_drain(&wake_gate, wake_recv, (void *)(intptr_t)wake_rx_fd);
 }
 
 static void drain_ctrl(void)
@@ -830,6 +841,8 @@ static void service_task(void *arg)
             int64_t rem_ms = after_status - now;
             if (rem_ms < 1) rem_ms = 1;
             if (rem_ms > STATUS_MS) rem_ms = STATUS_MS;
+            // Without the wake socket, inputs only arrive via this timeout.
+            if (wake_rx_fd < 0 && rem_ms > WAKE_POLL_MS) rem_ms = WAKE_POLL_MS;
             struct timeval tv = { .tv_sec = (time_t)(rem_ms / 1000), .tv_usec = (suseconds_t)((rem_ms % 1000) * 1000) };
             int ready = lwip_select(maxfd + 1, &rfds, NULL, NULL, &tv);
             if (ready < 0) break;
