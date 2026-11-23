@@ -35,6 +35,7 @@ func e2ePromptLimit() int32 {
 	}
 	return int32(limit)
 }
+
 const e2eModelReply = "The sky looks blue because air scatters sunlight."
 
 type e2eModel struct {
