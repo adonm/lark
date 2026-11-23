@@ -50,7 +50,7 @@ Non-zero for either means the upgrade below is pending. Older firmware reports a
 ### Affects
 - Firmware (`0.20.0`), BOX-3 dependency lock
 
-### Changes
+### Breaking Changes
 - **Wake race**: the loopback wake socket is drained to EWOULDBLOCK before its pending flag clears, so a request racing the drain can no longer strand input until the next 5 s status tick. A failed wake send clears the flag and retries later; if the wake socket cannot be created, the service loop polls every 50 ms.
 - **Pairing brightness**: `POWER` levels 0–100 are accepted, so the pairing QR screen reaches 100%; idle sleep and touch wake still restore the 12/85% UI range.
 - **Stop**: aborting speech still writes the BSP's bounded 90 ms TX tail, so the next chime or reply never starts behind stale speech.
@@ -60,9 +60,13 @@ Non-zero for either means the upgrade below is pending. Older firmware reports a
 - **Protocol**: terminals stop sending and consuming state sequence numbers. `RESUME.last_seq` is always 0 and the wire layout is unchanged, so 0.19.0 and newer servers both work; `STATUS` is read for its state byte only and may drop text/progress/kind. Server-side seq removal and the 12 s → 30 s sleeping ping backoff follow in a separate push; both sides tolerate the other.
 - **Tests**: new wake-drain ordering test and a 120x160 dirty-rectangle commit/strip-copy test on both board geometries.
 
+### How to Detect
+- `GET /status` on the board reports a firmware version below `0.20.0`.
+
 ### Upgrade Steps
 1. `lark ota --board vocat 192.168.1.120`, then `lark ota --board vocat 192.168.1.183`, then `lark ota --board box3 192.168.1.100`.
-2. Check `/status` reports `0.20.0` with a healthy `min_free_heap`, then run one tap-to-talk turn and one TTS reply.
+### Verification
+- `GET /status` reports `0.20.0` with a healthy `min_free_heap`; a tap-to-talk turn and a TTS reply both work, wake and Stop behave.
 
 ---
 
