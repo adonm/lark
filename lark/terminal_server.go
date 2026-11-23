@@ -370,9 +370,31 @@ func (nc *nativeClient) nextMsg() (nativeOutMsg, bool, bool) {
 	return nativeOutMsg{}, false, false
 }
 
+const (
+	pingAwake  = 12 * time.Second
+	pingAsleep = 30 * time.Second
+)
+
+// pingInterval backs off liveness pings while the panel is off, so the radio
+// and CPU are not woken every 12 s. The 75 s read deadline still catches a
+// dead TCP connection.
+func (nc *nativeClient) pingInterval() time.Duration {
+	if nc.hub == nil || nc.client == nil {
+		return pingAwake
+	}
+	nc.hub.mu.Lock()
+	d := nc.client.terminal
+	asleep := d != nil && d.asleep
+	nc.hub.mu.Unlock()
+	if asleep {
+		return pingAsleep
+	}
+	return pingAwake
+}
+
 func (nc *nativeClient) writeLoop() {
 	defer nc.conn.Close()
-	ping := time.NewTicker(12 * time.Second)
+	ping := time.NewTimer(nc.pingInterval())
 	defer ping.Stop()
 	for nc.client.ctx.Err() == nil {
 		if msg, isPCM, ok := nc.nextMsg(); ok {
@@ -417,6 +439,7 @@ func (nc *nativeClient) writeLoop() {
 			if !nc.writePacket(msgPing, ts[:]) {
 				return
 			}
+			ping.Reset(nc.pingInterval())
 		}
 	}
 }
