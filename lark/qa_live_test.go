@@ -367,8 +367,15 @@ func TestQADeltaChatLive(t *testing.T) {
 	waitMsg(20*time.Second, func(m deltachat.Message) bool {
 		return strings.Contains(m.Text, "Remote controls off.")
 	})
-	if status, _ := remoteReq(http.MethodGet, "/remote/api/history", newToken, nil); status != 401 {
-		t.Fatalf("revoked remote token still works: status=%d", status)
+	// /remote off also stops the scoped listener, so check revocation on the
+	// main HTTP port rather than expecting an HTTP status through the tunnel.
+	res, err := client.Get(c.base + "/remote/api/history?token=" + url.QueryEscape(newToken))
+	if err != nil {
+		t.Fatalf("revoked token check: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 401 {
+		t.Fatalf("revoked remote token still works: status=%d", res.StatusCode)
 	}
 
 	sendText("/say Hello from Delta Chat!")
