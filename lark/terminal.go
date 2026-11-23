@@ -57,7 +57,7 @@ func (b *larkServer) terminalEntry(t terminalRecord, full bool) object {
 		"auto_volume":  auto,
 		"volume":       vol,
 		"online":       false,
-		"connected": false,
+		"connected":    false,
 		"mode":         "offline",
 		"sleeping":     false,
 	}
@@ -68,6 +68,10 @@ func (b *larkServer) terminalEntry(t terminalRecord, full bool) object {
 	}
 	if t.CreatedAt != "" {
 		entry["created_at"] = t.CreatedAt
+	}
+	if t.CompanionID != "" {
+		// Report the companion the child knows, not the firmware's generic name.
+		entry["character"] = b.companionFor(t.CompanionID).Name
 	}
 	if b.hub != nil {
 		b.hub.terminalStatus(entry, t.ID, full)
