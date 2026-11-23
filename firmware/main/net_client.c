@@ -34,6 +34,7 @@
 enum {
     STATUS_MS = 5000,
     WAKE_POLL_MS = 50,
+    ACK_RETRY_MS = 20,
     INPUT_CAP = 24,
     TCP_BUF_BYTES = 64 * 1024,
     UDP_BUF_BYTES = 16 * 1024,
@@ -48,18 +49,15 @@ typedef enum {
     INPUT_TAP,
     INPUT_DRAG,
     INPUT_UP,
-    TTS_ACK,
     REJECT_RECORD,
 } input_kind_t;
 
 typedef struct {
     input_kind_t kind;
     uint32_t session;
-    uint32_t audio_id;
     uint16_t rev_lo;
     uint16_t rec_session;
     uint8_t target;
-    bool aborted;
     int x, y;
     int64_t ts_us;
 } input_t;
@@ -111,7 +109,10 @@ static atomic_uint_fast64_t rec_ctrl_us;
 static atomic_bool rec_first_rtp;
 static uint32_t next_session;
 static uint16_t tx_seq;
-static int reconnect_ms = 1000;
+static net_backoff_t backoff;
+static bool reject_terminal;
+static portMUX_TYPE ack_lock = portMUX_INITIALIZER_UNLOCKED;
+static net_ack_t pending_ack;
 static bool has_resume_token;
 static uint8_t resume_token[LARK_RESUME_TOKEN_LEN];
 static int64_t resume_deadline_us;
@@ -286,7 +287,36 @@ void net_client_rec_end(uint32_t session, uint16_t rec_session, uint8_t target, 
 
 void net_client_tts_ack(uint32_t session, uint32_t audio_id, bool aborted)
 {
-    enqueue_session((input_t){ .kind = TTS_ACK, .session = session, .audio_id = audio_id, .aborted = aborted });
+    if (!session || !audio_id) return;
+    // Acks share no ring with pointer input: the newest stream replaces an
+    // unsent ack, and the service loop retries until the frame is on the wire.
+    portENTER_CRITICAL(&ack_lock);
+    net_ack_submit(&pending_ack, session, audio_id, aborted);
+    portEXIT_CRITICAL(&ack_lock);
+    wake_service();
+}
+
+static bool drain_ack_retry(void)
+{
+    uint32_t ready = ready_socket_session();
+    net_ack_t ack;
+    portENTER_CRITICAL(&ack_lock);
+    if (pending_ack.pending && pending_ack.session != ready) {
+        // The stream or socket it belonged to is gone; it can never be sent.
+        pending_ack.pending = false;
+    }
+    bool pending = net_ack_take(&pending_ack, &ack);
+    portEXIT_CRITICAL(&ack_lock);
+    if (!pending) return false;
+
+    lark_tts_ack_t wire = { .aborted = ack.aborted ? 1 : 0, .audio_id = (uint64_t)ack.audio_id };
+    if (send_tcp_frame(ack.session, LARK_MSG_TTS_ACK, &wire, sizeof(wire), true)) {
+        portENTER_CRITICAL(&ack_lock);
+        net_ack_sent(&pending_ack);
+        portEXIT_CRITICAL(&ack_lock);
+        return false;
+    }
+    return true;
 }
 
 int16_t *net_client_rec_buf(void)
@@ -340,14 +370,6 @@ static void send_input(const input_t *input)
     uint32_t session = input->session;
     if (session != atomic_load(&ready_session)) return;
 
-    if (input->kind == TTS_ACK) {
-        lark_tts_ack_t ack = {
-            .aborted = input->aborted ? 1 : 0,
-            .audio_id = (uint64_t)input->audio_id,
-        };
-        send_tcp_frame(session, LARK_MSG_TTS_ACK, &ack, sizeof(ack), true);
-        return;
-    }
     if (input->kind == REJECT_RECORD) {
         net_client_rec_end(session, input->rec_session, input->target, true);
         return;
@@ -453,13 +475,12 @@ static void receive_tts_pcm(const uint8_t *bytes, size_t len)
     }
 }
 
-static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
+static void handle_handshake(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
 {
-    switch (type) {
-    case LARK_MSG_WELCOME: {
+    if (type == LARK_MSG_WELCOME) {
         lark_welcome_t w;
         char tid[32], cid[32];
-        if (!lark_decode_welcome(payload, len, &w, tid, sizeof(tid), cid, sizeof(cid))) break;
+        if (!lark_decode_welcome(payload, len, &w, tid, sizeof(tid), cid, sizeof(cid))) return;
         memcpy(resume_token, w.resume_token, LARK_RESUME_TOKEN_LEN);
         has_resume_token = true;
         resume_deadline_us = esp_timer_get_time() + (int64_t)w.resume_window_ms * 1000LL;
@@ -470,76 +491,95 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         rtp_rec_ts = 0;
         portEXIT_CRITICAL(&udp_lock);
         atomic_store(&ready_session, session);
+        net_backoff_connected(&backoff);
         if (hello_sem) xSemaphoreGive(hello_sem);
         display_set_link(true);
         ESP_LOGI(TAG, "Bridge welcome (id=%s comp=%s udp=%u ssrc=0x%08" PRIx32 ")",
                  tid, cid, w.udp_port, w.ssrc);
-        break;
+        return;
     }
-    case LARK_MSG_REJECT: {
-        lark_reject_t reject;
-        char msg[128];
-        if (!lark_decode_reject(payload, len, &reject, msg, sizeof(msg))) break;
-        ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reject.reason, msg);
-        if (reject.reason == LARK_REJECT_UNKNOWN_TERMINAL) {
-            has_resume_token = false;
-        }
-        break;
+
+    lark_reject_t reject;
+    char msg[128];
+    if (!lark_decode_reject(payload, len, &reject, msg, sizeof(msg))) return;
+    ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reject.reason, msg);
+    if (reject.reason == LARK_REJECT_UNKNOWN_TERMINAL) {
+        has_resume_token = false;
+    } else if (reject.reason == LARK_REJECT_BAD_TOKEN || reject.reason == LARK_REJECT_BAD_VERSION) {
+        // Retrying cannot fix a wrong token or protocol version.
+        reject_terminal = true;
     }
+}
+
+static void handle_display(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
+{
+    (void)session;
+    switch (type) {
     case LARK_MSG_FRAME:
         if (!display_apply_frame(payload, len)) ESP_LOGD(TAG, "Ignored display frame");
         break;
-    case LARK_MSG_REC_CTRL: {
-        lark_rec_ctrl_t ctrl;
-        char target[32];
-        if (!lark_decode_rec_ctrl(payload, len, &ctrl, target, sizeof(target))) break;
-        if (ctrl.op == LARK_REC_STOP || ctrl.op == LARK_REC_CANCEL) {
-            media_record_stop(ctrl.op == LARK_REC_CANCEL);
-        } else if (ctrl.op == LARK_REC_START) {
-            atomic_store_explicit(&rec_ctrl_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
-            atomic_store_explicit(&rec_first_rtp, true, memory_order_relaxed);
-            uint8_t target = ctrl.flags & LARK_REC_TARGET_INTERCOM;
-            bool bridge_ep = (ctrl.flags & LARK_REC_TARGET_BRIDGE_EP) != 0;
-            bool listen = (ctrl.flags & LARK_REC_TARGET_LISTEN) != 0;
-            if (!media_record_start(ctrl.session, target, bridge_ep, listen)) {
-                enqueue_session((input_t){
-                    .kind = REJECT_RECORD,
-                    .session = session,
-                    .rec_session = ctrl.session,
-                    .target = target,
-                });
-            }
-        }
+    case LARK_MSG_POWER:
+        if (len >= 1) display_set_brightness((int)payload[0]);
+        break;
+    default:
         break;
     }
-    case LARK_MSG_TTS_CTRL: {
-        lark_tts_ctrl_t ctrl;
-        if (!lark_decode_tts_ctrl(payload, len, &ctrl)) break;
-        uint32_t audio_id = (uint32_t)ctrl.audio_id;
-        if (ctrl.op == LARK_TTS_START) {
-            tts_split = (audio_tts_splitter_t){ 0 };
-            tts_accepted = media_tts_start(audio_id);
-            if (!tts_accepted) net_client_tts_ack(session, audio_id, true);
-        } else if (ctrl.op == LARK_TTS_END) {
-            if (tts_accepted) {
-                if (tts_split.odd) {
-                    media_interrupt();
-                } else {
-                    media_tts_end();
-                }
-            }
-            tts_accepted = false;
-            tts_split = (audio_tts_splitter_t){ 0 };
-        } else {
-            media_interrupt();
-            tts_accepted = false;
-            tts_split = (audio_tts_splitter_t){ 0 };
+}
+
+static void handle_recording(uint32_t session, const uint8_t *payload, uint32_t len)
+{
+    lark_rec_ctrl_t ctrl;
+    char target[32];
+    if (!lark_decode_rec_ctrl(payload, len, &ctrl, target, sizeof(target))) return;
+    if (ctrl.op == LARK_REC_STOP || ctrl.op == LARK_REC_CANCEL) {
+        media_record_stop(ctrl.op == LARK_REC_CANCEL);
+    } else if (ctrl.op == LARK_REC_START) {
+        atomic_store_explicit(&rec_ctrl_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
+        atomic_store_explicit(&rec_first_rtp, true, memory_order_relaxed);
+        uint8_t target_id = ctrl.flags & LARK_REC_TARGET_INTERCOM;
+        bool bridge_ep = (ctrl.flags & LARK_REC_TARGET_BRIDGE_EP) != 0;
+        bool listen = (ctrl.flags & LARK_REC_TARGET_LISTEN) != 0;
+        if (!media_record_start(ctrl.session, target_id, bridge_ep, listen)) {
+            enqueue_session((input_t){
+                .kind = REJECT_RECORD,
+                .session = session,
+                .rec_session = ctrl.session,
+                .target = target_id,
+            });
         }
-        break;
     }
-    case LARK_MSG_TTS_PCM:
+}
+
+static void handle_tts(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
+{
+    if (type == LARK_MSG_TTS_PCM) {
         receive_tts_pcm(payload, len);
-        break;
+        return;
+    }
+
+    lark_tts_ctrl_t ctrl;
+    if (!lark_decode_tts_ctrl(payload, len, &ctrl)) return;
+    uint32_t audio_id = (uint32_t)ctrl.audio_id;
+    if (ctrl.op == LARK_TTS_START) {
+        tts_split = (audio_tts_splitter_t){ 0 };
+        tts_accepted = media_tts_start(audio_id);
+        if (!tts_accepted) net_client_tts_ack(session, audio_id, true);
+    } else if (ctrl.op == LARK_TTS_END) {
+        // Always close the stream: an overflow or interrupt may have stopped
+        // accepting PCM, but the stream still owes its one completion ack.
+        media_tts_end();
+        tts_accepted = false;
+        tts_split = (audio_tts_splitter_t){ 0 };
+    } else {
+        media_interrupt();
+        tts_accepted = false;
+        tts_split = (audio_tts_splitter_t){ 0 };
+    }
+}
+
+static void handle_misc(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
+{
+    switch (type) {
     case LARK_MSG_CHIME: {
         if (len < 1) break;
         static const audio_tone_t map[] = {
@@ -552,11 +592,6 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         if (payload[0] < sizeof(map) / sizeof(map[0])) media_chime(map[payload[0]]);
         break;
     }
-    case LARK_MSG_POWER:
-        if (len >= 1) {
-            display_set_brightness((int)payload[0]);
-        }
-        break;
     case LARK_MSG_VOLUME:
         if (len >= 1) {
             int level = payload[0];
@@ -579,6 +614,30 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         if (len == 4) send_tcp_frame(session, LARK_MSG_PONG, payload, 4, false);
         break;
     default:
+        break;
+    }
+}
+
+static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
+{
+    switch (type) {
+    case LARK_MSG_WELCOME:
+    case LARK_MSG_REJECT:
+        handle_handshake(session, type, payload, len);
+        break;
+    case LARK_MSG_FRAME:
+    case LARK_MSG_POWER:
+        handle_display(session, type, payload, len);
+        break;
+    case LARK_MSG_REC_CTRL:
+        handle_recording(session, payload, len);
+        break;
+    case LARK_MSG_TTS_CTRL:
+    case LARK_MSG_TTS_PCM:
+        handle_tts(session, type, payload, len);
+        break;
+    default:
+        handle_misc(session, type, payload, len);
         break;
     }
 }
@@ -639,6 +698,61 @@ static void close_sockets(void)
     }
 }
 
+static int open_tcp_socket(const struct sockaddr_in *remote)
+{
+    int fd = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return -1;
+    int one = 1;
+    int buf = TCP_BUF_BYTES;
+    lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    lwip_setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+    lwip_setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof(buf));
+    lwip_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
+
+    int flags = lwip_fcntl(fd, F_GETFL, 0);
+    lwip_fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int rc = lwip_connect(fd, (const struct sockaddr *)remote, sizeof(*remote));
+    if (rc < 0 && errno != EINPROGRESS) {
+        lwip_close(fd);
+        return -1;
+    }
+    if (rc < 0) {
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+        struct timeval tv = { .tv_sec = CONNECT_TIMEOUT_MS / 1000, .tv_usec = 0 };
+        int err = 0;
+        socklen_t elen = sizeof(err);
+        if (lwip_select(fd + 1, NULL, &wfds, NULL, &tv) <= 0 ||
+            lwip_getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) {
+            lwip_close(fd);
+            return -1;
+        }
+    }
+    lwip_fcntl(fd, F_SETFL, flags);
+    struct timeval snd_tv = { .tv_sec = 0, .tv_usec = 500000 };
+    lwip_setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+    return fd;
+}
+
+static int open_udp_socket(uint16_t *local_port)
+{
+    int fd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) return -1;
+    int buf = UDP_BUF_BYTES;
+    lwip_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
+    struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = 0 };
+    socklen_t blen = sizeof(bind_addr);
+    if (lwip_bind(fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) != 0 ||
+        lwip_getsockname(fd, (struct sockaddr *)&bind_addr, &blen) != 0) {
+        lwip_close(fd);
+        return -1;
+    }
+    lwip_fcntl(fd, F_SETFL, lwip_fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    *local_port = ntohs(bind_addr.sin_port);
+    return fd;
+}
+
 static bool open_connection(uint32_t *out_session)
 {
     char port_str[8];
@@ -651,67 +765,14 @@ static bool open_connection(uint32_t *out_session)
     struct sockaddr_in remote = *(const struct sockaddr_in *)res->ai_addr;
     lwip_freeaddrinfo(res);
 
-    int tfd = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    int ufd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int tfd = open_tcp_socket(&remote);
+    uint16_t local_udp_port = 0;
+    int ufd = tfd >= 0 ? open_udp_socket(&local_udp_port) : -1;
     if (tfd < 0 || ufd < 0) {
         if (tfd >= 0) lwip_close(tfd);
         if (ufd >= 0) lwip_close(ufd);
         return false;
     }
-
-    int one = 1;
-    int tcp_buf = TCP_BUF_BYTES;
-    int udp_buf = UDP_BUF_BYTES;
-    lwip_setsockopt(tfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    lwip_setsockopt(tfd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
-    lwip_setsockopt(tfd, SOL_SOCKET, SO_RCVBUF, &tcp_buf, sizeof(tcp_buf));
-    lwip_setsockopt(tfd, SOL_SOCKET, SO_SNDBUF, &tcp_buf, sizeof(tcp_buf));
-    lwip_setsockopt(ufd, SOL_SOCKET, SO_SNDBUF, &udp_buf, sizeof(udp_buf));
-
-    struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = 0 };
-    if (lwip_bind(ufd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) != 0) {
-        lwip_close(tfd);
-        lwip_close(ufd);
-        return false;
-    }
-    socklen_t blen = sizeof(bind_addr);
-    if (lwip_getsockname(ufd, (struct sockaddr *)&bind_addr, &blen) != 0) {
-        lwip_close(tfd);
-        lwip_close(ufd);
-        return false;
-    }
-    uint16_t local_udp_port = ntohs(bind_addr.sin_port);
-
-    int flags = lwip_fcntl(tfd, F_GETFL, 0);
-    lwip_fcntl(tfd, F_SETFL, flags | O_NONBLOCK);
-    int rc = lwip_connect(tfd, (const struct sockaddr *)&remote, sizeof(remote));
-    if (rc < 0 && errno != EINPROGRESS) {
-        lwip_close(tfd);
-        lwip_close(ufd);
-        return false;
-    }
-    if (rc < 0) {
-        fd_set wfds;
-        FD_ZERO(&wfds);
-        FD_SET(tfd, &wfds);
-        struct timeval tv = { .tv_sec = CONNECT_TIMEOUT_MS / 1000, .tv_usec = 0 };
-        if (lwip_select(tfd + 1, NULL, &wfds, NULL, &tv) <= 0) {
-            lwip_close(tfd);
-            lwip_close(ufd);
-            return false;
-        }
-        int err = 0;
-        socklen_t elen = sizeof(err);
-        if (lwip_getsockopt(tfd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) {
-            lwip_close(tfd);
-            lwip_close(ufd);
-            return false;
-        }
-    }
-    lwip_fcntl(tfd, F_SETFL, flags);
-    struct timeval snd_tv = { .tv_sec = 0, .tv_usec = 500000 };
-    lwip_setsockopt(tfd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
-    lwip_fcntl(ufd, F_SETFL, lwip_fcntl(ufd, F_GETFL, 0) | O_NONBLOCK);
 
     if (++next_session == 0) ++next_session;
     uint32_t session = next_session;
@@ -767,89 +828,106 @@ static void drain_ctrl(void)
     }
 }
 
+static void run_session(uint32_t session)
+{
+    int64_t after_status = esp_timer_get_time() / 1000 + STATUS_MS;
+
+    while (atomic_load(&wifi_online) && tcp_fd >= 0 && !reject_terminal) {
+        drain_wake_socket();
+        drain_ctrl();
+        input_t input;
+        while (next_input(&input)) send_input(&input);
+        bool ack_waiting = drain_ack_retry();
+
+        int64_t now = esp_timer_get_time() / 1000;
+        if (ready_socket_session() && now >= after_status) {
+            send_status(session);
+            after_status = now + STATUS_MS;
+        }
+
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(tcp_fd, &rfds);
+        int maxfd = tcp_fd;
+        if (wake_rx_fd >= 0) {
+            FD_SET(wake_rx_fd, &rfds);
+            if (wake_rx_fd > maxfd) maxfd = wake_rx_fd;
+        }
+        int64_t rem_ms = after_status - now;
+        if (rem_ms < 1) rem_ms = 1;
+        if (rem_ms > STATUS_MS) rem_ms = STATUS_MS;
+        if (ack_waiting && rem_ms > ACK_RETRY_MS) rem_ms = ACK_RETRY_MS;
+        // Without the wake socket, inputs only arrive via this timeout.
+        if (wake_rx_fd < 0 && rem_ms > WAKE_POLL_MS) rem_ms = WAKE_POLL_MS;
+        struct timeval tv = { .tv_sec = (time_t)(rem_ms / 1000), .tv_usec = (suseconds_t)((rem_ms % 1000) * 1000) };
+        int ready = lwip_select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        if (ready < 0) return;
+        if (!FD_ISSET(tcp_fd, &rfds)) continue;
+
+        uint8_t hbuf[LARK_PROTO_HDR_SIZE];
+        if (!recv_exact(tcp_fd, hbuf, sizeof(hbuf))) return;
+        lark_hdr_t hdr;
+        if (!lark_unpack_hdr(hbuf, &hdr)) {
+            ESP_LOGW(TAG, "Invalid TCP frame header");
+            return;
+        }
+        if (hdr.length <= FRAME_PACKET_CAP) {
+            if (hdr.length && !recv_exact(tcp_fd, rx_buffer, hdr.length)) return;
+            handle_tcp_message(session, hdr.type, rx_buffer, hdr.length);
+        } else {
+            // Drain oversized non-frame payloads cleanly in chunks.
+            uint32_t rem = hdr.length;
+            while (rem > 0) {
+                uint32_t chunk = rem > FRAME_PACKET_CAP ? FRAME_PACKET_CAP : rem;
+                if (!recv_exact(tcp_fd, rx_buffer, chunk)) return;
+                if (hdr.type == LARK_MSG_TTS_PCM) receive_tts_pcm(rx_buffer, chunk);
+                rem -= chunk;
+            }
+        }
+    }
+}
+
 static void service_task(void *arg)
 {
     (void)arg;
+    net_backoff_init(&backoff);
     for (;;) {
         if (!atomic_load(&wifi_online)) {
             close_sockets();
-            reconnect_ms = net_backoff_reset();
             while (!atomic_load(&wifi_online)) {
                 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             }
             continue;
         }
-        init_wake_sockets();
-        uint32_t session = 0;
-        if (!open_connection(&session)) {
-            close_sockets();
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(reconnect_ms));
-            reconnect_ms = net_backoff_next(reconnect_ms);
+        if (net_backoff_stopped(&backoff)) {
+            // A wrong token or protocol version cannot heal by retrying; wait
+            // for a reboot or a config change. Wifi events only wake this wait.
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
         }
-        reconnect_ms = net_backoff_reset();
-        int64_t after_status = esp_timer_get_time() / 1000 + STATUS_MS;
-
-        while (atomic_load(&wifi_online) && tcp_fd >= 0) {
-            drain_wake_socket();
-            drain_ctrl();
-            input_t input;
-            while (next_input(&input)) send_input(&input);
-
-            int64_t now = esp_timer_get_time() / 1000;
-            if (ready_socket_session() && now >= after_status) {
-                send_status(session);
-                after_status = now + STATUS_MS;
-            }
-
-            fd_set rfds;
-            FD_ZERO(&rfds);
-            FD_SET(tcp_fd, &rfds);
-            int maxfd = tcp_fd;
-            if (wake_rx_fd >= 0) {
-                FD_SET(wake_rx_fd, &rfds);
-                if (wake_rx_fd > maxfd) maxfd = wake_rx_fd;
-            }
-            int64_t rem_ms = after_status - now;
-            if (rem_ms < 1) rem_ms = 1;
-            if (rem_ms > STATUS_MS) rem_ms = STATUS_MS;
-            // Without the wake socket, inputs only arrive via this timeout.
-            if (wake_rx_fd < 0 && rem_ms > WAKE_POLL_MS) rem_ms = WAKE_POLL_MS;
-            struct timeval tv = { .tv_sec = (time_t)(rem_ms / 1000), .tv_usec = (suseconds_t)((rem_ms % 1000) * 1000) };
-            int ready = lwip_select(maxfd + 1, &rfds, NULL, NULL, &tv);
-            if (ready < 0) break;
-
-            if (FD_ISSET(tcp_fd, &rfds)) {
-                uint8_t hbuf[LARK_PROTO_HDR_SIZE];
-                if (!recv_exact(tcp_fd, hbuf, sizeof(hbuf))) break;
-                lark_hdr_t hdr;
-                if (!lark_unpack_hdr(hbuf, &hdr)) {
-                    ESP_LOGW(TAG, "Invalid TCP frame header");
-                    break;
-                }
-                if (hdr.length <= FRAME_PACKET_CAP) {
-                    if (hdr.length && !recv_exact(tcp_fd, rx_buffer, hdr.length)) break;
-                    handle_tcp_message(session, hdr.type, rx_buffer, hdr.length);
-                } else {
-                    // Drain oversized non-frame payloads cleanly in chunks.
-                    uint32_t rem = hdr.length;
-                    bool ok = true;
-                    while (rem > 0) {
-                        uint32_t chunk = rem > FRAME_PACKET_CAP ? FRAME_PACKET_CAP : rem;
-                        if (!recv_exact(tcp_fd, rx_buffer, chunk)) {
-                            ok = false;
-                            break;
-                        }
-                        if (hdr.type == LARK_MSG_TTS_PCM) receive_tts_pcm(rx_buffer, chunk);
-                        rem -= chunk;
-                    }
-                    if (!ok) break;
-                }
-            }
+        init_wake_sockets();
+        uint32_t session = 0;
+        reject_terminal = false;
+        if (!open_connection(&session)) {
+            close_sockets();
+            int delay = net_backoff_delay_ms(&backoff);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(delay));
+            net_backoff_failed(&backoff);
+            continue;
         }
+
+        run_session(session);
+        bool welcomed = ready_socket_session() == session;
         close_sockets();
-        if (atomic_load(&wifi_online)) {
+        if (reject_terminal) {
+            net_backoff_rejected(&backoff, true);
+        } else if (welcomed) {
+            // WELCOME already reset the delay; retry a healthy session quickly.
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+        } else {
+            int delay = net_backoff_delay_ms(&backoff);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(delay));
+            net_backoff_failed(&backoff);
         }
     }
 }
