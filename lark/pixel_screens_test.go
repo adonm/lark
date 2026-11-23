@@ -99,7 +99,7 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 		voiceP1, v1Hits, _ := renderPixelVoiceWithHits(spec, lilyVoice, 0, th)
 		voiceP2, _, _ := renderPixelVoiceWithHits(spec, lilyVoice, 1, th)
 		moreImg, _, _ := renderPixelMoreWithHits(spec, 0, th)
-		volImg, _, _ := renderPixelVolumeWithHits(spec, false, 60, 0, th)
+		volImg, _, _ := renderPixelVolumeWithHits(spec, 60, 0, th)
 		statsImg, _, _ := renderPixelStatsWithHits(spec, []menuRow{{"Companion", "Greg"}, {"Voice", "Heart"}}, th)
 		wantVoiceP1 := 3
 		if !spec.round {
@@ -277,7 +277,7 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		voiceP2, _, _ := renderPixelVoiceWithHits(spec, heartVoice, 1, th)
 		save(spec.name+"-voice-p1", voiceP1)
 		save(spec.name+"-voice-p2", voiceP2)
-		volImg, _, _ := renderPixelVolumeWithHits(spec, false, 60, 0, th)
+		volImg, _, _ := renderPixelVolumeWithHits(spec, 60, 0, th)
 		save(spec.name+"-volume", volImg)
 		statsImg, _, _ := renderPixelStatsWithHits(spec, []menuRow{{"Companion", "Greg"}, {"Battery", "88%"}, {"Voice", "Heart"}}, th)
 		save(spec.name+"-stats", statsImg)

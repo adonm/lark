@@ -478,7 +478,7 @@ func TestRemoteVolumeStoryOpenAndRevoke(t *testing.T) {
 	if res["ok"] != true {
 		t.Fatalf("volume failed: %+v", res)
 	}
-	if _, level := b.volumePrefs("vocat-r001"); level != 73 {
+	if level := b.volumePref("vocat-r001"); level != 73 {
 		t.Fatalf("volume not persisted: %d", level)
 	}
 

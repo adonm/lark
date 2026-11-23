@@ -8,6 +8,8 @@ tap-label Voice
 tap-label Back
 tap-label More
 tap-label Volume
+tap-label vol-down
+tap-label vol-up
 tap-label Back
 tap-label Stats
 tap-label Back

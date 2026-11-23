@@ -199,6 +199,36 @@ func TestListeningBoolMigratesFromSeconds(t *testing.T) {
 	}
 }
 
+func TestVolumePrefsMigrateToManualOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lark.db")
+	d, err := openLarkDB(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the pre-manual shape: auto flag plus manual_volume.
+	if _, err := d.Exec(`DROP TABLE terminal_prefs`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`CREATE TABLE terminal_prefs (terminal_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO terminal_prefs (terminal_id,auto_volume,manual_volume) VALUES ('vocat-33d8',1,70)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = testDB(t, path)
+	var volume int
+	if err := d.QueryRow(`SELECT volume FROM terminal_prefs WHERE terminal_id='vocat-33d8'`).Scan(&volume); err != nil || volume != 70 {
+		t.Fatalf("volume = %d, %v; want 70", volume, err)
+	}
+	var retired int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('terminal_prefs') WHERE name IN ('auto_volume','manual_volume')`).Scan(&retired); err != nil || retired != 0 {
+		t.Fatalf("volume columns still present: %d, %v", retired, err)
+	}
+}
+
 func TestRetiredTimerColumnIsDropped(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lark.db")
 	d, err := openLarkDB(t.Context(), path)
