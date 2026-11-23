@@ -9,9 +9,37 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestChatHistoryCloseDuringConcurrentAdd(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	for range 200 {
+		h := &chatHistory{db: b.db}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for _, id := range []string{"greg", "cake"} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				for range 8 {
+					h.add(id, newChat("user", "You", "hello", "typed"))
+				}
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			h.close()
+		}()
+		close(start)
+		wg.Wait()
+	}
+}
 
 func TestDeviceResetHistory(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, dir string) {

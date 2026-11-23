@@ -114,6 +114,7 @@ type chatWrite struct {
 
 type chatQueue struct {
 	ch   chan chatWrite
+	quit chan struct{}
 	done chan struct{}
 }
 
@@ -136,7 +137,7 @@ func (h *chatHistory) queueFor(id string) *chatQueue {
 	}
 	q := h.queues[key]
 	if q == nil {
-		q = &chatQueue{ch: make(chan chatWrite, 64), done: make(chan struct{})}
+		q = &chatQueue{ch: make(chan chatWrite, 64), quit: make(chan struct{}), done: make(chan struct{})}
 		h.queues[key] = q
 		go h.runQueue(q)
 	}
@@ -145,14 +146,31 @@ func (h *chatHistory) queueFor(id string) *chatQueue {
 
 func (h *chatHistory) runQueue(q *chatQueue) {
 	defer close(q.done)
-	for w := range q.ch {
-		if w.sync != nil {
-			close(w.sync)
-			continue
+	for {
+		select {
+		case <-q.quit:
+			// Persist what is already queued, then stop.
+			for {
+				select {
+				case w := <-q.ch:
+					h.write(q, w)
+				default:
+					return
+				}
+			}
+		case w := <-q.ch:
+			h.write(q, w)
 		}
-		if _, err := h.db.Exec(insertMessage, messageValues(w.id, w.entry)...); err != nil {
-			log.Printf("Lark could not persist message: %v", err)
-		}
+	}
+}
+
+func (h *chatHistory) write(q *chatQueue, w chatWrite) {
+	if w.sync != nil {
+		close(w.sync)
+		return
+	}
+	if _, err := h.db.Exec(insertMessage, messageValues(w.id, w.entry)...); err != nil {
+		log.Printf("Lark could not persist message: %v", err)
 	}
 }
 
@@ -167,8 +185,14 @@ func (h *chatHistory) flush(id string) {
 		return
 	}
 	done := make(chan struct{})
-	q.ch <- chatWrite{sync: done}
-	<-done
+	select {
+	case q.ch <- chatWrite{sync: done}:
+		select {
+		case <-done:
+		case <-q.quit:
+		}
+	case <-q.quit:
+	}
 }
 
 func (h *chatHistory) close() {
@@ -188,7 +212,7 @@ func (h *chatHistory) close() {
 	clear(h.queues)
 	h.mu.Unlock()
 	for _, q := range queues {
-		close(q.ch)
+		close(q.quit)
 		<-q.done
 	}
 }
@@ -248,7 +272,10 @@ func messageValues(id string, e chatEntry) []any {
 func (h *chatHistory) add(id string, e chatEntry) {
 	if e, ok := canonicalMessage(e); ok {
 		if q := h.queueFor(id); q != nil {
-			q.ch <- chatWrite{id: strings.ToLower(id), entry: e}
+			select {
+			case q.ch <- chatWrite{id: strings.ToLower(id), entry: e}:
+			case <-q.quit:
+			}
 		}
 	}
 }
