@@ -321,11 +321,13 @@ type turnOptions struct {
 }
 
 type specTurn struct {
-	text     string
-	audioLen int
-	started  time.Time
-	emitMark uint64 // emit sequence before the speculative model ran
-	cancel   context.CancelFunc
+	text       string
+	audioLen   int
+	started    time.Time
+	emitMark   uint64 // emit sequence before the speculative model ran
+	cancel     context.CancelFunc
+	fillCtx    context.Context // per-spec context for speculative TTS fills
+	cancelFill context.CancelFunc
 
 	mu        sync.Mutex
 	promoted  bool
@@ -360,13 +362,16 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(b.root, turnTimeout)
+	fillCtx, cancelFill := context.WithTimeout(b.root, turnTimeout)
 	s := &specTurn{
-		text:     text,
-		audioLen: audioLen,
-		started:  time.Now(),
-		emitMark: b.emits.mark(companionID),
-		cancel:   cancel,
-		done:     make(chan specResult, 1),
+		text:       text,
+		audioLen:   audioLen,
+		started:    time.Now(),
+		emitMark:   b.emits.mark(companionID),
+		cancel:     cancel,
+		fillCtx:    fillCtx,
+		cancelFill: cancelFill,
+		done:       make(chan specResult, 1),
 	}
 	// Pre-synthesize the first sentence while the turn is still speculative so a
 	// promoted reply can publish PCM immediately instead of waiting for TTS.
@@ -387,14 +392,13 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 		s.warming = true
 		s.mu.Unlock()
 		// Reserve synchronously so a promoted turn awaits this clip instead of
-		// queueing a duplicate synthesis for the same first chunk. The fill uses
-		// the server context: a speculative call may finish (and cancel its own
-		// context) before the promoted turn consumes the audio.
+		// queueing a duplicate synthesis for the same first chunk. The fill runs
+		// on the spec's own context so aborting the speculation drops it.
 		item, owner := b.clips.reserve(voice, clean)
 		if !owner {
 			return
 		}
-		go b.clips.fill(b.root, b.worker, voice, clean, item)
+		go b.clips.fill(s.fillCtx, b.worker, voice, clean, item)
 	}
 	go func() {
 		defer cancel()
@@ -474,7 +478,17 @@ func (s *specTurn) abort() {
 	s.aborted = true
 	s.onSent, s.onTool, s.onChat = nil, nil, nil
 	s.mu.Unlock()
+	s.cancelFill()
 	s.cancel()
+}
+
+func (s *specTurn) isPromoted() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.promoted
 }
 
 func (s *specTurn) promote(ctx context.Context, onSent func(string), onTool func(), onChat func(chatEntry)) specResult {

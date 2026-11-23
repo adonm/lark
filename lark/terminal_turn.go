@@ -485,6 +485,13 @@ func (h *wsHub) runTurn(ctx context.Context, d *wsTerminal, id uint64, text, sou
 }
 
 func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, text, source string, pcm []byte, ch turnChannel) {
+	if ch.spec != nil {
+		defer func() {
+			if !ch.spec.isPromoted() {
+				ch.spec.abort()
+			}
+		}()
+	}
 	if d.companionID == "" {
 		h.turnError(d, id, "This terminal is not attached to a companion.")
 		return

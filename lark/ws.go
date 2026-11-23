@@ -84,12 +84,18 @@ type wsHub struct {
 	resumes           map[[resumeTokenLen]byte]*resumeEntry
 	assetsMu          sync.RWMutex
 	assets            map[string]cachedAssets
+	assetsClock       uint64
 }
+
+// Keep every companion's decoded assets resident; the bound only guards
+// against long histories of replaced portraits.
+const assetsCacheLimit = 16
 
 type cachedAssets struct {
 	bg    *image.RGBA
 	poses [4]*image.RGBA
 	theme pixelTheme
+	used  uint64
 }
 
 func newWSHub(b *larkServer, atmosphere bool) *wsHub {

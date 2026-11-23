@@ -850,12 +850,16 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 // rectangle is always based on the last frame committed to that terminal's queue.
 func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
 	if c != nil && c.PortraitID != "" && h != nil && h.b != nil && h.b.portraits != nil {
-		h.assetsMu.RLock()
-		cached, ok := h.assets[c.PortraitID]
-		h.assetsMu.RUnlock()
-		if ok {
+		h.assetsMu.Lock()
+		h.assetsClock++
+		clock := h.assetsClock
+		if cached, ok := h.assets[c.PortraitID]; ok {
+			cached.used = clock
+			h.assets[c.PortraitID] = cached
+			h.assetsMu.Unlock()
 			return cached.bg, cached.poses, cached.theme
 		}
+		h.assetsMu.Unlock()
 		dir := filepath.Join(h.b.portraits.dir, c.PortraitID)
 		var bg *image.RGBA
 		var poses [4]*image.RGBA
@@ -876,7 +880,8 @@ func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA,
 			if h.assets == nil {
 				h.assets = make(map[string]cachedAssets)
 			}
-			h.assets[c.PortraitID] = cachedAssets{bg: bg, poses: poses, theme: th}
+			h.assets[c.PortraitID] = cachedAssets{bg: bg, poses: poses, theme: th, used: clock}
+			h.evictAssetsLocked()
 			h.assetsMu.Unlock()
 		}
 		return bg, poses, th
@@ -884,6 +889,30 @@ func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA,
 	poses := pixelPlaceholderPoses()
 	th := derivePixelTheme(nil, poses[:])
 	return nil, poses, th
+}
+
+// invalidateAssets drops the decoded background and poses for a portrait so
+// the next render reloads them from disk.
+func (h *wsHub) invalidateAssets(portraitID string) {
+	if h == nil || portraitID == "" {
+		return
+	}
+	h.assetsMu.Lock()
+	delete(h.assets, portraitID)
+	h.assetsMu.Unlock()
+}
+
+func (h *wsHub) evictAssetsLocked() {
+	for len(h.assets) > assetsCacheLimit {
+		var oldest string
+		var oldestUsed uint64
+		for id, a := range h.assets {
+			if oldest == "" || a.used < oldestUsed {
+				oldest, oldestUsed = id, a.used
+			}
+		}
+		delete(h.assets, oldest)
+	}
 }
 
 func poseIndexForMood(pose companionPose) int {

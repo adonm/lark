@@ -430,13 +430,19 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 	if op != "get" && b.dc != nil && b.dc.ready.Load() && c.DCAccountID != 0 {
 		go b.dc.syncProfile(c, c.DCAccountID)
 	}
+	if op != "get" && before.PortraitID != "" && before.PortraitID != c.PortraitID {
+		b.ws.invalidateAssets(before.PortraitID)
+		b.portraits.discard(before.PortraitID)
+	}
 	if op != "get" && c.Form != "" && c.Form != before.Form && c.PortraitID != "" && portrait == nil && b.portraits != nil && b.portraits.generate != nil {
+		b.ws.invalidateAssets(c.PortraitID)
 		go func(pid, form, vibe string) {
 			ctxBG := b.root
 			if ctxBG == nil {
 				ctxBG = context.Background()
 			}
 			_ = b.portraits.generateBackground(ctxBG, pid, form, vibe)
+			b.ws.invalidateAssets(pid)
 		}(c.PortraitID, c.Form, c.Personality)
 	}
 	return object{"ok": true, "companion_id": id, "companion": c}, nil

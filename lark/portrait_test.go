@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func portraitFixture(t *testing.T) []byte {
@@ -265,6 +267,81 @@ func TestPortraitOpenCodeContract(t *testing.T) {
 	}
 }
 
+func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
+	sheet := portraitFixture(t)
+	dir := t.TempDir()
+	var backgrounds atomic.Int32
+	encode := func(img image.Image) []byte {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			t.Error(err)
+		}
+		return buf.Bytes()
+	}
+	b, base := wsHarness(t, nil)
+	b.portraits = &portraitStore{dir: dir, generate: func(_ context.Context, prompt string, _ []byte) ([]byte, error) {
+		if strings.Contains(prompt, "background scene") {
+			n := backgrounds.Add(1)
+			img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+			draw.Draw(img, img.Bounds(), image.NewUniform(imagecolor.RGBA{R: uint8(20 * n), G: 80, B: 40, A: 255}), image.Point{}, draw.Src)
+			return encode(img), nil
+		}
+		return sheet, nil
+	}}
+	own := testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Own", "form": "a cat"}, 201))
+	id := str(own["id"])
+	created := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{"portrait": object{"prompt": "draw an owl"}}}, false)
+	companion, _ := created["companion"].(object)
+	pid := str(companion["portrait_id"])
+	if !portraitIDPattern.MatchString(pid) {
+		t.Fatalf("no portrait id in %+v", created)
+	}
+
+	c := b.companionFor(id)
+	cached, _, _ := b.ws.companionAssets(&c)
+	if cached == nil {
+		t.Fatal("portrait background was not cached")
+	}
+	before := cached.RGBAAt(cached.Bounds().Dx()/2, cached.Bounds().Dy()/2)
+
+	if out := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{"form": "a red fox"}}, false); out["companion"] == nil {
+		t.Fatalf("form patch failed: %+v", out)
+	}
+	// The regeneration runs in the background: wait for the new file, then for
+	// the invalidated cache entry.
+	deadline := time.Now().Add(2 * time.Second)
+	fileRefreshed := false
+	for time.Now().Before(deadline) {
+		if raw, err := os.ReadFile(filepath.Join(dir, pid, "bg.png")); err == nil {
+			if img, err := png.Decode(bytes.NewReader(raw)); err == nil && img.At(img.Bounds().Dx()/2, img.Bounds().Dy()/2) != before {
+				fileRefreshed = true
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !fileRefreshed {
+		t.Fatal("form change did not regenerate the background file")
+	}
+	for time.Now().Before(deadline) {
+		b.ws.assetsMu.RLock()
+		_, present := b.ws.assets[pid]
+		b.ws.assetsMu.RUnlock()
+		if !present {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	refreshed, _, _ := b.ws.companionAssets(&c)
+	if refreshed == nil {
+		t.Fatal("portrait background missing after form change")
+	}
+	after := refreshed.RGBAAt(refreshed.Bounds().Dx()/2, refreshed.Bounds().Dy()/2)
+	if after == before {
+		t.Fatalf("cached background survived the form change: %v", after)
+	}
+}
+
 func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	sheet := portraitFixture(t)
 	dir := t.TempDir()
@@ -316,6 +393,9 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	edited := patch(object{"prompt": "add a scarf", "edit": true}, false)
 	if newAsset := str(edited["portrait_id"]); newAsset == "" || asset == newAsset || edited["form"] != "a snowy owl" {
 		t.Fatal(edited)
+	}
+	if _, err := os.Stat(filepath.Join(dir, asset)); !os.IsNotExist(err) {
+		t.Fatalf("replaced portrait directory survived: %v", err)
 	}
 }
 

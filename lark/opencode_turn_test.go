@@ -647,3 +647,24 @@ func TestFinishTurnWaitsForPendingTTS(t *testing.T) {
 		t.Fatalf("playbackDone status = %d, want statusDone (%d)", st.state, statusDone)
 	}
 }
+
+func TestSpecTurnAbortsOnEarlyTurnExit(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	fillCtx, cancelFill := context.WithCancel(t.Context())
+	defer cancelFill()
+	var modelCanceled, fillCanceled bool
+	s := &specTurn{
+		done:       make(chan specResult, 1),
+		fillCtx:    fillCtx,
+		cancel:     func() { modelCanceled = true },
+		cancelFill: func() { fillCanceled = true; cancelFill() },
+	}
+	d := &wsTerminal{id: "detached", key: "detached"}
+	b.ws.runTurnChannel(t.Context(), d, 1, "hello", "voice", nil, turnChannel{spec: s})
+	if !s.aborted || !modelCanceled || !fillCanceled {
+		t.Fatalf("early exit orphaned the speculative turn: aborted=%v model=%v fill=%v", s.aborted, modelCanceled, fillCanceled)
+	}
+	if fillCtx.Err() == nil {
+		t.Fatal("early exit left the speculative fill context live")
+	}
+}
