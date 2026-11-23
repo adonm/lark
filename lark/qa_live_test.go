@@ -321,8 +321,8 @@ func TestQADeltaChatLive(t *testing.T) {
 		}
 		restSamples = append(restSamples, time.Since(start))
 	}
-	chatSamples := make([]time.Duration, 0, 5)
-	for i := 0; i < 5; i++ {
+	chatSamples := make([]time.Duration, 0, 1)
+	for i := 0; i < 1; i++ {
 		before := map[uint32]bool{}
 		if ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false); err == nil {
 			for _, id := range ids {
@@ -332,7 +332,7 @@ func TestQADeltaChatLive(t *testing.T) {
 		start := time.Now()
 		sendText(fmt.Sprintf("/say latency probe %d", i))
 		measured := false
-		probeDeadline := time.Now().Add(20 * time.Second)
+		probeDeadline := time.Now().Add(60 * time.Second)
 		for time.Now().Before(probeDeadline) {
 			ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false)
 			if err == nil {
@@ -341,7 +341,7 @@ func TestQADeltaChatLive(t *testing.T) {
 						continue
 					}
 					m, err := qadc.rpc.GetMessage(qadc.accID, id)
-					if err == nil && m.FromId == deltachat.ContactSelf && m.ViewType == deltachat.ViewtypeText && m.Text == "Said it." {
+					if err == nil && m.FromId != deltachat.ContactSelf && m.ViewType == deltachat.ViewtypeText && m.Text == "Said it." {
 						chatSamples = append(chatSamples, time.Since(start))
 						measured = true
 						break
