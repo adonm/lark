@@ -20,6 +20,10 @@ import (
 
 const turnTimeout = 90 * time.Second
 
+// contractWait bounds how long a turn waits for the background MCP catalog
+// refresh after a restart or a prompt/deploy change.
+const contractWait = 30 * time.Second
+
 type fixedEndpoint endpoint
 
 func (e fixedEndpoint) get(bool) (endpoint, error) { return endpoint(e), nil }
@@ -123,6 +127,7 @@ type openCode struct {
 	defaultModel ocModel
 	sessionModel map[string]ocModel
 	flushHistory func(string)
+	contractWait time.Duration
 }
 
 type ocReset struct {
@@ -137,6 +142,7 @@ func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, se
 		interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
 		verified:     make(map[string]string),
 		sessionModel: make(map[string]ocModel),
+		contractWait: contractWait,
 		feed:         eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
 	o.feed.onConfigChange = func() { o.invalidateVerified() }
 	for i := range o.turns {
@@ -452,6 +458,34 @@ func (o *openCode) fastSession(ctx context.Context, companionID, character strin
 	return o.ensureSession(ctx, companionID, character, replace)
 }
 
+// awaitContract waits for runSchemaUpgrade to record the current MCP catalog
+// hash. A turn that lands during a restart or a prompt change waits here
+// instead of failing with "refresh pending".
+func (o *openCode) awaitContract(ctx context.Context) error {
+	wait := o.contractWait
+	if wait <= 0 {
+		wait = contractWait
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		catalog, err := o.db.getMeta(ctx, mcpSchemaMeta)
+		if err != nil {
+			return problem(502, "Cannot read OpenCode MCP contract")
+		}
+		if catalog == o.contract {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return problem(503, "OpenCode MCP catalog refresh pending")
+		}
+	}
+}
+
 func (o *openCode) ensureSession(ctx context.Context, companionID, character string, replace bool) (string, error) {
 	if o.contract != "" {
 		catalog, err := o.db.getMeta(ctx, mcpSchemaMeta)
@@ -459,7 +493,13 @@ func (o *openCode) ensureSession(ctx context.Context, companionID, character str
 			return "", problem(502, "Cannot read OpenCode MCP contract")
 		}
 		if catalog != o.contract {
-			return "", problem(503, "OpenCode MCP catalog refresh pending")
+			// The catalog refreshes in the background right after the listener
+			// comes up (and after any prompt/deploy change). A turn that
+			// arrives first waits for it instead of failing, which is what made
+			// the first turn after a restart silently fail.
+			if err := o.awaitContract(ctx); err != nil {
+				return "", err
+			}
 		}
 	}
 	binding, err := o.readBinding(ctx, companionID)

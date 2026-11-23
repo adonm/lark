@@ -311,7 +311,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		}
 		start := time.Now()
 		clean, err := spokenText(s)
-		if err != nil || b.worker == nil || !b.worker.ready.Load() {
+		if err != nil || b.worker == nil {
 			return
 		}
 		mu.Lock()
@@ -373,7 +373,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	}
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
-	if !options.textOnly && speechErr == nil && (eager != nil || b.worker != nil && b.worker.ready.Load()) {
+	if !options.textOnly && speechErr == nil && (eager != nil || b.worker != nil && b.worker.available()) {
 		ex := sentenceExtractor{firstChunk: true}
 		final := append(ex.add(clean), ex.flush()...)
 		if eager == nil || !eager.completeAfter(preToolCount, final) {

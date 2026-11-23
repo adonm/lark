@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -77,10 +78,22 @@ func (b *larkServer) sttFunc() func(context.Context, []byte) (string, error) {
 
 func (b *larkServer) decodeClip(ctx context.Context, pcm []byte) (string, error) {
 	fn := b.sttFunc()
-	if fn == nil {
-		return "", errors.New("STT unavailable")
+	if fn != nil {
+		return fn(ctx, pcm)
 	}
-	return fn(ctx, pcm)
+	// Parakeet loads in the background after the listener is up. Wait for it
+	// (bounded) so the first turn after a restart is not an STT failure.
+	if b.models.stt != nil {
+		waitCtx, cancel := context.WithTimeout(ctx, modelWait)
+		defer cancel()
+		if err := b.models.stt.await(waitCtx); err != nil {
+			return "", fmt.Errorf("STT unavailable: %w", err)
+		}
+		if fn = b.sttFunc(); fn != nil {
+			return fn(ctx, pcm)
+		}
+	}
+	return "", errors.New("STT unavailable")
 }
 
 // The host can check the installed TTS and STT together without creating a

@@ -30,6 +30,7 @@ type larkServer struct {
 	stt             func(context.Context, []byte) (string, error)
 	sttLabel        string
 	ttsLabel        string
+	models          modelSet
 	endpoint        *endpointSettings
 	oc              *openCode
 	worker          *synthWorker
@@ -334,10 +335,15 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			if sttName == "" {
 				sttName = sttEngine
 			}
-			return object{"ok": true, "stt": b.sttFunc() != nil, "stt_engine": sttName,
+			out := object{"ok": true, "stt": b.sttFunc() != nil, "stt_engine": sttName,
 				"opencode": o, "tts": ready, "tts_engine": engine,
-				"smart_turn": b.endpoint != nil && b.endpoint.smartTurn != nil,
-				"deltachat":  b.dc != nil && b.dc.ready.Load()}, nil
+				"smart_turn": b.endpoint.smart() != nil,
+				"deltachat":  b.dc != nil && b.dc.ready.Load()}
+			if b.models.stt != nil {
+				out["models"] = b.models.report()
+				out["models_ready"] = b.models.allReady()
+			}
+			return out, nil
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
 		case path == "/api/library":

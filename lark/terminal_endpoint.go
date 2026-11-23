@@ -11,8 +11,26 @@ import (
 var debugEndpoint = os.Getenv("LARK_DEBUG_ENDPOINT") != ""
 
 type endpointSettings struct {
+	mu        sync.RWMutex
 	newVAD    func() endpointVAD
 	smartTurn func([]byte) (float32, error)
+}
+
+// smart returns the semantic endpoint function, or nil while Smart Turn is
+// still loading in the background.
+func (e *endpointSettings) smart() func([]byte) (float32, error) {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.smartTurn
+}
+
+func (e *endpointSettings) setSmartTurn(fn func([]byte) (float32, error)) {
+	e.mu.Lock()
+	e.smartTurn = fn
+	e.mu.Unlock()
 }
 
 const (
@@ -480,7 +498,8 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					}
 				}(clip, pcmDuration(lastGateOpenLen), pcmDuration(startOff), len(u.pcm), windowed)
 			}
-			if h.b.endpoint.smartTurn != nil && vad != nil && u.policy.hasWords &&
+			smartTurnFn := h.b.endpoint.smart()
+			if smartTurnFn != nil && vad != nil && u.policy.hasWords &&
 				!u.policy.incomplete && smartTurnCh == nil &&
 				(smartTurnCheckedAt != u.policy.lastVoicedAt && at-u.policy.lastVoicedAt >= endpointSpecQuiet ||
 					smartTurnCheckedQuiet < endpointQuiet && lastSmartTurnProb < smartTurnThreshold &&
@@ -492,7 +511,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				wordAt := u.policy.lastVoicedAt
 				startOff := max(0, len(u.pcm)-endpointProbeWindow)
 				pcm := u.pcm[startOff:len(u.pcm):len(u.pcm)]
-				fn := h.b.endpoint.smartTurn
+				fn := smartTurnFn
 				go func() {
 					prob, err := fn(pcm)
 					if err != nil {
@@ -502,7 +521,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				}()
 			}
 			if spec == nil && !c.listen && c.companionID != "" && h.b != nil && h.b.oc != nil &&
-				h.b.endpoint.smartTurn != nil && vad != nil && u.policy.hasWords && !u.policy.incomplete &&
+				smartTurnFn != nil && vad != nil && u.policy.hasWords && !u.policy.incomplete &&
 				at-u.policy.lastVoicedAt >= endpointSpecQuiet &&
 				cached.err == nil && cached.text != "" && !cached.windowed &&
 				lastGateOpenLen <= cached.audioLen && cached.text != specTriedText &&

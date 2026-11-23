@@ -60,6 +60,8 @@ func checkEndpointModel(path string) error {
 	return nil
 }
 
+var errVADLoad = errors.New("could not load the pinned Silero v5 model")
+
 type endpointVAD interface {
 	detect([]byte) bool
 	close()

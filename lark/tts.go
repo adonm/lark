@@ -35,6 +35,7 @@ type ttsResult struct {
 
 type synthWorker struct {
 	ready    atomic.Bool
+	state    *modelState
 	requests chan ttsRequest
 	warming  chan ttsRequest
 	done     chan struct{}
@@ -47,7 +48,11 @@ type speechEngine interface {
 }
 
 func newSynthWorker(ctx context.Context, open func() (speechEngine, error)) *synthWorker {
-	w := &synthWorker{requests: make(chan ttsRequest), warming: make(chan ttsRequest), done: make(chan struct{})}
+	return newSynthWorkerWithState(ctx, nil, open)
+}
+
+func newSynthWorkerWithState(ctx context.Context, state *modelState, open func() (speechEngine, error)) *synthWorker {
+	w := &synthWorker{state: state, requests: make(chan ttsRequest), warming: make(chan ttsRequest), done: make(chan struct{})}
 	go w.run(ctx, open)
 	return w
 }
@@ -83,10 +88,12 @@ func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)
 	engine, err := open()
 	if err != nil {
 		log.Printf("Lark TTS unavailable: %v", err)
+		w.state.setError(err)
 		return
 	}
 	defer engine.close()
 	w.ready.Store(true)
+	w.state.setReady()
 	defer w.ready.Store(false)
 	scratch := make([]float32, 0, kokoroRate*10)
 	for ctx.Err() == nil {
@@ -132,6 +139,15 @@ func (w *synthWorker) next(ctx context.Context) (ttsRequest, bool) {
 
 func (w *synthWorker) synthesize(ctx context.Context, voice, text string) ([]byte, error) {
 	return w.synthesizeQueued(ctx, voice, text, time.Now())
+}
+
+// available reports whether TTS can still deliver audio: ready now, or still
+// loading in the background. A rejected load is not available.
+func (w *synthWorker) available() bool {
+	if w == nil {
+		return false
+	}
+	return w.ready.Load() || (w.state != nil && !w.state.failed())
 }
 
 func (w *synthWorker) synthesizeQueued(ctx context.Context, voice, text string, at time.Time) ([]byte, error) {

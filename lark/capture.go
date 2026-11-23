@@ -417,9 +417,6 @@ func (b *larkServer) remoteCaptureTranscribe(r *http.Request, companionID, name 
 	if _, err := os.Stat(path); err != nil {
 		return nil, problem(404, "Capture not found")
 	}
-	if b.sttFunc() == nil {
-		return nil, problem(503, "STT unavailable")
-	}
 	if !b.captures.beginTranscribe(name) {
 		return nil, problem(409, "This capture is already being transcribed")
 	}
@@ -505,9 +502,6 @@ func (b *larkServer) sttAPI(r *http.Request) (any, error) {
 	}
 	if len(pcm) < 2 || len(pcm)%2 != 0 {
 		return nil, problem(400, "Expected 16 kHz mono s16le PCM or WAV")
-	}
-	if b.sttFunc() == nil {
-		return nil, problem(503, "STT unavailable")
 	}
 	start := time.Now()
 	text, err := b.decodeClip(r.Context(), pcm)

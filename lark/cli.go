@@ -243,6 +243,21 @@ func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []stri
 			fmt.Fprintf(out, " deltachat=%v", dc)
 		}
 		fmt.Fprintln(out)
+		if models, ok := health["models"].(object); ok {
+			fmt.Fprint(out, "Models:")
+			for _, name := range []string{"parakeet", "kokoro", "smart_turn", "silero"} {
+				model, _ := models[name].(object)
+				if model == nil {
+					continue
+				}
+				state := str(model["state"])
+				if msg := str(model["error"]); msg != "" {
+					state += " (" + msg + ")"
+				}
+				fmt.Fprintf(out, " %s=%s", name, state)
+			}
+			fmt.Fprintln(out)
+		}
 		printLibraryPlan(out, lib)
 		compList, _ := comps["companions"].([]any)
 		termList, _ := terms["terminals"].([]any)

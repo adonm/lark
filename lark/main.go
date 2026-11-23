@@ -33,6 +33,17 @@ func (c *condSignal) notify() {
 	c.mu.Unlock()
 }
 
+// pipe returns the channel notify closes on its next call, creating it on
+// demand so a waiter that arrives before the event still wakes.
+func (c *condSignal) pipe() chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ch == nil {
+		c.ch = make(chan struct{})
+	}
+	return c.ch
+}
+
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -71,46 +82,12 @@ func run() error {
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	state := env("XDG_STATE_HOME", filepath.Join(home, ".local/state"))
 	local := filepath.Join(data, "lark")
-	stub := stubSetup(local)
-	var transcribe func(context.Context, []byte) (string, error)
-	endpointConfig := &endpointSettings{}
-	if stub != nil {
-		transcribe = stub.stt
-		endpointConfig = stub.endpoint
-	} else {
-		path := filepath.Join(local, "stt-models", parakeetModel)
-		if err := checkParakeetModel(path); err != nil {
-			return err
-		}
-		vadPath := filepath.Join(local, "stt-models", sileroModel)
-		if err := checkEndpointModel(vadPath); err != nil {
-			return err
-		}
-		parakeet, err := openParakeet(path)
-		if err != nil {
-			return err
-		}
-		defer parakeet.close()
-		if _, err := parakeet.transcribe(context.Background(), make([]byte, sampleRate*2)); err != nil {
-			return err
-		}
-		vad := newSileroVAD(vadPath)
-		if vad == nil {
-			return errors.New("could not load the pinned Silero v5 model")
-		}
-		vad.close()
-		log.Print("Lark endpoint VAD ready (in-process Silero v5)")
-		endpointConfig = &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(vadPath) }}
-		smartTurnPath := filepath.Join(local, "stt-models", smartTurnModel)
-		if st, err := openSmartTurn(smartTurnPath, min(4, runtime.GOMAXPROCS(0))); err != nil {
-			log.Printf("Smart Turn disabled: %v", err)
-		} else {
-			defer st.close()
-			endpointConfig.smartTurn = st.predictPCM16
-			log.Print("Lark semantic endpoint ready (Smart Turn v3.2)")
-		}
-		transcribe = parakeet.transcribe
+	paths := modelPaths{
+		parakeet:  filepath.Join(local, "stt-models", parakeetModel),
+		vad:       filepath.Join(local, "stt-models", sileroModel),
+		smartTurn: filepath.Join(local, "stt-models", smartTurnModel),
 	}
+	stub := stubSetup(local)
 	ocURL, ocPassword := os.Getenv("LARK_OPENCODE_URL"), os.Getenv("LARK_OPENCODE_PASSWORD")
 	ocAPI, err := openCodeUpstream(pooledClient(), state, ocURL, ocPassword)
 	if err != nil {
@@ -178,18 +155,29 @@ func run() error {
 	oc := newOpenCode(root, ocAPI, db, ocDir, settings)
 	oc.contract = contract
 	modelDir := ttsModelDir(local)
+	models := newModelSet(started)
+	endpointConfig := &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(paths.vad) }}
 	openEngine := func() (speechEngine, error) {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
 	}
 	sttLabel, ttsLabel := sttEngine, kokoroEngine
+	var transcribe func(context.Context, []byte) (string, error)
 	if stub != nil {
+		transcribe = stub.stt
+		endpointConfig = stub.endpoint
 		openEngine = stub.openEngine
 		sttLabel, ttsLabel = "stub", "stub"
+		// The e2e build has no model files; its scripted backends are ready
+		// as soon as the server starts.
+		models.stt.setReady()
+		models.tts.setReady()
+		models.smartTurn.setReady()
+		models.vad.setReady()
 	}
-	worker := newSynthWorker(root, openEngine)
+	worker := newSynthWorkerWithState(root, models.tts, openEngine)
 	b := &larkServer{root: root, token: token, db: db, terminals: terminalStore(db),
-		stt: transcribe, endpoint: endpointConfig, oc: oc, worker: worker,
-		sttLabel: sttLabel, ttsLabel: ttsLabel,
+		stt: transcribe, sttLabel: sttLabel, ttsLabel: ttsLabel,
+		endpoint: endpointConfig, models: models, oc: oc, worker: worker,
 		voices:  companionVoiceStore(db, fallbackVoice),
 		history: &chatHistory{db: db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
@@ -235,7 +223,24 @@ func run() error {
 		<-worker.done
 		return err
 	}
+	// Models load after the listener is up: terminals, /health and admin pages
+	// work immediately, and turns wait for a model instead of failing.
+	var modelsDone <-chan struct{}
+	if stub != nil {
+		ready := make(chan struct{})
+		close(ready)
+		modelsDone = ready
+	} else {
+		modelsDone = b.loadModels(root, paths)
+	}
 	go func() {
+		// Warming needs Kokoro; wait for the background load instead of
+		// spending the pre-synthesis budget on a not-yet-ready worker.
+		ready, cancel := context.WithTimeout(root, modelWait)
+		defer cancel()
+		if err := models.tts.await(ready); err != nil {
+			return
+		}
 		ctx, cancel := context.WithTimeout(root, ttsWait)
 		defer cancel()
 		_, _ = b.clips.getWith(ctx, worker.warm, b.voices.fallback, "Sent to everyone!")
@@ -257,6 +262,8 @@ func run() error {
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 105 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	log.Print(larkListeningPrefix + listener.Addr().String())
+	log.Printf("Lark serving in %s with models loading in the background",
+		time.Since(started).Round(time.Millisecond))
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	served := make(chan error, 1)
@@ -284,6 +291,7 @@ func run() error {
 	b.timers.close()
 	b.hub.shutdown()
 	termSrv.shutdown()
+	<-modelsDone
 	<-worker.done
 	oc.client.CloseIdleConnections()
 	if errors.Is(err, http.ErrServerClosed) {
