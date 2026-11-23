@@ -1,0 +1,203 @@
+{
+  "sample_rate": 16000,
+  "note": "Synthetic TTS fixtures only; local captures are never tracked.",
+  "fixtures": [
+    {
+      "name": "short",
+      "file": "short.wav",
+      "ms": 1793,
+      "rms": 2999,
+      "origin": "synthetic",
+      "kind": "short",
+      "transcript": "What is two plus two?",
+      "progress": [
+        {
+          "at_ms": 1193,
+          "text": "What is two plus two?"
+        }
+      ],
+      "expected": {
+        "endpoint": "quiet",
+        "commit_after_last_voiced_ms": 400
+      }
+    },
+    {
+      "name": "long",
+      "file": "long.wav",
+      "ms": 7973,
+      "rms": 3364,
+      "origin": "synthetic",
+      "kind": "long",
+      "transcript": "Please tell me a long and winding story about a small green dragon who lived in a teapot at the edge of a quiet village near the sea.",
+      "progress": [
+        {
+          "at_ms": 7373,
+          "text": "Please tell me a long and winding story about a small green dragon who lived in a teapot at the edge of a quiet village near the sea."
+        }
+      ],
+      "expected": {
+        "endpoint": "quiet",
+        "commit_after_last_voiced_ms": 400,
+        "min_speech_ms": 4000
+      }
+    },
+    {
+      "name": "timer",
+      "file": "timer.wav",
+      "ms": 2425,
+      "rms": 3046,
+      "origin": "synthetic",
+      "kind": "command",
+      "transcript": "Set a timer for ninety seconds.",
+      "progress": [
+        {
+          "at_ms": 1825,
+          "text": "Set a timer for ninety seconds."
+        }
+      ],
+      "expected": {
+        "endpoint": "quiet",
+        "commit_after_last_voiced_ms": 400
+      }
+    },
+    {
+      "name": "trailing-um",
+      "file": "trailing-um.wav",
+      "ms": 2913,
+      "rms": 2589,
+      "origin": "synthetic",
+      "kind": "filler",
+      "transcript": "Show me a giraffe, um.",
+      "progress": [
+        {
+          "at_ms": 1413,
+          "text": "Show me a giraffe, um."
+        }
+      ],
+      "expected": {
+        "endpoint": "cap",
+        "commit_after_last_voiced_ms": 1200,
+        "incomplete": true
+      }
+    },
+    {
+      "name": "pause",
+      "file": "pause.wav",
+      "ms": 6249,
+      "rms": 3030,
+      "origin": "synthetic",
+      "kind": "pause",
+      "transcript": "Once upon a time there was a little frog, and then it made a house under a purple mushroom.",
+      "progress": [
+        {
+          "at_ms": 2734,
+          "text": "Once upon a time there was a little frog, and then"
+        },
+        {
+          "at_ms": 5648,
+          "text": "Once upon a time there was a little frog, and then it made a house under a purple mushroom."
+        }
+      ],
+      "expected": {
+        "endpoint": "quiet",
+        "commit_after_last_voiced_ms": 400,
+        "no_commit_ms": [
+          3134,
+          3584
+        ]
+      }
+    },
+    {
+      "name": "list",
+      "file": "list.wav",
+      "ms": 4140,
+      "rms": 3327,
+      "origin": "synthetic",
+      "kind": "list",
+      "transcript": "I want apples, grapes, and strawberries and chocolate sprinkles too!",
+      "progress": [
+        {
+          "at_ms": 3540,
+          "text": "I want apples, grapes, and strawberries and chocolate sprinkles too!"
+        }
+      ],
+      "expected": {
+        "endpoint": "quiet",
+        "commit_after_last_voiced_ms": 400
+      }
+    },
+    {
+      "name": "function-word",
+      "file": "function-word.wav",
+      "ms": 2519,
+      "rms": 2561,
+      "origin": "synthetic",
+      "kind": "function-word",
+      "transcript": "Can you put his",
+      "progress": [
+        {
+          "at_ms": 1019,
+          "text": "Can you put his"
+        }
+      ],
+      "expected": {
+        "endpoint": "cap",
+        "commit_after_last_voiced_ms": 1200,
+        "incomplete": true
+      }
+    },
+    {
+      "name": "quiet-over-noise",
+      "file": "quiet-over-noise.wav",
+      "ms": 3600,
+      "rms": 538,
+      "origin": "synthetic",
+      "kind": "quiet",
+      "transcript": "Turn on the little lamp please.",
+      "progress": [
+        {
+          "at_ms": 1561,
+          "text": "Turn on the little lamp please."
+        }
+      ],
+      "expected": {
+        "endpoint": "quiet",
+        "commit_after_last_voiced_ms": 400,
+        "speech_rms_over_floor": true
+      }
+    },
+    {
+      "name": "noise-only",
+      "file": "noise-only.wav",
+      "ms": 3000,
+      "rms": 69,
+      "origin": "synthetic",
+      "kind": "noise",
+      "transcript": "",
+      "progress": [],
+      "expected": {
+        "endpoint": "discard"
+      }
+    },
+    {
+      "name": "monologue-20s",
+      "file": "monologue-20s.wav",
+      "ms": 21779,
+      "rms": 3544,
+      "origin": "synthetic",
+      "kind": "monologue",
+      "transcript": "Let me tell you about the long trip we took to the mountains last summer. We packed a red tent, two sleeping bags, a little stove, and far too many apples. The road climbed past a waterfall, a wooden bridge, and a field full of yellow flowers. At the top the wind was cold, so we made cocoa and watched the clouds roll below us. On the way home we found a bakery that sold cinnamon rolls bigger than my hand. I would go back tomorrow if the car were not still full of pine needles and sand.",
+      "progress": [
+        {
+          "at_ms": 21479,
+          "text": "Let me tell you about the long trip we took to the mountains last summer. We packed a red tent, two sleeping bags, a little stove, and far too many apples. The road climbed past a waterfall, a wooden bridge, and a field full of yellow flowers. At the top the wind was cold, so we made cocoa and watched the clouds roll below us. On the way home we found a bakery that sold cinnamon rolls bigger than my hand. I would go back tomorrow if the car were not still full of pine needles and sand."
+        }
+      ],
+      "expected": {
+        "endpoint": "monologue",
+        "commit_after_last_voiced_ms": 0,
+        "min_speech_ms": 16000
+      }
+    }
+  ]
+}
