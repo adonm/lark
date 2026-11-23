@@ -1016,15 +1016,22 @@ func probeDownloadSize(ctx context.Context, client *http.Client, url string) (in
 // segmentedDownload fetches a large file in parallel byte ranges. Each segment
 // resumes from its own partial file, so interrupted runs make progress.
 func segmentedDownload(ctx context.Context, client *http.Client, url, dest string, size int64, hashName, expect string, out io.Writer) error {
-	const jobs = 8
+	const chunks, workers = 8, 3
 	part := dest + ".part"
-	segments := make([]string, jobs)
-	chunk := (size + jobs - 1) / jobs
+	segments := make([]string, chunks)
+	chunk := (size + chunks - 1) / chunks
 	var mu sync.Mutex
 	var written int64
 	started := time.Now()
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	for i := 0; i < chunks; i++ {
+		segments[i] = fmt.Sprintf("%s.seg%d", dest, i)
+		if info, err := os.Stat(segments[i]); err == nil {
+			written += info.Size()
+		}
+	}
+	base := written
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(10 * time.Second)
@@ -1036,99 +1043,48 @@ func segmentedDownload(ctx context.Context, client *http.Client, url, dest strin
 				n := written
 				mu.Unlock()
 				elapsed := time.Since(started).Seconds()
+				rate := float64(n-base) / max(0.001, elapsed) / 1e6
 				libraryLog(out, "%s: %s/%s (%.1f%%, %.1f MB/s)", filepath.Base(part),
-					humanBytes(n), humanBytes(size), 100*float64(n)/float64(size), float64(n)/max(0.001, elapsed)/1e6)
+					humanBytes(n), humanBytes(size), 100*float64(n)/float64(size), rate)
 			case <-stop:
 				return
 			}
 		}
 	}()
-	errs := make(chan error, jobs)
-	for i := 0; i < jobs; i++ {
-		segments[i] = fmt.Sprintf("%s.seg%d", dest, i)
-		start := int64(i) * chunk
-		end := min(size-1, start+chunk-1)
-		if start > end {
-			errs <- nil
-			continue
-		}
-		go func(path string, start, end int64) {
-			expected := end - start + 1
-			offset := start
-			if info, err := os.Stat(path); err == nil {
-				if info.Size() > expected {
-					_ = os.Remove(path)
-				} else {
-					offset = start + info.Size()
-					mu.Lock()
-					written += info.Size()
-					mu.Unlock()
-				}
-			}
-			flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
-			if offset == start {
-				flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-			}
-			file, err := os.OpenFile(path, flags, 0o600)
-			if err != nil {
-				errs <- err
-				return
-			}
-			defer file.Close()
-			for offset <= end {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-				if err != nil {
-					errs <- err
-					return
-				}
-				req.Header.Set("User-Agent", libraryUserAgent)
-				req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
-				res, err := client.Do(req)
-				if err != nil {
-					errs <- err
-					return
-				}
-				if res.StatusCode != http.StatusPartialContent {
-					res.Body.Close()
-					errs <- fmt.Errorf("segment %s: HTTP %d", filepath.Base(path), res.StatusCode)
-					return
-				}
-				buf := make([]byte, 1<<20)
-				for {
-					n, readErr := res.Body.Read(buf)
-					if n > 0 {
-						if _, err := file.Write(buf[:n]); err != nil {
-							res.Body.Close()
-							errs <- err
-							return
-						}
-						offset += int64(n)
-						mu.Lock()
-						written += int64(n)
-						mu.Unlock()
-					}
-					if readErr == io.EOF {
-						break
-					}
-					if readErr != nil {
-						res.Body.Close()
-						errs <- readErr
-						return
-					}
-				}
-				res.Body.Close()
-			}
-			errs <- nil
-		}(segments[i], start, end)
+	ch := make(chan int, chunks)
+	for i := 0; i < chunks; i++ {
+		ch <- i
 	}
+	close(ch)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range ch {
+				start := int64(i) * chunk
+				end := min(size-1, start+chunk-1)
+				if start > end {
+					continue
+				}
+				if err := downloadSegment(ctx, client, url, segments[i], start, end, &mu, &written); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(stop)
+	<-done
 	var firstErr error
-	for range jobs {
-		if err := <-errs; err != nil && firstErr == nil {
+	for err := range errs {
+		if firstErr == nil {
 			firstErr = err
 		}
 	}
-	close(stop)
-	<-done
 	if firstErr != nil {
 		return firstErr
 	}
@@ -1167,6 +1123,69 @@ func segmentedDownload(ctx context.Context, client *http.Client, url, dest strin
 		_ = os.Remove(path)
 	}
 	return os.Rename(part, dest)
+}
+
+func downloadSegment(ctx context.Context, client *http.Client, url, path string, start, end int64, mu *sync.Mutex, written *int64) error {
+	expected := end - start + 1
+	offset := start
+	if info, err := os.Stat(path); err == nil {
+		if info.Size() > expected {
+			_ = os.Remove(path)
+		} else {
+			offset = start + info.Size()
+			mu.Lock()
+			*written += info.Size()
+			mu.Unlock()
+		}
+	}
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if offset == start {
+		flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	for offset <= end {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", libraryUserAgent)
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
+		res, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		if res.StatusCode != http.StatusPartialContent {
+			res.Body.Close()
+			return fmt.Errorf("segment %s: HTTP %d", filepath.Base(path), res.StatusCode)
+		}
+		buf := make([]byte, 1<<20)
+		for {
+			n, readErr := res.Body.Read(buf)
+			if n > 0 {
+				if _, err := file.Write(buf[:n]); err != nil {
+					res.Body.Close()
+					return err
+				}
+				offset += int64(n)
+				mu.Lock()
+				*written += int64(n)
+				mu.Unlock()
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				res.Body.Close()
+				return readErr
+			}
+		}
+		res.Body.Close()
+	}
+	return nil
 }
 
 func downloadRange(ctx context.Context, client *http.Client, url, part string, offset int64, out io.Writer) error {
