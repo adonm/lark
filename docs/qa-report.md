@@ -1,3 +1,56 @@
+## 2026-11-23 — Server Cleanup (bug fixes, deletions, performance, cohesion)
+
+Four approved cleanup tiers landed in review order; firmware `0.20.0` shipped in the same rollout and the server was rebased on it before deploy.
+
+### Bugs fixed
+- CI workflow pointed at the deleted `bridge/` module; it now uses `lark/go.mod` and `lark/go.sum`.
+- Deleting a companion removed local rows but left `dc_welcome:*`/`dc_story_msgs:*` meta and the Delta Chat address/account maps, so recreating a slug did not greet contacts and could answer on the old account. Deletion now clears both and calls `dcService.forget`.
+- `chatHistory.close` closed data channels under concurrent writers (send-on-closed panic). Queues stop through a `quit` channel and drain.
+- Portrait/form changes served a stale background from the asset cache; replaced portraits leaked their directory. The cache is invalidated on form change and after regeneration, replaced directories are deleted, and entries are LRU-bounded.
+- Speculative turns were orphaned on early exits and their TTS fills kept the server context. Turns defer `abort` unless promoted and fills use a per-spec cancellable context.
+- Listen captures silently dropped speech after 60 s of a longer window; the PCM cap now covers the full listen span (still bounded by the window).
+- `/remote` rebuilt whole panels on every SSE push, wiping typed text and pending buttons; it now patches keyed rows in place. The PWA manifest uses token-free URLs and the cookie, and `hidden="until-found"` is no longer forced to `display:none`.
+- The session store's dead upsert branches and unused mutex were removed.
+
+### Deletions
+- Unrouted `memoryAPI`, `timerAPI`, `messages`, `compactAPI`/`compactResult`/`compactActiveSessions`/`CompactSession`/`companionIDArg`: **−305 source lines** (net −312 with the session-store rewrite).
+- WebSocket-era terminal state and dead protocol paths (client queues, hub peer/refresh caches, `onlineTerminals`/`peerDisplay`, empty-kind hello/resume, `msgMedia`/RTP-over-frame, `msgSetVolume`, web branches, `virtual()`, `icon.svg`, app labels, `timers.app_name`, setup strips): **−349 lines** in one commit (net −261 after the UDP test harness moved off `msgMedia`).
+- State sequence and status detail: status/voice-owner payloads keep their 0.20.0 sizes with zeroed fields; the server stops tracking or sending them and drops unpopulated telemetry (`battery_mv`, `min_free_heap`, `free_psram`, `running_partition`, flush/drop counters, `ws_connected`, `reported_volume`). **−167 lines**.
+- Legacy parsing: channel backfill replaces the `channel=''` query fallbacks; dead prompt-header prefixes removed. **−27 lines**.
+- Tier 2 net source change: **+240 / −752 lines**; `/remote` also lost `oat.min.css` (32,147 B) and `oat.min.js` (11,267 B) in favour of the eight theme variables it uses.
+
+### Performance
+Measured on the same host (`-benchmem`, 3 runs, median):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `RenderPixelHome/vocat` (server recycle path) | 352,217–359,354 ns, 590,202 B, 7 allocs | 290,180–290,610 ns, 370 B, 2 allocs |
+| `RenderPixelHome/box3` (server recycle path) | 307,912–312,405 ns, 393,592 B, 7 allocs | 259,200–261,066 ns, 225–310 B, 2 allocs |
+| `RenderPixelMenu/vocat` | 320,542 ns, 591,549 B, 11 allocs | 317,431 ns, 591,554 B, 10 allocs |
+| `FrameEncoderRLE` | 207,916 ns, 1,152 B, 1 alloc | 204,922 ns, 1,152 B, 1 alloc |
+
+- Endpoint capture rings drop from `256 × 8 KiB` (2 MiB) to `256 × 640 B` (160 KiB, 12.5× smaller) and are pooled; slot push asserts 0 allocs/op.
+- Probes stop after the quiet window or near the cap, commit cancels pending probes, and the STT window is 4 s instead of 8 s.
+- Render screens/canvases are pooled once converted to RGB565; placeholder poses/theme build once.
+- TTS inserts one shared zero-filled silence chunk between sentences instead of copying every sentence; the clip cache is 24 MiB with pinned fillers/openers.
+- TCP reads are buffered per connection and writes use `net.Buffers` writev for header+payload.
+
+### Cohesion
+- Delta Chat human turns use `generateReply` (`textOnly`) instead of a duplicate prompt/TTS/silence pipeline.
+- Intercom, Delta Chat, `/say` and `emit` share `intercomNotice`; the card reply target now defaults to the sender.
+- `handlers.go` → `prompt.go` + `reply.go`, `terminal_hub.go` → `terminal_render.go`, `deltachat.go` → `dc_commands.go` + `dc_media.go` (moves only).
+- `wsHub`/`wsTerminal`/`wsStatus`/`wsReceipt`/`wsFrame`/`wsClient` renamed; the JSON field is `connected` (no `ws_connected` alias).
+
+### Tests added
+- Companion delete/recreate welcome + account mapping; history close under concurrent add (`-race`); form change refreshes the cached background; early-exit speculative turn leaves no live spec; listen cap beyond 60 s; `/remote` input/pending preservation and `until-found` panel test; token-free manifest; retired timer column drop; ring and frame allocation assertions; shared TTS silence chunk; reply-context TTL; remote volume/story-open/revoke; README route guard in both directions.
+
+### Gates and deploy
+- `./scripts/check.sh`, live-tag vet/compile, `--qa` (4/4 sim scenarios), `--remote-ui` (9/9, 2.5 s), README guards: pass.
+- `./scripts/setup-host.sh --gpu-index 0` after rebasing on firmware `0.20.0`; `lark status` healthy (`ok=true`, opencode/stt/tts/deltachat true, library installed) with all three boards online on `0.20.0`.
+- One scripted `lark sim` turn on `greg`: listening → thinking → speaking → done, first TTS 2.25 s after speech.
+- `/remote` page behaviour was verified by the headless UI suite and the Go page/manifest tests; the live tunnel for `greg` answers `401` without a token as designed. The household contact was not messaged to mint a fresh link.
+- The accidental 20 MB `lark/lark` build output was removed from the unpushed commit; `.gitignore` now covers it and no unpushed commit adds a binary.
+
 # Lark QA Report
 
 ## 2026-11-23 — Sleeping-terminal ping backoff
