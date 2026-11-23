@@ -367,7 +367,7 @@ func (m *remoteManager) stopLocked(ctx context.Context, companionID string) erro
 	if m.b == nil || m.b.db == nil {
 		return nil
 	}
-	rows, err := m.b.db.QueryContext(ctx, `SELECT key FROM meta WHERE key LIKE ?`, "remote_token:"+companionID+":%")
+	rows, err := m.b.db.readDB().QueryContext(ctx, `SELECT key FROM meta WHERE key LIKE ?`, "remote_token:"+companionID+":%")
 	if err == nil {
 		var keys []string
 		for rows.Next() {
