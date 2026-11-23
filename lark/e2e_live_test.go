@@ -280,7 +280,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 		terminalID: id, companionID: name, board: variant, firmware: "0.12.0", token: s.token,
 	}))
 	c := &e2eCompanion{testWS: ws, id: id, name: name, width: width, high: height, pixels: make([]uint16, width*height)}
-	ws.until(t, hasProto(msgWelcome, ""))
+	ws.acceptWelcome(t, ws.until(t, hasProto(msgWelcome, "")))
 	first := c.expect(t, "full initial framebuffer", isDisplay)
 	r, _, _ := decodeDisplay(t, first)
 	if r != image.Rect(0, 0, width, height) {
