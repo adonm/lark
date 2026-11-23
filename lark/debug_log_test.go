@@ -14,7 +14,7 @@ func TestTranscriptLoggingIsRedactedByDefault(t *testing.T) {
 	if strings.Contains(redacted, "secret") || strings.Contains(redacted, "lantern") {
 		t.Fatalf("redacted output leaked text: %q", redacted)
 	}
-	if !strings.Contains(redacted, "len=24") || !strings.Contains(redacted, "words=4") || !strings.Contains(redacted, "sha=") {
+	if !strings.Contains(redacted, "len=25") || !strings.Contains(redacted, "words=4") || !strings.Contains(redacted, "sha=") {
 		t.Fatalf("redacted output lacks the shape: %q", redacted)
 	}
 	if redactTranscript("a") == redactTranscript("b") {

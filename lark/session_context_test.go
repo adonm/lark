@@ -169,6 +169,8 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 					"content": []object{{"type": "text", "text": "Mango Island!"}}, "time": object{"created": time.Now().UnixMilli()}},
 				{"id": promptID, "type": "user"},
 			}})
+		case "DELETE /api/session/" + oldSID:
+			w.WriteHeader(204) // The rolled-over session is retired.
 		default:
 			t.Errorf("unexpected OpenCode work: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(404)
@@ -363,6 +365,8 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 					}})
 				case "GET /api/event":
 					w.WriteHeader(404)
+				case "DELETE /api/session/" + oldSID:
+					w.WriteHeader(204)
 				default:
 					t.Errorf("unexpected OpenCode call: %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(404)

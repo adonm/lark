@@ -63,7 +63,11 @@ func TestStatusReportsLibraryPacks(t *testing.T) {
 		if err := os.MkdirAll(b.library, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(b.library, "gutenberg.db"), []byte("index"), 0o600); err != nil {
+		createPackDB(t, filepath.Join(b.library, "gutenberg.db"), "books")
+		if err := os.MkdirAll(filepath.Join(b.library, "books"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.library, "books", "00001.txt"), []byte("text"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	})
