@@ -28,6 +28,8 @@ type larkServer struct {
 	terminals       *store[terminalRecord]
 	sttMu           sync.RWMutex
 	stt             func(context.Context, []byte) (string, error)
+	sttLabel        string
+	ttsLabel        string
 	endpoint        *endpointSettings
 	oc              *openCode
 	worker          *synthWorker
@@ -296,6 +298,9 @@ func (b *larkServer) ttsAPI(w http.ResponseWriter, r *http.Request) error {
 
 func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) (any, error) {
 	ctx := r.Context()
+	if value, err, handled := stubHTTP(b, r, path); handled {
+		return value, err
+	}
 	switch {
 	case path == "/remote" || strings.HasPrefix(path, "/remote/"):
 		b.remoteHTTP(w, r, path)
@@ -320,9 +325,16 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			ready := b.worker != nil && b.worker.ready.Load()
 			engine := "unavailable"
 			if ready {
-				engine = kokoroEngine
+				engine = b.ttsLabel
+				if engine == "" {
+					engine = kokoroEngine
+				}
 			}
-			return object{"ok": true, "stt": b.sttFunc() != nil, "stt_engine": sttEngine,
+			sttName := b.sttLabel
+			if sttName == "" {
+				sttName = sttEngine
+			}
+			return object{"ok": true, "stt": b.sttFunc() != nil, "stt_engine": sttName,
 				"opencode": o, "tts": ready, "tts_engine": engine,
 				"smart_turn": b.endpoint != nil && b.endpoint.smartTurn != nil,
 				"deltachat":  b.dc != nil && b.dc.ready.Load()}, nil

@@ -71,36 +71,45 @@ func run() error {
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	state := env("XDG_STATE_HOME", filepath.Join(home, ".local/state"))
 	local := filepath.Join(data, "lark")
-	path := filepath.Join(local, "stt-models", parakeetModel)
-	if err := checkParakeetModel(path); err != nil {
-		return err
-	}
-	vadPath := filepath.Join(local, "stt-models", sileroModel)
-	if err := checkEndpointModel(vadPath); err != nil {
-		return err
-	}
-	parakeet, err := openParakeet(path)
-	if err != nil {
-		return err
-	}
-	defer parakeet.close()
-	if _, err := parakeet.transcribe(context.Background(), make([]byte, sampleRate*2)); err != nil {
-		return err
-	}
-	vad := newSileroVAD(vadPath)
-	if vad == nil {
-		return errors.New("could not load the pinned Silero v5 model")
-	}
-	vad.close()
-	log.Print("Lark endpoint VAD ready (in-process Silero v5)")
-	endpointConfig := &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(vadPath) }}
-	smartTurnPath := filepath.Join(local, "stt-models", smartTurnModel)
-	if st, err := openSmartTurn(smartTurnPath, min(4, runtime.GOMAXPROCS(0))); err != nil {
-		log.Printf("Smart Turn disabled: %v", err)
+	stub := stubSetup(local)
+	var transcribe func(context.Context, []byte) (string, error)
+	endpointConfig := &endpointSettings{}
+	if stub != nil {
+		transcribe = stub.stt
+		endpointConfig = stub.endpoint
 	} else {
-		defer st.close()
-		endpointConfig.smartTurn = st.predictPCM16
-		log.Print("Lark semantic endpoint ready (Smart Turn v3.2)")
+		path := filepath.Join(local, "stt-models", parakeetModel)
+		if err := checkParakeetModel(path); err != nil {
+			return err
+		}
+		vadPath := filepath.Join(local, "stt-models", sileroModel)
+		if err := checkEndpointModel(vadPath); err != nil {
+			return err
+		}
+		parakeet, err := openParakeet(path)
+		if err != nil {
+			return err
+		}
+		defer parakeet.close()
+		if _, err := parakeet.transcribe(context.Background(), make([]byte, sampleRate*2)); err != nil {
+			return err
+		}
+		vad := newSileroVAD(vadPath)
+		if vad == nil {
+			return errors.New("could not load the pinned Silero v5 model")
+		}
+		vad.close()
+		log.Print("Lark endpoint VAD ready (in-process Silero v5)")
+		endpointConfig = &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(vadPath) }}
+		smartTurnPath := filepath.Join(local, "stt-models", smartTurnModel)
+		if st, err := openSmartTurn(smartTurnPath, min(4, runtime.GOMAXPROCS(0))); err != nil {
+			log.Printf("Smart Turn disabled: %v", err)
+		} else {
+			defer st.close()
+			endpointConfig.smartTurn = st.predictPCM16
+			log.Print("Lark semantic endpoint ready (Smart Turn v3.2)")
+		}
+		transcribe = parakeet.transcribe
 	}
 	ocURL, ocPassword := os.Getenv("LARK_OPENCODE_URL"), os.Getenv("LARK_OPENCODE_PASSWORD")
 	ocAPI, err := openCodeUpstream(pooledClient(), state, ocURL, ocPassword)
@@ -169,11 +178,18 @@ func run() error {
 	oc := newOpenCode(root, ocAPI, db, ocDir, settings)
 	oc.contract = contract
 	modelDir := ttsModelDir(local)
-	worker := newSynthWorker(root, func() (speechEngine, error) {
+	openEngine := func() (speechEngine, error) {
 		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
-	})
+	}
+	sttLabel, ttsLabel := sttEngine, kokoroEngine
+	if stub != nil {
+		openEngine = stub.openEngine
+		sttLabel, ttsLabel = "stub", "stub"
+	}
+	worker := newSynthWorker(root, openEngine)
 	b := &larkServer{root: root, token: token, db: db, terminals: terminalStore(db),
-		stt: parakeet.transcribe, endpoint: endpointConfig, oc: oc, worker: worker,
+		stt: transcribe, endpoint: endpointConfig, oc: oc, worker: worker,
+		sttLabel: sttLabel, ttsLabel: ttsLabel,
 		voices:  companionVoiceStore(db, fallbackVoice),
 		history: &chatHistory{db: db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
@@ -185,10 +201,16 @@ func run() error {
 	b.remote = newRemoteManager(b, findTunnelCLI(home))
 	b.remote.restore(root)
 	defer b.remote.close()
-	go b.provisionLibrary(root)
+	if stub == nil {
+		go b.provisionLibrary(root)
+	}
 	oc.flushHistory = b.history.flush
 	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
-	go b.dc.start(root)
+	if stub != nil {
+		stub.startDC(b)
+	} else {
+		go b.dc.start(root)
+	}
 	defer b.dc.shutdown()
 	var termSrv *terminalServer
 	if devicePort != 0 {

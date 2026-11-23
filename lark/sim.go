@@ -207,7 +207,13 @@ func (s *simTerminal) readLoop() {
 					s.ttsActive = false
 					s.timeline = append(s.timeline, object{"event": "tts_end", "t_ms": now.Sub(s.started).Milliseconds()})
 					if msg.op == ttsOpEnd {
-						go func(id uint64) { _ = s.sendProto(msgTTSAck, encodeTTSAck(false, id)) }(msg.audioID)
+						// Firmware acknowledges after playback, not when the
+						// end frame is queued. Pacing the ack keeps the
+						// speaking state observable, so Stop can land there.
+						go func(id uint64, d time.Duration) {
+							time.Sleep(min(d, 3*time.Second))
+							_ = s.sendProto(msgTTSAck, encodeTTSAck(false, id))
+						}(msg.audioID, pcmDuration(len(s.ttsBuf)))
 					}
 				}
 				s.cond.Broadcast()
@@ -619,9 +625,10 @@ func (s *simTerminal) execLine(ctx context.Context, line string) (object, error)
 		bridgeEP := s.recBridgeEP
 		s.mu.Unlock()
 		if stillActive && bridgeEP {
-			// Feed silence tail so Silero endpoint detects end-of-speech.
+			// Feed silence tail so Silero endpoint detects end-of-speech. The
+			// bridge's cap is 1.2 s, so leave a little margin.
 			var silence [rtpPCMBytes]byte
-			for range 60 {
+			for range 90 {
 				s.mu.Lock()
 				ok := s.recActive
 				s.mu.Unlock()
@@ -664,6 +671,63 @@ func (s *simTerminal) execLine(ctx context.Context, line string) (object, error)
 			return nil, fmt.Errorf("timed out waiting for state %q (current %q)", want, got)
 		}
 		out["state"] = want
+	case "wait-current":
+		if len(fields) < 2 {
+			return nil, errors.New("usage: wait-current <state> [timeout]")
+		}
+		want := fields[1]
+		timeout := 30 * time.Second
+		if len(fields) >= 3 {
+			if d, err := time.ParseDuration(fields[2]); err == nil {
+				timeout = d
+			}
+		}
+		ok := s.waitFor(timeout, func() bool { return s.state == want })
+		if !ok {
+			s.mu.Lock()
+			got := s.state
+			s.mu.Unlock()
+			return nil, fmt.Errorf("timed out waiting for current state %q (current %q)", want, got)
+		}
+		out["state"] = want
+	case "sleep":
+		if len(fields) != 2 {
+			return nil, errors.New("usage: sleep <ms>")
+		}
+		ms, err := strconv.Atoi(fields[1])
+		if err != nil || ms < 0 || ms > 30000 {
+			return nil, errors.New("sleep must be 0..30000 ms")
+		}
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		out["ms"] = ms
+	case "state":
+		s.mu.Lock()
+		out["state"] = s.state
+		s.mu.Unlock()
+	case "wait-rec":
+		timeout := 10 * time.Second
+		if len(fields) >= 2 {
+			if d, err := time.ParseDuration(fields[1]); err == nil {
+				timeout = d
+			}
+		}
+		if !s.waitFor(timeout, func() bool { return s.recActive }) {
+			return nil, fmt.Errorf("timed out waiting for REC_CTRL start")
+		}
+		out["rec"] = true
+	case "hits":
+		res, err := s.client.do(ctx, http.MethodGet, "/api/terminals/"+s.id+"/hits", nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"screen", "rev"} {
+			if v, ok := res[key]; ok {
+				out[key] = v
+			}
+		}
+		if hits, ok := res["hits"].([]any); ok {
+			out["hits"] = hits
+		}
 	case "screen":
 		if len(fields) != 2 {
 			return nil, errors.New("usage: screen <out.png>")
