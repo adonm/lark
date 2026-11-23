@@ -534,13 +534,19 @@ func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
 	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.96, true, false); got != endpointCommit {
 		t.Fatalf("punctuated turn with strong Smart Turn, got %v, want commit", got)
 	}
-	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.94, false, false); got != endpointWait {
-		t.Fatalf("Smart Turn below the early threshold, got %v, want wait", got)
+	// The early gate only differs from the quiet gate while it is shorter than
+	// endpointQuiet. Restoring 400 ms for speculation makes them coincide, and
+	// the quiet window then commits regardless of punctuation.
+	if endpointEarlyQuiet < endpointQuiet {
+		if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.94, false, false); got != endpointWait {
+			t.Fatalf("Smart Turn below the early threshold, got %v, want wait", got)
+		}
+		p.observeProgress(500*time.Millisecond, "Tell me everything about all the dinosaurs", false)
+		if got := p.decide(500*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.99, false, false); got != endpointWait {
+			t.Fatalf("unpunctuated transcript, got %v, want wait", got)
+		}
 	}
 	p.observeProgress(500*time.Millisecond, "Tell me everything about all the dinosaurs", false)
-	if got := p.decide(500*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.99, false, false); got != endpointWait {
-		t.Fatalf("unpunctuated transcript, got %v, want wait", got)
-	}
 	if got := p.decide(500*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, 0.90, false, false); got != endpointCommit {
 		t.Fatalf("quiet window without punctuation, got %v, want commit", got)
 	}
