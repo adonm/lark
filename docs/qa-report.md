@@ -19,15 +19,15 @@ The library tool phase is **50× faster end-to-end** and **300× faster in-proce
 
 | Turn | Tool trace | First TTS PCM |
 | --- | --- | --- |
-| Baseline: "Say hello" | no library, no websearch | 3,698 ms |
-| "Why is the sky blue?" | `library.search`/`read`; no websearch | 2,940 ms (−758 ms vs baseline) |
-| "Tell me the story of the three little pigs" | `library` import + silent reader open; no websearch | 3,996 ms |
-| "What is the current price of Bitcoin?" | `library.search` miss, then `websearch` | 4,441 ms |
+| Baseline: "Say hello" | no library, no websearch | 3,649 ms |
+| "Why is the sky blue?" | `library.search`/`read`; no websearch | 3,326 ms (−323 ms vs baseline) |
+| "Tell me the story of the three little pigs" | `library` import + silent reader open; no websearch | 4,470 ms |
+| "What is the current price of Bitcoin?" | `library.search` miss, then `websearch` | 3,990 ms |
 
 - Reference and story turns chose the library *because it is the fast path*; neither used web search.
 - The current-events turn tried the library once, missed, and fell back to websearch with a normal spoken answer. No dead end.
 - A requested story is imported as a validated Twee story and opened on the reader silently; the spoken retell happens because the user asked for it.
-- The static prompt grew from 3,928 to 4,234 bytes (about +76 tokens) and stays under the 4,250-byte regression budget. A short per-turn `[library: search before facts]` hint was added because the prompt alone did not reliably trigger the tool on a small fast model.
+- The static prompt grew from 3,928 to 4,214 bytes (about +72 tokens) and stays under the 4,250-byte regression budget. A short per-turn `[library: search before facts]` hint was added because the prompt alone did not reliably trigger the tool on a small fast model; story turns get `[library: import the requested story with companion_id]` so the reader actually opens.
 
 ### Content
 

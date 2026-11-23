@@ -639,9 +639,23 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 
 	prompt := turnHeader(companionID, source, companion, ch, now) + "\n" + text
 	if b.libraryInstalled() {
-		prompt += "\n[library: search before facts]"
+		hint := "[library: search before facts]"
+		if storyRequest(text) {
+			hint = "[library: import the requested story with companion_id]"
+		}
+		prompt += "\n" + hint
 	}
 	return prompt + "\n" + turnStateLine(now, companion, terminals, timers, stories)
+}
+
+func storyRequest(text string) bool {
+	text = strings.ToLower(text)
+	for _, cue := range []string{"story", "tale", "read me", "once upon"} {
+		if strings.Contains(text, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *larkServer) libraryInstalled() bool {
