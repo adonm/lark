@@ -15,15 +15,21 @@ import (
 func stripLarkHeader(text string) string {
 	first, rest, ok := strings.Cut(text, "\n")
 	if ok && strings.HasPrefix(first, "[") && strings.HasSuffix(strings.TrimSuffix(first, "\r"), "]") {
-		if strings.HasPrefix(first, "[You are ") {
-			text = rest
+		// Current headers carry only the live speaker; "You are" is stored legacy.
+		for _, prefix := range []string{"[Speaker: ", "[Event: ", "[You are "} {
+			if strings.HasPrefix(first, prefix) {
+				text = rest
+				break
+			}
 		}
 	}
 	if i := strings.LastIndex(text, "\n[state: "); i >= 0 && strings.HasSuffix(strings.TrimSuffix(text, "\r"), "]") {
 		text = text[:i]
 	}
-	if i := strings.LastIndex(text, "\n[library: "); i >= 0 && strings.HasSuffix(strings.TrimSuffix(text, "\r"), "]") {
-		text = text[:i]
+	for _, hint := range []string{"\n[library: ", "\n[story: "} {
+		if i := strings.LastIndex(text, hint); i >= 0 && strings.HasSuffix(strings.TrimSuffix(text, "\r"), "]") {
+			text = text[:i]
+		}
 	}
 	return text
 }

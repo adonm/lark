@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -20,7 +18,9 @@ func formatLocalTimeIn(t time.Time, loc *time.Location) string {
 	return t.In(loc).Format("2006-01-02 15:04 MST (-07:00)")
 }
 
-func turnHeader(companionID, source string, companion companionState, ch turnChannel, now time.Time) string {
+// The companion's identity lives in the session instruction entry, written once
+// when the session is created. Headers carry only the live speaker and channel.
+func turnHeader(source string, companion companionState, ch turnChannel) string {
 	var prefix string
 	switch {
 	case ch.channel == "deltachat":
@@ -33,26 +33,19 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 			sender = "Friend"
 		}
 		if ch.private {
-			prefix = fmt.Sprintf("You are %s (%s). Speaker: %s via Delta Chat (%s) · private", companion.Name, companionID, sender, kind)
+			prefix = fmt.Sprintf("Speaker: %s via Delta Chat (%s) · private", sender, kind)
 		} else {
-			prefix = fmt.Sprintf("You are %s (%s). Speaker: %s via Delta Chat (%s)", companion.Name, companionID, sender, kind)
+			prefix = fmt.Sprintf("Speaker: %s via Delta Chat (%s)", sender, kind)
 		}
 	case ch.channel == "timer" || source == "timer":
-		prefix = fmt.Sprintf("You are %s (%s). Event: timer", companion.Name, companionID)
+		prefix = "Event: timer"
 	case ch.reply != nil && ch.reply.name != "":
-		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · replying to %s (Delta Chat) · %s", companion.Name, companionID, ch.reply.name, source)
+		prefix = fmt.Sprintf("Speaker: someone in person at your device (name unknown) · replying to %s (Delta Chat) · %s", ch.reply.name, source)
 	default:
-		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · %s", companion.Name, companionID, source)
+		prefix = fmt.Sprintf("Speaker: someone in person at your device (name unknown) · %s", source)
 	}
 	if !companion.Configured {
-		extra := " · setup"
-		if companion.Personality != "" {
-			extra += " · vibe: " + companion.Personality
-		}
-		return "[" + prefix + extra + "]"
-	}
-	if companion.Personality != "" {
-		return "[" + prefix + " · vibe: " + companion.Personality + "]"
+		return "[" + prefix + " · setup]"
 	}
 	return "[" + prefix + "]"
 }
@@ -79,26 +72,16 @@ func turnStateLine(now time.Time, companion companionState, terminals, timers, s
 	return "[state: " + strings.Join(parts, " · ") + "]"
 }
 
-func turnPrompt(companionID string, source, text string, companion companionState) string {
-	return turnPromptAt(companionID, source, text, companion, time.Now())
+func turnPrompt(source, text string, companion companionState) string {
+	return turnPromptAt(source, text, companion, time.Now())
 }
 
-func turnPromptAt(companionID string, source, text string, companion companionState, now time.Time) string {
-	return turnPromptChannelAt(companionID, source, text, companion, turnChannel{}, now)
+func turnPromptAt(source, text string, companion companionState, now time.Time) string {
+	return turnPromptChannelAt(source, text, companion, turnChannel{}, now)
 }
 
-func turnPromptChannelAt(companionID, source, text string, companion companionState, ch turnChannel, now time.Time) string {
-	return turnHeader(companionID, source, companion, ch, now) + "\n" + text + "\n" + turnStateLine(now, companion, "", "", "")
-}
-
-func storyRequest(text string) bool {
-	text = strings.ToLower(text)
-	for _, cue := range []string{"story", "tale", "read me", "once upon"} {
-		if strings.Contains(text, cue) {
-			return true
-		}
-	}
-	return false
+func turnPromptChannelAt(source, text string, companion companionState, ch turnChannel, now time.Time) string {
+	return turnHeader(source, companion, ch) + "\n" + text + "\n" + turnStateLine(now, companion, "", "", "")
 }
 
 func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, source, text string, companion companionState, ch turnChannel, now time.Time) string {
@@ -166,25 +149,6 @@ func (b *larkServer) turnPromptWithState(ctx context.Context, companionID, sourc
 		stories = strings.Join(storyParts, ",")
 	}
 
-	prompt := turnHeader(companionID, source, companion, ch, now) + "\n" + text
-	if b.libraryInstalled() {
-		hint := "[library: search before facts]"
-		if storyRequest(text) {
-			hint = "[story: story get a listed story and read its passages aloud; library import only when absent; say so if a book will not open]"
-		}
-		prompt += "\n" + hint
-	}
+	prompt := turnHeader(source, companion, ch) + "\n" + text
 	return prompt + "\n" + turnStateLine(now, companion, terminals, timers, stories)
-}
-
-func (b *larkServer) libraryInstalled() bool {
-	if b == nil || b.library == "" {
-		return false
-	}
-	for _, source := range librarySourceOrder {
-		if _, err := os.Stat(filepath.Join(b.libraryDir(), librarySources[source].db)); err == nil {
-			return true
-		}
-	}
-	return false
 }

@@ -22,7 +22,8 @@ const (
 	mcpLimit    = 128 << 10
 	exitNode    = "lark-exit"
 
-	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, library=instant books/facts, emit=Delta Chat/say/audio. Only final prose is spoken."
+	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, library=instant books/facts, emit=Delta Chat/say/audio. Only final prose is spoken. " +
+		"For facts, stories, and books, call library search before answering, then read or import. For a listed story, story get it and read its passages aloud; import only when absent, and say so if a book will not open. Never paste long text."
 )
 
 // emitTracker counts successful emit calls per companion so a device turn can

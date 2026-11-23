@@ -109,7 +109,7 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := turnPrompt(id, "typed",
+	prompt := turnPrompt("typed",
 		"Run a live screen and controls check. Use Code Mode execute to call tools.lark.state({companion_id:'"+id+
 			"',include:['companions']}), tools.lark.patch({companion_id:'"+id+"',terminal:{sleep:false}}), tools.lark.emit({to:'"+id+
 			"',chime:'tap'}), and tools.lark.app({companions:'"+id+
@@ -117,7 +117,9 @@ func TestRealModelLarkCodeMode(t *testing.T) {
 		blankCompanion())
 	turn, endTurn := context.WithTimeout(root, 60*time.Second)
 	defer endTurn()
-	_, sid, err := o.askPrepared(turn, prefix, func() (string, string) { return character, prompt }, turnStream{}, "typed", nil, nil)
+	_, sid, err := o.askPrepared(turn, prefix, func() (companionState, string) {
+		return companionState{ID: prefix, companionLook: companionLook{Name: character}}, prompt
+	}, turnStream{}, "typed", nil, nil)
 	if err != nil {
 		t.Fatalf("real-model Code Mode smoke failed (separate from release checks): %v", err)
 	}

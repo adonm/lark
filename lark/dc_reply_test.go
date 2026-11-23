@@ -28,6 +28,8 @@ func dcVoiceHarness(t *testing.T, replyFn func(prompt string) string) (*larkServ
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-dc"}}`))
+			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/instructions/entries/"):
+				w.WriteHeader(204)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc/model":
 				w.WriteHeader(204)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc/prompt":

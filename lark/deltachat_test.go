@@ -27,6 +27,8 @@ func dcTestHarness(t *testing.T) (*larkServer, string, *stubDCRPC) {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-dc"}}`))
+			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/instructions/entries/"):
+				w.WriteHeader(204)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc/model":
 				w.WriteHeader(204)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc/prompt":
@@ -543,6 +545,8 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-overlap"}}`))
+			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/instructions/entries/"):
+				w.WriteHeader(204)
 			case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses-overlap":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-overlap","agent":"lark","model":{"providerID":"test","id":"model"}}}`))
 			case strings.HasPrefix(r.URL.Path, "/api/session/ses-overlap/"):
@@ -692,7 +696,7 @@ func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(excerpt, "[You are Greg. Speaker: Mum via Delta Chat (contact)") || !strings.Contains(excerpt, "[You are Greg. Speaker: someone in person at your device (name unknown)") {
+	if !strings.Contains(excerpt, "[Speaker: Mum via Delta Chat (contact)") || !strings.Contains(excerpt, "[Speaker: someone in person at your device (name unknown)") {
 		t.Fatalf("excerpt missing channel/sender format: %s", excerpt)
 	}
 }
@@ -775,7 +779,7 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 	promptsMu.Lock()
 	gotPrompts := slices.Clone(prompts)
 	promptsMu.Unlock()
-	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[You are Greg (greg). Speaker: Mum via Delta Chat (contact) · private") || !strings.Contains(gotPrompts[0], "\nSecret plan\n[state: ") {
+	if len(gotPrompts) != 1 || !strings.Contains(gotPrompts[0], "[Speaker: Mum via Delta Chat (contact) · private") || !strings.Contains(gotPrompts[0], "\nSecret plan\n[state: ") {
 		t.Fatalf("unexpected agent prompts: %v", gotPrompts)
 	}
 

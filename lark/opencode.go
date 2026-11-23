@@ -169,7 +169,8 @@ func (o *openCode) invalidateVerified(devices ...string) {
 	o.mu.Unlock()
 }
 
-func (o *openCode) prewarm(ctx context.Context, companionID, character string) {
+func (o *openCode) prewarm(ctx context.Context, companion companionState) {
+	companionID := companion.ID
 	if o == nil || companionID == "" {
 		return
 	}
@@ -190,7 +191,7 @@ func (o *openCode) prewarm(ctx context.Context, companionID, character string) {
 		return
 	}
 	defer unlock()
-	_, _ = o.ensureSession(ctx, companionID, character, false)
+	_, _ = o.ensureSession(ctx, companion, false)
 }
 
 func (o *openCode) forget(companionID string) error {
@@ -448,14 +449,14 @@ func (o *openCode) ensureModel(ctx context.Context, sid string, model ocModel) e
 	return nil
 }
 
-func (o *openCode) fastSession(ctx context.Context, companionID, character string, replace bool) (string, error) {
+func (o *openCode) fastSession(ctx context.Context, companion companionState, replace bool) (string, error) {
 	o.mu.Lock()
-	cached := o.verified[companionID]
+	cached := o.verified[companion.ID]
 	o.mu.Unlock()
 	if cached != "" {
 		return cached, nil
 	}
-	return o.ensureSession(ctx, companionID, character, replace)
+	return o.ensureSession(ctx, companion, replace)
 }
 
 // awaitContract waits for runSchemaUpgrade to record the current MCP catalog
@@ -486,7 +487,8 @@ func (o *openCode) awaitContract(ctx context.Context) error {
 	}
 }
 
-func (o *openCode) ensureSession(ctx context.Context, companionID, character string, replace bool) (string, error) {
+func (o *openCode) ensureSession(ctx context.Context, companion companionState, replace bool) (string, error) {
+	companionID := companion.ID
 	if o.contract != "" {
 		catalog, err := o.db.getMeta(ctx, mcpSchemaMeta)
 		if err != nil {
@@ -586,14 +588,19 @@ func (o *openCode) ensureSession(ctx context.Context, companionID, character str
 	in := struct {
 		Title    string `json:"title"`
 		Location object `json:"location"`
+		Metadata object `json:"metadata"`
 		ocSettings
-	}{larkTitle(companionID, character), object{"directory": o.project}, settings}
+	}{larkTitle(companionID, companion.Name), object{"directory": o.project},
+		object{"lark": object{"companion": companionID}}, settings}
 	created, err := ocData[session](ctx, o.upstream, http.MethodPost, "/api/session", in)
 	if err != nil {
 		return "", err
 	}
 	if !sessionIDRE.MatchString(created.ID) || created.ID == sid {
 		return "", o.invalid()
+	}
+	if err := o.putCompanionEntry(ctx, created.ID, companion); err != nil {
+		return "", err
 	}
 	if seed != "" {
 		if err := o.seedDialogue(ctx, created.ID, seed); err != nil {
@@ -857,11 +864,11 @@ func (o *openCode) lockPrompt(ctx context.Context, companionID string) (context.
 	}
 }
 
-func (o *openCode) askPrepared(ctx context.Context, companionID string, prepare func() (string, string), stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
+func (o *openCode) askPrepared(ctx context.Context, companionID string, prepare func() (companionState, string), stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
 	return o.askPreparedWithModel(ctx, companionID, prepare, ocModel{}, stream, source, begin, onChat)
 }
 
-func (o *openCode) askPreparedWithModel(ctx context.Context, companionID string, prepare func() (string, string), model ocModel, stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
+func (o *openCode) askPreparedWithModel(ctx context.Context, companionID string, prepare func() (companionState, string), model ocModel, stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
 	waiting := time.Now()
 	trace := traceFrom(ctx)
 	ctx, unlock, err := o.lockPrompt(ctx, companionID)
@@ -871,8 +878,8 @@ func (o *openCode) askPreparedWithModel(ctx context.Context, companionID string,
 	admitted := time.Now()
 	trace.measure(diagGate, admitted.Sub(waiting))
 	defer unlock()
-	character, prompt := prepare()
-	sid, err = o.fastSession(ctx, companionID, character, source != "timer")
+	companion, prompt := prepare()
+	sid, err = o.fastSession(ctx, companion, source != "timer")
 	if err != nil {
 		return "", "", err
 	}

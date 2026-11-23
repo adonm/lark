@@ -79,7 +79,7 @@ func TestReconcileSessionUsesCurrentAgentModel(t *testing.T) {
 	for _, model := range models {
 		<-current
 		current <- model
-		got, err := o.ensureSession(t.Context(), device, "Cat", true)
+		got, err := o.ensureSession(t.Context(), companionState{ID: device, companionLook: companionLook{Name: "Cat"}}, true)
 		if err != nil || got != sid {
 			t.Fatalf("did not preserve session %q: %q, %v", sid, got, err)
 		}
@@ -166,6 +166,8 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 						}
 					case "/api/session":
 						fmt.Fprintf(w, `{"data":{"id":%q}}`, sid)
+					case "/api/experimental/session/" + sid + "/instructions/entries/lark.companion":
+						w.WriteHeader(204)
 					case "/api/session/" + sid + "/prompt":
 						_, _ = io.WriteString(w, `{"data":{"id":"prompt"}}`)
 						close(prompted)
@@ -269,6 +271,8 @@ func TestTerminalEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 						}
 					case "/api/session":
 						fmt.Fprintf(w, `{"data":{"id":%q}}`, sid)
+					case "/api/experimental/session/" + sid + "/instructions/entries/lark.companion":
+						w.WriteHeader(204)
 					case "/api/session/" + sid + "/prompt":
 						_, _ = io.WriteString(w, `{"data":{"id":"prompt"}}`)
 						close(prompted)
@@ -482,6 +486,8 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 				t.Error("unexpected character title:", got)
 			}
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q}}`, sid)
+		case "/api/experimental/session/" + sid + "/instructions/entries/lark.companion":
+			w.WriteHeader(204)
 		case "/api/session/" + sid:
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q}}`, sid)
 		case "/api/session/" + sid + "/prompt":
@@ -520,13 +526,17 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 	})
 	first, second := make(chan error, 1), make(chan error, 1)
 	go func() {
-		_, _, err := o.askPrepared(root, id, func() (string, string) { return "Cake", "First" }, turnStream{}, "text", nil, nil)
+		_, _, err := o.askPrepared(root, id, func() (companionState, string) {
+			return companionState{ID: id, companionLook: companionLook{Name: "Cake"}}, "First"
+		}, turnStream{}, "text", nil, nil)
 		first <- err
 	}()
 	expectValue(t, prompts, "First")
 	o.interruptDevice(id)
 	go func() {
-		_, _, err := o.askPrepared(root, id, func() (string, string) { return "Cake", "Second" }, turnStream{}, "text", nil, nil)
+		_, _, err := o.askPrepared(root, id, func() (companionState, string) {
+			return companionState{ID: id, companionLook: companionLook{Name: "Cake"}}, "Second"
+		}, turnStream{}, "text", nil, nil)
 		second <- err
 	}()
 	close(allowPrompt)
@@ -554,6 +564,8 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 				raw, _ := io.ReadAll(r.Body)
 				titles <- str(testObject(t, raw)["title"])
 				_, _ = io.WriteString(w, `{"data":{"id":"ses-ask"}}`)
+			case "/api/experimental/session/ses-ask/instructions/entries/lark.companion":
+				w.WriteHeader(204)
 			case "/api/session/ses-ask/prompt":
 				raw, _ := io.ReadAll(r.Body)
 				prompts <- str(testObject(t, raw)["text"])
@@ -568,7 +580,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 		})
 	})
 	for _, item := range []struct{ id, name string }{{"lark-empty", ""}, {"lark-equal", "lark-equal"}} {
-		if _, err := b.oc.ensureSession(t.Context(), item.id, item.name, true); err != nil {
+		if _, err := b.oc.ensureSession(t.Context(), companionState{ID: item.id, companionLook: companionLook{Name: item.name}}, true); err != nil {
 			t.Fatal(err)
 		}
 		expectValue(t, titles, "Lark: "+item.id)

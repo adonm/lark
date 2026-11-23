@@ -486,6 +486,8 @@ func TestDeltaChatUsesPrimaryModelAndAllowsTaskSubagent(t *testing.T) {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-dc-model"}}`))
+			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/instructions/entries/"):
+				w.WriteHeader(204)
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses-dc-model/model":
 				var body struct{ Model ocModel }
 				_ = json.NewDecoder(r.Body).Decode(&body)

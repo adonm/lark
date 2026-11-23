@@ -373,7 +373,7 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID))
 	h.render(d, now, true)
 	if d.companionID != "" && h.b.oc != nil {
-		go h.b.oc.prewarm(c.ctx, d.companionID, d.companion.Name)
+		go h.b.oc.prewarm(c.ctx, d.companion)
 	}
 	return true
 }
@@ -460,7 +460,7 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID))
 	h.render(d, now, true)
 	if d.companionID != "" && h.b.oc != nil {
-		go h.b.oc.prewarm(c.ctx, d.companionID, d.companion.Name)
+		go h.b.oc.prewarm(c.ctx, d.companion)
 	}
 	return true
 }

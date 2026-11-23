@@ -213,6 +213,8 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 			switch r.URL.Path {
 			case "/api/session", "/api/session/" + sid:
 				fmt.Fprintf(w, `{"data":{"id":%q}}`, sid)
+			case "/api/experimental/session/" + sid + "/instructions/entries/lark.companion":
+				w.WriteHeader(204)
 			case "/api/session/" + sid + "/prompt":
 				raw, _ := io.ReadAll(r.Body)
 				prompt <- str(testObject(t, raw)["text"])
@@ -245,7 +247,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 	go func() { defer close(finished); b.timers.fire(str(timer["id"]), nil) }()
 	select {
 	case got := <-prompt:
-		if !strings.HasPrefix(got, "[You are Cake (cake). Event: timer]\nTimer fired: Timer\n[state: now: ") {
+		if !strings.HasPrefix(got, "[Event: timer]\nTimer fired: Timer\n[state: now: ") {
 			t.Fatal(got)
 		}
 	case <-time.After(testWait(t)):

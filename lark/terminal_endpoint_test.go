@@ -416,6 +416,8 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 			switch r.URL.Path {
 			case "/api/session", "/api/session/" + sid:
 				sendJSON(w, 200, object{"data": object{"id": sid}})
+			case "/api/experimental/session/" + sid + "/instructions/entries/lark.companion":
+				w.WriteHeader(http.StatusNoContent)
 			case "/api/session/" + sid + "/agent", "/api/session/" + sid + "/model":
 				w.WriteHeader(http.StatusNoContent)
 			case "/api/session/" + sid + "/prompt":

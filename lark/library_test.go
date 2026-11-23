@@ -265,8 +265,8 @@ func TestLibraryPromptBudget(t *testing.T) {
 	if !strings.Contains(prompt, "library") {
 		t.Fatal("agent prompt does not mention the library")
 	}
-	// ~4 bytes/token; keep the static prompt under ~1065 tokens (~4250 bytes).
-	if len(prompt) > 4250 {
-		t.Fatalf("agent prompt grew to %d bytes (budget 4250)", len(prompt))
+	// ~4 bytes/token; keep the static prompt under ~1000 tokens (~4000 bytes).
+	if len(prompt) > 4000 {
+		t.Fatalf("agent prompt grew to %d bytes (budget 4000)", len(prompt))
 	}
 }

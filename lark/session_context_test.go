@@ -82,7 +82,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	current := hashMCPSchema(mcpTools, mcpInstructions, mcpRuntimeContract, "")
 	var lanURL atomic.Value
 	var online, connected, seeded atomic.Bool
-	var reconnects, creates, calls atomic.Int32
+	var reconnects, creates, calls, entries atomic.Int32
 	var mu sync.Mutex
 	var promptID string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,12 +116,27 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 			}
 			sendJSON(w, 200, object{"data": mcpServerStatus("lark", status)})
 		case "POST /api/session":
-			var in struct{ Title string }
+			var in struct {
+				Title    string
+				Metadata object
+			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Title != larkTitle(id, "Plum") || !connected.Load() {
 				t.Error("session created without the new catalog or correct companion")
 			}
+			if lark, _ := in.Metadata["lark"].(map[string]any); lark["companion"] != id {
+				t.Errorf("session create metadata lacks the companion: %+v", in.Metadata)
+			}
 			creates.Add(1)
 			sendJSON(w, 200, object{"data": object{"id": freshSID}})
+		case "PUT /api/experimental/session/" + freshSID + "/instructions/entries/lark.companion":
+			var in struct {
+				Value struct{ ID, Name, Personality string }
+			}
+			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Value.ID != id || in.Value.Name != "Plum" || in.Value.Personality != "" {
+				t.Errorf("unexpected instruction entry: %+v", in)
+			}
+			entries.Add(1)
+			w.WriteHeader(204)
 		case "GET /api/session/" + freshSID:
 			sendJSON(w, 200, object{"data": object{"id": freshSID}})
 		case "POST /api/session/" + freshSID + "/synthetic":
@@ -139,7 +154,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 				want = "And what fruit grows there?"
 			}
 			if json.NewDecoder(r.Body).Decode(&in) != nil || !seeded.Load() || !connected.Load() ||
-				!strings.HasPrefix(in.Text, "[You are Plum ("+id+"). Speaker: someone in person at your device (name unknown) · voice]") ||
+				!strings.HasPrefix(in.Text, "[Speaker: someone in person at your device (name unknown) · voice]") ||
 				!strings.Contains(in.Text, "\n"+want+"\n[state: ") || in.Metadata["larkSource"] != "voice" {
 				t.Errorf("current turn changed after handoff: %+v", in)
 			}
@@ -263,8 +278,9 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	if _, err := b.generateReply(t.Context(), b.root, c, "And what fruit grows there?", turnOptions{source: "voice"}); err != nil {
 		t.Fatal(err)
 	}
-	if creates.Load() != 1 || calls.Load() != 2 {
-		t.Fatal("newly versioned binding did not survive restart")
+	if creates.Load() != 1 || calls.Load() != 2 || entries.Load() != 1 {
+		t.Fatalf("newly versioned binding did not survive restart (creates=%d calls=%d entries=%d)",
+			creates.Load(), calls.Load(), entries.Load())
 	}
 }
 
@@ -275,7 +291,7 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			const failedPrompt = "Set my timer."
 			const nextPrompt = "What is our island called?"
 			var lanURL atomic.Value
-			var probe, creates, oldPrompts, newPrompts atomic.Int32
+			var probe, creates, oldPrompts, newPrompts, entries atomic.Int32
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /api/session/" + oldSID:
@@ -314,6 +330,15 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 						return
 					}
 					sendJSON(w, 200, object{"data": object{"id": freshSID}})
+				case "PUT /api/experimental/session/" + freshSID + "/instructions/entries/lark.companion":
+					var in struct {
+						Value struct{ ID, Name, Personality string }
+					}
+					if json.NewDecoder(r.Body).Decode(&in) != nil || in.Value.ID != id || in.Value.Name != "Plum" {
+						t.Errorf("unexpected instruction entry: %+v", in)
+					}
+					entries.Add(1)
+					w.WriteHeader(204)
 				case "POST /api/session/" + freshSID + "/synthetic":
 					testSeed(t, w, r, freshSID, []string{"Mango Island"}, []string{failedPrompt, nextPrompt, "Once only"})
 				case "POST /api/session/" + freshSID + "/prompt":
@@ -395,8 +420,9 @@ func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
 			}
 			var timers int
 			if err := db.QueryRow(`SELECT count(*) FROM timers WHERE companion_id=?`, id).Scan(&timers); err != nil ||
-				timers != 1 || oldPrompts.Load() != 1 || newPrompts.Load() != 1 {
-				t.Fatalf("recovery repeated a turn or a timer: timers=%d old=%d new=%d, %v", timers, oldPrompts.Load(), newPrompts.Load(), err)
+				timers != 1 || oldPrompts.Load() != 1 || newPrompts.Load() != 1 || entries.Load() != 1 {
+				t.Fatalf("recovery repeated a turn, timer, or instruction entry: timers=%d old=%d new=%d entries=%d, %v",
+					timers, oldPrompts.Load(), newPrompts.Load(), entries.Load(), err)
 			}
 		})
 	}

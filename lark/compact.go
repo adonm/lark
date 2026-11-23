@@ -83,7 +83,7 @@ func (b *larkServer) prewarmSessions(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		b.oc.prewarm(ctx, c.ID, c.Name)
+		b.oc.prewarm(ctx, c)
 	}
 }
 

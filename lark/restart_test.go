@@ -30,7 +30,7 @@ func TestFirstTurnWaitsForMCPCatalogRefresh(t *testing.T) {
 		_ = o.db.setMeta(context.Background(), mcpSchemaMeta, o.contract)
 	}()
 	started := time.Now()
-	got, err := o.ensureSession(t.Context(), id, "Cat", true)
+	got, err := o.ensureSession(t.Context(), companionState{ID: id, companionLook: companionLook{Name: "Cat"}}, true)
 	if err != nil || got != sid {
 		t.Fatalf("first turn after restart: session %q, %v", got, err)
 	}
@@ -44,7 +44,7 @@ func TestTurnFailsClearlyWhenCatalogRefreshNeverLands(t *testing.T) {
 	o.settings = ocSettings{Agent: "lark", Model: ocModel{"provider", "model", ""}}
 	o.contract = "catalog-never"
 	o.contractWait = 150 * time.Millisecond
-	if _, err := o.ensureSession(t.Context(), "lark-contract", "Cat", true); err == nil ||
+	if _, err := o.ensureSession(t.Context(), companionState{ID: "lark-contract", companionLook: companionLook{Name: "Cat"}}, true); err == nil ||
 		!strings.Contains(err.Error(), "catalog refresh pending") {
 		t.Fatalf("want a bounded refresh error, got %v", err)
 	}

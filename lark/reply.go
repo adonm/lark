@@ -184,9 +184,9 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 			s.entries = append(s.entries, entry)
 			s.mu.Unlock()
 		}
-		prepare := func() (string, string) {
+		prepare := func() (companionState, string) {
 			companion := b.companionFor(companionID)
-			return companion.Name, b.turnPromptWithState(ctx, companionID, source, text, companion, ch, time.Now().In(b.location()))
+			return companion, b.turnPromptWithState(ctx, companionID, source, text, companion, ch, time.Now().In(b.location()))
 		}
 		reply, sid, err := b.oc.askPrepared(ctx, companionID, prepare, stream, source, nil, onChat)
 		s.done <- specResult{reply: reply, sid: sid, err: err}
@@ -334,9 +334,9 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 			}
 		}
 	}}
-	prepare := func() (string, string) {
+	prepare := func() (companionState, string) {
 		companion := b.companionFor(sender.ID)
-		return companion.Name, b.turnPromptWithState(ctx, sender.ID, options.source, text, companion, options.channel, time.Now().In(b.location()))
+		return companion, b.turnPromptWithState(ctx, sender.ID, options.source, text, companion, options.channel, time.Now().In(b.location()))
 	}
 	onChat := func(entry chatEntry) {
 		if entry.Role == "assistant" {

@@ -26,6 +26,8 @@ func listenHarness(t *testing.T, replyFn func(string) string) (*larkServer, stri
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, `{"data":{"id":"ses-listen"}}`)
+			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/instructions/entries/"):
+				w.WriteHeader(204)
 			case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses-listen":
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, `{"data":{"id":"ses-listen"}}`)

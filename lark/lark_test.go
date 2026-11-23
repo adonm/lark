@@ -30,25 +30,63 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 		{"vocat-33d8", "voice"},
 		{"box3-b324", "typed"},
 	} {
-		if got := turnPromptAt(tc.id, tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}, fixed); got !=
-			"[You are Cake ("+tc.id+"). Speaker: someone in person at your device (name unknown) · "+tc.source+"]\nHi\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
+		if got := turnPromptAt(tc.source, "Hi", companionState{companionLook: companionLook{Name: "Cake", Configured: true}}, fixed); got !=
+			"[Speaker: someone in person at your device (name unknown) · "+tc.source+"]\nHi\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
 			t.Fatal(got)
 		}
 	}
-	if got := turnPromptChannelAt("greg", "deltachat", "Dinner?", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
+	if got := turnPromptChannelAt("deltachat", "Dinner?", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
 		turnChannel{channel: "deltachat", sender: "Mum", senderKind: "contact"}, fixed); got !=
-		"[You are Greg (greg). Speaker: Mum via Delta Chat (contact)]\nDinner?\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
+		"[Speaker: Mum via Delta Chat (contact)]\nDinner?\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
 		t.Fatal(got)
 	}
-	if got := turnPromptChannelAt("greg", "deltachat", "Hey", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
+	if got := turnPromptChannelAt("deltachat", "Hey", companionState{companionLook: companionLook{Name: "Greg", Configured: true}},
 		turnChannel{channel: "deltachat", sender: "cake", senderKind: "companion"}, fixed); got !=
-		"[You are Greg (greg). Speaker: cake via Delta Chat (companion)]\nHey\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
+		"[Speaker: cake via Delta Chat (companion)]\nHey\n[state: now: 2026-11-22 18:04 AEDT (+11:00) · listen: off]" {
 		t.Fatal(got)
 	}
 }
 
+func TestTurnHeaderOmitsStaticIdentity(t *testing.T) {
+	// Identity is written once to the session instruction entry, so no header
+	// branch may repeat the companion name.
+	comp := companionState{companionLook: companionLook{Name: "Cake", Configured: true, Personality: "curious fox"}}
+	for _, tc := range []struct {
+		source string
+		ch     turnChannel
+		want   string
+	}{
+		{"voice", turnChannel{}, "[Speaker: someone in person at your device (name unknown) · voice]"},
+		{"typed", turnChannel{reply: &turnReply{name: "Mum"}}, "[Speaker: someone in person at your device (name unknown) · replying to Mum (Delta Chat) · typed]"},
+		{"deltachat", turnChannel{channel: "deltachat", sender: "Mum", senderKind: "contact"}, "[Speaker: Mum via Delta Chat (contact)]"},
+		{"deltachat", turnChannel{channel: "deltachat", sender: "Mum", senderKind: "contact", private: true}, "[Speaker: Mum via Delta Chat (contact) · private]"},
+		{"timer", turnChannel{channel: "timer"}, "[Event: timer]"},
+	} {
+		if got := turnHeader(tc.source, comp, tc.ch); got != tc.want {
+			t.Errorf("turnHeader(%q) = %q, want %q", tc.source, got, tc.want)
+		}
+	}
+	blank := companionState{companionLook: companionLook{Name: "New Companion"}}
+	if got := turnHeader("voice", blank, turnChannel{}); got != "[Speaker: someone in person at your device (name unknown) · voice · setup]" {
+		t.Errorf("blank companion header = %q", got)
+	}
+}
+
+func TestStripLarkHeaderDropsIdentityAndState(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"[Speaker: someone in person at your device (name unknown) · voice]\nHi\n[state: now: 12:00 · listen: off]", "Hi"},
+		{"[Event: timer]\nTimer fired\n[state: now: 12:00]", "Timer fired"},
+		{"[You are Cake (cake). Speaker: someone in person at your device (name unknown) · voice]\nHi\n[state: now: 12:00]", "Hi"},
+		{"[Speaker: Mum via Delta Chat (contact)]\nHi\n[library: search before facts]\n[state: now: 12:00]", "Hi"},
+		{"plain text", "plain text"},
+	} {
+		if got := stripLarkHeader(tc.in); got != tc.want {
+			t.Errorf("stripLarkHeader(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestTurnHeaderNeverPutsCompanionInSpeakerPosition(t *testing.T) {
-	fixed := time.Date(2026, 11, 22, 18, 4, 0, 0, time.UTC)
 	comp := companionState{companionLook: companionLook{Name: "greg", Configured: true}}
 	for _, ch := range []turnChannel{
 		{},
@@ -56,7 +94,7 @@ func TestTurnHeaderNeverPutsCompanionInSpeakerPosition(t *testing.T) {
 		{channel: "deltachat", sender: "Mum", senderKind: "contact"},
 		{channel: "deltachat", sender: "Mum", senderKind: "contact", private: true},
 	} {
-		hdr := turnHeader("greg", "voice", comp, ch, fixed)
+		hdr := turnHeader("voice", comp, ch)
 		_, afterSpeaker, ok := strings.Cut(hdr, "Speaker: ")
 		if !ok {
 			t.Fatalf("header missing Speaker: %q", hdr)

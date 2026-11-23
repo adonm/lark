@@ -890,10 +890,12 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 				<-r.Context().Done()
 			case "/api/session":
 				_, _ = io.WriteString(w, `{"data":{"id":"ses-ws"}}`)
+			case "/api/experimental/session/ses-ws/instructions/entries/lark.companion":
+				w.WriteHeader(204)
 			case "/api/session/ses-ws/prompt":
 				var prompt struct{ Text string }
 				if err := json.NewDecoder(r.Body).Decode(&prompt); err != nil ||
-					!strings.HasPrefix(prompt.Text, "[You are Cake (cake). Speaker: someone in person at your device (name unknown) · voice]\nWhat are stars?\n[state: now: ") {
+					!strings.HasPrefix(prompt.Text, "[Speaker: someone in person at your device (name unknown) · voice]\nWhat are stars?\n[state: now: ") {
 					t.Errorf("unexpected voice prompt: %q (%v)", prompt.Text, err)
 				}
 				close(kick)

@@ -146,6 +146,8 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 				<-r.Context().Done()
 			case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-spec"}}`))
+			case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/instructions/entries/"):
+				w.WriteHeader(204)
 			case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses-spec":
 				_, _ = w.Write([]byte(`{"data":{"id":"ses-spec"}}`))
 			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/model"):

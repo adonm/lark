@@ -407,7 +407,7 @@ func (h *terminalHub) attachTerminal(termID, compID string) {
 			h.voiceOwners[compID] = d.id
 		}
 		if h.b.oc != nil {
-			go h.b.oc.prewarm(d.client.ctx, compID, d.companion.Name)
+			go h.b.oc.prewarm(d.client.ctx, d.companion)
 		}
 	} else {
 		d.companion = blankCompanion()

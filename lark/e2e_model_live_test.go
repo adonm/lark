@@ -292,6 +292,8 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		}
 		switch method + " " + action {
 		case "GET ", "GET /message", "POST /wait", "POST /interrupt", "DELETE ":
+		case "GET /instructions/entries", "GET /instructions/entries/lark.companion",
+			"PUT /instructions/entries/lark.companion":
 		case "POST /prompt":
 			in := readInput()
 			text := str(in["text"])
@@ -387,7 +389,7 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	}
 }
 
-var e2eSessionRoute = regexp.MustCompile(`^/api/(?:experimental/)?session/(ses[-_][A-Za-z0-9_-]{1,120})(/message|/wait|/prompt|/interrupt)?$`)
+var e2eSessionRoute = regexp.MustCompile(`^/api/(?:experimental/)?session/(ses[-_][A-Za-z0-9_-]{1,120})(/message|/wait|/prompt|/interrupt|/instructions/entries(?:/[a-z0-9][a-z0-9._-]*)?)?$`)
 
 func (m *e2eModel) relayMCP(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	if !tokenMatches(r.Header.Values("X-Lark-Token"), s.token) || r.Method != "POST" {
@@ -528,6 +530,12 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 	case "POST /interrupt", "PATCH ":
 		m.mu.Unlock()
 		w.WriteHeader(204)
+	case "PUT /instructions/entries/lark.companion":
+		m.mu.Unlock()
+		w.WriteHeader(204)
+	case "GET /instructions/entries":
+		m.mu.Unlock()
+		writeStubJSON(w, object{"data": []object{}})
 	case "POST /prompt":
 		var in struct{ Text string }
 		err := json.NewDecoder(r.Body).Decode(&in)

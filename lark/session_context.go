@@ -61,11 +61,6 @@ func (o *openCode) recentDialogue(ctx context.Context, companion string, after i
 	}
 	// Only canonical dialogue from this companion. Do not load archives, cards,
 	// intercom, tool data, timer wakes, attachments, or prompt headers.
-	var compName string
-	_ = o.db.readDB().QueryRowContext(ctx, `SELECT name FROM companions WHERE id=?`, strings.ToLower(companion)).Scan(&compName)
-	if compName == "" {
-		compName = companion
-	}
 	rows, err := o.db.readDB().QueryContext(ctx, `SELECT role,sender,source,channel,text,ts_ms FROM messages WHERE companion_id=? AND ts_ms>?
 		AND role IN ('user','companion') AND source IN ('typed','voice','text','deltachat')
 		ORDER BY ts_ms DESC,id DESC LIMIT 12`, strings.ToLower(companion), after)
@@ -91,9 +86,9 @@ func (o *openCode) recentDialogue(ctx context.Context, companion string, after i
 				if sender == "" {
 					sender = "Friend"
 				}
-				clean = "[You are " + compName + ". Speaker: " + sender + " via Delta Chat (contact) · now: " + formatLocalTime(ts) + "] " + clean
+				clean = "[Speaker: " + sender + " via Delta Chat (contact) · now: " + formatLocalTime(ts) + "] " + clean
 			} else {
-				clean = "[You are " + compName + ". Speaker: someone in person at your device (name unknown) · now: " + formatLocalTime(ts) + "] " + clean
+				clean = "[Speaker: someone in person at your device (name unknown) · now: " + formatLocalTime(ts) + "] " + clean
 			}
 		}
 		recent = append(recent, line{Role: role, Text: clean})
@@ -129,4 +124,16 @@ func (o *openCode) seedDialogue(ctx context.Context, sid, excerpt string) error 
 		return o.invalid()
 	}
 	return nil
+}
+
+// putCompanionEntry writes the companion's static identity once, at session
+// creation. Per-turn state stays in the user message; updating an entry appends
+// a persisted system row and only reaches the model a step late.
+func (o *openCode) putCompanionEntry(ctx context.Context, sid string, companion companionState) error {
+	value := object{"id": companion.ID, "name": companion.Name}
+	if companion.Personality != "" {
+		value["personality"] = companion.Personality
+	}
+	return o.jsonCall(ctx, http.MethodPut,
+		"/api/experimental/session/"+sid+"/instructions/entries/lark.companion", object{"value": value}, nil)
 }
