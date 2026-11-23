@@ -62,7 +62,15 @@ func newTerminalServer(h *terminalHub, host, port string) (*terminalServer, erro
 		return nil, err
 	}
 	tcpAddr := tcpLn.Addr().(*net.TCPAddr)
-	udpAddr := &net.UDPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port, Zone: tcpAddr.Zone}
+	udpPort := tcpAddr.Port
+	if port == "0" {
+		// An ephemeral listener must not reuse the kernel's TCP pick: TCP and
+		// UDP port spaces are independent, so the number may already belong to
+		// another process. Production passes the firmware's fixed port, where
+		// the shared number is the protocol.
+		udpPort = 0
+	}
+	udpAddr := &net.UDPAddr{IP: tcpAddr.IP, Port: udpPort, Zone: tcpAddr.Zone}
 	udpConn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		_ = tcpLn.Close()
@@ -75,7 +83,7 @@ func newTerminalServer(h *terminalHub, host, port string) (*terminalServer, erro
 		hub:     h,
 		tcpLn:   tcpLn,
 		udpConn: udpConn,
-		udpPort: uint16(tcpAddr.Port),
+		udpPort: uint16(udpConn.LocalAddr().(*net.UDPAddr).Port),
 		peers:   make(map[uint32]*nativeClient),
 	}
 	s.wg.Add(2)
