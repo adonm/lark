@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/hex"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -29,6 +31,23 @@ func TestMCPSchemaHash(t *testing.T) {
 		if hashMCPSchema(mcpTools, tc.instructions, tc.runtime, tc.prompt) == original {
 			t.Errorf("changing %s did not change the schema hash", tc.name)
 		}
+	}
+}
+
+// A missing prompt must fail startup instead of hashing an empty agent
+// instruction.
+func TestReadMCPContractRequiresAgentPrompt(t *testing.T) {
+	t.Parallel()
+	if _, err := readMCPContract(filepath.Join(t.TempDir(), "lark.md")); err == nil {
+		t.Fatal("missing agents/lark.md hashed without error")
+	}
+	path := filepath.Join(t.TempDir(), "lark.md")
+	if err := os.WriteFile(path, []byte("Use exact companion IDs."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := readMCPContract(path)
+	if err != nil || hash == "" {
+		t.Fatalf("readMCPContract = %q, %v", hash, err)
 	}
 }
 

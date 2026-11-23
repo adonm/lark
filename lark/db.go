@@ -36,7 +36,7 @@ func sqliteDSN(path string, writer bool) string {
 
 var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '', listening INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '', listening INTEGER NOT NULL DEFAULT 0, identity_version INTEGER NOT NULL DEFAULT 0, identity_synced INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS terminals (id TEXT PRIMARY KEY, kind TEXT NOT NULL, companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL, ip TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, volume INTEGER NOT NULL DEFAULT 55)`,
 	`CREATE TABLE IF NOT EXISTS sessions (companion_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
@@ -45,6 +45,7 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS memory (scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key))`,
 	`CREATE TABLE IF NOT EXISTS stories (id TEXT PRIMARY KEY, title TEXT NOT NULL, twee TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, passages INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS story_progress (companion_id TEXT NOT NULL, story_id TEXT NOT NULL, passage TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 0, flags_json TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL, PRIMARY KEY (companion_id, story_id))`,
+	`CREATE INDEX IF NOT EXISTS story_progress_story ON story_progress (story_id)`,
 	`CREATE TABLE IF NOT EXISTS timers (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, label TEXT NOT NULL, say TEXT NOT NULL, chime TEXT NOT NULL, wake_agent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, fire_at TEXT NOT NULL, notes_json TEXT NOT NULL DEFAULT '[]')`,
 }
 
@@ -242,6 +243,31 @@ func openLarkDB(ctx context.Context, path string) (_ *larkDB, err error) {
 	return d, nil
 }
 
+// requiredColumns are additive columns every runtime query depends on. Older
+// databases that predate them are upgraded in place at startup (see
+// initSchema); `lark doctor` verifies the same list so a stale database is
+// visible before a turn fails with a generic 502.
+var requiredColumns = []struct{ table, column, ddl string }{
+	{"companions", "configured", "INTEGER NOT NULL DEFAULT 0"},
+	{"companions", "personality", "TEXT NOT NULL DEFAULT ''"},
+	{"companions", "voice", "TEXT NOT NULL DEFAULT ''"},
+	{"companions", "form", "TEXT NOT NULL DEFAULT ''"},
+	{"companions", "portrait_id", "TEXT NOT NULL DEFAULT ''"},
+	{"companions", "dc_account_id", "INTEGER NOT NULL DEFAULT 0"},
+	{"companions", "listening", "INTEGER NOT NULL DEFAULT 0"},
+	{"companions", "identity_version", "INTEGER NOT NULL DEFAULT 0"},
+	{"companions", "identity_synced", "INTEGER NOT NULL DEFAULT 0"},
+	{"sessions", "contract_hash", "TEXT NOT NULL DEFAULT ''"},
+	{"sessions", "context_after_ms", "INTEGER NOT NULL DEFAULT 0"},
+	{"messages", "channel", "TEXT NOT NULL DEFAULT ''"},
+	{"messages", "card_title", "TEXT NOT NULL DEFAULT ''"},
+	{"stories", "author", "TEXT NOT NULL DEFAULT ''"},
+	{"stories", "passages", "INTEGER NOT NULL DEFAULT 0"},
+	{"story_progress", "page", "INTEGER NOT NULL DEFAULT 0"},
+	{"story_progress", "flags_json", "TEXT NOT NULL DEFAULT '{}'"},
+	{"terminals", "created_at", "TEXT NOT NULL DEFAULT ''"},
+}
+
 func (d *larkDB) initSchema(ctx context.Context) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
@@ -251,6 +277,18 @@ func (d *larkDB) initSchema(ctx context.Context) error {
 	for _, q := range schemaBaseline {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+	}
+	for _, col := range requiredColumns {
+		exists, err := columnExists(ctx, tx, col.table, col.column)
+		if err != nil {
+			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE "+col.table+" ADD COLUMN "+col.column+" "+col.ddl); err != nil {
+			return fmt.Errorf("initialize Lark schema: add %s.%s: %w", col.table, col.column, err)
 		}
 	}
 	// Listening became a boolean. Backfill from the retired duration column
@@ -308,8 +346,12 @@ func (d *larkDB) initSchema(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+type columnQuery interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func columnExists(ctx context.Context, q columnQuery, table, column string) (bool, error) {
+	rows, err := q.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return false, err
 	}
@@ -331,6 +373,16 @@ func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, 
 }
 
 const initialVolume = 55
+
+// larkDBPath is the database this host serves; doctor opens it to verify the
+// schema without a turn or API call.
+func larkDBPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return env("LARK_DB_PATH", filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "lark", "lark.db"))
+}
 
 func (b *larkServer) volumePref(id string) (level int) {
 	level = initialVolume

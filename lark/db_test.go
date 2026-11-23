@@ -21,6 +21,40 @@ func testDB(t *testing.T, path string) *larkDB {
 	return d
 }
 
+func TestRequiredColumnsAreAddedToExistingDatabases(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "lark.db")
+	d, err := openLarkDB(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"form", "portrait_id", "dc_account_id", "identity_version"} {
+		if _, err := d.Exec(`ALTER TABLE companions DROP COLUMN ` + column); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.Exec(`ALTER TABLE sessions DROP COLUMN contract_hash`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = openLarkDB(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, col := range []struct{ table, column string }{
+		{"companions", "form"}, {"companions", "portrait_id"}, {"companions", "dc_account_id"},
+		{"companions", "identity_version"}, {"sessions", "contract_hash"},
+	} {
+		ok, err := columnExists(t.Context(), d.DB, col.table, col.column)
+		if err != nil || !ok {
+			t.Fatalf("%s.%s missing after startup migration: %v", col.table, col.column, err)
+		}
+	}
+}
+
 func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

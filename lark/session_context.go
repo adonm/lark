@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,6 +26,9 @@ func (o *openCode) readBinding(ctx context.Context, companion string) (sessionBi
 		return b, problem(502, "Cannot read sessions")
 	}
 	b.found = err == nil
+	if b.sid != "" && !sessionIDRE.MatchString(b.sid) {
+		return b, problem(502, "Invalid stored OpenCode session ID")
+	}
 	return b, nil
 }
 
@@ -148,4 +152,38 @@ func (o *openCode) refreshCompanionEntry(ctx context.Context, companion companio
 		return err
 	}
 	return o.putCompanionEntry(ctx, binding.sid, companion)
+}
+
+// reconcileCompanionIdentity retries an unacknowledged identity edit. Identity
+// writes are serialized per process so an older PUT can never land after a
+// newer one; the confirmed version is recorded with a compare-and-set, so an
+// edit that lands mid-flight stays dirty for the next turn.
+func (o *openCode) reconcileCompanionIdentity(ctx context.Context, companionID string) {
+	if o == nil || o.db == nil {
+		return
+	}
+	o.identityMu.Lock()
+	defer o.identityMu.Unlock()
+	c, err := readCompanionRow(o.db.readDB().QueryRowContext(ctx,
+		`SELECT `+companionColumns+` FROM companions WHERE id=?`, strings.ToLower(companionID)))
+	if err != nil || c.IdentitySynced >= c.IdentityVersion {
+		return
+	}
+	binding, err := o.readBinding(ctx, c.ID)
+	if err != nil || binding.sid == "" || !sessionIDRE.MatchString(binding.sid) {
+		return
+	}
+	if err := o.putCompanionEntry(ctx, binding.sid, c); err != nil {
+		log.Printf("Lark could not refresh the identity entry for %s; will retry next turn: %v", c.ID, err)
+		return
+	}
+	o.confirmIdentityVersion(ctx, c.ID, c.IdentityVersion)
+}
+
+func (o *openCode) confirmIdentityVersion(ctx context.Context, companionID string, version int64) {
+	if _, err := o.db.ExecContext(ctx,
+		`UPDATE companions SET identity_synced=? WHERE id=? AND identity_version=?`,
+		version, strings.ToLower(companionID), version); err != nil {
+		log.Printf("Lark could not record the identity version for %s: %v", companionID, err)
+	}
 }

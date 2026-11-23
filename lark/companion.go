@@ -30,6 +30,9 @@ type companionState struct {
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 	DCAccountID uint32 `json:"dc_account_id,omitempty"`
 	Listening   bool   `json:"listening"`
+
+	IdentityVersion int64 `json:"identity_version,omitempty"`
+	IdentitySynced  int64 `json:"identity_synced,omitempty"`
 }
 
 func blankCompanion() companionState {
@@ -49,32 +52,39 @@ func validCompanionID(id string) bool {
 	return len(id) >= 1 && len(id) <= 64 && companionSlugRE.MatchString(id)
 }
 
-const companionColumns = `id,name,configured,personality,voice,updated_at,dc_account_id,form,portrait_id,listening`
+const companionColumns = `id,name,configured,personality,voice,updated_at,dc_account_id,form,portrait_id,listening,identity_version,identity_synced`
 
 func readCompanionRow(row rowScanner) (companionState, error) {
 	var c companionState
 	var configured, listening int
-	err := row.Scan(&c.ID, &c.Name, &configured, &c.Personality, &c.Voice, &c.UpdatedAt, &c.DCAccountID, &c.Form, &c.PortraitID, &listening)
+	err := row.Scan(&c.ID, &c.Name, &configured, &c.Personality, &c.Voice, &c.UpdatedAt, &c.DCAccountID, &c.Form, &c.PortraitID, &listening, &c.IdentityVersion, &c.IdentitySynced)
 	if err != nil {
 		return c, err
 	}
 	c.Configured = configured != 0
 	c.Listening = listening != 0
 	if c.Voice != "" && voiceByID(c.Voice).ID == "" {
-		return c, fmt.Errorf("unknown stored voice %q for companion %s", c.Voice, c.ID)
+		// A retired voice must not hide the companion. Resolution falls back to
+		// the theme default; the raw id stays visible for doctor and repairs.
+		log.Printf("Lark companion %s stores unknown voice %q; using the default", c.ID, c.Voice)
 	}
 	return c, nil
 }
 
 func writeCompanion(ctx context.Context, tx *sql.Tx, id string, c companionState) error {
 	id = strings.ToLower(id)
-	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)
+	// A name or personality edit bumps the identity version and marks the
+	// OpenCode entry dirty; the next turn re-sends it and records the version
+	// it confirmed.
+	_, err := tx.ExecContext(ctx, `INSERT INTO companions (`+companionColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,configured=excluded.configured,
 		personality=excluded.personality,voice=excluded.voice,
 		updated_at=max(companions.updated_at+1,excluded.updated_at),
 		dc_account_id=CASE WHEN excluded.dc_account_id>0 THEN excluded.dc_account_id ELSE companions.dc_account_id END,
-		form=excluded.form,portrait_id=excluded.portrait_id,listening=excluded.listening`,
-		id, c.Name, c.Configured, c.Personality, c.Voice, time.Now().UnixMilli(), c.DCAccountID, c.Form, c.PortraitID, c.Listening)
+		form=excluded.form,portrait_id=excluded.portrait_id,listening=excluded.listening,
+		identity_version=companions.identity_version+CASE WHEN companions.name<>excluded.name OR companions.personality<>excluded.personality THEN 1 ELSE 0 END,
+		identity_synced=CASE WHEN companions.name<>excluded.name OR companions.personality<>excluded.personality THEN 0 ELSE companions.identity_synced END`,
+		id, c.Name, c.Configured, c.Personality, c.Voice, time.Now().UnixMilli(), c.DCAccountID, c.Form, c.PortraitID, c.Listening, c.IdentityVersion, c.IdentitySynced)
 	return err
 }
 
@@ -188,6 +198,9 @@ func (b *larkServer) companionEntry(c companionState, full bool) object {
 	}
 	if c.PortraitID != "" {
 		entry["portrait_id"] = c.PortraitID
+	}
+	if c.Voice != "" && !b.voices.allowed(c.Voice) {
+		entry["voice_invalid"] = c.Voice
 	}
 	if c.DCAccountID != 0 {
 		entry["dc_account_id"] = c.DCAccountID
@@ -439,17 +452,66 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		b.portraits.discard(before.PortraitID)
 	}
 	if op != "get" && c.Form != "" && c.Form != before.Form && c.PortraitID != "" && portrait == nil && b.portraits != nil && b.portraits.generate != nil {
-		b.hub.invalidateAssets(c.PortraitID)
-		go func(pid, form, vibe string) {
-			ctxBG := b.root
-			if ctxBG == nil {
-				ctxBG = context.Background()
-			}
-			_ = b.portraits.generateBackground(ctxBG, pid, form, vibe)
-			b.hub.invalidateAssets(pid)
-		}(c.PortraitID, c.Form, c.Personality)
+		if b.hub != nil {
+			b.hub.invalidateAssets(c.PortraitID)
+		}
+		b.schedulePortraitBackground(c.PortraitID, c.Form, c.Personality)
 	}
 	return object{"ok": true, "companion_id": id, "companion": c}, nil
+}
+
+func (b *larkServer) schedulePortraitBackground(id, form, vibe string) {
+	if b == nil || b.portraits == nil {
+		return
+	}
+	b.portraitBGMu.Lock()
+	if b.portraitBG == nil {
+		b.portraitBG = map[string]*portraitBGQueue{}
+	}
+	q := b.portraitBG[id]
+	if q == nil {
+		q = &portraitBGQueue{}
+		b.portraitBG[id] = q
+	}
+	q.form, q.vibe = form, vibe
+	if q.running {
+		q.dirty = true
+		b.portraitBGMu.Unlock()
+		return
+	}
+	q.running = true
+	b.portraitBGMu.Unlock()
+	go b.runPortraitBackground(id, q)
+}
+
+// runPortraitBackground keeps one generation in flight per portrait. A newer
+// form edit marks the queue dirty; when the current image lands, the newest
+// values are generated again so an older request cannot win.
+func (b *larkServer) runPortraitBackground(id string, q *portraitBGQueue) {
+	for {
+		b.portraitBGMu.Lock()
+		form, vibe := q.form, q.vibe
+		q.dirty = false
+		b.portraitBGMu.Unlock()
+		ctx := b.root
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := b.portraits.generateBackground(ctx, id, form, vibe); err != nil {
+			log.Printf("Lark could not regenerate the background for %s: %v", id, err)
+		}
+		if b.hub != nil {
+			b.hub.invalidateAssets(id)
+		}
+		b.portraitBGMu.Lock()
+		if !q.dirty {
+			delete(b.portraitBG, id)
+			q.running = false
+			b.portraitBGMu.Unlock()
+			return
+		}
+		b.portraitBGMu.Unlock()
+	}
 }
 
 func (b *larkServer) syncCompanionTitle(ctx context.Context, companionID string) {
@@ -470,9 +532,7 @@ func (b *larkServer) syncCompanionTitle(ctx context.Context, companionID string)
 func (b *larkServer) syncCompanionEntry(ctx context.Context, c companionState) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := b.oc.refreshCompanionEntry(ctx, c); err != nil {
-		log.Print("Lark could not refresh a companion identity entry")
-	}
+	b.oc.reconcileCompanionIdentity(ctx, c.ID)
 }
 
 func (b *larkServer) createCompanion(ctx context.Context, obj object) (companionState, error) {
@@ -620,11 +680,7 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	if b.dc != nil {
 		b.dc.forget(id)
 		if accID := c.DCAccountID; accID != 0 {
-			if rpc := b.dc.getRPC(); rpc != nil {
-				if err := rpc.RemoveAccount(accID); err != nil {
-					log.Printf("Lark could not remove Delta Chat account %d for %s: %v", accID, id, err)
-				}
-			}
+			b.dc.dropAccount(ctx, accID)
 		}
 	}
 	if b.hub != nil {

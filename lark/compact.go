@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -65,8 +64,10 @@ func (b *larkServer) runSchemaUpgrade(ctx context.Context, delay, maxDelay time.
 
 func readMCPContract(agentPath string) (string, error) {
 	prompt, err := os.ReadFile(agentPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read agent prompt: %w", err)
+	if err != nil {
+		// A missing agents/lark.md would hash an empty prompt and silently run
+		// the agent without its instructions.
+		return "", fmt.Errorf("read agent prompt %s: %w", agentPath, err)
 	}
 	return hashMCPSchema(mcpTools, mcpInstructions, mcpRuntimeContract, string(prompt)), nil
 }

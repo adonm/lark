@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 	"runtime"
 	"sync"
 	"time"
@@ -35,10 +36,46 @@ func (b *larkServer) loadModels(ctx context.Context, paths modelPaths) <-chan st
 		b.loadSmartTurn(ctx, paths.smartTurn)
 		wg.Wait()
 		if ctx.Err() == nil {
-			log.Printf("Lark models ready in %s", time.Since(b.models.stt.started).Round(time.Millisecond))
+			b.logModelReadiness()
 		}
 	}()
 	return done
+}
+
+// logModelReadiness reports success only when every model this phase owns has
+// loaded, and names the failures otherwise.
+func (b *larkServer) logModelReadiness() {
+	models := []struct {
+		name  string
+		state *modelState
+	}{
+		{"Parakeet", b.models.stt},
+		{"Silero VAD", b.models.vad},
+		{"Smart Turn", b.models.smartTurn},
+	}
+	var failed, loading []string
+	for _, model := range models {
+		state, err := model.state.get()
+		switch state {
+		case modelReady:
+		case modelError:
+			detail := model.name + " unavailable"
+			if err != nil {
+				detail += ": " + err.Error()
+			}
+			failed = append(failed, detail)
+		default:
+			loading = append(loading, model.name)
+		}
+	}
+	switch {
+	case len(failed) > 0:
+		log.Printf("Lark models not ready: %s", strings.Join(failed, "; "))
+	case len(loading) > 0:
+		log.Printf("Lark models still loading: %s", strings.Join(loading, ", "))
+	default:
+		log.Printf("Lark models ready in %s", time.Since(b.models.stt.started).Round(time.Millisecond))
+	}
 }
 
 func (b *larkServer) loadVAD(ctx context.Context, path string) {

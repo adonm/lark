@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/fnv"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -126,6 +127,7 @@ type openCode struct {
 	verified     map[string]string
 	defaultModel ocModel
 	sessionModel map[string]ocModel
+	identityMu   sync.Mutex
 	flushHistory func(string)
 	contractWait time.Duration
 }
@@ -154,7 +156,13 @@ func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, se
 
 func (o *openCode) get(companionID string) (string, error) {
 	sid, _, err := o.store.get(companionID)
-	return sid, err
+	if err != nil {
+		return "", err
+	}
+	if sid != "" && !sessionIDRE.MatchString(sid) {
+		return "", problem(502, "Invalid stored OpenCode session ID")
+	}
+	return sid, nil
 }
 
 func (o *openCode) invalidateVerified(devices ...string) {
@@ -298,7 +306,28 @@ func (o *openCode) reset(ctx context.Context, companionID string) error {
 func (o *openCode) prepareReset(companionID string) func(context.Context) error {
 	run := o.prepareMappingChange(companionID)
 	return func(ctx context.Context) error {
-		return run(ctx, func() error { return o.forget(companionID) })
+		binding, _ := o.readBinding(ctx, companionID)
+		return run(ctx, func() error {
+			if err := o.forget(companionID); err != nil {
+				return err
+			}
+			o.retireSession(ctx, binding.sid)
+			return nil
+		})
+	}
+}
+
+// retireSession deletes a replaced OpenCode session and its cached model, so a
+// reset does not leave old transcripts behind or keep per-session state.
+func (o *openCode) retireSession(ctx context.Context, sid string) {
+	if sid == "" || !sessionIDRE.MatchString(sid) {
+		return
+	}
+	o.mu.Lock()
+	delete(o.sessionModel, sid)
+	o.mu.Unlock()
+	if err := o.jsonCall(ctx, http.MethodDelete, "/api/session/"+sid, nil, nil); err != nil {
+		log.Printf("Lark could not delete retired OpenCode session %s: %v", sid, err)
 	}
 }
 
@@ -561,6 +590,7 @@ func (o *openCode) ensureSession(ctx context.Context, companion companionState, 
 				o.sessionModel[sid] = settings.Model
 			}
 			o.mu.Unlock()
+			o.reconcileCompanionIdentity(ctx, companionID)
 			return sid, nil
 		}
 		var status *upstreamStatus
@@ -575,15 +605,15 @@ func (o *openCode) ensureSession(ctx context.Context, companion companionState, 
 		}
 	}
 	var seed string
+	// A new session starts its dialogue watermark at creation time: the seed
+	// covers everything up to now, so replaying from an older watermark would
+	// duplicate context after a contract rollover.
+	after := time.Now().UnixMilli()
 	if sid != "" {
 		seed, err = o.recentDialogue(ctx, companionID, binding.after)
 		if err != nil {
 			return "", err
 		}
-	}
-	after := binding.after
-	if after == 0 || sid == "" {
-		after = time.Now().UnixMilli()
 	}
 	in := struct {
 		Title    string `json:"title"`
@@ -602,6 +632,7 @@ func (o *openCode) ensureSession(ctx context.Context, companion companionState, 
 	if err := o.putCompanionEntry(ctx, created.ID, companion); err != nil {
 		return "", err
 	}
+	o.confirmIdentityVersion(ctx, companionID, companion.IdentityVersion)
 	if seed != "" {
 		if err := o.seedDialogue(ctx, created.ID, seed); err != nil {
 			return "", err
@@ -609,6 +640,9 @@ func (o *openCode) ensureSession(ctx context.Context, companion companionState, 
 	}
 	if err := o.replaceBinding(ctx, companionID, binding, created.ID, after); err != nil {
 		return "", err
+	}
+	if sid != "" && sid != created.ID {
+		o.retireSession(ctx, sid)
 	}
 	o.mu.Lock()
 	if o.verified != nil {

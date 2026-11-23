@@ -48,7 +48,7 @@ func TestTTSVoiceSelection(t *testing.T) {
 	}
 }
 
-func TestUnknownStoredVoiceErrors(t *testing.T) {
+func TestUnknownStoredVoiceFallsBack(t *testing.T) {
 	t.Parallel()
 	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, "")
@@ -64,11 +64,18 @@ func TestUnknownStoredVoiceErrors(t *testing.T) {
 		if b.voices.allowed(bad) {
 			t.Errorf("%q unexpectedly allowed", bad)
 		}
-		if _, ok := b.companionByID(id); ok {
-			t.Errorf("companionByID(%q) succeeded with unknown stored voice %q", id, bad)
+		// A retired voice must not hide the companion: reads fall back to the
+		// theme default and expose the invalid id for repair.
+		c, ok := b.companionByID(id)
+		if !ok || c.Voice != bad {
+			t.Fatalf("companionByID lost %q: %+v ok=%v", id, c, ok)
 		}
-		if _, err := b.allCompanions(t.Context()); err == nil {
-			t.Errorf("allCompanions succeeded with unknown stored voice %q", bad)
+		if got := b.voiceFor(id); got != b.voices.defaultFor(companionTheme("Legacy")) {
+			t.Fatalf("voiceFor(%q) = %q; want the default", bad, got)
+		}
+		list, err := b.allCompanions(t.Context())
+		if err != nil || len(list) != 1 {
+			t.Fatalf("allCompanions = %v, %v", list, err)
 		}
 	}
 }
