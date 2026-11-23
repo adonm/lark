@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -138,4 +139,35 @@ func TestSpeculationGateAttributesByCompanion(t *testing.T) {
 	if got := g.find(object{}); got != nil {
 		t.Fatalf("removed speculation still owns calls: %p", got)
 	}
+}
+
+// Cost of deferring a mutating tool through a promoted speculation versus
+// running it directly. Read tools never take this path.
+func BenchmarkSpeculationToolHandoff(b *testing.B) {
+	ctx := context.Background()
+	g := &specGate{}
+	run := func() (object, error) { return object{"ok": true}, nil }
+	b.Run("direct", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := run(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("deferred", func(b *testing.B) {
+		for b.Loop() {
+			s := &specTurn{gate: g, done: make(chan specResult, 1), cancel: func() {}, cancelFill: func() {}}
+			g.add(s)
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.hold(ctx, run)
+				done <- err
+			}()
+			s.done <- specResult{}
+			s.promote(ctx, nil, nil, nil)
+			if err := <-done; err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
