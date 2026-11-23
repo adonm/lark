@@ -3,17 +3,31 @@ set -euo pipefail
 
 scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 firmware=$(cd -- "$scripts/../firmware" && pwd -P)
-if (( $# > 1 )); then
-    printf 'Usage: %s [vocat|box3]\n' "$0" >&2
-    exit 2
-fi
-BOARD=${1:-${BOARD:-vocat}}
+force=false
+watch=false
+board_arg=""
+for arg in "$@"; do
+    case $arg in
+        vocat|box3) board_arg=$arg ;;
+        --force) force=true ;;
+        --watch) watch=true ;;
+        *)
+            printf 'Usage: %s [vocat|box3] [--force] [--watch]\n' "$0" >&2
+            exit 2
+            ;;
+    esac
+done
+BOARD=${board_arg:-${BOARD:-vocat}}
 # shellcheck source=scripts/board.sh
 source "$scripts/board.sh"
 if [[ ! -f "$firmware/sdkconfig.local" ]]; then
     echo "Copy firmware/sdkconfig.local.example to firmware/sdkconfig.local and fill in your credentials." >&2
     exit 1
 fi
+idf_image=docker.io/espressif/idf:release-v5.5
+# Incremental builds reuse ccache across runs; the managed components and
+# build*/ directories already live in the repo tree.
+ccache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/lark-ccache
 
 if command -v podman >/dev/null 2>&1; then
     podman=(podman)
@@ -26,28 +40,65 @@ else
     exit 1
 fi
 
-# Let the container shell expand its own arguments and paths.
-# shellcheck disable=SC2016
-exec "${podman[@]}" run --rm --user 0 \
-    -v "$firmware:/project:z" -w /project \
-    docker.io/espressif/idf:release-v5.5 \
-    bash -ec '
-        umask 077
-        build="/project/$1"
-        project="/project/$2"
-        defaults=(/project/sdkconfig.defaults)
-        if [[ $2 != . ]]; then defaults+=("$project/sdkconfig.defaults"); fi
-        defaults+=(/project/sdkconfig.local)
-        # Kconfig defaults do not override an existing sdkconfig.
-        actions=(build)
-        for file in "${defaults[@]}"; do
-            if [[ $file -nt "$build/sdkconfig" ]]; then
-                rm -f "$build/sdkconfig"
-                actions=(reconfigure build)
-                break
-            fi
-        done
-        IFS=";"
-        idf.py -C "$project" -B "$build" -D "SDKCONFIG=$build/sdkconfig" \
-            -D "SDKCONFIG_DEFAULTS=${defaults[*]}" "${actions[@]}"
-    ' -- "$build_dir" "$project_dir"
+# Everything that changes the image: board sources and config plus this recipe.
+source_hash() {
+    {
+        cd -- "$firmware"
+        find main boards CMakeLists.txt partitions.csv dependencies.lock sdkconfig.defaults \
+            -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum
+        if [[ -f sdkconfig.local ]]; then sha256sum sdkconfig.local; fi
+        sha256sum -- "$scripts/build.sh"
+        printf 'board=%s image=%s\n' "$BOARD" "$idf_image"
+    } | sha256sum | cut -d' ' -f1
+}
+
+build_once() {
+    local quiet=${1-} started=$SECONDS hash stamp
+    hash=$(source_hash)
+    stamp="$firmware/$build_dir/.lark-source-hash"
+    if ! "$force" && [[ -f $stamp && $(<"$stamp") == "$hash" && -f "$firmware/$build_dir/$board_image" ]]; then
+        if [[ -z $quiet ]]; then
+            printf '%s: up to date (%s, source %s)\n' "$BOARD" "$board_image" "${hash:0:12}"
+        fi
+        return 0
+    fi
+    install -d -m 700 -- "$ccache_dir"
+    # Let the container shell expand its own arguments and paths.
+    # shellcheck disable=SC2016
+    "${podman[@]}" run --rm --user 0 \
+        --env IDF_CCACHE_ENABLE=1 --env CCACHE_DIR=/root/.ccache --env CCACHE_BASEDIR=/project \
+        -v "$firmware:/project:z" -v "$ccache_dir:/root/.ccache:z" -w /project \
+        "$idf_image" \
+        bash -ec '
+            umask 077
+            build="/project/$1"
+            project="/project/$2"
+            defaults=(/project/sdkconfig.defaults)
+            if [[ $2 != . ]]; then defaults+=("$project/sdkconfig.defaults"); fi
+            defaults+=(/project/sdkconfig.local)
+            # Kconfig defaults do not override an existing sdkconfig.
+            actions=(build)
+            for file in "${defaults[@]}"; do
+                if [[ $file -nt "$build/sdkconfig" ]]; then
+                    rm -f "$build/sdkconfig"
+                    actions=(reconfigure build)
+                    break
+                fi
+            done
+            IFS=";"
+            idf.py -C "$project" -B "$build" -D "SDKCONFIG=$build/sdkconfig" \
+                -D "SDKCONFIG_DEFAULTS=${defaults[*]}" "${actions[@]}"
+        ' -- "$build_dir" "$project_dir"
+    printf '%s' "$hash" > "$stamp"
+    printf '%s: built in %ss (%s)\n' "$BOARD" "$((SECONDS - started))" "$board_image"
+}
+
+if "$watch"; then
+    printf 'Watching firmware sources for %s; Ctrl-C to stop. Ccache: %s\n' "$BOARD" "$ccache_dir"
+    build_once
+    while sleep 2; do
+        build_once quiet
+    done
+else
+    build_once
+fi
