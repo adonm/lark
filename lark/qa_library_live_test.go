@@ -52,6 +52,7 @@ func TestQALocalLibraryBehaviour(t *testing.T) {
 		{"story", "Tell me the story of the three little pigs.", true, false, true},
 		{"current", "What is the current price of Bitcoin?", false, true, false},
 	}
+	suffix := fmt.Sprintf("%x", time.Now().UnixNano()&0xffff)
 	var baselinePCM int64
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
@@ -60,7 +61,7 @@ func TestQALocalLibraryBehaviour(t *testing.T) {
 			if sc.wantStory {
 				localLibraryResetStories(t, "%three little pigs%")
 			}
-			compID := qaTempCompanion(t, c, "qa-lib-"+sc.name, "cat")
+			compID := qaTempCompanion(t, c, "qa-lib-"+sc.name+"-"+suffix, "cat")
 			script := fmt.Sprintf("attach %s\ntap 180 180\nsay %s\nwait thinking 30s\nwait idle 120s\ntimeline\n", compID, sc.prompt)
 			out := qaSimRun(t, "vocat", "sim-lib-"+sc.name, script)
 			firstPCM := int64(0)
