@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -45,18 +46,21 @@ type turnOptions struct {
 }
 
 type specTurn struct {
-	text       string
-	audioLen   int
-	started    time.Time
-	emitMark   uint64 // emit sequence before the speculative model ran
-	cancel     context.CancelFunc
-	fillCtx    context.Context // per-spec context for speculative TTS fills
-	cancelFill context.CancelFunc
+	text        string
+	companionID string
+	audioLen    int
+	started     time.Time
+	emitMark    uint64 // emit sequence before the speculative model ran
+	cancel      context.CancelFunc
+	fillCtx     context.Context // per-spec context for speculative TTS fills
+	cancelFill  context.CancelFunc
+	gate        *specGate // nil outside a terminal hub
 
 	mu        sync.Mutex
 	promoted  bool
 	aborted   bool
 	warming   bool
+	held      []*heldMCP
 	firstAt   time.Time
 	onSent    func(string)
 	onTool    func()
@@ -71,6 +75,133 @@ type specResult struct {
 	reply string
 	sid   string
 	err   error
+}
+
+// heldMCP is a mutating tool call from a speculative turn. Its HTTP handler
+// waits here until the turn is promoted or aborted.
+type heldMCP struct {
+	run  func() (object, error)
+	done chan struct{}
+	out  object
+	err  error
+}
+
+var errSpecAborted = errors.New("speculative turn was cancelled; the change was not applied")
+
+// specGate tracks speculations that are still in flight. MCP requests carry no
+// turn identity (OpenCode calls Lark over HTTP), so a mutating call is
+// attributed to the only active speculation, or to the one matching its
+// companion argument.
+type specGate struct {
+	mu     sync.Mutex
+	active map[*specTurn]struct{}
+}
+
+func (g *specGate) add(s *specTurn) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	if g.active == nil {
+		g.active = make(map[*specTurn]struct{})
+	}
+	g.active[s] = struct{}{}
+	g.mu.Unlock()
+}
+
+func (g *specGate) remove(s *specTurn) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	delete(g.active, s)
+	g.mu.Unlock()
+}
+
+// find returns the speculation a tool call belongs to. Explicit companion
+// arguments disambiguate concurrent turns; otherwise a single in-flight
+// speculation owns the call.
+func (g *specGate) find(args object) *specTurn {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.active) == 0 {
+		return nil
+	}
+	ids := func(candidate *specTurn) bool {
+		for _, key := range []string{"companion_id", "to", "from", "from_companion_id", "to_companion_id"} {
+			if v := strings.ToLower(strings.TrimSpace(str(args[key]))); v != "" && v != "all" {
+				return strings.EqualFold(v, candidate.companionID)
+			}
+		}
+		return false
+	}
+	for s := range g.active {
+		if ids(s) {
+			return s
+		}
+	}
+	if len(g.active) == 1 {
+		for s := range g.active {
+			return s
+		}
+	}
+	return nil
+}
+
+func (s *specTurn) hold(ctx context.Context, run func() (object, error)) (object, error) {
+	s.mu.Lock()
+	if s.promoted {
+		s.mu.Unlock()
+		return run()
+	}
+	if s.aborted {
+		s.mu.Unlock()
+		return nil, errSpecAborted
+	}
+	call := &heldMCP{run: run, done: make(chan struct{})}
+	s.held = append(s.held, call)
+	s.mu.Unlock()
+	select {
+	case <-call.done:
+		return call.out, call.err
+	case <-ctx.Done():
+		// The caller gave up; do not apply it on promotion.
+		s.mu.Lock()
+		for i, held := range s.held {
+			if held == call {
+				s.held = append(s.held[:i], s.held[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+// releaseHeld applies the deferred calls in the order the model issued them.
+func (s *specTurn) releaseHeld() {
+	s.mu.Lock()
+	held := s.held
+	s.held = nil
+	s.mu.Unlock()
+	for _, call := range held {
+		call.out, call.err = call.run()
+		close(call.done)
+	}
+}
+
+func (s *specTurn) rejectHeld() {
+	s.mu.Lock()
+	held := s.held
+	s.held = nil
+	s.mu.Unlock()
+	for _, call := range held {
+		call.err = errSpecAborted
+		close(call.done)
+	}
 }
 
 func normalizeSpecText(s string) string {
@@ -88,14 +219,19 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 	ctx, cancel := context.WithTimeout(b.root, turnTimeout)
 	fillCtx, cancelFill := context.WithTimeout(b.root, turnTimeout)
 	s := &specTurn{
-		text:       text,
-		audioLen:   audioLen,
-		started:    time.Now(),
-		emitMark:   b.emits.mark(companionID),
-		cancel:     cancel,
-		fillCtx:    fillCtx,
-		cancelFill: cancelFill,
-		done:       make(chan specResult, 1),
+		text:        text,
+		companionID: strings.ToLower(companionID),
+		audioLen:    audioLen,
+		started:     time.Now(),
+		emitMark:    b.emits.mark(companionID),
+		cancel:      cancel,
+		fillCtx:     fillCtx,
+		cancelFill:  cancelFill,
+		done:        make(chan specResult, 1),
+	}
+	if b.hub != nil {
+		s.gate = b.hub.gate
+		s.gate.add(s)
 	}
 	// Pre-synthesize the first sentence while the turn is still speculative so a
 	// promoted reply can publish PCM immediately instead of waiting for TTS.
@@ -202,6 +338,8 @@ func (s *specTurn) abort() {
 	s.aborted = true
 	s.onSent, s.onTool, s.onChat = nil, nil, nil
 	s.mu.Unlock()
+	s.gate.remove(s)
+	s.rejectHeld()
 	s.cancelFill()
 	s.cancel()
 }
@@ -231,6 +369,9 @@ func (s *specTurn) promote(ctx context.Context, onSent func(string), onTool func
 	sentences := s.sentences
 	s.sentences = nil
 	s.mu.Unlock()
+	s.gate.remove(s)
+	// Tool side effects must land before the reply that describes them.
+	s.releaseHeld()
 
 	if onChat != nil {
 		for _, entry := range entries {

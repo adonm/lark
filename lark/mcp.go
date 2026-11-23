@@ -387,7 +387,36 @@ func mcpUint(args object, key string) (*uint64, error) {
 	return nil, nil
 }
 
+// Mutating tools from an in-flight speculation are held until the turn is
+// promoted; reads run immediately. A speculative turn may still be aborted by
+// more speech or a mismatched transcript, and its writes must not outlive it.
+func mcpReadOnly(name string, args object) bool {
+	switch name {
+	case "state":
+		return true
+	case "story":
+		return str(args["op"]) == "get"
+	case "library":
+		switch str(args["op"]) {
+		case "search", "read", "list":
+			return true
+		}
+	}
+	return false
+}
+
 func (b *larkServer) callMCP(ctx context.Context, name string, args object) (object, error) {
+	if b.hub != nil && !mcpReadOnly(name, args) {
+		if spec := b.hub.gate.find(args); spec != nil {
+			return spec.hold(ctx, func() (object, error) {
+				return b.applyMCP(ctx, name, args)
+			})
+		}
+	}
+	return b.applyMCP(ctx, name, args)
+}
+
+func (b *larkServer) applyMCP(ctx context.Context, name string, args object) (object, error) {
 	if err := checkMCPFields(args, mcpInputSchema(name), ""); err != nil {
 		b.noteMCPError(name, err)
 		return nil, err
