@@ -25,6 +25,71 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-23 — Offline Content Library
+
+### Affects
+- Host / `~/.local/share/lark/library/` (new, about 80 GB), `lark.service`, `lark-opencode.service`, `check.sh`, `setup-host.sh`
+
+### Changes
+- **Content**: full English Wikipedia and Simple English Wikipedia plain text in SQLite FTS5 (`enwiki.db`, `simple.db`, article text capped at 64 KB), plus a pinned 3,000-title Project Gutenberg set (`gutenberg.db` + `books/`) weighted toward children's and classic literature. The downloader resumes, fetches large files in 8 byte ranges over 3 workers, verifies Wikimedia SHA-1 and local SHA-256, and takes a per-file lock.
+- **Tool**: `tools.lark.library` (`search`, `read`, `list`, `import`) is available to `lark` and `deep`. Search uses FTS5 bm25 with short snippets; read returns 3.2 KB sections; import builds a validated Twee story (60 passages max, 575 characters each) with attribution and can open it silently on the reader. Call counts and recent timings are under `library` in `/api/diagnostics`.
+- **Prompt**: lark checks the library first for facts, stories, and books. The static prompt grew from 3,928 to 4,224 bytes (about +74 tokens), and real turns carry a trailing `[library: search before facts; import requested stories]` hint. `deep` gets short grounded-answer guidance and only lark/websearch permissions.
+- **Setup**: `./scripts/setup-host.sh --library` checks for 100 GB free, then downloads and indexes in the background (`systemctl --user status lark-library`; log at `library/setup.log`). Builds now include `sqlite_fts5`, and `check.sh` adds it for the test suite.
+
+### Upgrade Steps
+1. Run `./scripts/setup-host.sh --gpu-index 0 --library`. Expect about 80 GB under `~/.local/share/lark/library`; the job continues after the script exits.
+2. Restart `lark.service` and `lark-opencode.service` (setup does this). Verify with `~/.local/share/lark/lark library --status`.
+
+---
+
+## 2026-11-23 — Delta Chat DB Reclaim After Panel Echo
+
+### Affects
+- Host / SQLite (`~/.local/share/lark/deltachat/`)
+
+### Changes
+- One-time housekeeping: the panel echo bug had grown greg's Delta Chat account DB (`dc=5`, `216ef3f6-f7b0-4e73-9cdc-c952af9ec643`) to 11 GB with 1.3M freelist pages; `VACUUM` reclaimed it to 5.7 GB. Delta Chat exposes no vacuum RPC, so stop `lark.service`, copy `dc.db`/`dc.db-wal` aside on the same filesystem, run `VACUUM` and `PRAGMA integrity_check` via Python `sqlite3`, then restart.
+
+---
+
+## 2026-11-23 — Delta Chat Status-Update Wire Log Purge and QA Account Prune
+
+### Affects
+- Host / SQLite (`dc.db`) and `~/.local/share/lark/deltachat/` account dirs
+
+### Changes
+- The 5.7 GB left after the first vacuum was not live chat data. Reading `dbstat` showed `msgs` 4.0 GiB + `smtp` 1.63 GiB; 52,957 rows were hidden core wire messages for queued webxdc status updates (`param LIKE '%S=30%'`, chat 17 = the `adonm` DM), each carrying up to 100 KB of batched panel updates, and 51,773 matching `smtp` rows were still unsent (state 20, `retries=0`, queue stuck behind the echo flood). After purging those rows plus 75 orphan `smtp` rows: 824 KB, `integrity_check` ok, and the queued panel `.xdc` + real messages were delivered.
+- Removed 58 unused QA Delta Chat accounts (54 MB) with `RemoveAccount` after the 8 QA companions (`bench3`, `new-companion`…`-7`) were removed via `lark companions rm`. Kept ids 1–8 (`cake`, `cake-classic`, `george`, `george-classic`, `greg`, `greg-classic`, `mint`, `mint-classic`).
+- Blobs (portrait PNG, story JPG, panel `.xdc`, 284 KB) and all real `adonm` messages were left untouched.
+
+### Detection
+```sh
+DB=~/.local/share/lark/deltachat/216ef3f6-f7b0-4e73-9cdc-c952af9ec643/dc.db
+sqlite3 "file:$DB?mode=ro" "SELECT name, SUM(pgsize)/1048576 AS mb FROM dbstat GROUP BY name ORDER BY mb DESC LIMIT 5;"
+sqlite3 "file:$DB?mode=ro" "SELECT COUNT(*), SUM(LENGTH(param))/1048576, SUM(state=20) FROM msgs WHERE param LIKE '%S=30%';"
+```
+A healthy account has single-digit `S=30` rows. Thousands means a panel echo or a stalled `smtp` queue.
+
+### Upgrade Steps
+1. Stop `lark.service`. Reflink-backup the account dir (`cp -a --reflink=always`).
+2. Delete the stale wire log and its queue, then vacuum:
+   ```sql
+   DELETE FROM smtp WHERE msg_id IN (SELECT id FROM msgs WHERE param LIKE '%S=30%');
+   DELETE FROM smtp WHERE msg_id NOT IN (SELECT id FROM msgs);
+   DELETE FROM msgs WHERE param LIKE '%S=30%';
+   VACUUM;
+   PRAGMA integrity_check;
+   ```
+   The `delete_messages` RPC only trashes rows (zeroed tombstones), so direct SQL is required to reclaim space. Do not remove trash tombstones — they stop deleted messages being re-downloaded.
+3. Prune unreferenced accounts with a one-off `RemoveAccount` client (`DC_ACCOUNTS_PATH` must point at `~/.local/share/lark/deltachat`, service stopped). Keep the `dc_account_id`s still present in `companions`; core rewrites `accounts.toml` and removes the dirs itself. Remove QA companions first (`lark companions rm <id>`), then restart.
+4. Restart and confirm `lark status` lists the household companions and `smtp` drains to 0.
+
+### Notes
+- Do not run account/companion pruning while a live QA suite is creating throwaway companions and accounts; rerun it afterwards.
+- Delivered status-update wire copies on other devices are unaffected by purging the server-side rows.
+
+---
+
 ## 2026-11-23 — Silent Story Opens
 
 ### Affects
