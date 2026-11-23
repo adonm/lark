@@ -53,9 +53,6 @@ type terminalSession struct {
 	announcing     bool
 	companion      companionState
 	vol            int
-	autoVol        bool
-	ambientEMA     float64
-	hasAmbient     bool
 	pct            int
 	charging       bool
 	telemetry      terminalTelemetry
@@ -344,7 +341,7 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 		d.companion = blankCompanion()
 	}
 	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
-	d.autoVol, d.vol = h.b.volumePrefs(d.key)
+	d.vol = h.b.volumePref(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
 
 	h.mu.Lock()
@@ -432,7 +429,7 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 		d.companion = blankCompanion()
 	}
 	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
-	d.autoVol, d.vol = h.b.volumePrefs(d.key)
+	d.vol = h.b.volumePref(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
 
 	if old := h.terminals[d.key]; old != nil {
@@ -554,7 +551,6 @@ type renderRequest struct {
 	grade        gradeKey
 	drawer       string
 	menuPage     int
-	autoVol      bool
 	vol          int
 	voice        string
 	peers        []menuPeer
@@ -724,10 +720,6 @@ func (h *terminalHub) animate(ctx context.Context) {
 	}
 }
 
-func (d *terminalSession) volumeFrame(persist bool) object {
-	return object{"op": "volume", "terminal_id": d.id, "companion_id": d.companionID, "level": d.vol, "auto_volume": d.autoVol, "persist": persist}
-}
-
 func (h *terminalHub) companionTerminals(companionID string) []object {
 	if h == nil {
 		return nil
@@ -762,7 +754,7 @@ func (b *larkServer) setCompanionTerminalVolume(ctx context.Context, companionID
 	if d == nil || !h.active(d) || d.companionID != companionID {
 		return problem(404, "Terminal not attached or offline")
 	}
-	return h.setVolume(ctx, d, false, level, "")
+	return h.setVolume(ctx, d, level, "")
 }
 
 func (h *terminalHub) saveVoice(id, voice string) error {
@@ -785,7 +777,7 @@ func (h *terminalHub) saveVoice(id, voice string) error {
 }
 
 // Takes and returns with h.mu held. Serialize writes without blocking the hub.
-func (h *terminalHub) setVolume(ctx context.Context, d *terminalSession, auto bool, level int, action string) error {
+func (h *terminalHub) setVolume(ctx context.Context, d *terminalSession, level int, action string) error {
 	h.mu.Unlock()
 	h.settingsMu.Lock()
 	defer h.settingsMu.Unlock()
@@ -798,23 +790,12 @@ func (h *terminalHub) setVolume(ctx context.Context, d *terminalSession, auto bo
 		level = max(0, d.vol-10)
 	case "vol-plus":
 		level = min(100, d.vol+10)
-	case "vol-auto":
-		auto, level = !d.autoVol, d.vol
 	}
 	if level < 0 {
 		level = d.vol
 	}
-	savedLevel := level
-	if auto {
-		savedLevel = initialAutoVolume
-		if !d.autoVol {
-			level = initialAutoVolume
-		} else {
-			level = d.vol
-		}
-	}
 	h.mu.Unlock()
-	err := h.b.saveVolumePrefs(ctx, d.key, auto, savedLevel)
+	err := h.b.saveVolumePref(ctx, d.key, level)
 	h.mu.Lock()
 	if err != nil {
 		return err
@@ -822,17 +803,10 @@ func (h *terminalHub) setVolume(ctx context.Context, d *terminalSession, auto bo
 	if !h.active(d) {
 		return problem(409, "Device disconnected while saving volume")
 	}
-	if auto != d.autoVol {
-		d.hasAmbient = false
-	}
-	changedMode := d.autoVol != auto
-	d.autoVol, d.vol = auto, level
-	h.pushVolume(d, !auto, true)
+	d.vol = level
+	h.pushVolume(d, true, true)
 	now := time.Now()
 	d.meter = now.Add(1800 * time.Millisecond)
 	h.render(d, now, false)
-	if changedMode {
-		h.broadcastPeers()
-	}
 	return nil
 }

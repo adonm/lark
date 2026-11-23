@@ -203,15 +203,13 @@ func (b *larkServer) volumeAPI(r *http.Request, id string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	auto, ok := args["auto"]
-	if !ok || len(args) > 2 || len(args) == 2 && args["volume"] == nil {
-		return nil, problem(400, `Expected {"auto":true} or {"auto":false,"volume":0..100}`)
+	level, ok := args["volume"]
+	if !ok || len(args) != 1 || level == nil {
+		return nil, problem(400, `Expected {"volume":0..100}`)
 	}
 	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
 	}
-	delete(args, "auto")
-	args["auto_volume"] = auto
 	return b.hub.terminalVolumeControl(r.Context(), id, args)
 }
 

@@ -180,8 +180,7 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 						"wifi_rssi": te["wifi_rssi"],
 					},
 					"volume": object{
-						"volume":      te["volume"],
-						"auto_volume": te["auto_volume"],
+						"volume": te["volume"],
 					},
 				})
 			}

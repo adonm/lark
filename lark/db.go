@@ -38,7 +38,7 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '', listening INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS terminals (id TEXT PRIMARY KEY, kind TEXT NOT NULL, companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL, ip TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
+	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, volume INTEGER NOT NULL DEFAULT 55)`,
 	`CREATE TABLE IF NOT EXISTS sessions (companion_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, channel TEXT NOT NULL DEFAULT '', card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS messages_companion_ts_id ON messages (companion_id, ts_ms, id)`,
@@ -276,9 +276,22 @@ func (d *larkDB) initSchema(ctx context.Context) error {
 			return fmt.Errorf("initialize Lark schema: %w", err)
 		}
 	}
+	// Volume is manual-only; older databases also carry the auto flag and
+	// name the level `manual_volume`. Rename first so the drop below can run
+	// against the same table.
+	hasManual, err := columnExists(ctx, tx, "terminal_prefs", "manual_volume")
+	if err != nil {
+		return fmt.Errorf("initialize Lark schema: %w", err)
+	}
+	if hasManual {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE terminal_prefs RENAME COLUMN manual_volume TO volume`); err != nil {
+			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+	}
 	// Columns retired from the baseline. SQLite has no DROP COLUMN IF EXISTS,
 	// so probe the table first; fresh databases never have them.
 	for _, col := range []struct{ table, column string }{
+		{"terminal_prefs", "auto_volume"},
 		{"timers", "app_name"},
 	} {
 		exists, err := columnExists(ctx, tx, col.table, col.column)
@@ -317,28 +330,28 @@ func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, 
 	return false, rows.Err()
 }
 
-const initialAutoVolume = 55
+const initialVolume = 55
 
-func (b *larkServer) volumePrefs(id string) (auto bool, level int) {
-	auto, level = true, initialAutoVolume
+func (b *larkServer) volumePref(id string) (level int) {
+	level = initialVolume
 	if b.db == nil {
-		return auto, level
+		return level
 	}
-	err := b.db.readDB().QueryRow(`SELECT auto_volume,manual_volume FROM terminal_prefs WHERE terminal_id=?`, strings.ToLower(id)).Scan(&auto, &level)
+	err := b.db.readDB().QueryRow(`SELECT volume FROM terminal_prefs WHERE terminal_id=?`, strings.ToLower(id)).Scan(&level)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.Print("Lark could not read volume preferences")
-		return auto, level
+		return level
 	}
-	return auto, level
+	return level
 }
 
-func (b *larkServer) saveVolumePrefs(ctx context.Context, id string, auto bool, level int) error {
+func (b *larkServer) saveVolumePref(ctx context.Context, id string, level int) error {
 	if b.db == nil {
 		return problem(503, "Volume storage unavailable")
 	}
-	_, err := b.db.ExecContext(ctx, `INSERT INTO terminal_prefs (terminal_id,auto_volume,manual_volume) VALUES (?,?,?)
-		ON CONFLICT(terminal_id) DO UPDATE SET auto_volume=excluded.auto_volume,manual_volume=excluded.manual_volume`,
-		strings.ToLower(id), auto, level)
+	_, err := b.db.ExecContext(ctx, `INSERT INTO terminal_prefs (terminal_id,volume) VALUES (?,?)
+		ON CONFLICT(terminal_id) DO UPDATE SET volume=excluded.volume`,
+		strings.ToLower(id), level)
 	if err != nil {
 		return problem(502, "Cannot save volume")
 	}

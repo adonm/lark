@@ -278,7 +278,6 @@ func (h *terminalHub) endRecording(d *terminalSession, reqTarget string, cancell
 		}
 		return
 	}
-	d.measureAmbient(pcm)
 	h.startTurn(d, now, false, "voice", func(ctx context.Context, id uint64) {
 		h.runVoice(ctx, d, id, target, pcm)
 	})
@@ -796,7 +795,6 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 				return context.Canceled
 			}
 			d.ttsStarted = true
-			h.applyAmbientVolume(d)
 			h.setCompanionStatus(d.companionID, statusSpeaking)
 			h.mu.Unlock()
 			if !control("start") {
@@ -850,31 +848,6 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 		return context.Canceled
 	}
 	return nil
-}
-
-func (d *terminalSession) measureAmbient(pcm []byte) {
-	if rms, ok := ambientRMS(pcm); ok {
-		d.updateAmbient(rms)
-	}
-}
-
-func (d *terminalSession) updateAmbient(rms float64) {
-	if d.hasAmbient {
-		d.ambientEMA += 0.45 * (rms - d.ambientEMA)
-	} else {
-		d.ambientEMA, d.hasAmbient = rms, true
-	}
-}
-
-func (h *terminalHub) applyAmbientVolume(d *terminalSession) {
-	if !d.autoVol || !d.hasAmbient {
-		return
-	}
-	level := ambientVolume(d.ambientEMA)
-	if delta := level - d.vol; delta >= 3 || delta <= -3 {
-		d.vol = level
-		h.pushVolume(d, false, true)
-	}
 }
 
 func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {

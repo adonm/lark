@@ -392,13 +392,8 @@ func renderPixelMoreWithHits(spec pixelDisplaySpec, page int, th pixelTheme) (*i
 	return renderPixelMenuGrid(spec, "More", pixelMoreMenuItems, page, th, ""), hits, actions
 }
 
-func renderPixelVolumeWithHits(spec pixelDisplaySpec, auto bool, vol, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
-	mode := "Manual"
-	if auto {
-		mode = "Auto"
-	}
+func renderPixelVolumeWithHits(spec pixelDisplaySpec, vol, page int, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction) {
 	items := []tile{
-		{id: "vol-mode", label: "Mode: " + mode, detail: "Tap to switch", icon: "volume", action: sceneAction{"volume-auto", ""}},
 		{id: "vol-down", label: "Quieter (-10)", detail: fmt.Sprintf("Level %d%%", vol), icon: "volume", action: sceneAction{"volume-step", "-10"}},
 		{id: "vol-up", label: "Louder (+10)", detail: fmt.Sprintf("Level %d%%", vol), icon: "volume", action: sceneAction{"volume-step", "10"}},
 	}

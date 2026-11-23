@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -21,36 +20,6 @@ var (
 	le            = binary.LittleEndian
 	errInvalidPCM = errors.New("invalid synthesized audio")
 )
-
-func ambientRMS(pcm []byte) (float64, bool) {
-	const block = sampleRate / 100 * 2
-	var energy [20]int64
-	if len(pcm) < len(energy)*block {
-		return 0, false
-	}
-	for i := range energy {
-		for offset := i * block; offset < (i+1)*block; offset += 2 {
-			s := int64(int16(le.Uint16(pcm[offset:])))
-			energy[i] += s * s
-		}
-	}
-	slices.Sort(energy[:])
-	return math.Sqrt(float64(energy[0]+energy[1]+energy[2]+energy[3]) / (4 * (block / 2))), true
-}
-
-func ambientVolume(rms float64) int {
-	curve := [...]struct{ rms, level float64 }{{80, 40}, {300, 58}, {800, 78}, {1800, 100}}
-	for i, p := range curve {
-		if rms <= p.rms {
-			if i == 0 {
-				return int(p.level)
-			}
-			prev := curve[i-1]
-			return int(math.Round(prev.level + (p.level-prev.level)*(rms-prev.rms)/(p.rms-prev.rms)))
-		}
-	}
-	return 100
-}
 
 func wavHeader(size int) (h [44]byte) {
 	copy(h[:], "RIFF")

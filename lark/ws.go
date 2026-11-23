@@ -206,7 +206,7 @@ func (h *terminalHub) pushPower(d *terminalSession, brightness int, mirror bool)
 }
 
 func (h *terminalHub) pushVolume(d *terminalSession, persist, mirror bool) {
-	h.pushProto(d, msgVolume, encodeVolumeMsg(d.vol, persist, d.autoVol, d.id, d.companionID), mirror)
+	h.pushProto(d, msgVolume, encodeVolumeMsg(d.vol, persist, d.id, d.companionID), mirror)
 }
 
 func (h *terminalHub) active(d *terminalSession) bool {

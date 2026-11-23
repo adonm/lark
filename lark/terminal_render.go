@@ -49,7 +49,6 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 	case d.drawer != "" && (mood == "idle" || (d.drawer == drawerStoryReader && (mood == "speaking" || d.recording.listen))):
 		r.drawer = d.drawer
 		r.menuPage = d.menuPage
-		r.autoVol = d.autoVol
 		r.vol = d.vol
 		r.voice = d.voice
 		if d.story != nil {
@@ -221,11 +220,7 @@ func (h *terminalHub) renderFrames(d *terminalSession) {
 							}
 						}
 						if r.drawer == drawerVolume {
-							mode := "Manual"
-							if r.autoVol {
-								mode = "Auto"
-							}
-							srcParts = append(srcParts, fmt.Sprintf("%s · %d%%", mode, r.vol))
+							srcParts = append(srcParts, fmt.Sprintf("Level · %d%%", r.vol))
 						}
 						if r.view.menu != nil {
 							if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {

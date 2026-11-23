@@ -592,13 +592,6 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 			h.finishTurn(d, id, nil, nil)
 			return
 		}
-		if rms, ok := ambientRMS(result.pcm); ok {
-			h.mu.Lock()
-			if h.active(d) && d.turn == id {
-				d.updateAmbient(rms)
-			}
-			h.mu.Unlock()
-		}
 		trace := traceFrom(ctx)
 		trace.measure(diagSTT, result.stt)
 		if result.sttRun > 0 || result.sttQueue > 0 {

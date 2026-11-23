@@ -217,16 +217,12 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 				h.render(d, now, false)
 			}
 		}
-	case "volume-auto":
-		if err := h.setVolume(d.client.ctx, d, false, 0, "vol-auto"); err != nil && h.active(d) {
-			h.setCompanionStatus(d.companionID, statusError)
-		}
 	case "volume-step":
 		op := "vol-plus"
 		if strings.HasPrefix(a.value, "-") {
 			op = "vol-minus"
 		}
-		if err := h.setVolume(d.client.ctx, d, false, 0, op); err != nil && h.active(d) {
+		if err := h.setVolume(d.client.ctx, d, 0, op); err != nil && h.active(d) {
 			h.setCompanionStatus(d.companionID, statusError)
 		}
 	case "voice-set":
@@ -267,8 +263,8 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 		h.render(d, now, false)
 	case "voice-select":
 		h.selectAndPreviewVoice(d, a.value)
-	case "vol-auto", "vol-minus", "vol-plus":
-		if err := h.setVolume(d.client.ctx, d, false, 0, a.kind); err != nil && h.active(d) {
+	case "vol-minus", "vol-plus":
+		if err := h.setVolume(d.client.ctx, d, 0, a.kind); err != nil && h.active(d) {
 			h.setCompanionStatus(d.companionID, statusError)
 		}
 	case "listen", "reply":
@@ -427,7 +423,7 @@ func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, 
 		img, hits, acts := renderPixelMoreWithHits(spec, r.menuPage, th)
 		return img, hits, acts, nil
 	case drawerVolume:
-		img, hits, acts := renderPixelVolumeWithHits(spec, r.autoVol, r.vol, r.menuPage, th)
+		img, hits, acts := renderPixelVolumeWithHits(spec, r.vol, r.menuPage, th)
 		return img, hits, acts, nil
 	case drawerVoice:
 		img, hits, acts := renderPixelVoiceWithHits(spec, r.voice, r.menuPage, th)

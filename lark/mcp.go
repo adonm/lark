@@ -243,7 +243,7 @@ var mcpTools = func() []object {
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id")})),
 		tool("patch", "Update companion, terminal, timer, or atomic memory. Portraits use companion.portrait with form.",
 			schema(object{"companion_id": text,
-				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag}),
+				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "sleep": flag}),
 				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "form": text,
 					"personality": text, "voice": voice, "portrait": portraitSchema, "configured": flag,
 					"listening": object{"type": "boolean"}}),
@@ -316,7 +316,7 @@ func (h *terminalHub) terminalStatus(entry object, id string, full bool) {
 		entry["connected"], entry["online"], entry["mode"] = true, true, d.pose.mood
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
-		entry["auto_volume"], entry["sleeping"] = d.autoVol, d.asleep
+		entry["sleeping"] = d.asleep
 		if d.story != nil {
 			entry["story"] = d.story.title
 		}
@@ -340,11 +340,7 @@ func (h *terminalHub) terminalStatus(entry object, id string, full bool) {
 		return
 	}
 	h.mu.Unlock()
-	auto, level := h.b.volumePrefs(id)
-	entry["auto_volume"] = auto
-	if !auto {
-		entry["volume"] = level
-	}
+	entry["volume"] = h.b.volumePref(id)
 }
 
 func mcpUint(args object, key string) (*uint64, error) {
@@ -501,34 +497,19 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 	return out, nil
 }
 
-func volumeCommand(args object, key string) (auto bool, level int, set bool, err error) {
+func volumeCommand(args object) (level int, set bool, err error) {
 	volume, err := mcpUint(args, "volume")
 	if err != nil || volume != nil && *volume > 100 {
-		return false, 0, false, problem(400, "Volume must be an integer from 0 to 100")
-	}
-	if _, ok := args[key]; ok {
-		auto, err = companionBool(args, key, false)
-		if err != nil {
-			return false, 0, false, err
-		}
-		if auto && volume != nil {
-			return false, 0, false, problem(400, "Use auto without manual volume")
-		}
-	}
-	if auto {
-		return true, initialAutoVolume, true, nil
+		return 0, false, problem(400, "Volume must be an integer from 0 to 100")
 	}
 	if volume != nil {
-		return false, int(*volume), true, nil
+		return int(*volume), true, nil
 	}
-	if _, present := args[key]; present {
-		return false, -1, true, nil // Hold the current level when disabling auto-volume.
-	}
-	return false, 0, false, nil
+	return 0, false, nil
 }
 
 func (h *terminalHub) terminalVolumeControl(ctx context.Context, id string, args object) (object, error) {
-	auto, level, setVolume, err := volumeCommand(args, "auto_volume")
+	level, setVolume, err := volumeCommand(args)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +519,7 @@ func (h *terminalHub) terminalVolumeControl(ctx context.Context, id string, args
 		return nil, problem(400, "Sleep must be a boolean")
 	}
 	if !setVolume && !setSleep {
-		return nil, problem(400, "Expected volume, auto_volume, or sleep")
+		return nil, problem(400, "Expected volume or sleep")
 	}
 	id = strings.ToLower(id)
 	if !setSleep {
@@ -555,19 +536,19 @@ func (h *terminalHub) terminalVolumeControl(ctx context.Context, id string, args
 		}
 		h.mu.Unlock()
 		h.settingsMu.Lock()
-		if level < 0 {
-			_, level = h.b.volumePrefs(id)
+		if !setVolume {
+			level = h.b.volumePref(id)
 		}
-		err := h.b.saveVolumePrefs(ctx, id, auto, level)
+		err := h.b.saveVolumePref(ctx, id, level)
 		h.settingsMu.Unlock()
 		h.mu.Lock()
 		if err != nil {
 			return nil, err
 		}
-		return object{"ok": true, "terminal_id": id, "volume": level, "auto_volume": auto, "sleeping": false}, nil
+		return object{"ok": true, "terminal_id": id, "volume": level, "sleeping": false}, nil
 	}
 	if setVolume {
-		if err := h.setVolume(ctx, d, auto, level, ""); err != nil {
+		if err := h.setVolume(ctx, d, level, ""); err != nil {
 			return nil, err
 		}
 	}
@@ -577,7 +558,7 @@ func (h *terminalHub) terminalVolumeControl(ctx context.Context, id string, args
 		h.setSleeping(d, asleep)
 		h.render(d, now, false)
 	}
-	return object{"ok": true, "terminal_id": d.id, "companion_id": d.companionID, "volume": d.vol, "auto_volume": d.autoVol, "sleeping": d.asleep}, nil
+	return object{"ok": true, "terminal_id": d.id, "companion_id": d.companionID, "volume": d.vol, "sleeping": d.asleep}, nil
 }
 
 func validChime(kind string) bool {

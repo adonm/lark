@@ -49,13 +49,11 @@ func (b *larkServer) terminalsForCompanion(companionID string) ([]terminalRecord
 }
 
 func (b *larkServer) terminalEntry(t terminalRecord, full bool) object {
-	auto, vol := b.volumePrefs(t.ID)
 	entry := object{
 		"id":           t.ID,
 		"kind":         t.Kind,
 		"companion_id": t.CompanionID,
-		"auto_volume":  auto,
-		"volume":       vol,
+		"volume":       b.volumePref(t.ID),
 		"online":       false,
 		"connected":    false,
 		"mode":         "offline",
@@ -277,22 +275,11 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			}
 			t, _ = b.terminalByID(id)
 		}
-		if _, hasAuto := obj["auto"]; hasAuto {
+		if v, hasVol := obj["volume"]; hasVol {
 			if b.hub == nil {
 				return nil, problem(503, "Terminal hub unavailable")
 			}
-			volArgs := object{"auto_volume": obj["auto"]}
-			if v, ok := obj["volume"]; ok {
-				volArgs["volume"] = v
-			}
-			if _, err := b.hub.terminalVolumeControl(r.Context(), id, volArgs); err != nil {
-				return nil, err
-			}
-		} else if v, hasVol := obj["volume"]; hasVol {
-			if b.hub == nil {
-				return nil, problem(503, "Terminal hub unavailable")
-			}
-			if _, err := b.hub.terminalVolumeControl(r.Context(), id, object{"auto_volume": false, "volume": v}); err != nil {
+			if _, err := b.hub.terminalVolumeControl(r.Context(), id, object{"volume": v}); err != nil {
 				return nil, err
 			}
 		}

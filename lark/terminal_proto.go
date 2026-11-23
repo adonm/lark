@@ -275,18 +275,14 @@ func encodeChimePayload(kind string) (byte, bool) {
 	}
 }
 
-func encodeVolumeMsg(level int, persist, auto bool, terminalID, companionID string) []byte {
-	var p, a uint8
+func encodeVolumeMsg(level int, persist bool, terminalID, companionID string) []byte {
+	var p uint8
 	if persist {
 		p = 1
-	}
-	if auto {
-		a = 1
 	}
 	return protoVolume{
 		level:       uint8(min(100, max(0, level))),
 		persist:     p,
-		auto:        a,
 		terminalID:  terminalID,
 		companionID: companionID,
 	}.encode()

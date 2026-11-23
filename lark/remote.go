@@ -801,9 +801,6 @@ func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, por
 				"online": te["online"],
 				"volume": te["volume"],
 			}
-			if auto, ok := te["auto_volume"]; ok {
-				entry["auto_volume"] = auto
-			}
 			if pct, ok := te["battery_pct"]; ok && pct != nil {
 				entry["battery_pct"] = pct
 			}
@@ -967,13 +964,6 @@ func (b *larkServer) remoteVolume(r *http.Request, companionID string) (any, err
 		return nil, problem(503, "Terminal hub unavailable")
 	}
 	volArgs := object{}
-	if raw, exists := args["auto"]; exists {
-		auto, ok := raw.(bool)
-		if !ok {
-			return nil, problem(400, "Expected boolean auto.")
-		}
-		volArgs["auto_volume"] = auto
-	}
 	if raw, exists := args["volume"]; exists {
 		level, ok := companionInt(raw)
 		if !ok || level < 0 || level > 100 {
@@ -982,7 +972,7 @@ func (b *larkServer) remoteVolume(r *http.Request, companionID string) (any, err
 		volArgs["volume"] = level
 	}
 	if len(volArgs) == 0 {
-		return nil, problem(400, `Expected {"volume":0..100} or {"auto":true}`)
+		return nil, problem(400, `Expected {"volume":0..100}`)
 	}
 	if _, err := b.hub.terminalVolumeControl(r.Context(), terminalID, volArgs); err != nil {
 		return nil, err

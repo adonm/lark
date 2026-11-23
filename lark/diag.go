@@ -492,21 +492,15 @@ type diagTerminal struct {
 	Mode         string     `json:"mode"`
 	RTT          *float64   `json:"rtt_ms"`
 	Frame        *diagFrame `json:"last_frame"`
-	Ambient      *float64   `json:"ambient_rms"`
-	Auto         bool       `json:"auto_volume"`
 	terminalTelemetry
 }
 
 func (d *terminalSession) diagTerminal() diagTerminal {
 	s := d.telemetry
 	s.Volume = new(d.vol)
-	out := diagTerminal{ID: d.id, CompanionID: d.companionID, Character: d.companion.Name, Kind: d.kind, Board: d.board,
+	return diagTerminal{ID: d.id, CompanionID: d.companionID, Character: d.companion.Name, Kind: d.kind, Board: d.board,
 		Firmware: d.firmware, Mode: d.pose.mood, RTT: d.client.pingRTT(),
-		Frame: d.frame, Auto: d.autoVol, terminalTelemetry: s}
-	if d.hasAmbient {
-		out.Ambient = new(d.ambientEMA)
-	}
-	return out
+		Frame: d.frame, terminalTelemetry: s}
 }
 
 func (h *terminalHub) diagTerminals() []diagTerminal {
