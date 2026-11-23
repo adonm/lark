@@ -2,9 +2,14 @@
 
 `./scripts/check.sh` is the gate: shell checks, Node tests, Python setup tests,
 Go vet, the Go race suite, the live-tag compile, host C tests under ASan/UBSan,
-and tracked-file hygiene. Run it before every push. CI runs the same offline
-phases in one job, plus a remote-page job, the stub matrix, and firmware
-builds.
+tracked-file hygiene, and `scripts/lint-shims.sh`. Run it before every push. CI
+runs the same offline phases in one job, plus a remote-page job, the stub
+matrix, and firmware builds.
+
+Live QA that targets the installed server requires
+`LARK_QA_ALLOW_PRODUCTION=1`; `./scripts/check.sh --qa` and `--qa-hw` set it,
+and `requireIsolatedQA` fails without it. Cleanup is id-scoped: tests delete
+only rows they created, never by title or name.
 
 ## To change X, run Y
 

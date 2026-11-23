@@ -254,8 +254,8 @@ func playbackGaps(t *testing.T, prefill time.Duration) time.Duration {
 	long := make([]byte, sampleRate*2*1000/1000)
 	go func() {
 		stream.append(short)
-		for range 5 {
-			time.Sleep(500 * time.Millisecond)
+		for range 9 {
+			time.Sleep(400 * time.Millisecond)
 			stream.append(long)
 		}
 		stream.finish(nil)
