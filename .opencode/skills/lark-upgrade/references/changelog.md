@@ -4,6 +4,34 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-23 — Context layout: session identity entry, one live state line
+
+### Affects
+- Agent prompt / Config (`opencode.jsonc`, `./lark-context` plugin) / Lark API & MCP / OpenCode sessions
+
+### Breaking Changes
+- Turn headers no longer begin with `You are <name> (<id>).`; they start with `Speaker: …` or `Event: timer`.
+- Companion identity is the session instruction entry `lark.companion` (`{id,name,personality}`), written once at session create with `PUT /api/experimental/session/<sid>/instructions/entries/lark.companion`; session create metadata is `{"lark":{"companion":"<id>"}}`. The route is experimental and must be re-checked on OpenCode upgrades.
+- `[library: …]` / `[story: …]` hints left the per-turn prompt; that policy now lives in the MCP `instructions` (system prompt).
+- The `lark.context` OpenCode plugin strips stored `[state: …]` blocks from model requests, keeping only the current user message (and none during compaction). Stored history still contains them.
+- The OpenCode contract hash changes, so existing sessions roll over on the next user turn; no manual reset is needed.
+
+### How to Detect
+```sh
+jq -r '.plugins[].package' ~/.local/share/lark/opencode/config/opencode/opencode.jsonc | grep -qx ./lark-context
+```
+
+### Upgrade Steps
+1. Back up `lark.db`, `lark.env`, and `opencode.jsonc`, then run `./scripts/setup-host.sh --gpu-index 0`. It installs `config/opencode/lark-context/index.js` and appends `{"package":"./lark-context"}` without touching model selections; restart `lark-opencode.service` if setup did not reload it.
+2. No SQLite or firmware step is needed.
+
+### Verification
+- A new turn's prompt starts with `[Speaker: …]` or `[Event: timer]` and ends with exactly one `[state: …]` line.
+- `GET /api/experimental/session/<sid>/instructions/entries` lists `lark.companion` with the companion's id and name; `GET /api/session/<sid>/context` still shows historical `[state:` rows.
+- `GET /health` reports `"ok": true`; plugin tests (`node --test config/opencode/*.test.mjs`) pass.
+
+---
+
 ## 2026-11-23 — Background model loading, `lark deploy`, fast firmware builds
 
 ### Affects

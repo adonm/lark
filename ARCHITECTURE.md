@@ -135,10 +135,16 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
   API changes are changelog entries applied by the `lark-upgrade` skill
   (`.opencode/skills/lark-upgrade/`) while services are stopped. Upgrades
   never carry old fields or fallback readers forward.
-- **One session per companion, cache-friendly prompts.** Static agent prompt
-  first, then the turn header and transcript, then the dynamic
-  `[state: … now: …]` line last. Prompt changes must keep the prompt budget
-  test green; the session is never rotated for a new turn.
+- **One session per companion, cache-friendly prompts.** Context has four
+  layers: the static agent prompt plus MCP `instructions` (tool and
+  library/story policy); one session instruction entry `lark.companion`
+  (`{id, name, personality}`) written once at session create and never updated
+  per turn; the stored transcript; and one live `[state: … now: …]` line on the
+  current user message. Stored turns keep their historical state rows for
+  auditing, but the `lark.context` plugin removes them from the model request
+  (keeping the current user message, dropping all during compaction), so the
+  model sees exactly one state block. Prompt changes must keep the prompt
+  budget test green; the session is never rotated for a new turn.
 - **Audio and control beat frames.** Outbound terminal messages are ordered
   control → TTS PCM → latest coalesced frame. Frames may be dropped; audio and
   control may not.

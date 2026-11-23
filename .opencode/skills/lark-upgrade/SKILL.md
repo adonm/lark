@@ -47,6 +47,7 @@ Lark carries **zero runtime migrations and zero backwards-compatibility shims** 
 5. **Verify**
    - Confirm `GET /health` reports `"ok": true`, `"opencode": true`, `"stt": true`, `"tts": true`.
    - Confirm `GET /api/companions`, `GET /api/terminals`, and `GET /api/diagnostics` succeed and show the expected companions, terminals, voices, and no retired telemetry keys.
+   - After an OpenCode upgrade, confirm the experimental instruction-entry route still matches the changelog: `PUT /api/experimental/session/<sid>/instructions/entries/lark.companion` with `{"value":{"id":"…","name":"…","personality":"…"}}` returns 204, and `GET /api/experimental/session/<sid>/instructions/entries` lists it. Lark writes this entry once at session creation; a missing or changed route breaks session creation loudly.
    - Note any manual step the user must complete (such as USB firmware reflash). There is no browser pairing step and no `localStorage` state.
 
 ## Record a New Breaking Change
