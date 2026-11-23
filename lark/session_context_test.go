@@ -126,7 +126,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 			sendJSON(w, 200, object{"data": object{"id": freshSID}})
 		case "POST /api/session/" + freshSID + "/synthetic":
 			testSeed(t, w, r, freshSID, []string{"Our island is called Mango.", "Mango Island, got it."},
-				[]string{"BEFORE-RESET", "OTHER-DEVICE", "ARCHIVED-DIALOGUE", "TOOLS-ONLY", "OLD-TOOL", "PHOTO-CAPABILITY", turn})
+				[]string{"BEFORE-RESET", "OTHER-DEVICE", "ARCHIVED-DIALOGUE", "TOOLS-ONLY", "OLD-TOOL", "PHOTO-CAPABILITY", "INTERCOM-RELAY", turn})
 			seeded.Store(true)
 		case "POST /api/session/" + freshSID + "/prompt":
 			var in struct {
@@ -192,6 +192,9 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 		{"virt-11112222", "companion", "typed", "OTHER-DEVICE"},
 		{"archive-" + id + "-42", "user", "voice", "ARCHIVED-DIALOGUE"},
 		{"archive-" + id + "-42", "companion", "voice", "ARCHIVED-DIALOGUE"},
+		{id, "intercom", "intercom", "INTERCOM-RELAY"},
+		{id, "user", "intercom", "INTERCOM-RELAY"},
+		{id, "companion", "intercom", "INTERCOM-RELAY"},
 	} {
 		entry := newChat(row.role, "test", row.text, row.source)
 		entry.Timestamp = time.UnixMilli(cutoff + int64(i) - 1)
