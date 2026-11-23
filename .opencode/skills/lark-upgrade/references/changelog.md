@@ -4,6 +4,34 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-24 — Firmware 0.21.0: lossless TTS acks, 12 s TTS buffer, reconnect and telemetry fixes
+
+### Affects
+- Firmware (`esp-vocat`, `esp-box-3`) / Server telemetry consumers
+
+### Breaking Changes
+- Firmware `0.21.0`. Devices on `0.20.0` keep working; this is an OTA-only upgrade.
+- `TTS_ACK` is now delivered through a dedicated pending slot and retried until sent or its stream is replaced. A completed ack is never retracted by a late abort, and `TTS_END` always closes an accepted stream, so the server receives exactly one completion or abort per stream it starts. A wrong token or protocol version now stops reconnect attempts until the device reboots; it no longer loops at 1 Hz.
+- `/status` gains `tts_gap_ms`: cumulative underrun duration in milliseconds for the current TTS stream, reported alongside `tts_first_us` and `audio_underruns` (which keeps counting gaps). `tts_samples` now advances as PCM is written to the codec, not only when the stream ends, and resets at each TTS start.
+- `audio_drops` now also counts TTS ring drops (backpressure timeout) and failed recording datagrams, not only input-ring drops. A recording is cancelled only after 50 consecutive UDP send failures (about 1 s); single failures are dropped and counted.
+
+### How to Detect
+```sh
+~/.local/share/lark/lark device <terminal> status | jq -r '.firmware, has("tts_gap_ms")'
+```
+
+### Upgrade Steps
+1. No host, config or SQLite step.
+2. OTA each terminal from a checkout of this commit: `lark ota <ip>` (vocat), `lark ota --board box3 <ip>`. The `/status` board check refuses a mismatched image.
+
+### Verification
+- `/status` reports `"firmware":"0.21.0"` and includes `tts_gap_ms`.
+- During a long TTS reply (10+ sentences) `tts_samples` rises before the reply ends, `tts_gap_ms` stays small, and `audio_underruns` does not increase; the reply finishes without an aborted ack.
+- The pairing screen stays at brightness 100 after a touch or a TTS wake while linked; an offline panel still dims after two idle minutes.
+- A scratch build with a wrong `CONFIG_LARK_TOKEN` logs `Bridge rejected connection` once and stops reconnecting instead of retrying each second.
+
+---
+
 ## 2026-11-23 — Context layout: session identity entry, one live state line
 
 ### Affects

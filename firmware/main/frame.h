@@ -34,6 +34,11 @@ void frame_union(frame_bounds_t *dirty, frame_rect_t rect);
 bool frame_copy_strip(uint16_t *dst, const uint16_t *fb, frame_bounds_t area, int y, int rows);
 
 // Pixels are stored in LCD wire byte order. Invalid packets leave fb and dirty untouched.
+// Host tests compile a local LZ4 block decoder and JPEG header validator instead
+// of the shipped decoders: espressif/lz4 and esp_new_jpeg are managed components
+// fetched at device build time and are not available to the host harness. Those
+// host doubles check framing and malformed input; they do not exercise the
+// vendor decode path. A change to codec semantics needs a device build.
 bool frame_decode(const uint8_t *data, size_t len, frame_decoded_t *out);
 void frame_commit(uint16_t *fb, const frame_decoded_t *decoded);
 bool frame_apply(uint16_t *fb, const uint8_t *data, size_t len, frame_rect_t *dirty);

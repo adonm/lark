@@ -48,10 +48,12 @@ static uint16_t le16(const uint8_t *p)
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
+#ifndef ESP_PLATFORM
 static uint16_t be16(const uint8_t *p)
 {
     return ((uint16_t)p[0] << 8) | (uint16_t)p[1];
 }
+#endif
 
 static uint8_t *frame_scratch(size_t needed)
 {
@@ -107,6 +109,7 @@ static void decode_rle(uint16_t *out, const uint8_t *p, size_t pixels)
 }
 
 #ifndef ESP_PLATFORM
+// Host-only test doubles for the vendor decoders used on device; see frame.h.
 static bool lz4_block_valid(const uint8_t *src, size_t src_len, size_t expected_dst)
 {
     const uint8_t *ip = src, *iend = src + src_len;
