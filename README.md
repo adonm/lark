@@ -229,7 +229,7 @@ primary. Stalls, interruptions and permission failures do not switch models.
 `./scripts/setup-host.sh --library` downloads and indexes the local text
 library in the background: full English Wikipedia, Simple English Wikipedia,
 and a pinned Project Gutenberg set weighted toward children's and classic
-literature. It needs about 80 GB under `~/.local/share/lark/library/` and
+literature. It needs about 140 GB under `~/.local/share/lark/library/` and
 writes progress to `~/.local/share/lark/library/setup.log`. Check status with
 `~/.local/share/lark/lark library --status` after the build finishes.
 
