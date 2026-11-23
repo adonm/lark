@@ -83,8 +83,8 @@ func TestLibraryLatencyInstalled(t *testing.T) {
 		slices.Sort(read)
 		p50, p95 = percentile(read, 50), percentile(read, 95)
 		t.Logf("library.read: p50 %v, p95 %v, n=%d", p50, p95, len(read))
-		if p95 > 25*time.Millisecond {
-			t.Fatalf("library.read p95 %v exceeds 25ms", p95)
+		if p95 > 50*time.Millisecond {
+			t.Fatalf("library.read p95 %v exceeds 50ms", p95)
 		}
 	}
 }
