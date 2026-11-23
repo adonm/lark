@@ -307,8 +307,15 @@ static void worker(void *arg)
 
 bool media_debug_mic_load(size_t offset, const uint8_t *data, size_t len, size_t total_len, bool commit)
 {
-    if (!debug_mic_buf || !debug_mic_mu || total_len > DEBUG_MIC_MAX_BYTES || offset + len > total_len) return false;
+    if (!debug_mic_mu || total_len > DEBUG_MIC_MAX_BYTES || offset + len > total_len) return false;
     xSemaphoreTake(debug_mic_mu, portMAX_DELAY);
+    if (!debug_mic_buf) {
+        debug_mic_buf = heap_caps_malloc(DEBUG_MIC_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!debug_mic_buf) {
+            xSemaphoreGive(debug_mic_mu);
+            return false;
+        }
+    }
     if (offset == 0) {
         debug_mic_len = 0;
         debug_mic_pos = 0;
@@ -357,9 +364,8 @@ esp_err_t media_init(bool audio_ready)
 {
     if (!audio_ready) return ESP_OK;
     uint8_t *storage = heap_caps_malloc(TTS_BYTES + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    debug_mic_buf = heap_caps_malloc(DEBUG_MIC_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     debug_mic_mu = xSemaphoreCreateMutex();
-    if (!storage || !debug_mic_buf || !debug_mic_mu) return ESP_ERR_NO_MEM;
+    if (!storage || !debug_mic_mu) return ESP_ERR_NO_MEM;
     tts = xStreamBufferCreateStatic(TTS_BYTES + 1, sizeof(int16_t), storage, &tts_control);
     lock = xSemaphoreCreateMutex();
     jobs = xQueueCreate(6, sizeof(job_t));

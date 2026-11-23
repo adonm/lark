@@ -688,7 +688,6 @@ static bool open_connection(uint32_t *out_session)
     lwip_setsockopt(tfd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
     lwip_setsockopt(tfd, SOL_SOCKET, SO_RCVBUF, &tcp_buf, sizeof(tcp_buf));
     lwip_setsockopt(tfd, SOL_SOCKET, SO_SNDBUF, &tcp_buf, sizeof(tcp_buf));
-    lwip_setsockopt(ufd, SOL_SOCKET, SO_RCVBUF, &udp_buf, sizeof(udp_buf));
     lwip_setsockopt(ufd, SOL_SOCKET, SO_SNDBUF, &udp_buf, sizeof(udp_buf));
 
     struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = 0 };
