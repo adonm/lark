@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"testing"
 	"time"
@@ -74,10 +75,11 @@ func TestListenDidntCatchSpeaksAndRearms(t *testing.T) {
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
 	hw.recEnd(t, "", false)
-	hw.until(t, func(f protocolFrame) bool {
+	end := hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
+	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	hw.until(t, isListenRecStart) // re-armed after the feedback line
 	hw.barrier(t)
 	if len(*prompts) != 0 {

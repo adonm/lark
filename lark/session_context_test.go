@@ -179,6 +179,9 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bridge.db")
 	db := testDB(t, path)
 	b := recoveryServer(t, db, api, current)
+	// The pending-refresh turn below must fail without waiting the production
+	// contractWait; the timeout itself is covered by its own test.
+	b.oc.contractWait = 200 * time.Millisecond
 	c, err := b.createCompanion(t.Context(), object{"id": id, "name": "Plum", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)

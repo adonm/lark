@@ -32,31 +32,46 @@ var (
 )
 
 // udpFeed lets a test wait until the terminal server consumed each RTP packet,
-// preserving the ordering the old in-band media frames gave for free.
+// preserving the ordering the old in-band media frames gave for free. Packet
+// waits are signalled, not polled: a 3 MB capture is thousands of datagrams.
 type udpFeed struct {
 	mu      sync.Mutex
 	packets int
+	changed chan struct{}
 }
 
 func (u *udpFeed) received() {
 	u.mu.Lock()
 	u.packets++
+	if u.changed != nil {
+		close(u.changed)
+		u.changed = nil
+	}
 	u.mu.Unlock()
 }
 
 func (u *udpFeed) wait(t *testing.T, want int) {
 	t.Helper()
-	deadline := time.Now().Add(testWait(t))
-	for time.Now().Before(deadline) {
+	deadline := time.NewTimer(testWait(t))
+	defer deadline.Stop()
+	for {
 		u.mu.Lock()
 		got := u.packets
-		u.mu.Unlock()
 		if got >= want {
+			u.mu.Unlock()
 			return
 		}
-		time.Sleep(50 * time.Microsecond)
+		if u.changed == nil {
+			u.changed = make(chan struct{})
+		}
+		ch := u.changed
+		u.mu.Unlock()
+		select {
+		case <-ch:
+		case <-deadline.C:
+			t.Fatalf("terminal server did not consume RTP packet %d", want)
+		}
 	}
-	t.Fatalf("terminal server did not consume RTP packet %d", want)
 }
 
 type testWS struct {

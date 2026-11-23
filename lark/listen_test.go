@@ -328,10 +328,9 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "um", nil })
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f protocolFrame) bool {
-		p := framePayload(f)
-		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
-	})
+	// A filler-only segment is dropped while the window stays open. Wait for
+	// that decision; the window itself only cancels at listenWindow expiry.
+	b.hub.sig.wait(t, func() bool { return b.diag.listen.fillerOnly.Load() == 1 })
 	if len(*prompts) != 1 {
 		t.Fatalf("filler should not trigger LLM prompt, got %d prompts", len(*prompts))
 	}
