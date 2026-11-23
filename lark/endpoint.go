@@ -24,7 +24,6 @@ const (
 	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
 	// call overlaps the remaining quiet window instead of racing the commit.
 	endpointSpecQuiet   = 180 * time.Millisecond
-	endpointEarlyQuiet  = 400 * time.Millisecond // Must not preempt the 400 ms Smart Turn check that starts speculation.
 	endpointCap         = 1200 * time.Millisecond
 	endpointProbeEvery  = 250 * time.Millisecond
 	endpointProbeWindow = 4 * sampleRate * 2 // last <= 4 s
@@ -41,7 +40,6 @@ const (
 	// room noise (its 320 ms tail, a fan, a bump), not a quieter word.
 	speechEnergyRatio           = 0.12
 	smartTurnThreshold          = float32(0.90)
-	smartTurnEarlyThreshold     = float32(0.95)
 	smartTurnSpeculateThreshold = float32(0.40)
 	sileroModel                 = "silero_vad_v5.onnx"
 	sileroSHA256                = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
@@ -265,6 +263,9 @@ func inspectTranscript(s string) (words int, fillerOnly, incomplete bool) {
 		return 0, true, false
 	}
 	incompleteComma := s[end-1] == ','
+	// A sentence terminator closes the thought even when the last word is a
+	// function word ("I like that." is complete; "I like that" is not).
+	terminated := strings.ContainsRune(".,?!", rune(s[end-1]))
 	var buf [32]byte
 	var wlen int
 	var lastLen int
@@ -305,7 +306,10 @@ func inspectTranscript(s string) (words int, fillerOnly, incomplete bool) {
 		return 0, true, false
 	}
 	lastWord := string(lastBuf[:lastLen])
-	return words, false, incompleteComma || isIncompleteWord(lastWord)
+	// A terminal sentence closes the thought even when the last word is a
+	// function word ("I like that." is complete). A trailing filler is still
+	// mid-thought: "…, um." leaves the child waiting for the rest.
+	return words, false, incompleteComma || fillerWords[lastWord] || (!terminated && isIncompleteWord(lastWord))
 }
 
 func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, windowed bool) bool {
@@ -342,31 +346,15 @@ func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, win
 	return false
 }
 
-// terminalPunctuation reports whether the transcript closes a sentence. Smart
-// Turn alone can fire on a plausible clause break, so the early commit also
-// requires Parakeet to have heard the end of one.
-func terminalPunctuation(text string) bool {
-	text = strings.TrimSpace(text)
-	text = strings.TrimRight(text, `\"'”’`)
-	if text == "" {
-		return false
-	}
-	switch text[len(text)-1] {
-	case '.', '?', '!':
-		return true
-	}
-	return false
-}
-
 func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnReady, listen bool) endpointDecision {
 	var prob float32
 	if smartTurnReady {
 		prob = smartTurnThreshold
 	}
-	return p.decide(at, capDur, limitDur, prob, false, listen)
+	return p.decide(at, capDur, limitDur, prob, listen)
 }
 
-func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, early bool, listen bool) endpointDecision {
+func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, listen bool) endpointDecision {
 	if at >= limitDur {
 		if p.speechFrames > 0 {
 			return endpointCommit
@@ -404,9 +392,6 @@ func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn flo
 	if silence >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {
 		return endpointCommit
 	}
-	if silence >= endpointEarlyQuiet && early && !p.incomplete {
-		return endpointCommit
-	}
 	return endpointWait
 }
 
@@ -430,7 +415,18 @@ type utterance struct {
 	vadBuf  [endpointBytes]byte
 	vadLen  int
 	preScan int
+	// speechOffset is the policy-clock time discarded by flushPreRoll. The
+	// pre-roll ring keeps only the last 400 ms of a listening window that may
+	// have run for minutes, so policy timestamps derived from len(pcm) must
+	// continue past the discarded audio instead of restarting at zero.
+	speechOffset time.Duration
 }
+
+// at maps a byte position in the retained clip onto the policy clock.
+func (u *utterance) at(n int) time.Duration {
+	return pcmDuration(n) + u.speechOffset
+}
+
 
 func utteranceBytes(span time.Duration) int {
 	return sampleRate * 2 * int(span/time.Second)
@@ -447,7 +443,7 @@ func (u *utterance) add(pcm []byte, vad endpointVAD) {
 	for vad != nil && u.scan+endpointBytes <= len(u.pcm) {
 		frame := u.pcm[u.scan : u.scan+endpointBytes]
 		u.scan += endpointBytes
-		u.policy.observeEnergy(pcmDuration(u.scan), vad.detect(frame), frameRMS(frame))
+		u.policy.observeEnergy(u.at(u.scan), vad.detect(frame), frameRMS(frame))
 	}
 }
 
@@ -482,6 +478,9 @@ func (u *utterance) flushPreRoll() {
 	if u.preRoll == nil || u.preLen == 0 {
 		return
 	}
+	// The policy clock advanced over the whole listening window; only the tail
+	// is retained as PCM. Keep the clock continuous across that splice.
+	u.speechOffset += pcmDuration(u.preScan) - pcmDuration(u.preLen)
 	u.pcm = u.pcm[:0]
 	first := min(u.preLen, listenPreRollBytes-u.preHead)
 	u.pcm = append(u.pcm, u.preRoll[u.preHead:u.preHead+first]...)
@@ -491,6 +490,17 @@ func (u *utterance) flushPreRoll() {
 	u.preHead = 0
 	u.preLen = 0
 	u.scan = len(u.pcm)
+	u.preScan = 0
+}
+
+func (u *utterance) appendClip(pcm []byte) {
+	limit := u.limit
+	if limit <= 0 {
+		limit = utteranceBytes(endpointLimit)
+	}
+	if room := limit - len(u.pcm); room > 0 {
+		u.pcm = append(u.pcm, pcm[:min(len(pcm), room)]...)
+	}
 }
 
 func (u *utterance) addFor(pcm []byte, vad endpointVAD, listen bool) {
@@ -498,8 +508,8 @@ func (u *utterance) addFor(pcm []byte, vad endpointVAD, listen bool) {
 		u.add(pcm, vad)
 		return
 	}
-	u.pushPreRoll(pcm)
 	if vad == nil {
+		u.pushPreRoll(pcm)
 		return
 	}
 	pos := 0
@@ -508,18 +518,25 @@ func (u *utterance) addFor(pcm []byte, vad endpointVAD, listen bool) {
 		copy(u.vadBuf[u.vadLen:], pcm[pos:pos+take])
 		u.vadLen += take
 		pos += take
-		if u.vadLen == endpointBytes {
-			u.preScan += endpointBytes
-			u.vadLen = 0
-			u.policy.observeEnergy(pcmDuration(u.preScan), vad.detect(u.vadBuf[:]), frameRMS(u.vadBuf[:]))
-			if u.policy.voiced {
-				u.flushPreRoll()
-				if pos < len(pcm) {
-					u.add(pcm[pos:], vad)
-				}
-				return
-			}
+		if u.vadLen < endpointBytes {
+			continue
 		}
+		u.preScan += endpointBytes
+		u.vadLen = 0
+		u.policy.observeEnergy(u.at(u.preScan), vad.detect(u.vadBuf[:]), frameRMS(u.vadBuf[:]))
+		if !u.policy.voiced {
+			// Store whole consumed frames only; a packet may straddle a frame
+			// boundary and splicing its whole tail would duplicate audio.
+			u.pushPreRoll(u.vadBuf[:])
+			continue
+		}
+		u.flushPreRoll()
+		u.appendClip(u.vadBuf[:])
+		u.scan = len(u.pcm)
+		if pos < len(pcm) {
+			u.add(pcm[pos:], vad)
+		}
+		return
 	}
 }
 

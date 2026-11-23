@@ -90,7 +90,7 @@ func replayVoiceFixture(t *testing.T, pcm []byte, progress []voiceProgress) fixt
 			nextProgress++
 		}
 		if run.commitAt == 0 {
-			switch p.decide(at, endpointCap, endpointLimit, 0.99, false, false) {
+			switch p.decide(at, endpointCap, endpointLimit, 0.99, false) {
 			case endpointCommit:
 				run.commitAt = at
 				run.commitAfter = at - p.lastVoicedAt
@@ -105,7 +105,7 @@ func replayVoiceFixture(t *testing.T, pcm []byte, progress []voiceProgress) fixt
 		// A fixed listen window ends at its span; a tap that heard nothing
 		// discards on the no-speech timeout.
 		at := time.Duration(len(pcm)/endpointBytes) * endpointFrame
-		if p.decide(at, endpointCap, at, 0.99, false, true) == endpointDiscard {
+		if p.decide(at, endpointCap, at, 0.99, true) == endpointDiscard {
 			run.discard = true
 		}
 	}

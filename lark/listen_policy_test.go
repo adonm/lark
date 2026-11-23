@@ -21,6 +21,12 @@ func TestSplitNameToleratesSpeechNearMisses(t *testing.T) {
 		{"cake", "Cake", "", true},
 		{"the story please", "Cake", "", false},
 		{"I want a story", "Cake", "", false},
+		{"Bo, play music", "Bo", "play music", true},
+		{"bo tell me a story", "Bo", "tell me a story", true},
+		{"Al, what's up", "Al", "what's up", true},
+		{"Bob, play music", "Bo", "", false},
+		{"go to sleep", "Bo", "", false},
+		{"I am old", "Al", "", false},
 	} {
 		rest, ok := splitName(tc.text, tc.name)
 		if ok != tc.ok || rest != tc.rest {

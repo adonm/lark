@@ -545,40 +545,21 @@ func TestEndpointRingPushDoesNotAllocate(t *testing.T) {
 	}
 }
 
-func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
+func TestEndpointQuietWindowNeedsSmartTurnOnly(t *testing.T) {
 	t.Parallel()
 	var p endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
 	p.observeEnergy(230*time.Millisecond, false, 0)
-	p.observeProgress(250*time.Millisecond, "Set a timer for two minutes.", false)
-	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.96, true, false); got != endpointCommit {
-		t.Fatalf("punctuated turn with strong Smart Turn, got %v, want commit", got)
+	p.observeProgress(250*time.Millisecond, "Tell me everything about all the dinosaurs", false)
+	quietAt := p.lastVoicedAt + endpointQuiet
+	if got := p.decide(quietAt-endpointFrame, endpointCap, endpointLimit, 0.90, false); got != endpointWait {
+		t.Fatalf("before the quiet window, got %v, want wait", got)
 	}
-	// The early gate only differs from the quiet gate while it is shorter than
-	// endpointQuiet. Restoring 400 ms for speculation makes them coincide, and
-	// the quiet window then commits regardless of punctuation.
-	if endpointEarlyQuiet < endpointQuiet {
-		if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.94, false, false); got != endpointWait {
-			t.Fatalf("Smart Turn below the early threshold, got %v, want wait", got)
-		}
-		p.observeProgress(500*time.Millisecond, "Tell me everything about all the dinosaurs", false)
-		if got := p.decide(500*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.99, false, false); got != endpointWait {
-			t.Fatalf("unpunctuated transcript, got %v, want wait", got)
-		}
+	if got := p.decide(quietAt, endpointCap, endpointLimit, 0.90, false); got != endpointCommit {
+		t.Fatalf("quiet window with Smart Turn, got %v, want commit", got)
 	}
-	p.observeProgress(500*time.Millisecond, "Tell me everything about all the dinosaurs", false)
-	if got := p.decide(500*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, 0.90, false, false); got != endpointCommit {
-		t.Fatalf("quiet window without punctuation, got %v, want commit", got)
-	}
-	for _, text := range []string{"done.", "really?", `he said "stop."`, "wow!"} {
-		if !terminalPunctuation(text) {
-			t.Fatalf("%q should close a sentence", text)
-		}
-	}
-	for _, text := range []string{"", "and then", "wait,", "1.5"} {
-		if terminalPunctuation(text) {
-			t.Fatalf("%q should not close a sentence", text)
-		}
+	if got := p.decide(quietAt, endpointCap, endpointLimit, 0.89, false); got != endpointWait {
+		t.Fatalf("quiet window without Smart Turn, got %v, want wait", got)
 	}
 }
 
@@ -598,5 +579,86 @@ func TestCommittedEndpointKeepsItsResult(t *testing.T) {
 	d2.clear()
 	if ctx2.Err() == nil {
 		t.Fatal("cancelled capture left its worker running")
+	}
+}
+
+// A listening window can run for minutes before speech; the policy clock must
+// keep counting past the audio that the 400 ms pre-roll discarded.
+func TestListenPreRollKeepsPolicyClock(t *testing.T) {
+	t.Parallel()
+	var u utterance
+	vad := &testEndpointVAD{}
+	quiet := make([]byte, endpointBytes)
+	for range 500 { // 10 s of room tone before speech
+		u.addFor(quiet, vad, true)
+	}
+	voiced := make([]byte, endpointBytes)
+	voiced[0], voiced[1] = 0xE8, 0x03 // 1000 RMS counts
+	for i := 1; i <= 1000; i++ {      // 20 s of monologue
+		u.addFor(voiced, vad, true)
+		if i < 1000 {
+			continue
+		}
+		at := u.at(len(u.pcm))
+		if span := u.policy.lastVoicedAt - u.policy.firstVoicedAt; span < endpointMonologue {
+			t.Fatalf("speech span = %v, want >= %v (first=%v last=%v at=%v)", span, endpointMonologue,
+				u.policy.firstVoicedAt, u.policy.lastVoicedAt, at)
+		}
+		if got := u.policy.decide(at, endpointCap, endpointLimit, 0, true); got != endpointCommit {
+			t.Fatalf("20 s monologue after 10 s pre-roll: decision=%v, want commit", got)
+		}
+	}
+	if u.policy.firstVoicedAt < 9*time.Second {
+		t.Fatalf("firstVoicedAt = %v, want the pre-roll clock (~10 s)", u.policy.firstVoicedAt)
+	}
+}
+
+// A packet can straddle the VAD frame where speech starts. Splicing the whole
+// packet into the pre-roll would append the post-frame bytes twice.
+func TestListenPreRollSpliceDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+	var u utterance
+	vad := &testEndpointVAD{}
+	quiet := make([]byte, 600*time.Millisecond.Milliseconds()*sampleRate*2/1000)
+	voiced := make([]byte, 600*time.Millisecond.Milliseconds()*sampleRate*2/1000)
+	for i := 0; i < len(voiced); i += 2 {
+		voiced[i], voiced[i+1] = 0xE8, 0x03
+	}
+	signal := slices.Concat(quiet, voiced)
+	const chunk = 8192 // not a multiple of endpointBytes
+	for pos := 0; pos < len(signal); pos += chunk {
+		u.addFor(signal[pos:min(pos+chunk, len(signal))], vad, true)
+	}
+	want := slices.Concat(quiet[len(quiet)-listenPreRollBytes:], voiced)
+	if !bytes.Equal(u.clip(), want) {
+		t.Fatalf("clip = %d bytes, want %d (duplicated splice)", len(u.clip()), len(want))
+	}
+}
+
+// A terminal sentence marks the thought complete even when its last word is a
+// function word ("that"), which would otherwise look like a dangling clause.
+func TestInspectTranscriptTerminalPunctuation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		text       string
+		incomplete bool
+	}{
+		{"I like that.", false},
+		{"I like that?", false},
+		{"I like that!", false},
+		{"I like that", true},
+		{"Can you put his", true},
+		{"Is it blue,", true},
+		{"Wait.", false},
+		{"um", false},
+		{"Show me a giraffe, um.", true},
+	} {
+		words, filler, incomplete := inspectTranscript(tc.text)
+		if filler && words == 0 {
+			continue
+		}
+		if incomplete != tc.incomplete {
+			t.Fatalf("inspectTranscript(%q).incomplete = %v, want %v", tc.text, incomplete, tc.incomplete)
+		}
 	}
 }

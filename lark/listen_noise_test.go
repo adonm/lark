@@ -33,10 +33,10 @@ func TestEndpointQuietSpeechOverNoiseCommitsOnSilence(t *testing.T) {
 	if p.inVoice {
 		t.Fatal("steady noise kept the gate open")
 	}
-	if got := p.decide(p.lastVoicedAt+200*time.Millisecond, endpointCap, endpointLimit, 0.99, false, true); got != endpointWait {
+	if got := p.decide(p.lastVoicedAt+200*time.Millisecond, endpointCap, endpointLimit, 0.99, true); got != endpointWait {
 		t.Fatalf("committed inside the quiet span: %v", got)
 	}
-	if got := p.decide(p.lastVoicedAt+endpointQuiet, endpointCap, endpointLimit, 0.99, false, true); got != endpointCommit {
+	if got := p.decide(p.lastVoicedAt+endpointQuiet, endpointCap, endpointLimit, 0.99, true); got != endpointCommit {
 		t.Fatalf("quiet span did not commit: %v", got)
 	}
 }
@@ -50,7 +50,7 @@ func TestEndpointNoiseOnlyNeverOpensSegment(t *testing.T) {
 	if p.voiced {
 		t.Fatalf("noise-only opened a segment (floor %.1f, lastVoicedAt %v)", p.gate.floor, p.lastVoicedAt)
 	}
-	if got := p.decide(at, endpointCap, at, 0.99, false, true); got != endpointDiscard {
+	if got := p.decide(at, endpointCap, at, 0.99, true); got != endpointDiscard {
 		t.Fatalf("noise-only window did not discard: %v", got)
 	}
 }
@@ -70,7 +70,7 @@ func TestEndpointTranscriptChurnCannotExtendSilence(t *testing.T) {
 	if !p.hasWords {
 		t.Fatal("test setup lost the transcript")
 	}
-	if got := p.decide(end+endpointQuiet+endpointQuiet, endpointCap, endpointLimit, 0.95, false, true); got != endpointCommit {
+	if got := p.decide(end+endpointQuiet+endpointQuiet, endpointCap, endpointLimit, 0.95, true); got != endpointCommit {
 		t.Fatalf("transcript churn extended silence past the quiet span: %v", got)
 	}
 }
@@ -82,10 +82,10 @@ func TestEndpointMonologueCommitsAtCap(t *testing.T) {
 	at := feedFrames(&p, 0, 10, false, 2)
 	at = feedFrames(&p, at, 1100, true, 40) // 22 s of continuous speech
 	p.observeProgress(at, "a long story without any pauses at all", false)
-	if got := p.decide(at, endpointCap, 60*time.Second, 0.1, false, true); got != endpointCommit {
+	if got := p.decide(at, endpointCap, 60*time.Second, 0.1, true); got != endpointCommit {
 		t.Fatalf("22 s monologue did not commit: %v", got)
 	}
-	if got := p.decide(endpointMonologue+endpointFrame, endpointCap, 60*time.Second, 0.1, false, true); got != endpointCommit {
+	if got := p.decide(endpointMonologue+endpointFrame, endpointCap, 60*time.Second, 0.1, true); got != endpointCommit {
 		t.Fatalf("monologue cap did not commit: %v", got)
 	}
 }

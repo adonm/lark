@@ -224,7 +224,6 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	var smartTurnCh <-chan smartTurnResult
 	smartTurnCheckedAt := time.Duration(-1)
 	smartTurnCheckedQuiet := time.Duration(0)
-	var smartTurnCommit bool
 	var lastSmartTurnProb float32 = -1
 	var spec *specTurn
 	specTriedText := ""
@@ -260,7 +259,6 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			grew := spoken && !fillerOnly && wordCount > 0 &&
 				(u.policy.wordCount == 0 || newTokens >= 2 || (result.windowed && result.text != u.policy.lastText))
 			if grew && u.policy.observeProgress(result.at, result.text, result.windowed) {
-				smartTurnCommit = false
 				smartTurnCheckedAt = -1
 				smartTurnCheckedQuiet = 0
 				lastSmartTurnProb = -1
@@ -295,7 +293,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		if debugEndpoint && u.policy.inVoice != wasInVoice {
 			wasInVoice = u.policy.inVoice
 			log.Printf("endpoint gate term=%s open=%v rms=%.1f floor=%.1f enter=%.1f at=%v",
-				d.id, wasInVoice, frameRMS(packet.pcm), u.policy.gate.floor, u.policy.gate.enter(), pcmDuration(len(u.pcm)))
+				d.id, wasInVoice, frameRMS(packet.pcm), u.policy.gate.floor, u.policy.gate.enter(), u.at(len(u.pcm)))
 		}
 		if u.policy.inVoice {
 			lastGateOpenLen = len(u.pcm)
@@ -399,10 +397,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			lastSmartTurnProb = turn.prob
 			if debugEndpoint {
 				log.Printf("endpoint smart_turn term=%s prob=%.3f incomplete=%v at=%v lastWordAt=%v",
-					d.id, turn.prob, u.policy.incomplete, pcmDuration(len(u.pcm)), u.policy.lastWordAt)
-			}
-			if turn.prob >= smartTurnThreshold && !u.policy.incomplete {
-				smartTurnCommit = true
+					d.id, turn.prob, u.policy.incomplete, u.at(len(u.pcm)), u.policy.lastWordAt)
 			}
 		case <-c.stop:
 			commit()
@@ -417,15 +412,10 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		if len(c.packets) != 0 || c.ctx.Err() != nil {
 			continue
 		}
-		at := pcmDuration(len(u.pcm))
+		at := u.at(len(u.pcm))
 		decision := endpointWait
 		if vad != nil {
-			// Early commit needs a confident end and a punctuated transcript
-			// that already covers all speech; a newer probe may still be running.
-			early := lastSmartTurnProb >= smartTurnEarlyThreshold && !u.policy.incomplete &&
-				cached.err == nil && cached.text != "" && lastGateOpenLen <= cached.audioLen &&
-				terminalPunctuation(cached.text)
-			decision = u.policy.decide(at, endpointCap, c.limitSpan, lastSmartTurnProb, early, c.listen)
+			decision = u.policy.decide(at, endpointCap, c.limitSpan, lastSmartTurnProb, c.listen)
 		}
 		if c.debug {
 			continue // Record the whole window; no endpoint decisions.
@@ -451,12 +441,8 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					mode = "limit"
 				case u.policy.inVoice && u.policy.lastVoicedAt-u.policy.firstVoicedAt >= endpointMonologue:
 					mode = "monologue"
-				case smartTurnCommit:
-					mode = "smart_turn"
 				case silence >= endpointQuiet && u.policy.hasWords && !u.policy.incomplete:
 					mode = "quiet"
-				case silence >= endpointEarlyQuiet && u.policy.hasWords && !u.policy.incomplete:
-					mode = "early"
 				case !u.policy.hasWords:
 					mode = "no_words"
 				}
@@ -496,7 +482,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 						at: probeAt, from: from, audioLen: audioLen, windowed: windowed,
 						text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run,
 					}
-				}(clip, pcmDuration(lastGateOpenLen), pcmDuration(startOff), len(u.pcm), windowed)
+				}(clip, u.at(lastGateOpenLen), u.at(startOff), len(u.pcm), windowed)
 			}
 			smartTurnFn := h.b.endpoint.smart()
 			if smartTurnFn != nil && vad != nil && u.policy.hasWords &&
