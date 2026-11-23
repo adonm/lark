@@ -309,7 +309,7 @@ func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
 	}
 	// The regeneration runs in the background: wait for the new file, then for
 	// the invalidated cache entry.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testWait(t))
 	fileRefreshed := false
 	for time.Now().Before(deadline) {
 		if raw, err := os.ReadFile(filepath.Join(dir, pid, "bg.png")); err == nil {

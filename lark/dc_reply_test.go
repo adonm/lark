@@ -114,11 +114,14 @@ func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText strin
 
 func waitTurnDone(t *testing.T, b *larkServer, termID string) {
 	t.Helper()
+	b.hub.mu.Lock()
+	before := b.hub.terminals[termID].finished
+	b.hub.mu.Unlock()
 	b.hub.sig.wait(t, func() bool {
 		b.hub.mu.Lock()
 		defer b.hub.mu.Unlock()
 		d := b.hub.terminals[termID]
-		return d != nil && d.turn == 0 && !d.busy
+		return d != nil && d.finished > before && !d.busy
 	})
 }
 
@@ -365,17 +368,16 @@ func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
 	hw.recEnd(t, "", false)
 
 	var sent []stubDCSent
-	sendDeadline := time.Now().Add(3 * time.Second)
-	for len(sent) == 0 && time.Now().Before(sendDeadline) {
+	stub.sig.wait(t, func() bool {
 		sent = dcSent(stub)
-		time.Sleep(10 * time.Millisecond)
-	}
+		return len(sent) > 0
+	})
 	if len(sent) != 1 || sent[0].accID != greg.DCAccountID || sent[0].data.Viewtype == nil ||
 		*sent[0].data.Viewtype != deltachat.ViewtypeVoice {
 		t.Fatalf("card reply did not send a voice note to Mum: %+v", sent)
 	}
 	spoken := ""
-	ttsDeadline := time.After(3 * time.Second)
+	ttsDeadline := time.After(testWait(t))
 loop:
 	for {
 		select {

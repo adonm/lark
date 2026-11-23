@@ -334,6 +334,7 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 		return
 	}
 	d.busy = false
+	d.finished++
 	now := time.Now()
 	d.last = now
 	if audio != nil {

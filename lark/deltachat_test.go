@@ -36,6 +36,7 @@ type stubDCRPC struct {
 	qrJoined      []string
 	deleted       []uint32
 	deletedForAll []uint32
+	sig           condSignal
 }
 
 func newStubDCRPC() *stubDCRPC {
@@ -235,6 +236,7 @@ func (s *stubDCRPC) SendMsg(accID uint32, chatID uint32, data deltachat.MessageD
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sent = append(s.sent, stubDCSent{accID: accID, chatID: chatID, data: data})
+	s.sig.notify()
 	return uint32(len(s.sent)), nil
 }
 
@@ -628,7 +630,7 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 		if got != "Message from Mum: Bedtime soon" {
 			t.Fatalf("queued TTS = %q", got)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("queued DC message did not speak after voice turn ended")
 	}
 	waitSVG(t, b.hub, "box3-0003", "Bedtime soon")
@@ -666,7 +668,7 @@ func TestEmitSaySpeaksOnTerminal(t *testing.T) {
 		if got != "Dinner is ready!" {
 			t.Fatalf("emit say TTS = %q", got)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("emit say did not trigger TTS")
 	}
 }
@@ -876,7 +878,7 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 	stub.mu.Unlock()
 
 	var gotLocal bool
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(testWait(t))
 	for !gotLocal {
 		select {
 		case s := <-localTTS:

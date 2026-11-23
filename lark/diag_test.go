@@ -68,7 +68,7 @@ func TestDiagnosticsProcAndShutdown(t *testing.T) {
 	b := &larkServer{root: root}
 	stop := b.sampleDiagnostics(time.Now(), path)
 	defer stop()
-	deadline := time.NewTimer(5 * time.Second)
+	deadline := time.NewTimer(testWait(t))
 	defer deadline.Stop()
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
@@ -284,7 +284,7 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	select {
 	case <-transcribed:
 		// The target did not send rec_end; the fail-safe used buffered hardware PCM.
-	case <-time.After(2 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("Send did not finalize after the hardware rec_end timeout")
 	}
 	dev.recEnd(t, "", false)
@@ -365,7 +365,12 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	}
 	tap("Tap 2×", 1)
 	tap("Tap 1×", 2)
-	time.Sleep(stopTapWindow + 50*time.Millisecond)
+	// Age the tap window instead of sleeping through it; the next tap must
+	// start a fresh sequence. Rendering applies the expiry synchronously.
+	b.hub.mu.Lock()
+	d.stopTapAt = now.Add(-stopTapWindow - time.Second)
+	b.hub.render(d, time.Now(), false)
+	b.hub.mu.Unlock()
 	stillThinking(0)
 	tap("Tap 2×", 1)
 	tap("Tap 1×", 2)

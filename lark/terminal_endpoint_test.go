@@ -147,6 +147,13 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	start()
 	appendPCM(frame)
 	d.recEnd(t, "", true)
+	// The cancel chime is emitted exactly when the cancelled capture ends, so
+	// it is the completion signal. An idle status can also arrive earlier from
+	// rec_start, which made the next recording race a late rec_end.
+	d.until(t, func(f protocolFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
+	})
 	d.until(t, idleOrDone)
 	start()
 	appendPCM(frame)
@@ -157,7 +164,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 		if !bytes.Equal(got, frame) {
 			t.Fatal("Send did not commit the original single frame exactly once")
 		}
-	case <-time.After(2 * time.Second):
+	default:
 		t.Fatal("Send did not transcribe")
 	}
 	start()
@@ -193,11 +200,16 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	if voices := bytes.Count(last, frame); voices != 2 {
 		t.Fatalf("final clip did not contain both clauses (got %d)", voices)
 	}
+	b.diag.sig.wait(t, func() bool {
+		b.diag.mu.Lock()
+		defer b.diag.mu.Unlock()
+		return len(b.diag.metrics[diagEndpoint].items) >= 1
+	})
 	b.diag.mu.Lock()
 	n := len(b.diag.metrics[diagEndpoint].items)
 	b.diag.mu.Unlock()
 	if n != 1 {
-		t.Fatalf("got %d end-to-commit samples, want 1 for the observed endpoint", n)
+		t.Fatalf("got %d end-to-commit samples, want 1", n)
 	}
 }
 
@@ -270,8 +282,14 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	b.diag.sig.wait(t, func() bool {
 		b.diag.mu.Lock()
 		defer b.diag.mu.Unlock()
-		return len(b.diag.metrics[diagEndpoint].items) == 1
+		return len(b.diag.metrics[diagEndpoint].items) >= 1
 	})
+	b.diag.mu.Lock()
+	n := len(b.diag.metrics[diagEndpoint].items)
+	b.diag.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("got %d end-to-commit samples, want 1", n)
+	}
 	if decodes.Load() != 2 {
 		t.Fatal("finalization did not reuse the latest valid pause")
 	}

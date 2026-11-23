@@ -176,7 +176,7 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 
 	// 1. Promoted speculative turn delivers reply, audio, and records history once.
 	hit := b.startSpeculate("cake", "What is two plus two?", 200, "voice", turnChannel{})
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testWait(t))
 	for len(b.clips.peek(b.voiceFor("cake"), "Speculative answer!")) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("speculative turn did not pre-synthesize its first sentence")

@@ -161,7 +161,7 @@ func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
 	hw, _ := setupListenTerminal(t, b, base, "box3-off", "Greg", 0)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-off", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
-	time.Sleep(80 * time.Millisecond)
+	hw.barrier(t)
 	b.hub.mu.Lock()
 	d := b.hub.terminals["box3-off"]
 	active := d != nil && d.recording.active()
@@ -373,7 +373,6 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 	hw1.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 
 	hw1.until(t, isListenRecStart)
-	time.Sleep(60 * time.Millisecond)
 	b.hub.mu.Lock()
 	otherActive := b.hub.terminals["vocat-other"].recording.active()
 	b.hub.mu.Unlock()

@@ -38,6 +38,7 @@ type synthWorker struct {
 	requests chan ttsRequest
 	warming  chan ttsRequest
 	done     chan struct{}
+	served   chan struct{} // Optional test signal, one token per synthesized request.
 }
 
 type speechEngine interface {

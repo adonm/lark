@@ -26,6 +26,8 @@ node --test config/opencode/*.test.mjs
     # No Vulkan toolchain, weights or GPU are needed for the offline suite.
     "$GO_BIN" vet ./...
     "$GO_BIN" test -race -tags sqlite_fts5 ./...
+    # Compile the live suite so build-tag drift cannot land unnoticed.
+    "$GO_BIN" test -tags=live,sqlite_fts5 -run '^$' -count=1 .
 )
 
 host_tests=$(mktemp -d "${TMPDIR:-/tmp}/lark-check.XXXXXXXX")

@@ -248,7 +248,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 		if !strings.HasPrefix(got, "[You are Cake (cake). Event: timer]\nTimer fired: Timer\n[state: now: ") {
 			t.Fatal(got)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("missing timer prompt")
 	}
 	conflict := patchTimerTest(t, base, args, true)

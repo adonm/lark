@@ -30,6 +30,7 @@ type endpointCapture struct {
 	owner       *terminalClient
 	packets     chan micPacket
 	free        chan int
+	slotsMu     sync.Mutex // Guards the pool hand-off between push and captureEndpoint.
 	slots       *endpointRing
 	stop        chan struct{}
 	result      chan captureResult
@@ -50,6 +51,8 @@ type micPacket struct {
 }
 
 func (c *endpointCapture) push(pcm []byte, at time.Time) bool {
+	c.slotsMu.Lock()
+	defer c.slotsMu.Unlock()
 	if c.slots == nil {
 		return false
 	}
@@ -154,8 +157,11 @@ func (h *terminalHub) startEndpoint(d *terminalSession) {
 func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	defer close(c.result)
 	defer func() {
-		if ring := c.slots; ring != nil {
-			c.slots = nil
+		c.slotsMu.Lock()
+		ring := c.slots
+		c.slots = nil
+		c.slotsMu.Unlock()
+		if ring != nil {
 			endpointRings.Put(ring)
 		}
 	}()

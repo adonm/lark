@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -38,7 +39,7 @@ func expectValue[T comparable](t *testing.T, result <-chan T, want T) {
 		if got != want {
 			t.Fatalf("got %v, want %v", got, want)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatalf("timed out waiting for %v", want)
 	}
 }
@@ -470,6 +471,7 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 	prompts := make(chan string, 4)
 	interrupt := make(chan bool, 4)
 	allowPrompt, allowStop := make(chan struct{}), make(chan struct{})
+	var firstPromptDone, interruptDone atomic.Bool
 	root, stop := context.WithCancel(t.Context())
 	defer stop()
 	o := testOpenCode(t, root, t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
@@ -492,12 +494,19 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 				case <-r.Context().Done():
 					return
 				}
+				firstPromptDone.Store(true)
+			} else if !interruptDone.Load() {
+				t.Error("replacement prompt outran interrupt")
 			}
 			_, _ = io.WriteString(w, `{"data":{"id":"msg1"}}`)
 		case "/api/session/" + sid + "/interrupt":
+			if !firstPromptDone.Load() {
+				t.Error("interrupt raced prompt admission")
+			}
 			interrupt <- true
 			select {
 			case <-allowStop:
+				interruptDone.Store(true)
 				_, _ = io.WriteString(w, `{"data":{"interrupted":true}}`)
 			case <-r.Context().Done():
 			}
@@ -520,18 +529,8 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 		_, _, err := o.askPrepared(root, id, func() (string, string) { return "Cake", "Second" }, turnStream{}, "text", nil, nil)
 		second <- err
 	}()
-	select {
-	case <-interrupt:
-		t.Fatal("interrupt raced prompt admission")
-	case <-time.After(20 * time.Millisecond):
-	}
 	close(allowPrompt)
 	expectValue(t, interrupt, true)
-	select {
-	case <-prompts:
-		t.Fatal("replacement prompt outran interrupt")
-	case <-time.After(20 * time.Millisecond):
-	}
 	close(allowStop)
 	expectValue(t, prompts, "Second")
 	expectValue[error](t, second, nil)
@@ -540,7 +539,7 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 		if err == nil {
 			t.Fatal("first turn did not stop")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("first turn did not return")
 	}
 }

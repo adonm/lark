@@ -85,7 +85,7 @@ func toolTest(t *testing.T, base, tool string, args object, failed bool) object 
 }
 
 func fakeTTS(ctx context.Context, requests *atomic.Int32) *synthWorker {
-	w := &synthWorker{requests: make(chan ttsRequest), warming: make(chan ttsRequest), done: make(chan struct{})}
+	w := &synthWorker{requests: make(chan ttsRequest), warming: make(chan ttsRequest), done: make(chan struct{}), served: make(chan struct{}, 16)}
 	w.ready.Store(true)
 	go func() {
 		defer close(w.done)
@@ -97,10 +97,24 @@ func fakeTTS(ctx context.Context, requests *atomic.Int32) *synthWorker {
 			if requests != nil {
 				requests.Add(1)
 			}
+			select {
+			case w.served <- struct{}{}:
+			default:
+			}
 			req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
 		}
 	}()
 	return w
+}
+
+// waitTTSRequest blocks until the fake worker has taken one more request.
+func waitTTSRequest(t *testing.T, w *synthWorker) {
+	t.Helper()
+	select {
+	case <-w.served:
+	case <-time.After(testWait(t)):
+		t.Fatal("timed out waiting for TTS synthesis")
+	}
 }
 
 func TestMCPProtocol(t *testing.T) {
@@ -335,9 +349,15 @@ func TestMCPControl(t *testing.T) {
 	checkStatus("idle", "42")
 }
 
+// testWait is a generous safety bound for completion signals. It is not an
+// ordering delay: correct code returns as soon as its signal fires.
+func testWait(*testing.T) time.Duration {
+	return 30 * time.Second
+}
+
 func (c *condSignal) wait(t *testing.T, ready func() bool) {
 	t.Helper()
-	deadline := time.NewTimer(2 * time.Second)
+	deadline := time.NewTimer(testWait(t))
 	defer deadline.Stop()
 	for {
 		c.mu.Lock()
@@ -362,7 +382,7 @@ func waitPool(t *testing.T, ready func() bool) {
 	t.Helper()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
-	deadline := time.NewTimer(2 * time.Second)
+	deadline := time.NewTimer(testWait(t))
 	defer deadline.Stop()
 	for !ready() {
 		select {

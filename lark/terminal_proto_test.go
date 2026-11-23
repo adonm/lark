@@ -273,7 +273,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	nat.sendRTP(rtpPTRecPCM, recChunk)
 	select {
 	case <-udpDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("timed out waiting for UDP REC_PCM")
 	}
 	nat.send(msgRecEnd, []byte{1, 0, 0, 0})
@@ -283,7 +283,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 		if !bytes.Equal(pcm, recChunk) {
 			t.Fatalf("UDP REC_PCM mismatch: got %d bytes", len(pcm))
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("timed out waiting for UDP REC_PCM")
 	}
 }

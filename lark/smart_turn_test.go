@@ -74,12 +74,20 @@ func TestSmartTurnModelSmoke(t *testing.T) {
 
 func TestSmartTurnEndpointPolicy(t *testing.T) {
 	var calls atomic.Int32
+	var inflight atomic.Int32
+	var smart condSignal
 	var prob atomic.Uint32
 	prob.Store(0x3f733333) // 0.95 (math.Float32bits(0.95))
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		ep := testEndpointSettings()
 		ep.smartTurn = func([]byte) (float32, error) {
+			inflight.Add(1)
 			calls.Add(1)
+			smart.notify()
+			defer func() {
+				inflight.Add(-1)
+				smart.notify()
+			}()
 			bits := prob.Load()
 			switch {
 			case bits == 1:
@@ -146,7 +154,7 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 
 	// 2. Incomplete (< threshold) keeps listening, then re-checks on next pause and commits when >= threshold.
 	// Let any inference from the first recording drain before counting again.
-	time.Sleep(150 * time.Millisecond)
+	smart.wait(t, func() bool { return inflight.Load() == 0 })
 	prob.Store(2)
 	calls.Store(0)
 	b.hub.mu.Lock()
@@ -157,10 +165,7 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	waitSVG(t, b.hub, id, "rec-send")
 	appendPCM(bytes.Repeat(voiced, 10))
 	appendPCM(bytes.Repeat(silent, 22))
-	deadline := time.Now().Add(2 * time.Second)
-	for calls.Load() < 1 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	smart.wait(t, func() bool { return calls.Load() >= 1 })
 	firstPause := calls.Load()
 	if firstPause < 1 {
 		t.Fatalf("expected a smartTurn call on first pause, got %d", firstPause)

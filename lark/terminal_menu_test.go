@@ -308,7 +308,7 @@ func TestOpenStoryEntersStartPassage(t *testing.T) {
 	}
 }
 
-func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *terminalSession, *larkServer) {
+func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *terminalSession, *larkServer, *synthWorker) {
 	t.Helper()
 	b, base := wsHarness(t, nil)
 	requests := new(atomic.Int32)
@@ -320,16 +320,12 @@ func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *term
 	d := b.hub.terminals[termID]
 	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
 	b.hub.mu.Unlock()
-	deadline := time.Now().Add(time.Second)
-	for requests.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	return requests, d, b
+	return requests, d, b, b.worker
 }
 
 func TestOpenStoryFromMenuIsSilent(t *testing.T) {
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
-	requests, d, b := storyTTSHits(t, twee, false)
+	requests, d, b, worker := storyTTSHits(t, twee, false)
 	if n := requests.Load(); n != 0 {
 		t.Fatalf("opening a story from the menu synthesized %d TTS clips, want silence", n)
 	}
@@ -337,17 +333,13 @@ func TestOpenStoryFromMenuIsSilent(t *testing.T) {
 	target := d.story.choices[0].Target
 	b.hub.advanceStoryPassage(d, target, false)
 	b.hub.mu.Unlock()
-	time.Sleep(50 * time.Millisecond)
 	if n := requests.Load(); n != 0 {
 		t.Fatalf("tapping a story choice synthesized %d TTS clips, want silence", n)
 	}
 	b.hub.mu.Lock()
 	b.hub.advanceStoryPassage(d, target, true)
 	b.hub.mu.Unlock()
-	deadline := time.Now().Add(time.Second)
-	for requests.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitTTSRequest(t, worker)
 	if requests.Load() == 0 {
 		t.Fatal("a voice story choice did not narrate the next passage")
 	}
@@ -355,7 +347,8 @@ func TestOpenStoryFromMenuIsSilent(t *testing.T) {
 
 func TestConversationalStoryOpenStillNarrates(t *testing.T) {
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
-	requests, _, _ := storyTTSHits(t, twee, true)
+	requests, _, _, worker := storyTTSHits(t, twee, true)
+	waitTTSRequest(t, worker)
 	if requests.Load() == 0 {
 		t.Fatal("a conversational story open did not narrate the passage")
 	}

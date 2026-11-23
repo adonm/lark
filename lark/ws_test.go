@@ -46,7 +46,7 @@ func (u *udpFeed) received() {
 
 func (u *udpFeed) wait(t *testing.T, want int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testWait(t))
 	for time.Now().Before(deadline) {
 		u.mu.Lock()
 		got := u.packets
@@ -191,7 +191,7 @@ func (s *testWS) barrier(t *testing.T) {
 
 func (s *testWS) read(t *testing.T) protocolFrame {
 	t.Helper()
-	_ = s.conn.SetReadDeadline(time.Now().Add(max(5*time.Second, s.timeout)))
+	_ = s.conn.SetReadDeadline(time.Now().Add(max(testWait(t), s.timeout)))
 	var hdr [protoHeaderSize]byte
 	if _, err := io.ReadFull(s.in, hdr[:]); err != nil {
 		t.Fatal("cannot read terminal packet:", err)
@@ -213,7 +213,7 @@ func (s *testWS) read(t *testing.T) protocolFrame {
 
 func (s *testWS) until(t *testing.T, match func(protocolFrame) bool) protocolFrame {
 	t.Helper()
-	deadline := time.Now().Add(max(6*time.Second, s.timeout))
+	deadline := time.Now().Add(max(testWait(t), s.timeout))
 	for range 256 {
 		if time.Now().After(deadline) {
 			break
@@ -243,7 +243,7 @@ func hasProto(msgType uint8, sample string) func(protocolFrame) bool {
 
 func waitSVG(t *testing.T, h *terminalHub, termID, sample string) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testWait(t))
 	for time.Now().Before(deadline) {
 		h.mu.Lock()
 		d := h.terminals[strings.ToLower(termID)]
@@ -521,7 +521,7 @@ func TestTerminalHardwareSendWaitsForFinalPCM(t *testing.T) {
 				if !bytes.Equal(got, pcm) {
 					t.Fatalf("STT got %d bytes, want %d with intact PCM", len(got), len(pcm))
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(testWait(t)):
 				t.Fatal("recording was not finalized")
 			}
 			b.hub.mu.Lock()
@@ -589,6 +589,10 @@ func TestTerminalRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	to.hello(t, "vocat-000b", "mint")
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	from.recStart(t, "mint")
+	from.until(t, func(f protocolFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
+	})
 	from.sendRTP(t, rtpPTRecPCM, 1, 320, pcm[:100])
 	from.sendRTP(t, 99, 1, 320, []byte{1, 2}) // unknown RTP payload type is ignored
 	from.sendRTP(t, rtpPTRecPCM, 2, 640, pcm[100:])
@@ -602,13 +606,18 @@ func TestTerminalRawIntercomDoesNotWaitForSTT(t *testing.T) {
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
 	})
 	got := to.until(t, isPlayback)
-	if !bytes.Equal(framePayload(got), pcm) {
-		t.Fatal("raw intercom did not preserve concatenated PCM frames")
-	}
+	var captured []byte
+	captured = append(captured, framePayload(got)...)
 	end := to.until(t, func(f protocolFrame) bool {
+		if isPlayback(f) {
+			captured = append(captured, framePayload(f)...)
+		}
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
+	if !bytes.Equal(captured, pcm) {
+		t.Fatal("raw intercom did not preserve concatenated PCM frames")
+	}
 	to.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	close(allowSTT)
 	closed = true
@@ -906,6 +915,10 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-a000", "Cake")
 	dev.recStart(t, "")
+	dev.until(t, func(f protocolFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
+	})
 	dev.sendRTP(t, rtpPTRecPCM, 1, 320, pcm)
 	dev.recEnd(t, "", false)
 	start := dev.until(t, func(f protocolFrame) bool {

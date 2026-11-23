@@ -461,6 +461,31 @@ func (s *simTerminal) waitFor(timeout time.Duration, pred func() bool) bool {
 	return pred()
 }
 
+func (s *simTerminal) stateReached(want string) bool {
+	switch want {
+	case "idle":
+		return s.state == "idle" || s.state == "done"
+	case "thinking":
+		// A slow model call keeps the status here; a fast one may already be
+		// speaking or done. Accept a thinking status seen earlier in the turn
+		// so the wait cannot miss the transition.
+		return s.state == "thinking" || s.state == "speaking" || s.state == "done" || s.sawState("thinking")
+	case "speaking":
+		return s.state == "speaking" || (s.state == "done" && s.ttsBytes > 0) || s.sawState("speaking")
+	default:
+		return s.state == want
+	}
+}
+
+func (s *simTerminal) sawState(want string) bool {
+	for _, event := range s.timeline {
+		if len(event) != 0 && event["event"] == "status" && event["state"] == want {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *simTerminal) execLine(ctx context.Context, line string) (object, error) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
@@ -631,12 +656,7 @@ func (s *simTerminal) execLine(ctx context.Context, line string) (object, error)
 				timeout = d
 			}
 		}
-		ok := s.waitFor(timeout, func() bool {
-			if want == "idle" {
-				return s.state == "idle" || s.state == "done"
-			}
-			return s.state == want
-		})
+		ok := s.waitFor(timeout, func() bool { return s.stateReached(want) })
 		if !ok {
 			s.mu.Lock()
 			got := s.state

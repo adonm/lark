@@ -96,6 +96,7 @@ type terminalSession struct {
 	queuedVoice   *endpointCapture
 	queuedNotices []queuedNotice
 	turn          uint64
+	finished      uint64 // Completed turns; waiters use this as a monotonic signal.
 	trace         *turnTrace
 	cancel        context.CancelFunc
 	busy          bool

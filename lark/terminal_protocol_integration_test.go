@@ -121,7 +121,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 		if !bytes.Equal(got, pcm) {
 			t.Fatalf("RTP STT mismatch: got %d bytes", len(got))
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(testWait(t)):
 		t.Fatal("timed out waiting for RTP in STT")
 	}
 

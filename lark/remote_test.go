@@ -261,7 +261,7 @@ func TestRemoteEventsStreamsInitialStateAndChanges(t *testing.T) {
 	reader := bufio.NewReader(res.Body)
 	readState := func() object {
 		t.Helper()
-		deadline := time.Now().Add(3 * time.Second)
+		deadline := time.Now().Add(testWait(t))
 		for time.Now().Before(deadline) {
 			line, err := reader.ReadString('\n')
 			if err != nil {
