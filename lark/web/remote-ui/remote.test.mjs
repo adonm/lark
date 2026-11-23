@@ -111,6 +111,9 @@ class Remote {
     current = stateUpdate();
     const page = await browser.newPage({ viewport: { width: 420, height: 820 } });
     page.on("pageerror", (err) => errors.push(err));
+    // Oat is pinned on a CDN in production; stub it so tests stay offline.
+    await page.route("https://cdn.jsdelivr.net/**", (route) =>
+      route.fulfill({ status: 200, contentType: "text/css", body: "/* oat stub */" }));
     await page.goto(`${baseURL}/remote?token=${TOKEN}`);
     await page.waitForFunction(() => document.querySelector("#comp-name").textContent === "greg");
     return new Remote(page, errors);
@@ -196,7 +199,7 @@ before(async () => {
         let body = null;
         try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
         const index = requests.length;
-        requests.push({ method: req.method, path: pathname, query: Object.fromEntries(url.searchParams), body });
+        requests.push({ method: req.method, path: pathname, query: Object.fromEntries(url.searchParams), body, headers: req.headers });
         if (req.method === "GET" && pathname.endsWith(".wav")) {
           pending.push(null);
           res.writeHead(200, { "content-type": "audio/wav" });
@@ -332,8 +335,9 @@ test("History lists rows, pages, filters, and searches", async () => {
     assert.match(await p.page.locator("#body-history .hist-item").innerText(), /How is the weather\?/);
     assert.match(await p.page.locator("#body-history .hist-item").innerText(), /In person/);
 
-    await p.page.click('#body-history .pill-btn:has-text("Intercom")');
-    const req4 = await p.waitForRequest((r) => r.query.channel === "intercom");
+    assert.equal(await p.page.locator('#body-history .pill-btn:has-text("Intercom")').count(), 0);
+    await p.page.click('#body-history .pill-btn:has-text("My Delta Chat")');
+    const req4 = await p.waitForRequest((r) => r.query.channel === "deltachat");
     p.answer(req4.index, { items: [] });
     await p.page.waitForFunction(() => document.querySelector("#body-history").textContent.includes("No matching messages"));
     await p.shot("history");
@@ -400,17 +404,19 @@ test("Diagnostics records a capture, streams progress, and manages the file", as
   try {
     await p.tab("diagnostics");
     const list = await p.waitForRequest((r) => r.path === "/remote/api/captures" && r.method === "GET");
-    assert.equal(list.request.query.token, TOKEN);
+    assert.equal(list.request.query.token, undefined);
+    assert.equal(list.request.headers["x-lark-remote-token"], TOKEN);
     p.answer(list.index, { captures: [] });
     await p.page.waitForFunction(() => document.querySelector("#capture-list .empty"));
     assert.equal(await p.page.textContent('#body-diagnostics .pill-btn[aria-pressed="true"]'), "60 s");
-    assert.match(await p.page.textContent(".capture-privacy"), /Recordings stay on this server/);
+    assert.match(await p.page.textContent(".capture-privacy"), /Room audio stays on this server/);
 
     await p.page.click('#body-diagnostics .pill-btn:has-text("15 s")');
     await p.page.click("#capture-start");
     const start = await p.waitForRequest((r) => r.path === "/remote/api/capture");
     assert.deepEqual(start.request.body, { seconds: 15 });
-    assert.equal(start.request.query.token, TOKEN);
+    assert.equal(start.request.query.token, undefined);
+    assert.equal(start.request.headers["x-lark-remote-token"], TOKEN);
     assert.equal(await p.page.getAttribute("#capture-start", "aria-busy"), "true");
     p.answer(start.index, { id: name, name, seconds: 15, started_at: "2026-11-23T12:00:00Z" });
     await p.page.waitForFunction(() => document.querySelector("#capture-start").disabled);
@@ -437,14 +443,16 @@ test("Diagnostics records a capture, streams progress, and manages the file", as
     await p.page.click('#capture-list button:has-text("Transcribe")');
     const transcribe = await p.waitForRequest((r) => r.path === "/remote/api/captures/" + name + "/transcribe");
     assert.equal(transcribe.request.method, "POST");
-    assert.equal(transcribe.request.query.token, TOKEN);
+    assert.equal(transcribe.request.query.token, undefined);
+    assert.equal(transcribe.request.headers["x-lark-remote-token"], TOKEN);
     p.answer(transcribe.index, { name, transcript: "a tiny hello", stt_ms: 40, audio_ms: 15000, engine: "parakeet" });
     await p.page.waitForFunction(() => document.querySelector("#capture-list details.capture-transcript p").textContent === "a tiny hello");
 
     await p.page.click('#capture-list button:has-text("Delete")');
     const del = await p.waitForRequest((r) => r.path === "/remote/api/captures/" + name);
     assert.equal(del.request.method, "DELETE");
-    assert.equal(del.request.query.token, TOKEN);
+    assert.equal(del.request.query.token, undefined);
+    assert.equal(del.request.headers["x-lark-remote-token"], TOKEN);
     p.answer(del.index, { ok: true });
     await p.page.waitForFunction(() => document.querySelectorAll("#capture-list article.capture-row").length === 0);
     await p.shot("diagnostics");
@@ -471,6 +479,9 @@ test("tabs support keyboard navigation and controls are labelled", async () => {
   try {
     assert.equal(await p.page.getAttribute('nav[role="tablist"]', "aria-label"), "Remote sections");
     assert.equal(await p.page.locator('.tab-btn[role="tab"]').count(), 5);
+    assert.equal(await p.page.getAttribute("#tab-stories", "aria-controls"), "panel-stories");
+    assert.equal(await p.page.getAttribute("#panel-stories", "aria-labelledby"), "tab-stories");
+    assert.equal(await p.page.getAttribute("#live-state", "aria-live"), "polite");
     await p.page.focus("#tab-status");
     await p.page.keyboard.press("ArrowRight");
     assert.equal(await p.page.getAttribute("#tab-stories", "aria-selected"), "true");

@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{NAME}}</title>
   <meta name="theme-color" content="#6f5bd3">
-  <link rel="manifest" href="/remote/pwa/manifest.webmanifest?token={{TOKEN}}">
-  <link rel="icon" type="image/png" href="/remote/pwa/icon-192.png?token={{TOKEN}}">
-  <link rel="stylesheet" href="/remote/style.css">
+  <link rel="manifest" href="/remote/pwa/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/remote/pwa/icon-192.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@knadh/oat@1.1.0/oat.min.css">
+  <link rel="stylesheet" href="/remote/page.css">
 </head>
 <body data-token="{{TOKEN_HTML}}">
   <div class="shell">
@@ -16,7 +17,7 @@
       <div class="hero-meta">
         <div class="hero-top">
           <h1 id="comp-name">{{NAME}}</h1>
-          <span id="live-state" class="state-pill" data-state="offline"><span class="state-dot" aria-hidden="true"></span><span id="live-state-text">Connecting…</span></span>
+          <span id="live-state" class="state-pill" data-state="offline" role="status" aria-live="polite"><span class="state-dot" aria-hidden="true"></span><span id="live-state-text">Connecting…</span></span>
         </div>
         <p id="comp-form">Connecting…</p>
       </div>
@@ -25,11 +26,11 @@
     <div id="feedback" class="status-banner" role="status" aria-live="polite"></div>
 
     <nav class="tabs-bar" role="tablist" aria-label="Remote sections">
-      <button type="button" id="tab-status" class="tab-btn" role="tab" data-tab="status" aria-selected="true" tabindex="0">Status</button>
-      <button type="button" id="tab-stories" class="tab-btn" role="tab" data-tab="stories" aria-selected="false" tabindex="-1">Stories</button>
-      <button type="button" id="tab-history" class="tab-btn" role="tab" data-tab="history" aria-selected="false" tabindex="-1">History</button>
-      <button type="button" id="tab-diagnostics" class="tab-btn" role="tab" data-tab="diagnostics" aria-selected="false" tabindex="-1">Diagnostics</button>
-      <button type="button" id="tab-settings" class="tab-btn" role="tab" data-tab="settings" aria-selected="false" tabindex="-1">Settings</button>
+      <button type="button" id="tab-status" class="tab-btn" role="tab" data-tab="status" aria-controls="panel-status" aria-selected="true" tabindex="0">Status</button>
+      <button type="button" id="tab-stories" class="tab-btn" role="tab" data-tab="stories" aria-controls="panel-stories" aria-selected="false" tabindex="-1">Stories</button>
+      <button type="button" id="tab-history" class="tab-btn" role="tab" data-tab="history" aria-controls="panel-history" aria-selected="false" tabindex="-1">History</button>
+      <button type="button" id="tab-diagnostics" class="tab-btn" role="tab" data-tab="diagnostics" aria-controls="panel-diagnostics" aria-selected="false" tabindex="-1">Diagnostics</button>
+      <button type="button" id="tab-settings" class="tab-btn" role="tab" data-tab="settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1">Settings</button>
     </nav>
 
     <main>

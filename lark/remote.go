@@ -29,6 +29,9 @@ import (
 	"golang.org/x/image/draw"
 )
 
+// Oat's stylesheet is pinned on jsDelivr; everything else stays same-origin.
+const remoteCSP = "default-src 'none'; script-src 'self'; style-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:; media-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
 const (
 	remotePath       = "/remote"
 	remoteCookieName = "lark_remote"
@@ -561,7 +564,7 @@ func (m *remoteManager) scopedHandler(companionID string) http.Handler {
 
 func publicRemoteAsset(path string) bool {
 	switch path {
-	case "/remote/style.css", "/remote/app.js":
+	case "/remote/page.css", "/remote/app.js":
 		return true
 	}
 	return false
@@ -604,7 +607,7 @@ func (m *remoteManager) handleAuthorized(w http.ResponseWriter, r *http.Request,
 func (b *larkServer) serveRemoteAsset(w http.ResponseWriter, path string) {
 	name := strings.TrimPrefix(path, remotePath+"/")
 	switch name {
-	case "style.css", "app.js":
+	case "page.css", "app.js":
 	default:
 		sendError(w, problem(404, "Not found"))
 		return
@@ -622,7 +625,7 @@ func (b *larkServer) serveRemoteAsset(w http.ResponseWriter, path string) {
 		kind = "text/javascript; charset=utf-8"
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", remoteCSP)
 	sendBytes(w, 200, kind, data)
 }
 
@@ -643,7 +646,7 @@ func (b *larkServer) serveRemotePage(w http.ResponseWriter, r *http.Request, tok
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", remoteCSP)
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(page))
 }
@@ -902,12 +905,12 @@ func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, por
 		}
 	}
 	stories := []object{}
-	if list, err := b.listStories(ctx); err == nil {
+	if list, err := b.listStorySummaries(ctx); err == nil {
 		for _, st := range list {
 			item := object{"name": st.ID, "title": st.Title, "passages": st.Passages, "progress": 0}
 			if prog, ok := progressByStory[st.ID]; ok {
 				pct := 10
-				if cs, err := parseTwee(st.Twee); err == nil && len(cs.Passages) > 0 {
+				if cs, err := b.compiledStoryByID(ctx, st.ID); err == nil && len(cs.Passages) > 0 {
 					if idx, exists := cs.ByName[prog.Passage]; exists {
 						if cs.Passages[idx].End {
 							pct = 100

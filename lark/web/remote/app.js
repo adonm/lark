@@ -4,10 +4,10 @@
   const token = document.body.dataset.token || new URLSearchParams(location.search).get("token") || "";
   const tabs = ["status", "stories", "history", "diagnostics", "settings"];
   const stateLabels = { idle: "Idle", listening: "Listening", thinking: "Thinking", speaking: "Speaking", sleeping: "Sleeping", offline: "Offline" };
-  const chanLabels = { in_person: "In person", deltachat: "Delta Chat", intercom: "Intercom", timer: "Timer" };
+  const chanLabels = { in_person: "In person", deltachat: "Delta Chat" };
   const HISTORY_CHANNELS = [
     { id: "all", label: "All" }, { id: "in_person", label: "In person" },
-    { id: "deltachat", label: "Delta Chat" }, { id: "intercom", label: "Intercom" },
+    { id: "deltachat", label: "My Delta Chat" },
   ];
 
   let state = { companion: {}, terminals: [], stories: [], voices: [] };
@@ -58,10 +58,17 @@
     };
   }
 
+  // JSON calls authenticate with the header; only EventSource and audio URLs,
+  // which cannot set headers, carry the token in the query string.
   function apiURL(path, params) {
     const url = new URL(path, location.origin);
-    url.searchParams.set("token", token);
     if (params) for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    return url.pathname + url.search;
+  }
+
+  function mediaURL(path) {
+    const url = new URL(path, location.origin);
+    url.searchParams.set("token", token);
     return url.pathname + url.search;
   }
 
@@ -297,7 +304,10 @@
       const searchForm = el("form", { class: "inline-form", onsubmit: (e) => { e.preventDefault(); hist.q = qInput.value.trim(); loadHistory(false); } }, [
         el("label", { for: "hist-search", class: "visually-hidden", text: "Search history" }), qInput, el("button", { type: "submit", text: "Find" }),
       ]);
-      controls = el("section", { class: "card-box hist-controls" }, [chips, searchForm]);
+      controls = el("section", { class: "card-box hist-controls" }, [
+        el("p", { class: "row-sub", text: "Shows in-person notes and only your own Delta Chat messages. Room recordings are under Diagnostics." }),
+        chips, searchForm,
+      ]);
       root.append(controls, el("ul", { class: "hist-list" }), el("div", { id: "hist-footer" }));
     }
     for (const btn of controls.querySelectorAll(".pill-btn")) {
@@ -461,7 +471,7 @@
         durations, start,
         el("div", { id: "capture-progress", class: "row-sub", role: "status", "aria-live": "polite" }),
         el("div", { id: "capture-reason", class: "row-sub" }),
-        el("p", { class: "capture-privacy", text: "Recordings stay on this server; delete them when done." }),
+        el("p", { class: "capture-privacy", text: "Room audio stays on this server and is served only to the holder of this scoped link; it is never uploaded to a third party." }),
       ]);
       root.append(card, el("p", { class: "section-label", text: "Recent captures" }), el("div", { id: "capture-list", class: "panel-list" }));
     }
@@ -487,7 +497,7 @@
         const audio = el("audio", { controls: "", preload: "none", "aria-label": `Recording ${item.name}` });
         const play = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Play" });
         play.addEventListener("click", () => {
-          if (!audio.getAttribute("src")) audio.src = apiURL("/remote/api/captures/" + encodeURIComponent(item.name) + ".wav");
+          if (!audio.getAttribute("src")) audio.src = mediaURL("/remote/api/captures/" + encodeURIComponent(item.name) + ".wav");
           audio.load();
           audio.play().catch(() => {});
         });
@@ -589,7 +599,7 @@
     return;
   }
 
-  const source = new EventSource(apiURL("/remote/events"));
+  const source = new EventSource(mediaURL("/remote/events"));
   source.addEventListener("state", (event) => {
     const next = JSON.parse(event.data);
     state = applyState(state, next);

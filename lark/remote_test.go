@@ -120,14 +120,20 @@ func TestRemotePagePWAAndScopedAuth(t *testing.T) {
 	t.Parallel()
 	h := newRemoteHarness(t)
 	page := string(remoteHTTP(t, http.MethodGet, h.base, "", "/remote?token="+url.QueryEscape(h.token), nil, 200))
-	for _, want := range []string{"data-token=", "Greg", "/remote/pwa/manifest.webmanifest?token=", "/remote/app.js"} {
+	for _, want := range []string{"data-token=", "Greg", "/remote/pwa/manifest.webmanifest\"",
+		"/remote/app.js", "cdn.jsdelivr.net/npm/@knadh/oat@1.1.0/oat.min.css", "/remote/page.css",
+		`aria-controls="panel-status"`, `aria-live="polite"`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("remote page missing %q: %s", want, page)
 		}
 	}
-	if got := string(remoteHTTP(t, http.MethodGet, h.base, "", "/remote/style.css", nil, 200)); !strings.Contains(got, "--panel-max") {
-		t.Fatal("remote stylesheet not served")
+	if strings.Contains(page, "manifest.webmanifest?token=") || strings.Contains(page, "style.css") {
+		t.Fatal("page still puts the token in asset URLs or uses the deleted stylesheet")
 	}
+	if got := string(remoteHTTP(t, http.MethodGet, h.base, "", "/remote/page.css", nil, 200)); !strings.Contains(got, "[hidden=\"until-found\"]") {
+		t.Fatal("page stylesheet not served")
+	}
+	remoteHTTP(t, http.MethodGet, h.base, "", "/remote/style.css", nil, 401)
 	manifestRaw := remoteHTTP(t, http.MethodGet, h.base, "", "/remote/pwa/manifest.webmanifest?token="+url.QueryEscape(h.token), nil, 200)
 	var manifest map[string]any
 	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
@@ -150,6 +156,15 @@ func TestRemotePagePWAAndScopedAuth(t *testing.T) {
 	scopedPage := string(remoteHTTP(t, http.MethodGet, scoped, "", "/remote?token="+url.QueryEscape(h.token), nil, 200))
 	if !strings.Contains(scopedPage, "data-token=") {
 		t.Fatal("scoped listener did not serve the remote page")
+	}
+	res, err := http.Get(h.base + "/remote?token=" + url.QueryEscape(h.token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	cookies := res.Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly {
+		t.Fatalf("remote cookie is not Secure+HttpOnly: %+v", cookies)
 	}
 }
 
