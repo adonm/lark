@@ -11,16 +11,25 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-const captureTranscribeTimeout = 90 * time.Second
+const (
+	captureTranscribeTimeout = 90 * time.Second
+	// Debug captures are a local audit trail, not an archive: keep two weeks
+	// and at most 1 GiB, pruning oldest first on start and after each save.
+	captureRetention = 14 * 24 * time.Hour
+	captureMaxBytes  = int64(1) << 30
+	captureListMax   = 200
+	captureReadMax   = 64 << 20 // One capture's WAV must fit comfortably in memory.
+)
 
-// debugCaptureDir is local to the host, mode 0700, and never synced or sent
-// anywhere. Captures exist only for the user's own microphone audit.
+// debugCaptureDir is local to the host, mode 0700, and never uploaded to a
+// third party. Captures are served only to the holder of a scoped remote link.
 func debugCaptureDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -55,6 +64,94 @@ func capturePath(companionID, id string) (string, bool) {
 
 func captureTranscriptPath(wavPath string) string {
 	return strings.TrimSuffix(wavPath, ".wav") + ".txt"
+}
+
+type captureGroup struct {
+	base string
+	mod  time.Time
+	size int64
+}
+
+// pruneCaptures enforces the local retention limit. It returns the bytes
+// removed; failures are reported so the caller can log them without blocking
+// a capture.
+func pruneCaptures(dir string, maxAge time.Duration, maxBytes int64) (int64, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	groups := map[string]*captureGroup{}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		base := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".wav"), ".txt")
+		if _, ok := captureCompanion(base + ".wav"); !ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		group := groups[base]
+		if group == nil {
+			group = &captureGroup{base: base}
+			groups[base] = group
+		}
+		group.size += info.Size()
+		if strings.HasSuffix(entry.Name(), ".wav") || group.mod.IsZero() {
+			group.mod = info.ModTime()
+		}
+	}
+	ordered := make([]*captureGroup, 0, len(groups))
+	var total int64
+	for _, group := range groups {
+		ordered = append(ordered, group)
+		total += group.size
+	}
+	slices.SortFunc(ordered, func(a, b *captureGroup) int { return a.mod.Compare(b.mod) })
+	var removed int64
+	for _, group := range ordered {
+		if total <= maxBytes && time.Since(group.mod) <= maxAge {
+			break
+		}
+		for _, path := range []string{filepath.Join(dir, group.base+".wav"), filepath.Join(dir, group.base+".txt")} {
+			if info, err := os.Stat(path); err == nil {
+				if os.Remove(path) == nil {
+					total -= info.Size()
+					removed += info.Size()
+				}
+			}
+		}
+	}
+	return removed, nil
+}
+
+func deleteCompanionCaptures(dir, companionID string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		base := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".wav"), ".txt")
+		if owner, ok := captureCompanion(base + ".wav"); !ok || owner != companionID {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // writePrivateFile writes through a sibling temp file so an interrupted save
@@ -116,6 +213,11 @@ type captureRun struct {
 func (b *larkServer) beginCapture(companionID string, seconds int) (*captureRun, error) {
 	if _, ok := b.companionByID(companionID); !ok {
 		return nil, problem(404, "Companion not found")
+	}
+	if removed, err := pruneCaptures(debugCaptureDir(), captureRetention, captureMaxBytes); err != nil {
+		log.Printf("Lark could not prune debug captures: %v", err)
+	} else if removed > 0 {
+		log.Printf("Lark pruned %d bytes of debug captures", removed)
 	}
 	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
@@ -187,6 +289,11 @@ func (b *larkServer) saveCapture(run *captureRun, result captureResult) (string,
 	path := filepath.Join(debugCaptureDir(), run.name)
 	if err := writeCaptureWAV(path, result.pcm); err != nil {
 		return "", problem(500, "Cannot write capture: "+err.Error())
+	}
+	if removed, err := pruneCaptures(debugCaptureDir(), captureRetention, captureMaxBytes); err != nil {
+		log.Printf("Lark could not prune debug captures: %v", err)
+	} else if removed > 0 {
+		log.Printf("Lark pruned %d bytes of debug captures", removed)
 	}
 	return path, nil
 }
@@ -352,17 +459,33 @@ func (b *larkServer) captureFiles(companionID string) ([]object, error) {
 			"size": info.Size(), "seconds": max(0, int((info.Size()-44)/(2*sampleRate))),
 			"computing": b.captures.computing(id),
 		}
-		if raw, err := os.ReadFile(captureTranscriptPath(path)); err == nil {
-			if text := strings.TrimSpace(string(raw)); text != "" {
-				item["transcript"] = text
-			}
+		if text := readCaptureTranscript(captureTranscriptPath(path)); text != "" {
+			item["transcript"] = text
 		}
 		files = append(files, item)
 	}
 	sort.Slice(files, func(i, j int) bool {
 		return infoTime(files[i]) > infoTime(files[j]) || (infoTime(files[i]) == infoTime(files[j]) && str(files[i]["name"]) > str(files[j]["name"]))
 	})
+	if len(files) > captureListMax {
+		files = files[:captureListMax]
+	}
 	return files, nil
+}
+
+// readCaptureTranscript reads at most captureReadMax of a transcript so a
+// damaged or substituted file cannot exhaust memory.
+func readCaptureTranscript(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, captureReadMax))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func infoTime(item object) int64 {
@@ -416,6 +539,11 @@ func (b *larkServer) remoteCaptureTranscribe(r *http.Request, companionID, name 
 	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, problem(404, "Capture not found")
+	}
+	if info, err := os.Stat(path); err != nil {
+		return nil, problem(404, "Capture not found")
+	} else if info.Size() > captureReadMax {
+		return nil, problem(413, "Capture is too large to transcribe")
 	}
 	if !b.captures.beginTranscribe(name) {
 		return nil, problem(409, "This capture is already being transcribed")

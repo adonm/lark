@@ -603,6 +603,15 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	if err := tx.Commit(); err != nil {
 		return problem(502, "Cannot delete companion")
 	}
+	if b.portraits != nil && c.PortraitID != "" {
+		if b.hub != nil {
+			b.hub.invalidateAssets(c.PortraitID)
+		}
+		b.portraits.discard(c.PortraitID)
+	}
+	if err := deleteCompanionCaptures(debugCaptureDir(), id); err != nil {
+		log.Printf("Lark could not delete captures for %s: %v", id, err)
+	}
 	if b.remote != nil {
 		if err := b.remote.stopCompanion(ctx, id); err != nil {
 			log.Printf("Lark could not stop remote controls for %s: %v", id, err)

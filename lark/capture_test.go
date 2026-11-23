@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -270,6 +272,100 @@ func TestRemoteCaptureAuthValidationAndTraversal(t *testing.T) {
 	remoteHTTP(t, http.MethodGet, h.base, h.token, "/remote/api/captures/..%2Fsecret.wav", nil, 404)
 	if raw := remoteJSON(t, http.MethodGet, h.base, h.token, "/remote/api/captures", nil, 200); len(raw["captures"].([]any)) != 0 {
 		t.Fatalf("another companion's capture leaked into the list: %+v", raw)
+	}
+}
+
+func TestPruneCapturesRetentionCapAndCompanionDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := func(name string, age time.Duration, size int) {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, bytes.Repeat([]byte{0}, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mod := time.Now().Add(-age)
+		if err := os.Chtimes(path, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("capture-greg-20260101-000000.wav", 20*24*time.Hour, 100)
+	write("capture-greg-20260101-000000.txt", 20*24*time.Hour, 10)
+	write("capture-greg-20260102-000000.wav", time.Hour, 100)
+	write("capture-greg-20260102-000000.txt", time.Hour, 10)
+	write("capture-milo-20260101-000000.wav", time.Hour, 100)
+
+	removed, err := pruneCaptures(dir, 14*24*time.Hour, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 110 {
+		t.Fatalf("pruned %d bytes; want both files of the expired capture", removed)
+	}
+	for _, name := range []string{"capture-greg-20260101-000000.wav", "capture-greg-20260101-000000.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s survived an expired prune", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "capture-greg-20260102-000000.wav")); err != nil {
+		t.Fatalf("recent capture was pruned: %v", err)
+	}
+
+	// The byte cap prunes oldest-first even inside the age window.
+	for i := range 3 {
+		write(fmt.Sprintf("capture-greg-2026011%d-000000.wav", i), time.Duration(3-i)*time.Minute, 1000)
+	}
+	if _, err := pruneCaptures(dir, time.Hour, 1500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "capture-greg-20260110-000000.wav")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("byte cap kept the oldest capture")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "capture-greg-20260112-000000.wav")); err != nil {
+		t.Fatalf("byte cap pruned the newest capture: %v", err)
+	}
+
+	if err := deleteCompanionCaptures(dir, "greg"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if owner, ok := captureCompanion(entry.Name()); ok && owner == "greg" {
+			t.Fatalf("companion capture survived delete: %s", entry.Name())
+		}
+	}
+}
+
+func TestCaptureListIsCappedAndTranscriptReadIsBounded(t *testing.T) {
+	serial(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	b, _ := wsHarness(t, nil)
+	if err := os.MkdirAll(debugCaptureDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range captureListMax + 3 {
+		name := fmt.Sprintf("capture-greg-20260101-%06d", i)
+		if err := writeCaptureWAV(filepath.Join(debugCaptureDir(), name+".wav"), []byte{1, 0, 2, 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	big := bytes.Repeat([]byte("x"), captureReadMax+1024)
+	if err := os.WriteFile(filepath.Join(debugCaptureDir(), "capture-greg-20260101-000001.txt"), big, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := b.captureFiles("greg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != captureListMax {
+		t.Fatalf("capture list length = %d; want %d", len(files), captureListMax)
+	}
+	for _, file := range files {
+		if len(str(file["transcript"])) > captureReadMax {
+			t.Fatalf("transcript was not bounded: %d bytes", len(str(file["transcript"])))
+		}
 	}
 }
 

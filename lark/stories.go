@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -804,6 +805,11 @@ func (b *larkServer) deleteStory(ctx context.Context, id string) (bool, error) {
 	}
 	if err := tx.Commit(); err != nil {
 		return false, problem(502, "Cannot delete story")
+	}
+	if b.portraits != nil && b.portraits.dir != "" {
+		if err := os.RemoveAll(filepath.Join(filepath.Dir(b.portraits.dir), "story-bg", id)); err != nil {
+			log.Printf("Lark could not delete story background for %s: %v", id, err)
+		}
 	}
 	return n > 0, nil
 }

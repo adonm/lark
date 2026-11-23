@@ -372,6 +372,37 @@ func (d *doctor) checkDisk(ctx context.Context) doctorResult {
 		humanBytes(jsonInt(body["total_bytes"])))
 }
 
+func (d *doctor) checkCaptures(context.Context) doctorResult {
+	dir := debugCaptureDir()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return pass("no debug captures")
+	}
+	if err != nil {
+		return fail("cannot read %s: %v", dir, err)
+	}
+	var count int
+	var bytes int64
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := captureCompanion(name); !ok && !strings.HasSuffix(name, ".txt") {
+			continue
+		}
+		if info, err := entry.Info(); err == nil {
+			count++
+			bytes += info.Size()
+		}
+	}
+	if bytes > captureMaxBytes {
+		return warn("%s in %s exceeds the %s cap; old captures prune on the next recording",
+			humanBytes(bytes), dir, humanBytes(captureMaxBytes))
+	}
+	return pass("%d files, %s (limit %s / %s)", count, humanBytes(bytes), humanBytes(captureMaxBytes), captureRetention)
+}
+
 func (d *doctor) checkLibrary(ctx context.Context) doctorResult {
 	body, err := d.fetch(ctx, "/api/library", &d.library)
 	if err != nil {
