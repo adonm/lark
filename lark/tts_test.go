@@ -15,6 +15,7 @@ import (
 )
 
 func TestKokoroReplyBypassesQueuedWarmup(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	w := &synthWorker{requests: make(chan ttsRequest, 1), warming: make(chan ttsRequest, 2), done: make(chan struct{})}
 	started := make(chan string, 3)
@@ -44,6 +45,7 @@ func TestKokoroReplyBypassesQueuedWarmup(t *testing.T) {
 }
 
 func TestFirstChunkAndCachedOpener(t *testing.T) {
+	t.Parallel()
 	ex := sentenceExtractor{firstChunk: true}
 	var got []string
 	for _, d := range []string{"Two plus ", "two is ", "four ", "right now."} {
@@ -73,6 +75,7 @@ func TestFirstChunkAndCachedOpener(t *testing.T) {
 }
 
 func TestSpeechTurnUsesPreSynthesizedFirstChunk(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	clips := &speechClips{clips: map[clipKey]*clip{
 		{heartVoice, "A fresh answer"}: {done: make(chan struct{}), pcm: []byte{7, 8}},
@@ -97,6 +100,7 @@ func TestSpeechTurnUsesPreSynthesizedFirstChunk(t *testing.T) {
 }
 
 func TestSpeechTurnAwaitsInFlightFirstChunk(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	clips := &speechClips{}
 	var calls atomic.Int32
@@ -123,6 +127,7 @@ func TestSpeechTurnAwaitsInFlightFirstChunk(t *testing.T) {
 }
 
 func TestSpeculativeTurnHitAndAbort(t *testing.T) {
+	t.Parallel()
 	var prompts []string
 	var mu sync.Mutex
 	promptSeen := make(chan struct{})
@@ -219,6 +224,7 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 }
 
 func TestSpeechSilenceChunkIsShared(t *testing.T) {
+	t.Parallel()
 	s := newAudioStream()
 	if !s.appendSilence(sampleRate/5) || !s.append([]byte{1, 2}) {
 		t.Fatal("stream rejected chunks")

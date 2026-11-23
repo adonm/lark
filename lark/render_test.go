@@ -96,6 +96,7 @@ func decodeDisplay(t *testing.T, f protocolFrame) (image.Rectangle, uint16, []ui
 }
 
 func TestDirtyRectAndRLE565(t *testing.T) {
+	t.Parallel()
 	previous, next := make([]uint16, 360*360), make([]uint16, 360*360)
 	rect := image.Rect(18, 20, 280, 22)
 	for y := rect.Min.Y; y < rect.Max.Y; y++ {
@@ -148,6 +149,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 }
 
 func TestBox3HelloAndRawAppTaps(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	box := testConnectWS(t, base, "unit", false)
 	round := testConnectWS(t, base, "unit", false)
@@ -172,6 +174,7 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 }
 
 func TestFrameCodecsAndSmartSelector(t *testing.T) {
+	t.Parallel()
 	var enc frameEncoder
 	const w = 360
 	fb := make([]uint16, w*w)

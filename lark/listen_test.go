@@ -161,6 +161,7 @@ func isListenRecStart(f protocolFrame) bool {
 }
 
 func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
+	t.Parallel()
 	b, base, _ := listenHarness(t, func(string) string { return "Hello there." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-off", "Greg", false)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-off", "Hi Greg")
@@ -176,6 +177,7 @@ func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
 }
 
 func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
+	t.Parallel()
 	b, base, prompts := listenHarness(t, func(string) string { return "Got it." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-on", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-on", "Hi Greg")
@@ -214,6 +216,7 @@ func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 }
 
 func TestListenModeSilenceTimesOut(t *testing.T) {
+	serial(t)
 	old := listenWindow
 	listenWindow = time.Second
 	t.Cleanup(func() { listenWindow = old })
@@ -234,6 +237,7 @@ func TestListenModeSilenceTimesOut(t *testing.T) {
 }
 
 func TestListenModeTapEndsWindowWithoutMenu(t *testing.T) {
+	t.Parallel()
 	b, base, _ := listenHarness(t, func(string) string { return "Okay." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-tap", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-tap", "Hi Greg")
@@ -257,6 +261,7 @@ func TestListenModeTapEndsWindowWithoutMenu(t *testing.T) {
 }
 
 func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
+	t.Parallel()
 	b, base, prompts := listenHarness(t, func(string) string { return "Sent to Mum." })
 	hw, cid := setupListenTerminal(t, b, base, "box3-dc", "Greg", true)
 
@@ -302,6 +307,7 @@ func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 }
 
 func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
+	t.Parallel()
 	for _, filler := range []string{"", "   ", "...", "uh", "um", "hmm.", "uh-huh"} {
 		if !isFillerTranscript(filler) {
 			t.Fatalf("expected %q to be filler", filler)
@@ -332,6 +338,7 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 }
 
 func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
+	t.Parallel()
 	b, base, _ := listenHarness(t, func(text string) string {
 		if strings.Contains(text, "Overheard") {
 			return "[silent]"
@@ -365,6 +372,7 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 }
 
 func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
+	t.Parallel()
 	b, base, _ := listenHarness(t, func(string) string { return "Hello." })
 	hw1, cid := setupListenTerminal(t, b, base, "box3-owner", "Greg", true)
 	hw2 := testConnectWS(t, base, "unit", false)
@@ -389,6 +397,7 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 }
 
 func TestListenModeCountdownIndicator(t *testing.T) {
+	t.Parallel()
 	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
 		idle := renderPixelHomeListen(spec, nil, nil, gradeDay, "", "", false)
 		listen := renderPixelHomeListen(spec, nil, nil, gradeDay, "listening", "", true)

@@ -14,6 +14,7 @@ import (
 )
 
 func TestDeviceActions(t *testing.T) {
+	t.Parallel()
 	var gotTap, gotMic []byte
 	devSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" && r.Header.Get("X-Lark-Token") != "tok" {

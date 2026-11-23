@@ -113,6 +113,7 @@ func replayVoiceFixture(t *testing.T, pcm []byte, progress []voiceProgress) fixt
 }
 
 func TestVoiceFixtureManifestIsSynthetic(t *testing.T) {
+	t.Parallel()
 	m := readVoiceManifest(t, filepath.Join("qa", "fixtures", "voice"))
 	if len(m.Fixtures) == 0 {
 		t.Fatal("no committed voice fixtures")
@@ -135,6 +136,7 @@ func TestVoiceFixtureManifestIsSynthetic(t *testing.T) {
 }
 
 func TestVoiceFixturesEndpointPolicy(t *testing.T) {
+	t.Parallel()
 	manifests := []string{filepath.Join("qa", "fixtures", "voice")}
 	if _, err := os.Stat(filepath.Join("qa", "fixtures", "local", "manifest.json")); err == nil {
 		manifests = append(manifests, filepath.Join("qa", "fixtures", "local"))

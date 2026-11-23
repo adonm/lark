@@ -15,6 +15,7 @@ import (
 // skip when no library is present, so the offline suite still runs on a fresh
 // checkout.
 func TestLibraryLatencyInstalled(t *testing.T) {
+	serial(t)
 	dir := env("LARK_LIBRARY_DIR", defaultLibraryDir())
 	var sources []string
 	for _, name := range librarySourceOrder {

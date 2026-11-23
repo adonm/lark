@@ -22,6 +22,7 @@ import (
 )
 
 func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
+	t.Parallel()
 	loc := time.FixedZone("AEDT", 11*3600)
 	fixed := time.Date(2026, 11, 22, 18, 4, 0, 0, loc)
 	for _, tc := range []struct {
@@ -48,6 +49,7 @@ func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
 }
 
 func TestTurnHeaderOmitsStaticIdentity(t *testing.T) {
+	t.Parallel()
 	// Identity is written once to the session instruction entry, so no header
 	// branch may repeat the companion name.
 	comp := companionState{companionLook: companionLook{Name: "Cake", Configured: true, Personality: "curious fox"}}
@@ -73,6 +75,7 @@ func TestTurnHeaderOmitsStaticIdentity(t *testing.T) {
 }
 
 func TestStripLarkHeaderDropsIdentityAndState(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ in, want string }{
 		{"[Speaker: someone in person at your device (name unknown) · voice]\nHi\n[state: now: 12:00 · listen: off]", "Hi"},
 		{"[Event: timer]\nTimer fired\n[state: now: 12:00]", "Timer fired"},
@@ -87,6 +90,7 @@ func TestStripLarkHeaderDropsIdentityAndState(t *testing.T) {
 }
 
 func TestTurnHeaderNeverPutsCompanionInSpeakerPosition(t *testing.T) {
+	t.Parallel()
 	comp := companionState{companionLook: companionLook{Name: "greg", Configured: true}}
 	for _, ch := range []turnChannel{
 		{},
@@ -106,6 +110,7 @@ func TestTurnHeaderNeverPutsCompanionInSpeakerPosition(t *testing.T) {
 }
 
 func TestLocalTimeAcrossAgentSurfaces(t *testing.T) {
+	t.Parallel()
 	loc := time.FixedZone("AEDT", 11*3600)
 	fixed := time.Date(2026, 11, 22, 18, 4, 0, 0, loc)
 	if got := formatLocalTimeIn(fixed, loc); got != "2026-11-22 18:04 AEDT (+11:00)" {
@@ -144,6 +149,7 @@ func TestLocalTimeAcrossAgentSurfaces(t *testing.T) {
 }
 
 func TestSentencesAndFence(t *testing.T) {
+	t.Parallel()
 	want := []string{"Whoa!", "Dr. Lee found a 3.2-inch shell.", "Ooh, awesome question! What made it spiral?"}
 	if got := SplitSentences("**Whoa!** Dr. Lee found a 3.2-inch shell. Ooh, awesome question! What made it spiral?"); !slices.Equal(got, want) {
 		t.Fatal(got)
@@ -170,6 +176,7 @@ func TestSentencesAndFence(t *testing.T) {
 }
 
 func TestSentenceExtractorFragmentation(t *testing.T) {
+	t.Parallel()
 	for _, text := range []string{
 		"**Whoa!** Dr. Lee found a 3.2-inch shell. Ooh, awesome question! What made it spiral? ",
 		"\t A. B. Wood and Prof. Façade saw it…\u2002Then it returned.\u00a0“Really?” No way. ",
@@ -217,6 +224,7 @@ func sineFloats(n, hz int, gain float64) []float32 {
 }
 
 func TestAudioDSP(t *testing.T) {
+	t.Parallel()
 	rms := func(pcm []byte) float64 {
 		var sum float64
 		for i := 0; i < len(pcm); i += 2 {
@@ -250,6 +258,7 @@ func BenchmarkSincOneSecond(b *testing.B) {
 }
 
 func TestStateAndDirectMessage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lark.db")
 	db := testDB(t, path)
@@ -280,6 +289,7 @@ func TestStateAndDirectMessage(t *testing.T) {
 }
 
 func TestBridgeAuthAndBody(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{token: "correct", db: testDB(t, ":memory:")}
 	for _, tc := range []struct {
 		lark []string
@@ -347,6 +357,7 @@ func TestBridgeAuthAndBody(t *testing.T) {
 }
 
 func TestOpenCodeStreamingAndFallback(t *testing.T) {
+	t.Parallel()
 	for _, disconnect := range []bool{false, true} {
 		t.Run(strconv.FormatBool(disconnect), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
@@ -430,6 +441,7 @@ func TestOpenCodeStreamingAndFallback(t *testing.T) {
 }
 
 func TestCredentialReloadOnUnauthorized(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "local-api.json")
 	var replacement []byte
 	var attempts atomic.Int32
@@ -457,6 +469,7 @@ func TestCredentialReloadOnUnauthorized(t *testing.T) {
 }
 
 func TestOpenCodeExplicitEndpointAndDiscovery(t *testing.T) {
+	t.Parallel()
 	state := t.TempDir()
 	password := make(chan string, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

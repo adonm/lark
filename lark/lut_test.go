@@ -8,6 +8,7 @@ import (
 )
 
 func TestAtmospherePhasesAndContrast(t *testing.T) {
+	t.Parallel()
 	at := func(h, m int) time.Time { return time.Date(2026, 1, 1, h, m, 0, 0, time.UTC) }
 	for _, tc := range []struct {
 		h int
@@ -55,6 +56,7 @@ func TestAtmospherePhasesAndContrast(t *testing.T) {
 }
 
 func TestAtmosphereGradesDifferInLuminanceAndHue(t *testing.T) {
+	t.Parallel()
 	// Render a neutral-to-colorful test canvas and verify that dawn, day, dusk,
 	// and night produce meaningfully different mean luminance and hue/tint.
 	meanStats := func(g gradeKey) (lum, rMean, gMean, bMean float64) {
@@ -105,6 +107,7 @@ func TestAtmosphereGradesDifferInLuminanceAndHue(t *testing.T) {
 }
 
 func TestAtmosphereCache(t *testing.T) {
+	t.Parallel()
 	day := renderPixelHome(pixelSpecBox3, nil, nil, gradeDay, "", "")
 	night := renderPixelHome(pixelSpecBox3, nil, nil, gradeNight, "", "")
 	if day.Bounds() != night.Bounds() {

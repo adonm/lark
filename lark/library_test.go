@@ -83,6 +83,7 @@ func testGutenbergDB(t *testing.T, dir string, books []gutenbergRecord) {
 }
 
 func TestLibrarySearchReadImport(t *testing.T) {
+	serial(t)
 	dir := t.TempDir()
 	long := strings.Repeat("The sky looks blue because air scatters short blue light. ", 400)
 	testWikiDB(t, filepath.Join(dir, "simple.db"), map[string]string{
@@ -193,6 +194,7 @@ func TestLibrarySearchReadImport(t *testing.T) {
 }
 
 func TestLibraryTweePassageBounds(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("A sentence with several words to fill the passage. ", 2000)
 	twee, err := libraryTwee("A Long Book", text)
 	if err != nil {
@@ -218,6 +220,7 @@ func TestLibraryTweePassageBounds(t *testing.T) {
 }
 
 func TestDownloadResumeAndChecksum(t *testing.T) {
+	t.Parallel()
 	payload := bytes.Repeat([]byte("offline library payload\n"), 4096)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "file", time.Time{}, bytes.NewReader(payload))
@@ -257,6 +260,7 @@ type ioDiscard struct{}
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestLibraryPromptBudget(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("..", "agents", "lark.md"))
 	if err != nil {
 		t.Fatal(err)

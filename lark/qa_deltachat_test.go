@@ -126,6 +126,7 @@ func (q *qaDCClient) close() {
 }
 
 func TestDecodeQRFromPairPNG(t *testing.T) {
+	t.Parallel()
 	const wantQR = "https://i.delta.chat/#0123456789ABCDEF0123456789ABCDEF&a=qa%40example.org&n=Cake"
 	img, err := renderPixelPair(pixelSpecForGeometry(roundScreen), "Cake", wantQR)
 	if err != nil {

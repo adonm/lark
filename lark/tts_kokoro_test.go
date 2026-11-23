@@ -31,6 +31,7 @@ func kokoroTestDir(t testing.TB) string {
 }
 
 func TestKokoroReal(t *testing.T) {
+	t.Parallel()
 	k, err := openKokoro(kokoroTestDir(t), kokoroThreads)
 	if err != nil {
 		t.Fatal(err)

@@ -33,6 +33,7 @@ func testEndpointSettings() *endpointSettings {
 }
 
 func TestEndpointWaitsForContinuation(t *testing.T) {
+	t.Parallel()
 	var p, empty endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
 	p.observeEnergy(230*time.Millisecond, false, 0)
@@ -91,6 +92,7 @@ func TestEndpointWaitsForContinuation(t *testing.T) {
 }
 
 func TestEndpointAccumulatorPreservesOriginalPCM(t *testing.T) {
+	t.Parallel()
 	var u utterance
 	vad := &testEndpointVAD{}
 	frame := bytes.Repeat([]byte{46, 0}, endpointBytes/2)
@@ -111,6 +113,7 @@ func TestEndpointAccumulatorPreservesOriginalPCM(t *testing.T) {
 }
 
 func TestEndpointWebSendCancelAndAuto(t *testing.T) {
+	t.Parallel()
 	clips := make(chan []byte, 8)
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.endpoint = testEndpointSettings()
@@ -219,6 +222,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 }
 
 func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
+	t.Parallel()
 	frame := bytes.Repeat([]byte{17, 0}, endpointBytes/2)
 	first := make(chan struct{}, 1)
 	second := make(chan int, 1)
@@ -301,6 +305,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 }
 
 func TestEndpointHardwareNegotiation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ model, cap, want bool }{
 		{false, true, false}, {true, false, false}, {true, true, true},
 	} {
@@ -332,6 +337,7 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 }
 
 func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "vocat-ep01"
 	d := testConnectWS(t, base, "unit", false)
@@ -350,6 +356,7 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 }
 
 func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "vocat-e023"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -385,6 +392,7 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 }
 
 func TestStopDiscardsQueuedEndpoint(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	const id = "vocat-e024"
 	d := testConnectWS(t, base, "unit", false)
@@ -405,6 +413,7 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 }
 
 func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
+	t.Parallel()
 	const sid, id = "ses-followup", "vocat-e022"
 	prompts := make(chan string, 2)
 	finishFirst := make(chan struct{})
@@ -491,6 +500,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 }
 
 func TestListenCaptureCapCoversWholeWindow(t *testing.T) {
+	t.Parallel()
 	var u utterance
 	span := 305 * time.Second
 	u.limit = utteranceBytes(span)
@@ -511,6 +521,7 @@ func TestListenCaptureCapCoversWholeWindow(t *testing.T) {
 }
 
 func TestEndpointRingPushDoesNotAllocate(t *testing.T) {
+	serial(t)
 	free := make(chan int, 1)
 	free <- 0
 	c := &endpointCapture{
@@ -535,6 +546,7 @@ func TestEndpointRingPushDoesNotAllocate(t *testing.T) {
 }
 
 func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
+	t.Parallel()
 	var p endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
 	p.observeEnergy(230*time.Millisecond, false, 0)
@@ -571,6 +583,7 @@ func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
 }
 
 func TestCommittedEndpointKeepsItsResult(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &endpointCapture{ctx: ctx, cancel: cancel, committing: true}
 	d := &deviceCapture{endpoint: c}

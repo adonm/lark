@@ -7,6 +7,7 @@ import (
 )
 
 func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	d := testConnectWS(t, base, "unit", false)
 	const id = "vocat-0001"
@@ -35,6 +36,7 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 }
 
 func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
+	t.Parallel()
 	d := terminalSession{caps: terminalCaps{PointerRev: true}}
 	for _, action := range []string{"stop", "rec-cancel", "rec-send", "listen", "reply"} {
 		wrapped, old := uint16(0), uint16(65535)
@@ -49,6 +51,7 @@ func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
 }
 
 func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	d := testConnectWS(t, base, "unit", false)
 	const id = "vocat-0002"
@@ -83,6 +86,7 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 }
 
 func TestAcceptPointerRevisionAllowsAnimationFrames(t *testing.T) {
+	t.Parallel()
 	d := terminalSession{
 		caps:         terminalCaps{PointerRev: true},
 		nativeRev:    13,

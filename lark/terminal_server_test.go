@@ -7,6 +7,7 @@ import (
 // A sleeping panel must not have its radio woken every 12 s; waking returns to
 // the full liveness rate.
 func TestPingIntervalFollowsSleep(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {

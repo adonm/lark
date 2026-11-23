@@ -21,6 +21,7 @@ func feedFrames(p *endpointPolicy, at time.Duration, n int, vad bool, rms float6
 // Quiet, distant speech over a room floor must open the gate and end the
 // segment on silence, not on transcript text.
 func TestEndpointQuietSpeechOverNoiseCommitsOnSilence(t *testing.T) {
+	t.Parallel()
 	var p endpointPolicy
 	at := feedFrames(&p, 0, 100, false, 3) // 2 s room noise, floor 3
 	at = feedFrames(&p, at, 50, true, 12)  // 1 s quiet speech
@@ -43,6 +44,7 @@ func TestEndpointQuietSpeechOverNoiseCommitsOnSilence(t *testing.T) {
 // VAD false positives on steady room noise must not form a segment or hold a
 // listen window open.
 func TestEndpointNoiseOnlyNeverOpensSegment(t *testing.T) {
+	t.Parallel()
 	var p endpointPolicy
 	at := feedFrames(&p, 0, 500, true, 3) // 10 s of VAD-positive noise
 	if p.voiced {
@@ -56,6 +58,7 @@ func TestEndpointNoiseOnlyNeverOpensSegment(t *testing.T) {
 // Parakeet can invent new words on non-speech audio. Those guesses must not
 // move the silence deadline.
 func TestEndpointTranscriptChurnCannotExtendSilence(t *testing.T) {
+	t.Parallel()
 	var p endpointPolicy
 	at := feedFrames(&p, 0, 50, false, 2)
 	at = feedFrames(&p, at, 25, true, 20)
@@ -74,6 +77,7 @@ func TestEndpointTranscriptChurnCannotExtendSilence(t *testing.T) {
 
 // A monologue gets a turn at 20 s even if it never pauses.
 func TestEndpointMonologueCommitsAtCap(t *testing.T) {
+	t.Parallel()
 	var p endpointPolicy
 	at := feedFrames(&p, 0, 10, false, 2)
 	at = feedFrames(&p, at, 1100, true, 40) // 22 s of continuous speech
@@ -89,6 +93,7 @@ func TestEndpointMonologueCommitsAtCap(t *testing.T) {
 // A window with no gated speech closes on its own span and never sends a
 // hallucinated turn.
 func TestListenWindowNoiseOnlyClosesWithoutTurn(t *testing.T) {
+	serial(t)
 	old := listenWindow
 	listenWindow = 2 * time.Second
 	t.Cleanup(func() { listenWindow = old })
@@ -138,6 +143,7 @@ func TestListenWindowNoiseOnlyClosesWithoutTurn(t *testing.T) {
 // Once speech is heard, hallucinated probe text on the following noise must
 // not keep the turn open: it commits within the quiet span and sends once.
 func TestListenSpeechThenNoiseCommitsOnce(t *testing.T) {
+	t.Parallel()
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-churn", "Greg", true)
 	var calls atomic.Int32

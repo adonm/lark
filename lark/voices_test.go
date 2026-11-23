@@ -16,6 +16,7 @@ func (f fakeSpeechEngine) generate(text string, voice voiceChoice, keepGoing fun
 func (fakeSpeechEngine) close() {}
 
 func TestTTSVoiceSelection(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		id, lang string
 		sid      int
@@ -48,6 +49,7 @@ func TestTTSVoiceSelection(t *testing.T) {
 }
 
 func TestUnknownStoredVoiceErrors(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, "")
 	})
@@ -72,6 +74,7 @@ func TestUnknownStoredVoiceErrors(t *testing.T) {
 }
 
 func TestMCPVoiceCatalog(t *testing.T) {
+	t.Parallel()
 	want := []string{heartVoice, fableVoice, lilyVoice, "bm_george", "af_bella", "am_puck", "bf_alice", "bf_isabella"}
 	if len(voiceCatalog) != len(want) {
 		t.Fatalf("got %d voice choices, want %d", len(voiceCatalog), len(want))
@@ -84,6 +87,7 @@ func TestMCPVoiceCatalog(t *testing.T) {
 }
 
 func TestSpeechClipsCacheByVoice(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	var calls atomic.Int32
 	w := fakeTTS(ctx, &calls)
@@ -99,6 +103,7 @@ func TestSpeechClipsCacheByVoice(t *testing.T) {
 }
 
 func TestCompanionVoiceDefaults(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, "")
 	})
@@ -129,6 +134,7 @@ func TestCompanionVoiceDefaults(t *testing.T) {
 }
 
 func TestCompanionVoiceAPI(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, lilyVoice)
 	})
@@ -162,6 +168,7 @@ func TestCompanionVoiceAPI(t *testing.T) {
 }
 
 func TestMenuVoicePicker(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, heartVoice)
 	})

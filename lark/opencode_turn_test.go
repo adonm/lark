@@ -45,6 +45,7 @@ func expectValue[T comparable](t *testing.T, result <-chan T, want T) {
 }
 
 func TestReconcileSessionUsesCurrentAgentModel(t *testing.T) {
+	t.Parallel()
 	const device, sid = "lark-model-test", "ses-existing"
 	models := []ocModel{{"a", "first", "low"}, {"b", "second", "small"}}
 	changed := make(chan ocModel, len(models))
@@ -88,6 +89,7 @@ func TestReconcileSessionUsesCurrentAgentModel(t *testing.T) {
 }
 
 func TestOpenCodeAdmitsPromptBeforeEventStreamConnects(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	prompted := make(chan time.Time, 1)
@@ -120,6 +122,7 @@ func TestOpenCodeAdmitsPromptBeforeEventStreamConnects(t *testing.T) {
 }
 
 func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"matching", "divergent", "tool"} {
 		t.Run(mode, func(t *testing.T) {
 			const id, sid = "lark-eager", "ses-eager"
@@ -240,6 +243,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 }
 
 func TestTerminalEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"before-final", "after-final", "interrupted"} {
 		t.Run(mode, func(t *testing.T) {
 			const id, sid = "lark-eager", "ses-eager"
@@ -368,6 +372,7 @@ func TestTerminalEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 }
 
 func TestOpenCodeFinalReplyPaginatesToAdmittedPrompt(t *testing.T) {
+	t.Parallel()
 	const sid = "ses-long-turn"
 	const reply = "The authoritative reply."
 	first := []object{{"id": "answer", "type": "assistant", "finish": "stop",
@@ -411,6 +416,7 @@ func TestOpenCodeFinalReplyPaginatesToAdmittedPrompt(t *testing.T) {
 }
 
 func TestOpenCodeCancelAndReset(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"cancel", "reset", "disconnect"} {
 		t.Run(action, func(t *testing.T) {
 			const termID, id, sid = "vocat-0001", "cake", "ses-test"
@@ -471,6 +477,7 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 }
 
 func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
+	t.Parallel()
 	const id, sid = "lark-order", "ses-order"
 	prompts := make(chan string, 4)
 	interrupt := make(chan bool, 4)
@@ -555,6 +562,7 @@ func TestOpenCodeInterruptOrdersReplacementPrompt(t *testing.T) {
 }
 
 func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
+	t.Parallel()
 	const reply = "Done.\n```lark-message\n{\"to\":\"Mint\",\"text\":\"Do not deliver\"}\n```"
 	titles, prompts := make(chan string, 4), make(chan string, 4)
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -623,6 +631,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 }
 
 func TestFinishTurnWaitsForPendingTTS(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	c := testConnectWS(t, base, "unit", false)
 	const id = "vocat-pending-tts"
@@ -660,6 +669,7 @@ func TestFinishTurnWaitsForPendingTTS(t *testing.T) {
 }
 
 func TestSpecTurnAbortsOnEarlyTurnExit(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	fillCtx, cancelFill := context.WithCancel(t.Context())
 	defer cancelFill()

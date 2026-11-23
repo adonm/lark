@@ -8,6 +8,7 @@ import (
 )
 
 func TestHardwareVolumeMenu(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const id = "vocat-33d8"
 	board := testConnectWS(t, base, "unit", false)
@@ -64,6 +65,7 @@ func TestHardwareVolumeMenu(t *testing.T) {
 }
 
 func TestVolumePersistence(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	v := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{}, 201))
 	id := str(v["id"])

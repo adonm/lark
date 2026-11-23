@@ -135,6 +135,7 @@ func promptCount(prompts *[]string) int {
 // out, the child taps and answers by voice, and the reply must reach the human
 // sender instead of only being spoken in the room.
 func TestDeviceReplyToDeltaChatHuman(t *testing.T) {
+	t.Parallel()
 	b, base, stub, prompts := dcVoiceHarness(t, func(prompt string) string {
 		if strings.Contains(prompt, "via Delta Chat") {
 			return "[silent]"
@@ -178,6 +179,7 @@ func TestDeviceReplyToDeltaChatHuman(t *testing.T) {
 
 // TestDeviceReplyToDeltaChatCompanion covers a companion-to-companion read-out.
 func TestDeviceReplyToDeltaChatCompanion(t *testing.T) {
+	t.Parallel()
 	b, base, stub, prompts := dcVoiceHarness(t, func(string) string { return "See you soon, Cake!" })
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
@@ -215,6 +217,7 @@ func TestDeviceReplyToDeltaChatCompanion(t *testing.T) {
 
 // TestDeviceReplyExplicitEmitWins proves an agent-chosen target is honoured.
 func TestDeviceReplyExplicitEmitWins(t *testing.T) {
+	t.Parallel()
 	var b *larkServer
 	b, base, stub, _ := dcVoiceHarness(t, func(prompt string) string {
 		if strings.Contains(prompt, "via Delta Chat") {
@@ -249,6 +252,7 @@ func TestDeviceReplyExplicitEmitWins(t *testing.T) {
 
 // TestDeviceReplySilentSendsNothing: [silent] on the in-person reply is quiet.
 func TestDeviceReplySilentSendsNothing(t *testing.T) {
+	t.Parallel()
 	b, base, stub, _ := dcVoiceHarness(t, func(string) string { return "[silent]" })
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
@@ -271,6 +275,7 @@ func TestDeviceReplySilentSendsNothing(t *testing.T) {
 
 // TestDeviceTurnWithoutReadoutNotForwarded guards normal in-person turns.
 func TestDeviceTurnWithoutReadoutNotForwarded(t *testing.T) {
+	t.Parallel()
 	b, base, stub, prompts := dcVoiceHarness(t, func(string) string { return "It's four o'clock." })
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
@@ -292,6 +297,7 @@ func TestDeviceTurnWithoutReadoutNotForwarded(t *testing.T) {
 // TestEmitIntercomMatchesContactAddress covers me.contacts names falling back
 // to the address, and rejects unknown names instead of partially matching.
 func TestEmitIntercomMatchesContactAddress(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
@@ -321,6 +327,7 @@ func TestEmitIntercomMatchesContactAddress(t *testing.T) {
 // /say read-out: it used to target the companion itself, so the voice note
 // failed and the device said it could not reach greg.
 func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
+	t.Parallel()
 	b, base, stub, _ := dcVoiceHarness(t, func(string) string { return "ok" })
 	ttsCh := make(chan string, 8)
 	b.worker = &synthWorker{requests: make(chan ttsRequest)}
@@ -398,6 +405,7 @@ loop:
 }
 
 func TestIntercomCardReplyTargetsConversationPartner(t *testing.T) {
+	t.Parallel()
 	if got := (intercomCard{companion: "Greg", reply: "Mum"}).scene().actions["reply"].value; got != "mum" {
 		t.Fatalf("card reply target = %q, want mum", got)
 	}
@@ -407,6 +415,7 @@ func TestIntercomCardReplyTargetsConversationPartner(t *testing.T) {
 }
 
 func TestDeviceReplyContextNeedsCaptureAfterNotice(t *testing.T) {
+	t.Parallel()
 	h := &terminalHub{}
 	now := time.Now()
 	live := &turnReply{name: "Mum", companionID: "greg", chatID: 200}
@@ -445,6 +454,7 @@ func TestDeviceReplyContextNeedsCaptureAfterNotice(t *testing.T) {
 }
 
 func TestDeviceReplyContextExpires(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	expired := &terminalSession{
 		reply:      &turnReply{name: "Mum", companionID: "greg", chatID: 200},

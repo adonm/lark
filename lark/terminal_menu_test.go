@@ -12,19 +12,8 @@ import (
 	"time"
 )
 
-var (
-	lastMenuSVG = map[*testWS]string{}
-	menuTargets = map[*testWS]struct {
-		h      *terminalHub
-		termID string
-	}{}
-)
-
 func bindMenu(c *testWS, h *terminalHub, termID string) {
-	menuTargets[c] = struct {
-		h      *terminalHub
-		termID string
-	}{h, termID}
+	c.menuHub, c.menuTerm = h, termID
 }
 
 func hitCenter(svg, id string) (int, int, bool) {
@@ -52,9 +41,8 @@ func hitCenter(svg, id string) (int, int, bool) {
 
 func menuFrame(t *testing.T, c *testWS, want ...string) string {
 	t.Helper()
-	tgt := menuTargets[c]
-	svg := waitSVG(t, tgt.h, tgt.termID, want[0])
-	lastMenuSVG[c] = svg
+	svg := waitSVG(t, c.menuHub, c.menuTerm, want[0])
+	c.menuSVG = svg
 	for _, text := range want {
 		if !strings.Contains(svg, text) {
 			t.Errorf("missing %q on screen", text)
@@ -69,7 +57,7 @@ func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 		c.tapMenu(t)
 		return menuFrame(t, c, want...)
 	}
-	x, y, ok := hitCenter(lastMenuSVG[c], id)
+	x, y, ok := hitCenter(c.menuSVG, id)
 	if !ok {
 		t.Fatalf("control %q not found in SVG", id)
 	}
@@ -78,6 +66,7 @@ func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 }
 
 func TestTerminalMainMenuPages(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
 	c := testConnectWS(t, base, "unit", false)
@@ -103,6 +92,7 @@ func TestTerminalMainMenuPages(t *testing.T) {
 }
 
 func TestTerminalMenuListDetails(t *testing.T) {
+	t.Parallel()
 	const id = "cake"
 	const body = "A long note starts here and finishes with a tiny blue kite."
 	for _, tc := range []struct {
@@ -156,6 +146,7 @@ func TestTerminalMenuListDetails(t *testing.T) {
 }
 
 func TestTerminalMenuSQLLeavesHubUnlocked(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
@@ -177,7 +168,7 @@ func TestTerminalMenuSQLLeavesHubUnlocked(t *testing.T) {
 	}
 	defer conn.Close()
 	wait := b.db.readDB().Stats().WaitCount
-	x, y, ok := hitCenter(lastMenuSVG[web], "menu-stories")
+	x, y, ok := hitCenter(web.menuSVG, "menu-stories")
 	if !ok {
 		t.Fatalf("control %q not found", "menu-stories")
 	}
@@ -194,6 +185,7 @@ func TestTerminalMenuSQLLeavesHubUnlocked(t *testing.T) {
 }
 
 func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, termID, board string
 		spec                pixelDisplaySpec
@@ -264,6 +256,7 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 }
 
 func TestIntercomMenuPagingRoundScreen(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, "vocat-intercom-page", "Cake")
@@ -292,6 +285,7 @@ func TestIntercomMenuPagingRoundScreen(t *testing.T) {
 }
 
 func TestOpenStoryEntersStartPassage(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, "vocat-story-open", "Cake")
@@ -324,6 +318,7 @@ func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *term
 }
 
 func TestOpenStoryFromMenuIsSilent(t *testing.T) {
+	t.Parallel()
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
 	requests, d, b, worker := storyTTSHits(t, twee, false)
 	if n := requests.Load(); n != 0 {
@@ -346,6 +341,7 @@ func TestOpenStoryFromMenuIsSilent(t *testing.T) {
 }
 
 func TestConversationalStoryOpenStillNarrates(t *testing.T) {
+	t.Parallel()
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
 	requests, _, _, worker := storyTTSHits(t, twee, true)
 	waitTTSRequest(t, worker)
@@ -355,6 +351,7 @@ func TestConversationalStoryOpenStillNarrates(t *testing.T) {
 }
 
 func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.voices = companionVoiceStore(b.db, heartVoice)
 	})

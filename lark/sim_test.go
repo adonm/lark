@@ -11,6 +11,7 @@ import (
 )
 
 func TestSimDecodeFrames(t *testing.T) {
+	t.Parallel()
 	const w, h = 64, 64
 	src := make([]uint16, w*h)
 	for y := range h {
@@ -48,6 +49,7 @@ func TestSimDecodeFrames(t *testing.T) {
 }
 
 func TestSimPNGAndWAV(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fb := []uint16{pack565(255, 0, 0), pack565(0, 255, 0), pack565(0, 0, 255), pack565(255, 255, 255)}
 	pngPath := filepath.Join(dir, "out.png")
@@ -76,6 +78,7 @@ func TestSimPNGAndWAV(t *testing.T) {
 }
 
 func TestResolveHitLabel(t *testing.T) {
+	t.Parallel()
 	res := object{
 		"screen": "home",
 		"hits": []any{

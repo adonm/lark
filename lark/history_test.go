@@ -15,6 +15,7 @@ import (
 )
 
 func TestChatHistoryCloseDuringConcurrentAdd(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	for range 200 {
 		h := &chatHistory{db: b.db}
@@ -42,6 +43,7 @@ func TestChatHistoryCloseDuringConcurrentAdd(t *testing.T) {
 }
 
 func TestDeviceResetHistory(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_reset/interrupt" {
@@ -120,6 +122,7 @@ func TestDeviceResetHistory(t *testing.T) {
 }
 
 func TestHistoryCursorPagination(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	const id = "lark-history"
 	tx, err := b.db.BeginTx(t.Context(), nil)
@@ -170,6 +173,7 @@ func TestHistoryCursorPagination(t *testing.T) {
 }
 
 func TestSessionMatchesDevice(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		title, device string
 		want          bool
@@ -191,6 +195,7 @@ func TestSessionMatchesDevice(t *testing.T) {
 }
 
 func TestListDeviceSessionsFallback(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		status    int
@@ -220,6 +225,7 @@ func TestListDeviceSessionsFallback(t *testing.T) {
 }
 
 func TestSessionMessageBackfillExceedsOldPaginationLimit(t *testing.T) {
+	t.Parallel()
 	o := historyOpenCode(t, func(w http.ResponseWriter, r *http.Request) {
 		offset := 0
 		if cursor := r.URL.Query().Get("cursor"); cursor != "" {

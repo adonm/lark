@@ -31,6 +31,7 @@ func patchTimerTest(t *testing.T, base string, args object, failed bool) object 
 }
 
 func TestTimerLocalFireAndCancel(t *testing.T) {
+	t.Parallel()
 	tts := make(chan string, 8)
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.voices = companionVoiceStore(b.db, fableVoice)
@@ -105,6 +106,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 }
 
 func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lark.db")
 	db := testDB(t, path)
 	now := time.Now().UTC()
@@ -169,6 +171,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 }
 
 func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
+	t.Parallel()
 	const id = "cake"
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
@@ -204,6 +207,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 }
 
 func TestTimerWakeAgentGuard(t *testing.T) {
+	t.Parallel()
 	const device, other, sid = "cake", "mint", "ses-reminder"
 	prompt, release := make(chan string, 1), make(chan struct{})
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -268,6 +272,7 @@ func TestTimerWakeAgentGuard(t *testing.T) {
 }
 
 func TestScopedTimerIsolationAndCaps(t *testing.T) {
+	t.Parallel()
 	const owner, other = "owner", "other"
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)

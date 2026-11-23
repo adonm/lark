@@ -38,6 +38,7 @@ You hear an owl hoot.
 `
 
 func TestParseTweeValidAndRuntime(t *testing.T) {
+	t.Parallel()
 	cs, err := parseTwee(sampleBranchingTwee)
 	if err != nil {
 		t.Fatalf("parseTwee failed: %v", err)
@@ -73,6 +74,7 @@ func TestParseTweeValidAndRuntime(t *testing.T) {
 }
 
 func TestParseTweeValidationErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		twee string
@@ -140,6 +142,7 @@ func TestParseTweeValidationErrors(t *testing.T) {
 }
 
 func TestStoryMCPAndProgressRoundTrip(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	out := toolTest(t, base, "story", object{
 		"op":     "create",
@@ -193,6 +196,7 @@ func TestStoryMCPAndProgressRoundTrip(t *testing.T) {
 }
 
 func TestMatchStoryChoice(t *testing.T) {
+	t.Parallel()
 	choices := []storyChoice{
 		{Label: "Take the mossy path", Target: 1},
 		{Label: "Follow the lantern", Target: 2},

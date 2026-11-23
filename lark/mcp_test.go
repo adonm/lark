@@ -118,6 +118,7 @@ func waitTTSRequest(t *testing.T, w *synthWorker) {
 }
 
 func TestMCPProtocol(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	const id = "lark-test"
 	c := testConnectWS(t, base, "unit", false)
@@ -164,6 +165,7 @@ func TestMCPProtocol(t *testing.T) {
 }
 
 func TestMCPClosedArguments(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	for _, tc := range []struct {
 		tool string
@@ -202,6 +204,7 @@ func patchControl(t *testing.T, base, id string, terminal object) object {
 }
 
 func TestMCPPatchDefaultsToSpeakingCompanion(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const termID = "vocat-0001"
 	hw := testConnectWS(t, base, "unit", false)
@@ -233,6 +236,7 @@ func TestMCPPatchDefaultsToSpeakingCompanion(t *testing.T) {
 }
 
 func TestMCPStateSlices(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
@@ -293,6 +297,7 @@ func TestMCPStateSlices(t *testing.T) {
 }
 
 func TestEmitIntercom(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})
@@ -319,6 +324,7 @@ func TestEmitIntercom(t *testing.T) {
 }
 
 func TestMCPControl(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const termID, id = "vocat-control", "cake"
 	c := testConnectWS(t, base, "unit", false)
@@ -425,6 +431,7 @@ func waitPool(t *testing.T, ready func() bool) {
 }
 
 func TestMCPStdioForwards(t *testing.T) {
+	serial(t)
 	var posts atomic.Int32
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/mcp" || r.Method != "POST" || r.Header.Get("Authorization") != "Bearer unit" {
@@ -474,6 +481,7 @@ func TestMCPStdioForwards(t *testing.T) {
 }
 
 func TestDeltaChatUsesPrimaryModelAndAllowsTaskSubagent(t *testing.T) {
+	t.Parallel()
 	settings := openCodeSettings("lark")
 	if !slices.Contains(settings.Permissions, ocPermission{"subagent", "deep", "allow"}) {
 		t.Fatalf("lark permissions missing subagent deep allow: %+v", settings.Permissions)

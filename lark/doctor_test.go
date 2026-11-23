@@ -87,6 +87,7 @@ func doctorTestEnv(t *testing.T) doctor {
 }
 
 func TestDoctorReportsAllGreen(t *testing.T) {
+	t.Parallel()
 	server := doctorFixture(t, nil)
 	defer server.Close()
 	env := doctorTestEnv(t)
@@ -113,6 +114,7 @@ func TestDoctorReportsAllGreen(t *testing.T) {
 }
 
 func TestDoctorFailsOnBrokenServices(t *testing.T) {
+	t.Parallel()
 	server := doctorFixture(t, map[string]any{
 		"/health": map[string]any{"ok": true, "opencode": true, "stt": false, "tts": true,
 			"smart_turn": true, "deltachat": false},
@@ -140,6 +142,7 @@ func TestDoctorFailsOnBrokenServices(t *testing.T) {
 }
 
 func TestDoctorWarnsOnDrift(t *testing.T) {
+	t.Parallel()
 	offline := map[string]any{"id": "vocat-old", "board": "esp-vocat", "firmware": "9.9.8", "online": false, "ip": "127.0.0.2"}
 	server := doctorFixture(t, map[string]any{
 		"/api/terminals": map[string]any{"terminals": []any{
@@ -174,6 +177,7 @@ func TestDoctorWarnsOnDrift(t *testing.T) {
 }
 
 func TestStripJSONComments(t *testing.T) {
+	t.Parallel()
 	in := "{\n// note\n\"url\": \"http://x//y\", /* block */ \"n\": 1\n}"
 	got := strings.ReplaceAll(stripJSONComments(in), " ", "")
 	got = strings.ReplaceAll(got, "\n", "")

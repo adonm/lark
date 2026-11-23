@@ -15,6 +15,7 @@ import (
 )
 
 func TestPixelQRModuleRoundTrip(t *testing.T) {
+	t.Parallel()
 	const rawInvite = "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&v=1&n=Greg&i=abcdef1234567890&s=1234567890abcdef&a=greg%40example.org"
 	invite := shortenDeltaChatInvite(rawInvite)
 	if strings.Contains(invite, "&n=") || strings.Contains(invite, "&v=") {
@@ -57,6 +58,7 @@ func TestPixelQRModuleRoundTrip(t *testing.T) {
 }
 
 func TestFormatMemoryLinesAndTitles(t *testing.T) {
+	t.Parallel()
 	if got := formatMemoryLines(`{"text":"Once upon a time."}`); len(got) != 1 || got[0] != "Once upon a time." {
 		t.Fatalf("text field: %v", got)
 	}
@@ -77,6 +79,7 @@ func TestFormatMemoryLinesAndTitles(t *testing.T) {
 }
 
 func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
+	t.Parallel()
 	stories := []pixelStory{
 		{ID: "lost_island", Title: "The Lost Island", Passage: "Harbor", Passages: 7, Color: pxMint},
 		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: pxPeach},
@@ -178,6 +181,7 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 }
 
 func TestGeneratePixelRenderSamples(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("LARK_RENDER_SAMPLES") == "" {
 		t.Skip("set LARK_RENDER_SAMPLES=1 to write sample PNGs to /tmp/opencode/render-samples/")
 	}
@@ -382,6 +386,7 @@ func renderPixelListWithHitsImg(spec pixelDisplaySpec, title string, th pixelThe
 }
 
 func TestRenderPixelListDrawsNavBar(t *testing.T) {
+	t.Parallel()
 	spec := pixelSpecForGeometry(roundScreen)
 	th := defaultPixelTheme()
 	for _, items := range [][]tile{nil, {{id: "a", label: "Alpha"}}} {

@@ -69,6 +69,9 @@ type testWS struct {
 	feed     *udpFeed
 	feedBase int
 	udpSent  int
+	menuHub  *terminalHub
+	menuTerm string
+	menuSVG  string
 }
 
 func apiObjects(t *testing.T, url, field string) []any {
@@ -363,6 +366,7 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 }
 
 func TestTerminalHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	dev := testConnectWS(t, base, "unit", false)
 	const id = "box3-hello"
@@ -399,6 +403,7 @@ func TestTerminalHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 }
 
 func TestTerminalRecordingLimits(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		pcm     []byte
@@ -410,6 +415,7 @@ func TestTerminalRecordingLimits(t *testing.T) {
 		{"cross PCM cap", append(bytes.Repeat([]byte{12, 0}, (maxPCM-2)/2), 15, 0, 16, 0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			pcm := tc.pcm[:min(len(tc.pcm), maxPCM)]
 			sttCalled := make(chan struct{}, 1)
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
@@ -481,6 +487,7 @@ func TestTerminalRecordingLimits(t *testing.T) {
 }
 
 func TestTerminalHardwareSendWaitsForFinalPCM(t *testing.T) {
+	t.Parallel()
 	for _, recEnd := range []bool{true, false} {
 		name := "rec_end"
 		if !recEnd {
@@ -542,6 +549,7 @@ func TestTerminalHardwareSendWaitsForFinalPCM(t *testing.T) {
 }
 
 func TestTerminalHardwareSendFailsafeDeadline(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		b := &larkServer{root: t.Context()}
 		c := &terminalClient{ctx: t.Context()}
@@ -571,6 +579,7 @@ func TestTerminalHardwareSendFailsafeDeadline(t *testing.T) {
 }
 
 func TestTerminalRawIntercomDoesNotWaitForSTT(t *testing.T) {
+	t.Parallel()
 	allowSTT := make(chan struct{})
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.setSTT(func(ctx context.Context, _ []byte) (string, error) {
@@ -642,6 +651,7 @@ func TestTerminalRawIntercomDoesNotWaitForSTT(t *testing.T) {
 }
 
 func TestTerminalLongPlaybackWithBackpressure(t *testing.T) {
+	serial(t)
 	synctest.Test(t, func(t *testing.T) {
 		const duration = 12 * time.Second
 		pcm := make([]byte, 12*sampleRate*2)
@@ -723,6 +733,7 @@ func TestTerminalLongPlaybackWithBackpressure(t *testing.T) {
 }
 
 func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const id = "vocat-a123"
 	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
@@ -765,6 +776,7 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 }
 
 func TestTerminalPlaybackAbortIgnoresOldACKs(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const id = "vocat-abrt"
 	dev := testConnectWS(t, base, "unit", false)
@@ -827,6 +839,7 @@ func TestTerminalPlaybackAbortIgnoresOldACKs(t *testing.T) {
 }
 
 func TestTerminalVoicePlaysFirstSentenceBeforeFinal(t *testing.T) {
+	t.Parallel()
 	t.Run("Complete", func(t *testing.T) { wsEagerVoice(t, false) })
 	t.Run("StopWhileGenerating", func(t *testing.T) { wsEagerVoice(t, true) })
 }
@@ -1015,6 +1028,7 @@ func syncOnceClose(ch chan struct{}) func() {
 }
 
 func TestNativeClientPrioritizesControlAndCoalescesFrames(t *testing.T) {
+	t.Parallel()
 	server, client := net.Pipe()
 	defer client.Close()
 	defer server.Close()

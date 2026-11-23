@@ -27,6 +27,7 @@ func planPacks(t *testing.T, dir string, total, free int64) map[string]libraryPa
 }
 
 func TestLibraryBudgetKeepsTwentyPercentFree(t *testing.T) {
+	t.Parallel()
 	if got := libraryBudget(1000, 200); got != 0 {
 		t.Fatalf("free at the reserve line must budget nothing, got %d", got)
 	}
@@ -39,6 +40,7 @@ func TestLibraryBudgetKeepsTwentyPercentFree(t *testing.T) {
 }
 
 func TestLibraryPlanPicksTiersBySpace(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		total int64
@@ -90,6 +92,7 @@ func TestLibraryPlanPicksTiersBySpace(t *testing.T) {
 }
 
 func TestLibraryPlanSkipsInstalledPacks(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for _, name := range []string{"gutenberg.db", "simple.db"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("index"), 0o600); err != nil {
@@ -106,6 +109,7 @@ func TestLibraryPlanSkipsInstalledPacks(t *testing.T) {
 }
 
 func TestLibraryPlanRespectsRunningBuild(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	lockPath := filepath.Join(dir, "enwiki.db.build.lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
@@ -129,6 +133,7 @@ func TestLibraryPlanRespectsRunningBuild(t *testing.T) {
 }
 
 func TestLibraryPlanCountsExistingDump(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "raw")
 	if err := os.MkdirAll(raw, 0o700); err != nil {
@@ -160,6 +165,7 @@ func TestLibraryPlanCountsExistingDump(t *testing.T) {
 }
 
 func TestLibraryProvisionOrderIsSmallestFirst(t *testing.T) {
+	t.Parallel()
 	plan, err := planLibrary(t.TempDir(), fakeVolume(1024*gib, 1000*gib))
 	if err != nil {
 		t.Fatal(err)

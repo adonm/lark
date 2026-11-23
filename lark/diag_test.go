@@ -16,6 +16,7 @@ import (
 )
 
 func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{}
 	now := time.Now()
 	traceFrom(b.traceTurn(t.Context(), "cake", "Cake", "voice", now)).silent()
@@ -34,6 +35,7 @@ func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
 }
 
 func TestDiagnosticsListeningCountersAndSegments(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{}
 	b.diag.listen.windows.Add(3)
 	b.diag.listen.speech.Add(2)
@@ -60,6 +62,7 @@ func TestDiagnosticsListeningCountersAndSegments(t *testing.T) {
 }
 
 func TestDiagnosticsMetricWindowAndTurns(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{}
 	t0 := time.Now()
 	for i := 1; i <= 40; i++ {
@@ -95,6 +98,7 @@ func TestDiagnosticsMetricWindowAndTurns(t *testing.T) {
 }
 
 func TestDiagnosticsProcAndShutdown(t *testing.T) {
+	t.Parallel()
 	if got := parseProcStat("42 (cat ) server) S 0 0 0 0 0 0 0 0 0 0 12 30 0 0 0 0 0 0 567", 42); got != (procReading{42, 42, 567}) {
 		t.Fatal(got)
 	}
@@ -136,6 +140,7 @@ func TestDiagnosticsProcAndShutdown(t *testing.T) {
 }
 
 func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	board := testConnectWS(t, base, "unit", false)
 	const id = "vocat-diag"
@@ -222,6 +227,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 }
 
 func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{}
 	ctx := b.traceTurn(t.Context(), "box", "Mint", "voice", time.Now().Add(-10*time.Millisecond))
 	tr := traceFrom(ctx)
@@ -241,6 +247,7 @@ func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
 }
 
 func TestDiagnosticsTTSQueueDropsCanceledSpeechWithoutRestart(t *testing.T) {
+	t.Parallel()
 	root, stop := context.WithCancel(t.Context())
 	var calls []string
 	loads := 0
@@ -285,6 +292,7 @@ func TestDiagnosticsTTSQueueDropsCanceledSpeechWithoutRestart(t *testing.T) {
 }
 
 func TestAccessibleRecordingControls(t *testing.T) {
+	t.Parallel()
 	transcribed := make(chan struct{}, 2)
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.setSTT(func(context.Context, []byte) (string, error) {
@@ -360,6 +368,7 @@ func stopTestHarness(t *testing.T, id string) (*larkServer, string, <-chan strin
 }
 
 func TestThinkingStopRequiresThreeTaps(t *testing.T) {
+	t.Parallel()
 	const id = "vocat-stop"
 	b, base, interrupts := stopTestHarness(t, "cake")
 	dev := testConnectWS(t, base, "unit", false)
@@ -434,6 +443,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 }
 
 func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
+	t.Parallel()
 	const id = "vocat-spk0"
 	b, base, interrupts := stopTestHarness(t, id)
 	dev := testConnectWS(t, base, "unit", false)

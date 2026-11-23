@@ -6,6 +6,7 @@ import (
 )
 
 func TestCompanionTerminalLifecycle(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 
 	// 1. Create two companions; both start dormant with zero terminals.
@@ -57,6 +58,7 @@ func TestCompanionTerminalLifecycle(t *testing.T) {
 }
 
 func TestCompanionIntercom(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.worker = fakeTTS(b.root, nil)
 	})

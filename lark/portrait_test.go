@@ -51,6 +51,7 @@ func portraitFixture(t *testing.T) []byte {
 }
 
 func TestPortraitAlignsTranslatedSilhouettes(t *testing.T) {
+	t.Parallel()
 	raw := portraitFixture(t)
 	sheet, err := decodePortraitSheet(raw)
 	if err != nil {
@@ -84,6 +85,7 @@ func TestPortraitAlignsTranslatedSilhouettes(t *testing.T) {
 }
 
 func TestPortraitSilhouettesClearMenuAndBezel(t *testing.T) {
+	t.Parallel()
 	bg := parseHexRGBA("#FFF2E7", imagecolor.RGBA{})
 	for _, shape := range []image.Rectangle{image.Rect(100, 50, 410, 460), image.Rect(22, 106, 490, 406)} {
 		sheet := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
@@ -117,6 +119,7 @@ func TestPortraitSilhouettesClearMenuAndBezel(t *testing.T) {
 }
 
 func TestPixelPortraitGridAndAlignment(t *testing.T) {
+	t.Parallel()
 	fixture := portraitFixture(t)
 	store := &portraitStore{dir: t.TempDir(), generate: func(_ context.Context, prompt string, _ []byte) ([]byte, error) {
 		if strings.Contains(prompt, "background scene") {
@@ -180,6 +183,7 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 }
 
 func TestPortraitConsoleContract(t *testing.T) {
+	t.Parallel()
 	source := []byte("reference fixture")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req object
@@ -208,6 +212,7 @@ func TestPortraitConsoleContract(t *testing.T) {
 }
 
 func TestPortraitOpenCodeContract(t *testing.T) {
+	t.Parallel()
 	source := []byte("reference fixture")
 	sheet := portraitFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +273,7 @@ func TestPortraitOpenCodeContract(t *testing.T) {
 }
 
 func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
+	t.Parallel()
 	sheet := portraitFixture(t)
 	dir := t.TempDir()
 	var backgrounds atomic.Int32
@@ -343,6 +349,7 @@ func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
 }
 
 func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
+	t.Parallel()
 	sheet := portraitFixture(t)
 	dir := t.TempDir()
 	b, base := wsHarness(t, nil)
@@ -400,6 +407,7 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 }
 
 func TestPortraitInteriorMatchesBGStaysOpaque(t *testing.T) {
+	t.Parallel()
 	bg := imagecolor.RGBA{240, 244, 240, 255}
 	outline := imagecolor.RGBA{45, 70, 55, 255}
 	sheet := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))

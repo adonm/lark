@@ -9,6 +9,7 @@ import (
 )
 
 func TestSplitNameToleratesSpeechNearMisses(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		text, name, rest string
 		ok               bool
@@ -57,6 +58,7 @@ func appendQuiet(t *testing.T, hw *testWS, seq *uint16, n int) {
 }
 
 func TestListenDidntCatchSpeaksAndRearms(t *testing.T) {
+	t.Parallel()
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-miss", "Greg", true)
 	b.setSTT(func(context.Context, []byte) (string, error) { return "", nil })
@@ -90,6 +92,7 @@ func TestListenDidntCatchSpeaksAndRearms(t *testing.T) {
 }
 
 func TestListenNameRequiredAfterPause(t *testing.T) {
+	t.Parallel()
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-name", "Cake", true)
 	b.setSTT(func(context.Context, []byte) (string, error) { return "tell me a story", nil })
@@ -141,6 +144,7 @@ func TestListenNameRequiredAfterPause(t *testing.T) {
 }
 
 func TestListenNamePresentButUnusableSaysDidntCatch(t *testing.T) {
+	t.Parallel()
 	for i, stt := range []string{"Cake", "Cake um"} {
 		b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
 		term := fmt.Sprintf("box3-nu%d", i)

@@ -7,6 +7,7 @@ import (
 )
 
 func TestSynthesizeMelody(t *testing.T) {
+	t.Parallel()
 	notes := []string{"C5:120", "R:80", "F#4:120", "Bb4:120", "880:60"}
 	pcm, err := synthesizeMelody(notes)
 	if err != nil || len(pcm) != sampleRate {
@@ -34,6 +35,7 @@ func TestSynthesizeMelody(t *testing.T) {
 }
 
 func TestTerminalMelody(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	id := "cake"
 	c := testConnectWS(t, base, "unit", false)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestTerminalHitsRoute(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Cake", "form": "a cat"}, 201)
 
@@ -41,6 +42,7 @@ func TestTerminalHitsRoute(t *testing.T) {
 }
 
 func TestTTSRoute(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	b.worker = newSynthWorker(b.root, func() (speechEngine, error) {
 		return fakeSpeechEngine(func(_ string, _ voiceChoice, _ func() bool) ([]float32, int) {
@@ -62,6 +64,7 @@ func TestTTSRoute(t *testing.T) {
 }
 
 func TestLeaveSceneResetsCompanionStatus(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	hw := testConnectWS(t, base, "unit", false)
 	const id = "vocat-stop-status"

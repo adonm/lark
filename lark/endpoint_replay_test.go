@@ -98,6 +98,7 @@ const replayBytesPerMS = sampleRate / 1000 * 2
 
 // Run explicitly: all audio is synthesized and kept in memory.
 func TestEndpointReplay(t *testing.T) {
+	t.Parallel()
 	path := os.Getenv("LARK_REPLAY_SILERO")
 	if path == "" {
 		t.Skip("set LARK_REPLAY_SILERO to run local synthetic shadow replay")

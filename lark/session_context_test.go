@@ -76,6 +76,7 @@ func testSeed(t *testing.T, w http.ResponseWriter, r *http.Request, sid string, 
 }
 
 func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
+	t.Parallel()
 	const id, oldSID, freshSID = "virt-01234567", "ses-legacy", "ses-current"
 	const turn = "What did we name the imaginary island?"
 	previous := hashMCPSchema(mcpTools, mcpInstructions, "2", "")
@@ -285,6 +286,7 @@ func TestContractRolloverPreservesScopedCompanion(t *testing.T) {
 }
 
 func TestMissingSessionRecoveryDoesNotRepeatTimer(t *testing.T) {
+	t.Parallel()
 	for _, accepted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("admission-known=%t", accepted), func(t *testing.T) {
 			const id, oldSID, freshSID = "virt-01234567", "ses-old", "ses-fresh"

@@ -10,6 +10,7 @@ import (
 )
 
 func TestMemoryCRUDAndAtomicCAS(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const scope = "companion:cake"
 	args := object{"scope": scope, "key": "round:1", "value": object{"move": 0}, "expected_version": 0}
@@ -82,6 +83,7 @@ func memoryScope(t *testing.T, base, scope string) object {
 }
 
 func TestPatchMemoryBatchRollback(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	edit := func(scope, key string, want int, value any) object {
 		return object{"scope": scope, "key": key, "expected_version": want, "value": value}

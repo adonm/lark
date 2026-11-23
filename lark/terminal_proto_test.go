@@ -133,6 +133,7 @@ func (nc *testNativeClient) readRTP(wantPT uint8) []byte {
 }
 
 func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
@@ -163,6 +164,7 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 }
 
 func TestNativeProtoControlAndMessages(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
@@ -234,6 +236,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 }
 
 func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
+	t.Parallel()
 	gotPCM := make(chan []byte, 1)
 	b, _ := wsHarness(t, func(b *larkServer, _ string) {
 		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
@@ -289,6 +292,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 }
 
 func TestNativeUDPEndpointCopyRace(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	ds, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
@@ -343,6 +347,7 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 }
 
 func TestNativeUDPZeroAlloc(t *testing.T) {
+	serial(t)
 	b, _ := wsHarness(t, nil)
 	ds, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
@@ -372,6 +377,7 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 }
 
 func TestEndpointCaptureZeroAlloc(t *testing.T) {
+	serial(t)
 	b, _ := wsHarness(t, nil)
 	ds, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {

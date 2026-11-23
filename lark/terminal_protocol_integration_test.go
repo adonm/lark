@@ -10,6 +10,7 @@ import (
 )
 
 func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
 		t.Fatal(err)
@@ -83,6 +84,7 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 }
 
 func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing.T) {
+	t.Parallel()
 	sttGot := make(chan []byte, 1)
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
@@ -131,6 +133,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 }
 
 func TestProtocolWireSizesAndAllocs(t *testing.T) {
+	serial(t)
 	ptrBytes := len(packProtoPacket(msgPointer, 1, encodePointer(ptrTap, 180, 180, 42)))
 	statusBytes := len(packProtoPacket(msgStatus, 2, encodeStatus(statusThinking)))
 	if ptrBytes != 16 || statusBytes != 17 {

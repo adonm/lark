@@ -116,6 +116,7 @@ func remoteJSON(t *testing.T, method, base, token, path string, body any, want i
 }
 
 func TestRemotePagePWAAndScopedAuth(t *testing.T) {
+	t.Parallel()
 	h := newRemoteHarness(t)
 	page := string(remoteHTTP(t, http.MethodGet, h.base, "", "/remote?token="+url.QueryEscape(h.token), nil, 200))
 	for _, want := range []string{"data-token=", "Greg", "/remote/pwa/manifest.webmanifest?token=", "/remote/app.js"} {
@@ -152,6 +153,7 @@ func TestRemotePagePWAAndScopedAuth(t *testing.T) {
 }
 
 func TestRemoteRESTCommandsAndHistoryCursor(t *testing.T) {
+	t.Parallel()
 	h := newRemoteHarness(t)
 	b := h.b
 	h.b.voices = companionVoiceStore(b.db, heartVoice)
@@ -243,6 +245,7 @@ func TestRemoteRESTCommandsAndHistoryCursor(t *testing.T) {
 }
 
 func TestRemoteEventsStreamsInitialStateAndChanges(t *testing.T) {
+	t.Parallel()
 	h := newRemoteHarness(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -299,6 +302,7 @@ func TestRemoteEventsStreamsInitialStateAndChanges(t *testing.T) {
 }
 
 func TestRemoteTunnelCommandIssueRotateAndRevoke(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	b.remote = newRemoteManager(b, "fake-opentunnel")
 	var calls []string
@@ -362,6 +366,7 @@ func TestRemoteTunnelCommandIssueRotateAndRevoke(t *testing.T) {
 }
 
 func TestRemoteTunnelRestoresSavedRouteAndToken(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	b.voices = companionVoiceStore(b.db, heartVoice)
 	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"}); err != nil {
@@ -390,6 +395,7 @@ func TestRemoteTunnelRestoresSavedRouteAndToken(t *testing.T) {
 }
 
 func TestRemoteMissingOpentunnelAndCompanionDelete(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	b.remote = newRemoteManager(b, "")
 	c, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
@@ -429,6 +435,7 @@ func TestRemoteMissingOpentunnelAndCompanionDelete(t *testing.T) {
 }
 
 func TestRemoteManifestIsTokenFree(t *testing.T) {
+	t.Parallel()
 	b, _ := wsHarness(t, nil)
 	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"}); err != nil {
 		t.Fatal(err)
@@ -466,6 +473,7 @@ func TestRemoteManifestIsTokenFree(t *testing.T) {
 }
 
 func TestRemoteVolumeStoryOpenAndRevoke(t *testing.T) {
+	t.Parallel()
 	h := newRemoteHarness(t)
 	b := h.b
 	if _, _, err := b.saveStory(t.Context(), "lost_island", ":: StoryTitle\nLost Island\n\n:: Start {\"end\": true}\nShore.\n", "", true); err != nil {

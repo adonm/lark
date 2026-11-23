@@ -13,6 +13,7 @@ import (
 // turn used to fail with "OpenCode MCP catalog refresh pending"; it must wait
 // for the refresh and then create its session.
 func TestFirstTurnWaitsForMCPCatalogRefresh(t *testing.T) {
+	serial(t)
 	const id, sid = "lark-contract", "ses-contract"
 	o := testOpenCode(t, t.Context(), t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -42,6 +43,7 @@ func TestFirstTurnWaitsForMCPCatalogRefresh(t *testing.T) {
 }
 
 func TestTurnFailsClearlyWhenCatalogRefreshNeverLands(t *testing.T) {
+	t.Parallel()
 	o := testOpenCode(t, t.Context(), t.TempDir(), func(http.ResponseWriter, *http.Request) {})
 	o.settings = ocSettings{Agent: "lark", Model: ocModel{"provider", "model", ""}}
 	o.contract = "catalog-never"
@@ -53,6 +55,7 @@ func TestTurnFailsClearlyWhenCatalogRefreshNeverLands(t *testing.T) {
 }
 
 func TestHealthReportsPerModelState(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{models: newModelSet(time.Now()), endpoint: &endpointSettings{}}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -88,6 +91,7 @@ func TestHealthReportsPerModelState(t *testing.T) {
 }
 
 func TestDecodeClipWaitsForParakeet(t *testing.T) {
+	serial(t)
 	b := &larkServer{models: newModelSet(time.Now())}
 	want := func(context.Context, []byte) (string, error) { return "hello", nil }
 	go func() {
@@ -102,6 +106,7 @@ func TestDecodeClipWaitsForParakeet(t *testing.T) {
 }
 
 func TestDecodeClipReportsFailedModel(t *testing.T) {
+	t.Parallel()
 	b := &larkServer{models: newModelSet(time.Now())}
 	b.models.stt.setError(errVADLoad)
 	if _, err := b.decodeClip(t.Context(), []byte{0, 0}); err == nil ||
@@ -111,6 +116,7 @@ func TestDecodeClipReportsFailedModel(t *testing.T) {
 }
 
 func TestTTSWorkerIsAvailableWhileLoading(t *testing.T) {
+	t.Parallel()
 	root, stop := context.WithCancel(t.Context())
 	defer stop()
 	loaded := make(chan struct{})

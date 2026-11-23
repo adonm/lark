@@ -9,6 +9,7 @@ import (
 )
 
 func TestCompanionLifecycleAndValidation(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, heartVoice)
 	})
@@ -96,6 +97,7 @@ func TestCompanionLifecycleAndValidation(t *testing.T) {
 }
 
 func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.voices = companionVoiceStore(b.db, heartVoice)
 		b.oc = testOpenCodeOnDB(t, b.root, dir, b.db, func(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +123,7 @@ func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
 }
 
 func TestUpdateCompanionRejectsLegacyFields(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"svg_extras", "extras", "face_svg", "face_bg", "mark_color", "accent_color", "preset", "face_edits"} {
 		_, err := updateCompanion(blankCompanion(), object{field: "x"}, companionVoices{})
 		if e, ok := err.(*apiError); !ok || e.status != 400 || e.Error() != "Unknown companion field "+field {
@@ -130,6 +133,7 @@ func TestUpdateCompanionRejectsLegacyFields(t *testing.T) {
 }
 
 func TestCompanionFormAndPortraitPrompt(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{"name": "Greg"}, 400)
 	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
@@ -161,6 +165,7 @@ func TestCompanionFormAndPortraitPrompt(t *testing.T) {
 }
 
 func TestCompanionListeningToggle(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
 		"name": "Greg",

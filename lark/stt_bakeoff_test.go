@@ -18,6 +18,7 @@ import (
 )
 
 func TestSTTBakeoff(t *testing.T) {
+	t.Parallel()
 	mode := os.Getenv("LARK_BAKEOFF")
 	if mode == "" {
 		t.Skip("set LARK_BAKEOFF and LARK_BAKEOFF_AUDIO to run the local bake-off")

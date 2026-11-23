@@ -31,6 +31,7 @@ func writeFakeESPImage(t *testing.T, dir, name, version string) string {
 }
 
 func TestESPImageVersion(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFakeESPImage(t, dir, "lark.bin", "0.10.2")
 	ver, size, err := espImageVersion(path)
@@ -48,6 +49,7 @@ func TestESPImageVersion(t *testing.T) {
 }
 
 func TestRunOTAFlow(t *testing.T) {
+	serial(t)
 	repo := t.TempDir()
 	writeFakeESPImage(t, filepath.Join(repo, "firmware", "build"), "lark.bin", "0.10.2")
 
@@ -109,6 +111,7 @@ func TestRunOTAFlow(t *testing.T) {
 }
 
 func TestWaitOTAConfirmRejectsPendingOrDisconnected(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(otaStatus{
 			Board:            "esp-vocat",

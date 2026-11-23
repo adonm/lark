@@ -10,6 +10,7 @@ import (
 // companion's device, and the state line must say what it is and how listening
 // actually works.
 func TestTurnPromptListsOwnOnlineHardwareTerminal(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	own := testConnectWS(t, base, "unit", false)
 	own.helloHardware(t, "vocat-33d8", "Cake", capBattery|capDrag)

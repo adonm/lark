@@ -10,6 +10,7 @@ import (
 )
 
 func TestCLIAdminCommands(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, nil)
 	c := &cliClient{base: base, token: "unit", http: &http.Client{}}
 
@@ -57,6 +58,7 @@ func TestCLIAdminCommands(t *testing.T) {
 }
 
 func TestStatusReportsLibraryPacks(t *testing.T) {
+	t.Parallel()
 	_, base := wsHarness(t, func(b *larkServer, _ string) {
 		if err := os.MkdirAll(b.library, 0o700); err != nil {
 			t.Fatal(err)

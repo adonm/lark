@@ -6,6 +6,7 @@ import (
 )
 
 func TestCaptureTransitions(t *testing.T) {
+	t.Parallel()
 	type step struct {
 		event string
 		phase capturePhase

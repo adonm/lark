@@ -55,6 +55,7 @@ func dcTestHarness(t *testing.T) (*larkServer, string, *stubDCRPC) {
 }
 
 func TestDeltaChatVerifiedTextAndNonContactIgnored(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
@@ -100,6 +101,7 @@ func TestDeltaChatVerifiedTextAndNonContactIgnored(t *testing.T) {
 }
 
 func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
@@ -143,6 +145,7 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 }
 
 func TestDeltaChatIntercomBetweenCompanions(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
@@ -186,6 +189,7 @@ func TestDeltaChatIntercomBetweenCompanions(t *testing.T) {
 }
 
 func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	var sttCalled bool
 	b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
@@ -235,6 +239,7 @@ func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 }
 
 func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	var spoken []string
 	var spokenMu sync.Mutex
@@ -304,6 +309,7 @@ func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
 }
 
 func TestDeltaChatSilentReplyProducesNeitherChatNorSpeech(t *testing.T) {
+	t.Parallel()
 	b, base, _ := listenHarness(t, func(string) string { return "[silent]" })
 	dcStub := newStubDCRPC()
 	b.dc = newDCService(b, "", t.TempDir(), "nine.testrun.org")
@@ -359,6 +365,7 @@ func TestDeltaChatSilentReplyProducesNeitherChatNorSpeech(t *testing.T) {
 }
 
 func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	ttsCh := make(chan string, 4)
 	b.worker = &synthWorker{requests: make(chan ttsRequest)}
@@ -416,6 +423,7 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 }
 
 func TestEmitSaySpeaksOnTerminal(t *testing.T) {
+	t.Parallel()
 	b, base, _ := dcTestHarness(t)
 	ttsCh := make(chan string, 4)
 	b.worker = &synthWorker{requests: make(chan ttsRequest)}
@@ -453,6 +461,7 @@ func TestEmitSaySpeaksOnTerminal(t *testing.T) {
 }
 
 func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	b.worker = &synthWorker{requests: make(chan ttsRequest)}
 	b.worker.ready.Store(true)
@@ -497,6 +506,7 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 }
 
 func TestStateExposesContacts(t *testing.T) {
+	t.Parallel()
 	b, base, stub := dcTestHarness(t)
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
 	if err != nil {
@@ -534,6 +544,7 @@ func TestStateExposesContacts(t *testing.T) {
 }
 
 func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
+	t.Parallel()
 	stub := newStubDCRPC()
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -676,6 +687,7 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 }
 
 func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
+	t.Parallel()
 	b, _, _ := dcTestHarness(t)
 	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"}); err != nil {
 		t.Fatal(err)
@@ -702,6 +714,7 @@ func TestRecentDialogueIncludesChannelAndSender(t *testing.T) {
 }
 
 func TestDeltaChatSlashCommands(t *testing.T) {
+	t.Parallel()
 	var prompts []string
 	var promptsMu sync.Mutex
 	b, base, _ := listenHarness(t, func(prompt string) string {
@@ -818,6 +831,7 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 }
 
 func TestDeltaChatDeleteForgetsAccountAndWelcome(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
 	if err != nil {
@@ -877,6 +891,7 @@ func TestDeltaChatDeleteForgetsAccountAndWelcome(t *testing.T) {
 }
 
 func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
 	if err != nil {
@@ -922,6 +937,7 @@ func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
 }
 
 func TestDeltaChatStoryImportAndExport(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
 	if err != nil {
@@ -988,6 +1004,7 @@ func TestDeltaChatStoryImportAndExport(t *testing.T) {
 }
 
 func TestDCIntercomMatchesRenamedPeer(t *testing.T) {
+	t.Parallel()
 	b, _, stub := dcTestHarness(t)
 	qa1, err := b.createCompanion(t.Context(), object{"id": "qa1", "name": "qa1", "form": "cat"})
 	if err != nil {

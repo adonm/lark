@@ -11,6 +11,7 @@ import (
 )
 
 func TestWhisperMelZeroAlloc(t *testing.T) {
+	serial(t)
 	m := newWhisperMel()
 	pcm := make([]byte, sampleRate*2*2) // 2s
 	out := make([]float32, smartTurnMels*smartTurnFrames)
@@ -23,6 +24,7 @@ func TestWhisperMelZeroAlloc(t *testing.T) {
 }
 
 func TestSmartTurnModelSmoke(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip(err)
@@ -73,6 +75,7 @@ func TestSmartTurnModelSmoke(t *testing.T) {
 }
 
 func TestSmartTurnEndpointPolicy(t *testing.T) {
+	t.Parallel()
 	var calls atomic.Int32
 	var inflight atomic.Int32
 	var smart condSignal
@@ -188,6 +191,7 @@ func (*alwaysSpeechVAD) detect([]byte) bool { return true }
 func (*alwaysSpeechVAD) close()             {}
 
 func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
+	t.Parallel()
 	// 1. Policy-level: VAD stuck in speech on low-level noise still commits at cap.
 	var p endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
@@ -265,6 +269,7 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 }
 
 func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
+	t.Parallel()
 	var clips atomic.Int32
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.endpoint = &endpointSettings{
@@ -327,6 +332,7 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 }
 
 func TestEndpointNoiseNeverFormsWordsDiscards(t *testing.T) {
+	t.Parallel()
 	var p endpointPolicy
 	// A second of room noise teaches the floor that this level is not speech.
 	for i := range 50 {
@@ -357,6 +363,7 @@ func TestEndpointNoiseNeverFormsWordsDiscards(t *testing.T) {
 }
 
 func TestEndpointIncompleteTrailingWaitsForCap(t *testing.T) {
+	t.Parallel()
 	var sttCalls atomic.Int32
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.endpoint = &endpointSettings{
@@ -417,6 +424,7 @@ func TestEndpointIncompleteTrailingWaitsForCap(t *testing.T) {
 }
 
 func TestEndpointProbeAllocs(t *testing.T) {
+	serial(t)
 	var p endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
 	p.observeProgress(250*time.Millisecond, "What is two", false)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestMCPSchemaHash(t *testing.T) {
+	t.Parallel()
 	original := hashMCPSchema(mcpTools, mcpInstructions, mcpRuntimeContract, "")
 	if raw, err := hex.DecodeString(original); err != nil || len(raw) != 32 || original != hashMCPSchema(mcpTools, mcpInstructions, mcpRuntimeContract, "") {
 		t.Fatal("schema hash is not a deterministic SHA-256 hex digest")

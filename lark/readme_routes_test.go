@@ -11,6 +11,7 @@ import (
 )
 
 func TestREADMERoutesRegistered(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +70,7 @@ func TestREADMERoutesRegistered(t *testing.T) {
 // TestREADMEListsEveryRoute guards the other direction: a route the server
 // registers must appear in README's API table.
 func TestREADMEListsEveryRoute(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
 	if err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 )
 
 func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)
 		t.Cleanup(b.timers.close)
@@ -34,6 +35,7 @@ func TestMCPTimerUpdatePreservesIdentity(t *testing.T) {
 }
 
 func TestMCPHistoryCursor(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	const id = "cake"
 	board := testConnectWS(t, base, "unit", false)
@@ -58,6 +60,7 @@ func TestMCPHistoryCursor(t *testing.T) {
 }
 
 func TestMCPEmitReceipts(t *testing.T) {
+	t.Parallel()
 	b, base := wsHarness(t, nil)
 	cake := testConnectWS(t, base, "unit", false)
 	cake.hello(t, "vocat-0001", "Cake")

@@ -7,6 +7,7 @@ import (
 )
 
 func TestParakeetClipInput(t *testing.T) {
+	t.Parallel()
 	voiced := []byte{0, 128, 0, 64}
 	samples := parakeetSamples(voiced)
 	pad := sampleRate * 150 / 1000
@@ -27,6 +28,7 @@ func TestParakeetClipInput(t *testing.T) {
 }
 
 func TestParakeetText(t *testing.T) {
+	t.Parallel()
 	for input, want := range map[string]string{
 		"  Start a timer for 90 seconds.  ":                         "Start a timer for 90 seconds.",
 		"See you soon, SUBTITLES BY THE AMARA.ORG COMMUNITY.":       "See you soon",
@@ -40,6 +42,7 @@ func TestParakeetText(t *testing.T) {
 }
 
 func TestParakeetRejectsWrongModel(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), parakeetModel)
 	if err := checkParakeetModel(path); err == nil {
 		t.Fatal("accepted missing model")

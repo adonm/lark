@@ -10,6 +10,7 @@ import (
 )
 
 func TestPixelCanvasExactIntegerScaling(t *testing.T) {
+	t.Parallel()
 	c := newPixelCanvas(4, 3)
 	colors := []imagecolor.RGBA{
 		{255, 0, 0, 255},
@@ -44,6 +45,7 @@ func TestPixelCanvasExactIntegerScaling(t *testing.T) {
 }
 
 func TestPixelTextWrapAndEllipsis(t *testing.T) {
+	t.Parallel()
 	// At scale 2, VoCat safe width is 84*3 = 252 px (with 8px padding each side -> 236 px).
 	lines := wrapTextPx("Message from Mum: dinner's ready in five minutes!", dogica.Regular, 2, 160)
 	if len(lines) < 2 {
@@ -72,6 +74,7 @@ func TestPixelTextWrapAndEllipsis(t *testing.T) {
 }
 
 func TestPortraitQuantizationMax32Colors(t *testing.T) {
+	t.Parallel()
 	sheet := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))
 	bg := imagecolor.RGBA{240, 235, 250, 255}
 	for y := range portraitSheetSide {

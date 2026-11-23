@@ -16,6 +16,7 @@ import (
 )
 
 func TestCaptureAPIWritesLocalWAV(t *testing.T) {
+	serial(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	b, base := wsHarness(t, func(b *larkServer, _ string) { b.endpoint = testEndpointSettings() })
 	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
@@ -116,6 +117,7 @@ func waitCaptureListItem(t *testing.T, base, token, name string) object {
 }
 
 func TestRemoteCaptureSSEAndRESTLifecycle(t *testing.T) {
+	serial(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	h := newRemoteHarness(t)
 	b := h.b
@@ -244,6 +246,7 @@ done:
 func wavPathForTest(name string) string { return filepath.Join(debugCaptureDir(), name) }
 
 func TestRemoteCaptureAuthValidationAndTraversal(t *testing.T) {
+	serial(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	h := newRemoteHarness(t)
 	remoteHTTP(t, http.MethodPost, h.base, "wrong", "/remote/api/capture", object{"seconds": 15}, 401)
@@ -271,6 +274,7 @@ func TestRemoteCaptureAuthValidationAndTraversal(t *testing.T) {
 }
 
 func TestWriteCaptureWAVCleansUpOnError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "already-a-directory")
 	if err := os.Mkdir(target, 0o700); err != nil {

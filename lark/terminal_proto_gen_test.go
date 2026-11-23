@@ -11,6 +11,7 @@ import (
 // it with the generated Go codec and encoding it again must reproduce the
 // exact bytes; firmware/tests/proto_test.c checks the same fixtures in C.
 func TestGeneratedProtoFixtures(t *testing.T) {
+	t.Parallel()
 	if len(protospec.Fixtures) == 0 {
 		t.Fatal("no fixtures")
 	}
@@ -138,6 +139,7 @@ func TestGeneratedProtoFixtures(t *testing.T) {
 }
 
 func TestGeneratedProtoRejectsShortPayloads(t *testing.T) {
+	t.Parallel()
 	for _, f := range protospec.Fixtures {
 		f := f
 		if len(f.Bytes) == 0 {

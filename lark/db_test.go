@@ -22,6 +22,7 @@ func testDB(t *testing.T, path string) *larkDB {
 }
 
 func TestDailyBackupIncludesWALAndPrunes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	d := testDB(t, filepath.Join(root, "lark.db"))
 	dir := filepath.Join(root, "it's backed up")
@@ -89,6 +90,7 @@ func writeMap(path string, value any) error {
 }
 
 func TestSQLiteWALMmapAndConcurrentPool(t *testing.T) {
+	t.Parallel()
 	d := testDB(t, filepath.Join(t.TempDir(), "lark.db"))
 
 	var journal, tempStore string
@@ -166,6 +168,7 @@ func (o *openCode) save(device, sid string) error {
 }
 
 func TestListeningBoolMigratesFromSeconds(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lark.db")
 	d, err := openLarkDB(t.Context(), path)
 	if err != nil {
@@ -200,6 +203,7 @@ func TestListeningBoolMigratesFromSeconds(t *testing.T) {
 }
 
 func TestVolumePrefsMigrateToManualOnly(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lark.db")
 	d, err := openLarkDB(t.Context(), path)
 	if err != nil {
@@ -230,6 +234,7 @@ func TestVolumePrefsMigrateToManualOnly(t *testing.T) {
 }
 
 func TestRetiredTimerColumnIsDropped(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lark.db")
 	d, err := openLarkDB(t.Context(), path)
 	if err != nil {
