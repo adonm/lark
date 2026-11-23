@@ -35,7 +35,7 @@ import (
 // books on disk, and a small pinned downloader. No services, no vectors.
 
 const (
-	libraryMaxText    = 64 << 10 // Cap stored article text.
+	libraryMaxText    = 24 << 10 // Cap stored article text.
 	libraryReadChunk  = 3200     // Characters returned per read section.
 	libraryReadMax    = 4000     // Hard ceiling for one read.
 	librarySnippet    = 240
@@ -1908,6 +1908,15 @@ var wikiExternal = regexp.MustCompile(`\[(?:https?|ftp)://[^\s\]]+(?:\s+([^\]]*)
 var wikiHeading = regexp.MustCompile(`(?m)^={2,6}\s*(.*?)\s*={2,6}\s*$`)
 var wikiMagic = regexp.MustCompile(`__[A-Z]+__`)
 
+func wikiTailHeading(line string) bool {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "references", "external links", "see also", "notes", "further reading",
+		"bibliography", "sources", "citations", "footnotes", "gallery", "media":
+		return true
+	}
+	return false
+}
+
 // wikiPlainText is deliberately simple: drop templates, tables, files, and
 // references, keep link labels and prose. Good enough for retrieval and read.
 func wikiPlainText(source string) string {
@@ -1951,6 +1960,9 @@ func wikiPlainText(source string) string {
 		}
 		line = wikiHeading.ReplaceAllString(line, "$1")
 		line = strings.TrimLeft(line, "*#:; ")
+		if wikiTailHeading(line) {
+			break
+		}
 		out.WriteString(line)
 		out.WriteByte('\n')
 	}
