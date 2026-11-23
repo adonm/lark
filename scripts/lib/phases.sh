@@ -57,6 +57,8 @@ phase_c_host() {
     "${host_cc[@]}" firmware/tests/net_logic_test.c firmware/main/net_logic.c -o "$host_tests/net_logic"
     "$host_tests/net_logic"
 
+    "${host_cc[@]}" firmware/tests/telemetry_logic_test.c firmware/main/telemetry_logic.c -o "$host_tests/telemetry_logic" && "$host_tests/telemetry_logic"
+
     "${host_cc[@]}" firmware/tests/audio_logic_test.c firmware/main/audio_logic.c -o "$host_tests/audio_logic"
     "$host_tests/audio_logic"
 

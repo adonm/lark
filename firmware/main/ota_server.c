@@ -149,35 +149,6 @@ static esp_err_t reboot_post(httpd_req_t *request)
     return respond_and_reboot(request, "Rebooting\n");
 }
 
-static const char *skip_ws(const char *p)
-{
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
-    return p;
-}
-
-static bool parse_volume_level(const char *s, int *out)
-{
-    const char *p = skip_ws(s);
-    if (*p++ != '{') return false;
-    p = skip_ws(p);
-    if (strncmp(p, "\"level\"", 7) != 0) return false;
-    p = skip_ws(p + 7);
-    if (*p++ != ':') return false;
-    p = skip_ws(p);
-    if (*p < '0' || *p > '9') return false;
-    int value = 0;
-    while (*p >= '0' && *p <= '9') {
-        value = value * 10 + (*p++ - '0');
-        if (value > 100) return false;
-    }
-    p = skip_ws(p);
-    if (*p++ != '}') return false;
-    p = skip_ws(p);
-    if (*p != '\0') return false;
-    *out = value;
-    return true;
-}
-
 static esp_err_t volume_post(httpd_req_t *request)
 {
     char body[64];
@@ -191,7 +162,7 @@ static esp_err_t volume_post(httpd_req_t *request)
     }
     body[bytes] = '\0';
     int value = -1;
-    if (!parse_volume_level(body, &value)) {
+    if (!debug_parse_level(body, &value)) {
         return text_response(request, "400 Bad Request", "Expected an integer level from 0 to 100\n");
     }
     if (audio_set_volume(value) != ESP_OK) {
@@ -220,7 +191,10 @@ static esp_err_t ota_pull_post(httpd_req_t *request)
 {
     char url[256];
     if (!strncmp(CONFIG_LARK_URL, "http://", 7) || !strncmp(CONFIG_LARK_URL, "https://", 8)) {
-        snprintf(url, sizeof(url), "%s%s", CONFIG_LARK_URL, BOARD_OTA_PATH);
+        int len = snprintf(url, sizeof(url), "%s%s", CONFIG_LARK_URL, BOARD_OTA_PATH);
+        if (len < 0 || (size_t)len >= sizeof(url)) {
+            return text_response(request, "500 Internal Server Error", "OTA URL too large\n");
+        }
     } else {
         char host[128];
         uint16_t unused_port = 0;
@@ -341,6 +315,9 @@ static esp_err_t debug_tap_post(httpd_req_t *request)
 static esp_err_t debug_mic_post(httpd_req_t *request)
 {
     size_t total = request->content_len;
+    // Invalidate any previously committed buffer even when this body is
+    // rejected, so a stale sample never plays after a failed upload.
+    uint32_t gen = media_debug_mic_begin();
     if (!debug_mic_len_valid(total, DEBUG_MIC_MAX_BYTES)) {
         return text_response(request, "400 Bad Request", "Expected 1..320000 even bytes of 16 kHz mono PCM\n");
     }
@@ -350,10 +327,12 @@ static esp_err_t debug_mic_post(httpd_req_t *request)
         size_t want = total - offset < sizeof(chunk) ? total - offset : sizeof(chunk);
         int got = httpd_req_recv(request, (char *)chunk, want);
         if (got <= 0) {
+            media_debug_mic_abort(gen);
             return text_response(request, "408 Request Timeout", "Incomplete PCM body\n");
         }
         bool last = offset + (size_t)got == total;
-        if (!media_debug_mic_load(offset, chunk, (size_t)got, total, last)) {
+        if (!media_debug_mic_load(gen, offset, chunk, (size_t)got, total, last)) {
+            media_debug_mic_abort(gen);
             return text_response(request, "503 Service Unavailable", "Debug mic buffer unavailable\n");
         }
         offset += (size_t)got;
@@ -432,18 +411,22 @@ esp_err_t ota_server_start(void)
 void ota_check_boot(int64_t boot_us)
 {
     if (!pending_verification()) return;
-    // Roll back if the bridge never completes HELLO_OK within 45 s of boot.
+    // Roll back only if the bridge never completes HELLO_OK within 45 s of
+    // boot. Audio init is logged but not fatal: a codec fault must not roll
+    // back every image forever.
+    if (!media_audio_ready()) {
+        ESP_LOGE(TAG, "Audio unavailable at OTA health check; continuing without rollback");
+    }
     int64_t remaining_us = 45 * 1000000LL - (esp_timer_get_time() - boot_us);
-    if (media_audio_ready() &&
-        (net_client_connected() || (remaining_us > 0 && net_client_wait_connected((uint32_t)(remaining_us / 1000))))) {
+    if ((net_client_connected() || (remaining_us > 0 && net_client_wait_connected((uint32_t)(remaining_us / 1000))))) {
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Confirmed OTA image after bridge hello and audio initialization");
+            ESP_LOGI(TAG, "Confirmed OTA image after bridge hello");
             return;
         }
         ESP_LOGE(TAG, "Confirm OTA image: %s", esp_err_to_name(err));
     }
-    ESP_LOGE(TAG, "OTA boot health check failed (audio=%d, bridge=%d)", media_audio_ready(), net_client_connected());
+    ESP_LOGE(TAG, "OTA boot health check failed (bridge=%d)", net_client_connected());
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     ESP_LOGE(TAG, "Roll back OTA image: %s", esp_err_to_name(err));
     // USB flashes may have no known-good OTA image. Keep local recovery reachable.

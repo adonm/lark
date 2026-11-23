@@ -1,5 +1,7 @@
 #include "telemetry.h"
 
+#include "telemetry_logic.h"
+
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -9,27 +11,43 @@
 static portMUX_TYPE cpu_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint64_t sampled_us, idle_us;
 static unsigned cpu_pct;
+static bool sampling;
 struct telemetry_io telemetry_io;
 
 static unsigned sample_cpu(uint64_t *uptime_us)
 {
-    portENTER_CRITICAL(&cpu_lock);
     uint64_t now = esp_timer_get_time();
-    uint64_t elapsed = now - sampled_us;
-    // Share a five-second minimum sample window between HTTP and bridge readers.
-    if (elapsed && (!sampled_us || elapsed >= 5000000)) {
+    uint64_t previous_sampled = 0, previous_idle = 0;
+    bool due = false;
+    unsigned result = 0;
+    portENTER_CRITICAL(&cpu_lock);
+    result = cpu_pct;
+    // Share a five-second minimum sample window between HTTP and bridge readers;
+    // one reader computes while the other returns the last value.
+    if (!sampling && (!sampled_us || now - sampled_us >= 5000000)) {
+        due = true;
+        sampling = true;
+        previous_sampled = sampled_us;
+        previous_idle = idle_us;
+        sampled_us = now;
+    }
+    portEXIT_CRITICAL(&cpu_lock);
+
+    if (due) {
+        // Idle-run-time counters are sampled outside the lock, where they
+        // cannot block an ISR or another status reader.
         uint64_t idle = 0;
         for (int core = 0; core < configNUMBER_OF_CORES; ++core) {
             idle += ulTaskGetIdleRunTimeCounterForCore(core);
         }
-        uint64_t capacity = elapsed * configNUMBER_OF_CORES;
-        uint64_t idle_delta = idle - idle_us;
-        cpu_pct = idle_delta >= capacity ? 0 : ((capacity - idle_delta) * 100 + capacity / 2) / capacity;
-        sampled_us = now;
+        uint64_t idle_delta = idle >= previous_idle ? idle - previous_idle : 0;
+        result = telemetry_cpu_pct((now - previous_sampled) * configNUMBER_OF_CORES, idle_delta);
+        portENTER_CRITICAL(&cpu_lock);
         idle_us = idle;
+        cpu_pct = result;
+        sampling = false;
+        portEXIT_CRITICAL(&cpu_lock);
     }
-    unsigned result = cpu_pct;
-    portEXIT_CRITICAL(&cpu_lock);
     *uptime_us = now;
     return result;
 }
@@ -53,6 +71,7 @@ telemetry_t telemetry_read(void)
         .audio_drops = atomic_load_explicit(&telemetry_io.audio_drops, memory_order_relaxed),
         .rec_start_us = atomic_load_explicit(&telemetry_io.rec_start_us, memory_order_relaxed),
         .tts_first_us = atomic_load_explicit(&telemetry_io.tts_first_us, memory_order_relaxed),
+        .tts_gap_ms = atomic_load_explicit(&telemetry_io.tts_gap_ms, memory_order_relaxed),
         .ptr_send_us = atomic_load_explicit(&telemetry_io.ptr_send_us, memory_order_relaxed),
         .frame_flush_us = atomic_load_explicit(&telemetry_io.frame_flush_us, memory_order_relaxed),
         .tts_rms = atomic_load_explicit(&telemetry_io.tts_rms, memory_order_relaxed),
