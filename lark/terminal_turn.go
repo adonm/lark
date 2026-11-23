@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	micPrefix    = 0x01
-	pcmPrefix    = 0x02
-	pcmPacket    = 4 << 10
-	maxAudioLead = 8 * time.Second
-	recStopWait  = 450 * time.Millisecond
+	micPrefix      = 0x01
+	pcmPrefix      = 0x02
+	pcmPacket      = 4 << 10
+	maxAudioLead   = 8 * time.Second
+	recStopWait    = 450 * time.Millisecond
+	deviceReplyTTL = 2 * time.Minute
 )
 
 func recordTarget(s string) (string, bool) {
@@ -40,7 +41,6 @@ func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, requ
 		h.cancelTurn(d, "recording")
 	}
 	d.drawer, d.card, d.pending, d.view = "", nil, nil, nil
-	d.replyTo = ""
 	if !bridgeEndpoint || d.ttsStarted || d.awaitAck {
 		h.stopPlayback(d, true)
 	}
@@ -139,7 +139,6 @@ func (h *wsHub) tryStoryVoiceChoice(d *wsTerminal, turnID uint64, text string) b
 
 func (h *wsHub) stopListeningWindow(d *wsTerminal, now time.Time) {
 	if d.recording.active() && d.recording.listen {
-		d.replyTo = ""
 		h.recordingControl(d, now, true)
 	}
 }
@@ -498,6 +497,7 @@ func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, te
 		return
 	}
 	if direct != nil {
+		h.consumeReply(d, ch.reply)
 		h.b.chat(sender.ID, newChat("user", "You", text, source), true)
 		h.sendIntercom(ctx, d, id, others, direct.target, direct.text, pcm)
 		return
@@ -506,18 +506,48 @@ func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, te
 		h.turnError(d, id, "Chat is not ready yet.")
 		return
 	}
+	// Consume the read-out context now: its reply is this turn, even if the
+	// model fails or the child interrupts playback.
+	h.consumeReply(d, ch.reply)
 	gen, err := h.b.generateReply(ctx, ctx, sender, text, turnOptions{source: source, channel: ch, spec: ch.spec,
 		publish: func(stream *AudioStream, start time.Time) { h.publish(d, id, ctx, stream, start) }})
 	if err != nil {
 		h.turnError(d, id, "Could not finish that turn.")
 		return
 	}
+	h.deliverDeviceReply(ctx, ch.reply, gen)
 	var view *sceneView
 	if gen.reply != "" && ctx.Err() == nil {
 		v := noticeScene("Answer", shortText(gen.reply, maxMessage, true))
 		view = &v
 	}
 	h.finishTurn(d, id, view, gen.audio)
+}
+
+// deliverDeviceReply sends a spoken reply back to the Delta Chat chat whose
+// message the device read out. It is skipped when the agent routed the turn
+// with emit, so an explicit target always wins.
+func (h *wsHub) deliverDeviceReply(ctx context.Context, reply *turnReply, gen generatedReply) {
+	if reply == nil || gen.reply == "" || gen.routed || ctx.Err() != nil {
+		return
+	}
+	if h.b.dc == nil || !h.b.dc.ready.Load() {
+		return
+	}
+	if err := h.b.dc.sendDeviceReply(ctx, reply.companionID, reply.chatID, gen.reply); err != nil {
+		log.Printf("Delta Chat reply error: %v", err)
+	}
+}
+
+func (h *wsHub) consumeReply(d *wsTerminal, reply *turnReply) {
+	if reply == nil {
+		return
+	}
+	h.mu.Lock()
+	if d.reply == reply {
+		d.reply, d.replyUntil = nil, time.Time{}
+	}
+	h.mu.Unlock()
 }
 
 func (h *wsHub) sendIntercom(ctx context.Context, d *wsTerminal, id uint64, others []companionTarget, target, text string, pcm []byte) {
@@ -786,7 +816,6 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time, aborted bool) {
 	if !aborted && h.startListeningWindow(d, now) {
 		return
 	}
-	d.replyTo = ""
 	h.render(d, now, false)
 }
 
@@ -815,14 +844,14 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 }
 
 type queuedNotice struct {
-	view    *sceneView
-	chime   string
-	voice   string
-	intro   string
-	text    string
-	stream  *AudioStream
-	replyTo string
-	trace   *turnTrace
+	view   *sceneView
+	chime  string
+	voice  string
+	intro  string
+	text   string
+	stream *AudioStream
+	reply  *turnReply
+	trace  *turnTrace
 }
 
 type terminalNotice struct {
@@ -835,7 +864,7 @@ type terminalNotice struct {
 	pcm          []byte
 	chime        string
 	showCard     bool
-	replyTo      string
+	reply        *turnReply
 	trace        *turnTrace
 }
 
@@ -917,14 +946,14 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 			stream = immediateStream
 		}
 		q := queuedNotice{
-			view:    view,
-			chime:   n.chime,
-			voice:   n.voice,
-			intro:   n.intro,
-			text:    speakText,
-			stream:  stream,
-			replyTo: n.replyTo,
-			trace:   n.trace,
+			view:   view,
+			chime:  n.chime,
+			voice:  n.voice,
+			intro:  n.intro,
+			text:   speakText,
+			stream: stream,
+			reply:  n.reply,
+			trace:  n.trace,
 		}
 		if d.noticeBusy() {
 			// Queued notices synthesize their own stream when drained so they don't race or expire.
@@ -949,7 +978,10 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 
 func (h *wsHub) deliverNoticeNowLocked(d *wsTerminal, now time.Time, q queuedNotice) {
 	d.drawer, d.pending = "", nil
-	d.replyTo = q.replyTo
+	d.reply = q.reply
+	if q.reply != nil {
+		d.replyUntil = now.Add(deviceReplyTTL)
+	}
 	if q.view != nil {
 		d.view, d.card = q.view, nil
 	}

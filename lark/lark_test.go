@@ -52,7 +52,7 @@ func TestTurnHeaderNeverPutsCompanionInSpeakerPosition(t *testing.T) {
 	comp := companionState{companionLook: companionLook{Name: "greg", Configured: true}}
 	for _, ch := range []turnChannel{
 		{},
-		{replyTo: "Mum"},
+		{reply: &turnReply{name: "Mum"}},
 		{channel: "deltachat", sender: "Mum", senderKind: "contact"},
 		{channel: "deltachat", sender: "Mum", senderKind: "contact", private: true},
 	} {

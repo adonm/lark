@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,35 @@ const (
 
 	mcpInstructions = "Use exact companion IDs. state=snapshot, patch=update companion/terminal/memory/timer, story=Twee 3, library=instant books/facts, emit=Delta Chat/say/audio. Only final prose is spoken."
 )
+
+// emitTracker counts successful emit calls per companion so a device turn can
+// tell whether its reply was routed explicitly. A "" key counts emits whose
+// actor cannot be attributed (broadcast say) and suppresses every turn.
+type emitTracker struct {
+	mu  sync.Mutex
+	seq map[string]uint64
+}
+
+func (t *emitTracker) note(ids ...string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.seq == nil {
+		t.seq = make(map[string]uint64)
+	}
+	for _, id := range ids {
+		t.seq[id]++
+	}
+}
+
+func (t *emitTracker) mark(companionID string) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.seq[companionID] + t.seq[""]
+}
+
+func (t *emitTracker) routed(base uint64, companionID string) bool {
+	return t.mark(companionID) != base
+}
 
 type rpcRequest struct {
 	Version string          `json:"jsonrpc"`
@@ -226,7 +256,7 @@ var mcpTools = func() []object {
 				"source": enum("auto", "simple", "enwiki", "gutenberg"), "title": text, "ref": text,
 				"section": object{"type": "integer", "minimum": 0}, "companion_id": text, "open": flag,
 				"limit": object{"type": "integer", "minimum": 1, "maximum": 200}}, "op")),
-		tool("emit", "Send Delta Chat intercom, speak aloud on terminals (say), or play notes/sfx/chime.",
+		tool("emit", "Send Delta Chat intercom (to: a contact name or ID from me.contacts), speak aloud on terminals (say), or play notes/sfx/chime.",
 			schema(object{"to": text, "say": text, "intercom": schema(object{"from": text, "text": text}, "from", "text"),
 				"notes": notes, "sfx": enum(chimes...), "chime": enum(chimes...)}, "to")),
 	}
@@ -371,9 +401,10 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 		return nil, problem(400, "Expected recipient name, companion ID, or all")
 	}
 	if _, hasIntercom := args["intercom"]; !hasIntercom && !validCompanionID(to) && to != "all" {
-		return nil, problem(400, "Expected exact companion ID or all")
+		return nil, problem(400, "Expected a companion ID or all; use intercom to reach a Delta Chat contact")
 	}
 	out := object{"ok": true, "to": to}
+	var actors []string
 	var pcm []byte
 	var kind string
 	var audioField string
@@ -410,6 +441,7 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 		if err != nil {
 			return nil, err
 		}
+		actors = append(actors, strings.ToLower(strings.TrimSpace(str(i["from"]))))
 		out["intercom"] = r
 		receipts = append(receipts, delivered...)
 	}
@@ -441,6 +473,15 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 	if len(out) == 2 {
 		return nil, problem(400, "Expected an action")
 	}
+	if _, hasIntercom := args["intercom"]; !hasIntercom {
+		// say/audio act as the target companion; "all" cannot be attributed.
+		if to == "all" {
+			actors = append(actors, "")
+		} else {
+			actors = append(actors, to)
+		}
+	}
+	b.emits.note(actors...)
 	out["receipts"] = receipts
 	return out, nil
 }

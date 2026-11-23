@@ -514,6 +514,18 @@ func (s *dcService) pairQR(companionID string) (string, error) {
 	return rpc.CreateQrSvg(qr)
 }
 
+// contactName is the name shown to agents in me.contacts for a Delta Chat
+// contact, so emit targets and read-out labels always match it.
+func (s *dcService) contactName(ct deltachat.Contact) string {
+	if name := strings.TrimSpace(ct.DisplayName); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(ct.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(ct.Address)
+}
+
 func (s *dcService) listPairedContacts(companionID string) ([]dcContact, error) {
 	rpc := s.getRPC()
 	if rpc == nil {
@@ -535,14 +547,7 @@ func (s *dcService) listPairedContacts(companionID string) ([]dcContact, error) 
 		if _, isPeer := s.companionByAddr(ct.Address); isPeer {
 			continue
 		}
-		name := strings.TrimSpace(ct.DisplayName)
-		if name == "" {
-			name = strings.TrimSpace(ct.Name)
-		}
-		if name == "" {
-			name = ct.Address
-		}
-		out = append(out, dcContact{ID: ct.Id, Name: name, Address: ct.Address, IsBot: ct.IsBot})
+		out = append(out, dcContact{ID: ct.Id, Name: s.contactName(ct), Address: ct.Address, IsBot: ct.IsBot})
 	}
 	slices.SortFunc(out, func(a, b dcContact) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
 	return out, nil
@@ -573,13 +578,7 @@ func (s *dcService) listAllContacts(companionID string) ([]dcContactInfo, error)
 		if ct.Id == deltachat.ContactSelf || ct.IsBlocked {
 			continue
 		}
-		name := strings.TrimSpace(ct.DisplayName)
-		if name == "" {
-			name = strings.TrimSpace(ct.Name)
-		}
-		if name == "" {
-			name = ct.Address
-		}
+		name := s.contactName(ct)
 		kind := "human"
 		id := ""
 		if peerID, isPeer := s.companionByAddr(ct.Address); isPeer {
@@ -612,6 +611,26 @@ func (s *dcService) unpairContact(companionID string, contactID uint32) error {
 	return rpc.DeleteContact(accID, contactID)
 }
 
+// contactMatches reports whether target names this contact exactly as
+// me.contacts shows it: display name, address-book name, address, or for a
+// companion peer its current ID and renamed name.
+func (s *dcService) contactMatches(ct deltachat.Contact, target string) bool {
+	names := []string{
+		strings.ToLower(strings.TrimSpace(ct.DisplayName)),
+		strings.ToLower(strings.TrimSpace(ct.Name)),
+		strings.ToLower(strings.TrimSpace(ct.Address)),
+	}
+	if peerID, isPeer := s.companionByAddr(ct.Address); isPeer {
+		names = append(names, strings.ToLower(peerID))
+		if s.b != nil {
+			if peer, ok := s.b.companionByID(peerID); ok {
+				names = append(names, strings.ToLower(strings.TrimSpace(peer.Name)))
+			}
+		}
+	}
+	return slices.ContainsFunc(names, func(name string) bool { return name != "" && name == target })
+}
+
 func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetName, text string, pcm16k []byte) ([]string, error) {
 	rpc := s.getRPC()
 	if rpc == nil {
@@ -631,34 +650,14 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 		if ct.Id == deltachat.ContactSelf || !ct.IsVerified || ct.IsBlocked {
 			continue
 		}
-		peerID, isPeer := s.companionByAddr(ct.Address)
 		if targetLower == "all" {
-			if isPeer {
+			if _, isPeer := s.companionByAddr(ct.Address); isPeer {
 				matched = append(matched, ct)
 			}
 			continue
 		}
-		name := strings.ToLower(strings.TrimSpace(ct.DisplayName))
-		alt := strings.ToLower(strings.TrimSpace(ct.Name))
-		peerName := ""
-		if isPeer && s.b != nil {
-			if pc, ok := s.b.companionByID(peerID); ok {
-				peerName = strings.ToLower(strings.TrimSpace(pc.Name))
-			}
-		}
-		if (isPeer && (peerID == targetLower || peerName == targetLower)) || name == targetLower || alt == targetLower {
+		if s.contactMatches(ct, targetLower) {
 			matched = append(matched, ct)
-		}
-	}
-	if len(matched) == 0 && targetLower != "all" {
-		for _, ct := range contacts {
-			if ct.Id == deltachat.ContactSelf || !ct.IsVerified || ct.IsBlocked {
-				continue
-			}
-			name := strings.ToLower(strings.TrimSpace(ct.DisplayName))
-			if strings.Contains(name, targetLower) {
-				matched = append(matched, ct)
-			}
 		}
 	}
 	if len(matched) == 0 {
@@ -695,7 +694,7 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 			msg.Viewtype = &vt
 		}
 		if _, err := rpc.SendMsg(accID, chatID, msg); err == nil {
-			label := ct.DisplayName
+			label := s.contactName(ct)
 			if peerID, isPeer := s.companionByAddr(ct.Address); isPeer {
 				label = peerID
 			}
@@ -706,6 +705,32 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 		s.b.chat(fromCompanionID, newChat("companion", sender.Name, text, "intercom"), true)
 	}
 	return sentTo, nil
+}
+
+// sendDeviceReply delivers a reply spoken at the device back into the Delta
+// Chat chat its message was read from. The chat ID is captured at read-out so
+// this keeps working for group chats and renamed contacts.
+func (s *dcService) sendDeviceReply(ctx context.Context, companionID string, chatID uint32, text string) error {
+	rpc := s.getRPC()
+	if rpc == nil || chatID == 0 {
+		return errors.New("Delta Chat unavailable")
+	}
+	accID := s.accountForCompanion(companionID)
+	if accID == 0 {
+		return errors.New("Companion has no Delta Chat account")
+	}
+	text = shortText(text, maxMessage, true)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	out := deltachat.MessageData{Text: &text}
+	if _, err := rpc.SendMsg(accID, chatID, out); err != nil {
+		return err
+	}
+	if s.b != nil {
+		s.b.chat(companionID, newChat("companion", s.b.companionFor(companionID).Name, text, "deltachat"), true)
+	}
+	return nil
 }
 
 func (s *dcService) companionForAccount(ctx context.Context, accID uint32) string {
@@ -837,7 +862,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		}
 		sender := s.b.companionFor(peerID)
 		if s.b.ws != nil {
-			s.b.ws.deliverDCIntercom(ctx, sender, companionID, msg.Text, pcm)
+			s.b.ws.deliverDCIntercom(ctx, sender, companionID, msg.ChatId, msg.Text, pcm)
 		}
 		return
 	}
@@ -885,7 +910,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
 				return
 			}
-			s.b.sayOnCompanion(ctx, companionID, senderName, arg)
+			s.b.sayOnCompanion(ctx, companionID, senderName, msg.ChatId, arg)
 			ack := "Said it."
 			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &ack}); err != nil {
 				log.Printf("Delta Chat SendMsg error: %v", err)
@@ -975,7 +1000,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			voice:        s.b.voiceFor(companionID),
 			chime:        "intercom",
 			showCard:     true,
-			replyTo:      senderName,
+			reply:        &turnReply{name: senderName, companionID: companionID, chatID: msg.ChatId},
 			trace:        traceFrom(turnCtx),
 		})
 	}
@@ -1027,7 +1052,6 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			speakText:    "I told " + senderName + ": " + reply,
 			voice:        s.b.voiceFor(companionID),
 			showCard:     true,
-			replyTo:      senderName,
 			trace:        traceFrom(turnCtx),
 		})
 	}
@@ -1206,7 +1230,7 @@ func encodePCMToOpus(ctx context.Context, pcm []byte, rate int, outPath string) 
 	return nil
 }
 
-func (h *wsHub) deliverDCIntercom(ctx context.Context, sender companionState, recipientID, text string, pcm []byte) {
+func (h *wsHub) deliverDCIntercom(ctx context.Context, sender companionState, recipientID string, chatID uint32, text string, pcm []byte) {
 	if h == nil || h.b == nil {
 		return
 	}
@@ -1224,6 +1248,7 @@ func (h *wsHub) deliverDCIntercom(ctx context.Context, sender companionState, re
 		pcm:          pcm,
 		chime:        "intercom",
 		showCard:     true,
+		reply:        &turnReply{name: sender.Name, companionID: recipientID, chatID: chatID},
 		trace:        traceFrom(ctx),
 	})
 	if text != "" {

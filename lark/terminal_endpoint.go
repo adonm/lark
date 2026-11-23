@@ -29,7 +29,7 @@ type endpointCapture struct {
 	deadline    *time.Timer // Hub owns and stops the wall-clock watchdog.
 	commitAt    time.Time   // Hub writes before closing stop.
 	listen      bool
-	replyTo     string
+	reply       *turnReply
 	companionID string
 }
 
@@ -67,7 +67,7 @@ type captureResult struct {
 	vadQueue         time.Duration
 	hasEnd           bool
 	listen           bool
-	replyTo          string
+	reply            *turnReply
 	spec             *specTurn
 }
 
@@ -89,13 +89,14 @@ type smartTurnResult struct {
 func (h *wsHub) startEndpoint(d *wsTerminal) {
 	ctx, cancel := context.WithCancel(d.client.ctx)
 	limit := endpointLimit
-	var replyTo string
-	if d.recording.listen {
-		if d.recording.listenSpan > 0 {
-			limit = d.recording.listenSpan
-		}
-		replyTo = d.replyTo
-		d.replyTo = ""
+	var reply *turnReply
+	if d.recording.listen && d.recording.listenSpan > 0 {
+		limit = d.recording.listenSpan
+	}
+	// A read-out arms the reply for the next spoken turn, whether the child taps
+	// to talk or answers inside the listening window.
+	if d.reply != nil && time.Now().Before(d.replyUntil) {
+		reply = d.reply
 	}
 	free := make(chan int, endpointRingSlots)
 	for i := range endpointRingSlots {
@@ -112,7 +113,7 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 		result:      make(chan captureResult, 1),
 		listening:   make(chan struct{}),
 		listen:      d.recording.listen,
-		replyTo:     replyTo,
+		reply:       reply,
 		companionID: d.companionID,
 	}
 	d.recording.endpoint = c
@@ -222,7 +223,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 				if probeCancel != nil {
 					probeCancel()
 				}
-				result := captureResult{pcm: u.clip(), vadQueue: maxVADQueue, hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt), listen: c.listen, replyTo: c.replyTo}
+				result := captureResult{pcm: u.clip(), vadQueue: maxVADQueue, hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt), listen: c.listen, reply: c.reply}
 				if len(result.pcm) != 0 && (!c.listen || u.policy.voiced) && c.ctx.Err() == nil {
 					switch {
 					case cached.err == nil && cached.text != "" && !cached.windowed && lastGateOpenLen <= cached.audioLen:
@@ -373,7 +374,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 				lastGateOpenLen <= cached.audioLen && cached.text != specTriedText &&
 				smartTurnCheckedAt == u.policy.lastWordAt && smartTurnCh == nil && lastSmartTurnProb >= smartTurnSpeculateThreshold {
 				specTriedText = cached.text
-				spec = h.b.startSpeculate(c.companionID, cached.text, len(u.pcm), "voice", turnChannel{replyTo: c.replyTo})
+				spec = h.b.startSpeculate(c.companionID, cached.text, len(u.pcm), "voice", turnChannel{reply: c.reply})
 				if spec != nil {
 					h.b.diag.spec.started.Add(1)
 				}
@@ -456,7 +457,7 @@ func (h *wsHub) maybeStartVoice(d *wsTerminal, now time.Time) bool {
 			h.finishTurn(d, id, nil, nil)
 			return
 		}
-		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{replyTo: result.replyTo, spec: result.spec})
+		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{reply: result.reply, spec: result.spec})
 	})
 	return true
 }

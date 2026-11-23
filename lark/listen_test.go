@@ -264,7 +264,7 @@ func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 		voice:        b.voiceFor(cid),
 		chime:        "intercom",
 		showCard:     true,
-		replyTo:      "Mum",
+		reply:        &turnReply{name: "Mum"},
 	})
 
 	end := hw.until(t, func(f wsFrame) bool {

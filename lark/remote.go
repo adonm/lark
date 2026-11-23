@@ -890,7 +890,7 @@ func (b *larkServer) remoteSay(r *http.Request, companionID string) (any, error)
 	if err != nil {
 		return nil, problem(400, err.Error())
 	}
-	b.sayOnCompanion(r.Context(), companionID, "Remote", clean)
+	b.sayOnCompanion(r.Context(), companionID, "Remote", 0, clean)
 	return remoteStateResponse(b, r.Context(), companionID, "Said it."), nil
 }
 
@@ -1127,14 +1127,14 @@ func (b *larkServer) remoteHistory(ctx context.Context, companionID string, quer
 
 // sayOnCompanion and previewVoiceOnCompanion are shared by the Delta Chat
 // commands and the remote page.
-func (b *larkServer) sayOnCompanion(ctx context.Context, companionID, senderName, words string) {
+func (b *larkServer) sayOnCompanion(ctx context.Context, companionID, senderName string, chatID uint32, words string) {
 	if b == nil {
 		return
 	}
 	who := b.companionFor(companionID)
 	b.chat(companionID, newChat("user", senderName, "/say "+words, "deltachat"), true)
 	if b.ws != nil {
-		b.ws.deliverNotice(ctx, terminalNotice{
+		n := terminalNotice{
 			recipientIDs: []string{companionID},
 			sender:       who,
 			text:         words,
@@ -1142,8 +1142,11 @@ func (b *larkServer) sayOnCompanion(ctx context.Context, companionID, senderName
 			voice:        b.voiceFor(companionID),
 			chime:        "intercom",
 			showCard:     true,
-			replyTo:      senderName,
-		})
+		}
+		if chatID != 0 {
+			n.reply = &turnReply{name: senderName, companionID: companionID, chatID: chatID}
+		}
+		b.ws.deliverNotice(ctx, n)
 	}
 }
 

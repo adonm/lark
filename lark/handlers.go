@@ -52,6 +52,7 @@ type larkServer struct {
 	companionTitles sync.Mutex
 	storyBGMu       sync.Mutex
 	storyBGInflight map[string]bool
+	emits           emitTracker // Successful emit calls, to detect explicit reply routing.
 }
 
 func (b *larkServer) location() *time.Location {
@@ -288,16 +289,26 @@ type delivery struct {
 }
 
 type generatedReply struct {
-	reply, sid string
-	audio      *AudioStream
-	ttsStart   time.Time
+	reply    string
+	sid      string
+	audio    *AudioStream
+	ttsStart time.Time
+	routed   bool // the turn called emit, so its reply already went somewhere explicit
+}
+
+// turnReply is the Delta Chat message a device read out. A spoken reply that
+// follows it goes back to the same chat unless the agent emits somewhere else.
+type turnReply struct {
+	name        string // sender name shown in the prompt
+	companionID string // companion whose Delta Chat account received the message
+	chatID      uint32 // chat to reply into, so groups and renames keep working
 }
 
 type turnChannel struct {
 	channel    string // "in_person", "deltachat", "timer"
 	sender     string
 	senderKind string // "contact", "companion"
-	replyTo    string // Delta Chat sender name when replying in listening mode
+	reply      *turnReply
 	private    bool
 	spec       *specTurn
 }
@@ -313,6 +324,7 @@ type specTurn struct {
 	text     string
 	audioLen int
 	started  time.Time
+	emitMark uint64 // emit sequence before the speculative model ran
 	cancel   context.CancelFunc
 
 	mu        sync.Mutex
@@ -352,6 +364,7 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 		text:     text,
 		audioLen: audioLen,
 		started:  time.Now(),
+		emitMark: b.emits.mark(companionID),
 		cancel:   cancel,
 		done:     make(chan specResult, 1),
 	}
@@ -533,8 +546,8 @@ func turnHeader(companionID, source string, companion companionState, ch turnCha
 		}
 	case ch.channel == "timer" || source == "timer":
 		prefix = fmt.Sprintf("You are %s (%s). Event: timer", companion.Name, companionID)
-	case ch.replyTo != "":
-		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · replying to %s (Delta Chat) · %s", companion.Name, companionID, ch.replyTo, source)
+	case ch.reply != nil && ch.reply.name != "":
+		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · replying to %s (Delta Chat) · %s", companion.Name, companionID, ch.reply.name, source)
 	default:
 		prefix = fmt.Sprintf("You are %s (%s). Speaker: someone in person at your device (name unknown) · %s", companion.Name, companionID, source)
 	}
@@ -761,9 +774,11 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		}
 		b.chat(sender.ID, entry, true)
 	}
+	emitBase := b.emits.mark(sender.ID)
 	var raw, sid string
 	var err error
 	if options.spec != nil {
+		emitBase = options.spec.emitMark
 		res := options.spec.promote(ctx, onSentence, pieces.tool, onChat)
 		raw, sid, err = res.reply, res.sid, res.err
 	} else {
@@ -776,9 +791,10 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		return generatedReply{}, err
 	}
 	reply := strings.TrimSpace(fenced.ReplaceAllString(raw, ""))
+	routed := b.emits.routed(emitBase, sender.ID)
 	if isSilentReply(reply) {
 		drop(true)
-		return generatedReply{"", sid, nil, time.Time{}}, nil
+		return generatedReply{sid: sid, routed: routed}, nil
 	}
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
@@ -799,7 +815,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	} else {
 		drop(true)
 	}
-	return generatedReply{reply, sid, stream, ttsStart}, nil
+	return generatedReply{reply: reply, sid: sid, audio: stream, ttsStart: ttsStart, routed: routed}, nil
 }
 
 func (b *larkServer) ttsAPI(w http.ResponseWriter, r *http.Request) error {

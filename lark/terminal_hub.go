@@ -104,8 +104,9 @@ type wsTerminal struct {
 	moodAt    time.Time
 	last      time.Time
 	meter     time.Time
-	asleep    bool
-	replyTo   string
+	asleep     bool
+	reply      *turnReply // Delta Chat read-out awaiting an in-person reply
+	replyUntil time.Time
 
 	recording     deviceCapture
 	recSession    uint16
