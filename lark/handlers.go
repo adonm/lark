@@ -319,7 +319,8 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			}
 			return object{"ok": true, "stt": b.sttFunc() != nil, "stt_engine": sttEngine,
 				"opencode": o, "tts": ready, "tts_engine": engine,
-				"deltachat": b.dc != nil && b.dc.ready.Load()}, nil
+				"smart_turn": b.endpoint != nil && b.endpoint.smartTurn != nil,
+				"deltachat":  b.dc != nil && b.dc.ready.Load()}, nil
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
 		case path == "/api/library":

@@ -388,6 +388,7 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 }
 
 func (h *terminalHub) turnError(d *terminalSession, id uint64, message string) {
+	d.trace.fail()
 	h.mu.Lock()
 	if h.active(d) && d.turn == id {
 		h.setCompanionStatus(d.companionID, statusError)

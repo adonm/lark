@@ -360,6 +360,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	mu.Lock()
 	defer mu.Unlock()
 	if err != nil {
+		traceFrom(ctx).fail()
 		drop(true)
 		return generatedReply{}, err
 	}

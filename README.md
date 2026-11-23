@@ -379,8 +379,9 @@ over SSE.
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 
-Use `lark status`, `lark companions`, `lark terminals`, `lark tunnels`, `lark sim`,
-`lark device`, `lark ota`, and `lark mcp` from the CLI to inspect and control the server.
+Use `lark status`, `lark doctor`, `lark companions`, `lark terminals`, `lark tunnels`,
+`lark sim`, `lark device`, `lark ota`, and `lark mcp` from the CLI to inspect and
+control the server.
 
 | Device · port 80 | Request → response |
 | --- | --- |

@@ -125,6 +125,7 @@ type diagTurn struct {
 	STTQueue      *float64 `json:"stt_queue_ms"`
 	STTRun        *float64 `json:"stt_run_ms"`
 	Resample      *float64 `json:"resample_ms"`
+	Error         bool     `json:"error,omitempty"`
 }
 
 type diagFrame struct {
@@ -185,6 +186,16 @@ func traceFrom(ctx context.Context) *turnTrace {
 
 func milliseconds(d time.Duration) float64 {
 	return math.Round(max(0, float64(d)/float64(time.Millisecond))*100) / 100
+}
+
+func (t *turnTrace) fail() {
+	if t == nil {
+		return
+	}
+	t.d.mu.Lock()
+	t.record.Error = true
+	t.d.mu.Unlock()
+	t.d.sig.notify()
 }
 
 func (t *turnTrace) measure(metric diagMetric, elapsed time.Duration) {
