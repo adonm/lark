@@ -95,8 +95,19 @@ func TestDeltaChatVerifiedTextAndNonContactIgnored(t *testing.T) {
 	}
 	stub.mu.Unlock()
 	entries, err := b.history.list(t.Context(), cake.ID)
-	if err != nil || len(entries) != 2 || entries[0].Source != "deltachat" || entries[1].Text != "Hello Alice!" {
+	if err != nil || len(entries) != 2 {
 		t.Fatalf("unexpected history: %+v (%v)", entries, err)
+	}
+	var sawUser, sawReply bool
+	for _, entry := range entries {
+		if entry.Source != "deltachat" {
+			t.Fatalf("unexpected history source: %+v", entry)
+		}
+		sawUser = sawUser || entry.Sender == "Alice" && entry.Text == "Hi Cake!"
+		sawReply = sawReply || entry.Text == "Hello Alice!"
+	}
+	if !sawUser || !sawReply {
+		t.Fatalf("history missed a turn: %+v", entries)
 	}
 }
 

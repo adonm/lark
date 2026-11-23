@@ -68,6 +68,12 @@ func parsePortraitRef(raw string) (id, pose string, ok bool) {
 
 type portraitGenerator func(ctx context.Context, prompt string, source []byte) ([]byte, error)
 
+type portraitBGQueue struct {
+	running    bool
+	dirty      bool
+	form, vibe string
+}
+
 type portraitStore struct {
 	dir      string
 	generate portraitGenerator

@@ -419,6 +419,7 @@ type diagReport struct {
 	Speculation diagSpecReport         `json:"speculation"`
 	Listening   diagListenReport       `json:"listening"`
 	Library     object                 `json:"library"`
+	DeltaChat   object                 `json:"deltachat_accounts,omitempty"`
 	diagSystem
 }
 
@@ -467,6 +468,9 @@ func (b *larkServer) diagnosticReport() diagReport {
 	}
 	b.diag.segments.each(func(s diagSegment) { out.Listening.RecentSegments = append(out.Listening.RecentSegments, s) })
 	b.diag.mu.Unlock()
+	if b.dc != nil {
+		out.DeltaChat = b.dc.reconcileAccounts(context.Background())
+	}
 	if b.db != nil {
 		if at := b.db.lastBackup.Load(); at != 0 {
 			out.Bridge.LastBackup = new(time.Unix(at, 0).UTC())

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -19,10 +20,12 @@ import (
 const (
 	defaultChatmailRelay = "nine.testrun.org"
 	dcWelcomeVersion     = "3"
+	dcRemovePending      = "dc_remove_pending:"
 )
 
 type dcRPC interface {
 	AddAccount() (uint32, error)
+	GetAllAccountIds() ([]uint32, error)
 	AddTransportFromQr(accID uint32, qr string) error
 	BatchSetConfig(accID uint32, cfg map[string]*string) error
 	SetConfig(accID uint32, key string, val *string) error
@@ -222,6 +225,7 @@ func (s *dcService) getRPC() dcRPC {
 }
 
 func (s *dcService) syncAccounts(ctx context.Context) error {
+	s.retryPendingRemovals(ctx)
 	comps, err := s.b.allCompanions(ctx)
 	if err != nil {
 		return err
@@ -251,27 +255,12 @@ func (s *dcService) ensureCompanion(ctx context.Context, c companionState) (uint
 		if err != nil {
 			return 0, err
 		}
-		botVal := "1"
-		nameVal := c.Name
-		cfg := map[string]*string{
-			"bot":         &botVal,
-			"displayname": &nameVal,
-		}
-		if err := rpc.BatchSetConfig(accID, cfg); err != nil {
+		if err := s.provisionAccount(ctx, rpc, c, accID); err != nil {
+			// A partly provisioned account has no companion reference, so it
+			// would leak forever. Remove it now, or record it for the next
+			// rpc-server readiness if removal also fails.
+			s.dropAccount(ctx, accID)
 			return 0, err
-		}
-		whoCalls := "nobody"
-		_ = rpc.SetConfig(accID, "who_can_call_me", &whoCalls)
-		if err := rpc.AddTransportFromQr(accID, "dcaccount:"+s.relay); err != nil {
-			return 0, err
-		}
-		if err := rpc.StartIoForAllAccounts(); err != nil {
-			log.Printf("Delta Chat StartIo after provisioning %s: %v", c.ID, err)
-		}
-		if s.b != nil && s.b.db != nil {
-			if _, err := s.b.db.ExecContext(ctx, `UPDATE companions SET dc_account_id=? WHERE id=?`, accID, c.ID); err != nil {
-				return 0, err
-			}
 		}
 	}
 	s.syncProfile(c, accID)
@@ -283,6 +272,131 @@ func (s *dcService) ensureCompanion(ctx context.Context, c companionState) (uint
 	}
 	s.mu.Unlock()
 	return accID, nil
+}
+
+func (s *dcService) provisionAccount(ctx context.Context, rpc dcRPC, c companionState, accID uint32) error {
+	botVal := "1"
+	nameVal := c.Name
+	cfg := map[string]*string{
+		"bot":         &botVal,
+		"displayname": &nameVal,
+	}
+	if err := rpc.BatchSetConfig(accID, cfg); err != nil {
+		return err
+	}
+	whoCalls := "nobody"
+	_ = rpc.SetConfig(accID, "who_can_call_me", &whoCalls)
+	if err := rpc.AddTransportFromQr(accID, "dcaccount:"+s.relay); err != nil {
+		return err
+	}
+	if err := rpc.StartIoForAllAccounts(); err != nil {
+		log.Printf("Delta Chat StartIo after provisioning %s: %v", c.ID, err)
+	}
+	if s.b != nil && s.b.db != nil {
+		if _, err := s.b.db.ExecContext(ctx, `UPDATE companions SET dc_account_id=? WHERE id=?`, accID, c.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropAccount removes an account and records a durable retry when the RPC is
+// unavailable, so a failed create or delete cannot leak an account silently.
+func (s *dcService) dropAccount(ctx context.Context, accID uint32) {
+	if accID == 0 {
+		return
+	}
+	if rpc := s.getRPC(); rpc != nil {
+		if err := rpc.RemoveAccount(accID); err == nil {
+			s.clearPendingRemoval(ctx, accID)
+			return
+		} else {
+			log.Printf("Delta Chat could not remove account %d: %v", accID, err)
+		}
+	}
+	if s.b == nil || s.b.db == nil {
+		return
+	}
+	if err := s.b.db.setMeta(ctx, fmt.Sprintf("%s%d", dcRemovePending, accID), time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Printf("Delta Chat could not record pending removal of account %d: %v", accID, err)
+	}
+}
+
+func (s *dcService) clearPendingRemoval(ctx context.Context, accID uint32) {
+	if s.b == nil || s.b.db == nil {
+		return
+	}
+	_, _ = s.b.db.ExecContext(ctx, `DELETE FROM meta WHERE key=?`, fmt.Sprintf("%s%d", dcRemovePending, accID))
+}
+
+// retryPendingRemovals runs whenever the rpc-server becomes ready.
+func (s *dcService) retryPendingRemovals(ctx context.Context) {
+	rpc := s.getRPC()
+	if rpc == nil || s.b == nil || s.b.db == nil {
+		return
+	}
+	rows, err := s.b.db.readDB().QueryContext(ctx, `SELECT key FROM meta WHERE key LIKE ?`, dcRemovePending+"%")
+	if err != nil {
+		return
+	}
+	var keys []string
+	for rows.Next() {
+		var key string
+		if rows.Scan(&key) == nil {
+			keys = append(keys, key)
+		}
+	}
+	rows.Close()
+	for _, key := range keys {
+		id, err := strconv.ParseUint(strings.TrimPrefix(key, dcRemovePending), 10, 32)
+		if err != nil {
+			continue
+		}
+		if err := rpc.RemoveAccount(uint32(id)); err != nil {
+			log.Printf("Delta Chat could not remove account %d yet: %v", id, err)
+			continue
+		}
+		s.clearPendingRemoval(ctx, uint32(id))
+	}
+}
+
+// reconcileAccounts compares the rpc-server's accounts with the companions
+// table; orphaned accounts and queued removals are visible to doctor.
+func (s *dcService) reconcileAccounts(ctx context.Context) object {
+	out := object{"on_disk": 0, "linked": 0, "orphans": []uint32{}, "pending_removal": 0}
+	if s == nil {
+		return out
+	}
+	linked := map[uint32]bool{}
+	if s.b != nil {
+		if comps, err := s.b.allCompanions(ctx); err == nil {
+			for _, c := range comps {
+				if c.DCAccountID != 0 {
+					linked[c.DCAccountID] = true
+				}
+			}
+		}
+	}
+	out["linked"] = len(linked)
+	if rpc := s.getRPC(); rpc != nil {
+		if ids, err := rpc.GetAllAccountIds(); err == nil {
+			out["on_disk"] = len(ids)
+			orphans := []uint32{}
+			for _, id := range ids {
+				if !linked[id] {
+					orphans = append(orphans, id)
+				}
+			}
+			out["orphans"] = orphans
+		}
+	}
+	if s.b != nil && s.b.db != nil {
+		var pending int
+		if err := s.b.db.readDB().QueryRowContext(ctx, `SELECT count(*) FROM meta WHERE key LIKE ?`, dcRemovePending+"%").Scan(&pending); err == nil {
+			out["pending_removal"] = pending
+		}
+	}
+	return out
 }
 
 func (s *dcService) syncProfile(c companionState, accID uint32) {

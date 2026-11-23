@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,7 @@ type doctor struct {
 	configPath   string
 	relay        string
 	zone         string
+	dbPath       string
 	deviceStatus func(ip string) (object, error)
 	relayProbe   func(host string) error
 
@@ -97,6 +99,7 @@ func runDoctor(ctx context.Context, args []string, out, errOut io.Writer) error 
 		envFile:    larkEnvFile(),
 		configPath: openCodeConfigPath(),
 		relay:      chatmailRelay(larkEnvFile()),
+		dbPath:     larkDBPath(),
 	})
 }
 
@@ -144,7 +147,11 @@ func (d *doctor) checks(ctx context.Context) []doctorCheck {
 		{"voice models", d.checkVoiceModels},
 		{"opencode models", d.checkOpenCodeModels},
 		{"firmware build", d.checkFirmwareBuild},
+		{"schema", d.checkSchema},
+		{"agent prompt", d.checkAgentPrompt},
 		{"disk", d.checkDisk},
+		{"captures", d.checkCaptures},
+		{"companion voices", d.checkCompanionVoices},
 		{"library", d.checkLibrary},
 		{"deltachat", d.checkDeltaChat},
 		{"deltachat accounts", d.checkDCAccounts},
@@ -372,6 +379,18 @@ func (d *doctor) checkDisk(ctx context.Context) doctorResult {
 		humanBytes(jsonInt(body["total_bytes"])))
 }
 
+func (d *doctor) checkAgentPrompt(context.Context) doctorResult {
+	path := filepath.Join(d.repo, "agents/lark.md")
+	info, err := os.Stat(path)
+	if err != nil {
+		return fail("agents/lark.md missing; install the prompt (lark-upgrade or setup-host)")
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return fail("%s is not a non-empty prompt file", path)
+	}
+	return pass("%s, %s", path, humanBytes(info.Size()))
+}
+
 func (d *doctor) checkCaptures(context.Context) doctorResult {
 	dir := debugCaptureDir()
 	entries, err := os.ReadDir(dir)
@@ -403,6 +422,52 @@ func (d *doctor) checkCaptures(context.Context) doctorResult {
 	return pass("%d files, %s (limit %s / %s)", count, humanBytes(bytes), humanBytes(captureMaxBytes), captureRetention)
 }
 
+func (d *doctor) checkSchema(ctx context.Context) doctorResult {
+	path := d.dbPath
+	if path == "" {
+		path = larkDBPath()
+	}
+	db, err := sql.Open("lark-sqlite3", sqliteDSN(path, false))
+	if err != nil {
+		return fail("cannot open %s: %v", path, err)
+	}
+	defer db.Close()
+	var missing []string
+	for _, col := range requiredColumns {
+		ok, err := columnExists(ctx, db, col.table, col.column)
+		if err != nil {
+			return fail("cannot inspect %s: %v", path, err)
+		}
+		if !ok {
+			missing = append(missing, col.table+"."+col.column)
+		}
+	}
+	if len(missing) > 0 {
+		return fail("missing columns: %s; restart the server to migrate or run lark-upgrade",
+			strings.Join(missing, ", "))
+	}
+	return pass("%d required columns present in %s", len(requiredColumns), path)
+}
+
+func (d *doctor) checkCompanionVoices(ctx context.Context) doctorResult {
+	body, err := d.fetch(ctx, "/api/companions", &d.companions)
+	if err != nil {
+		return fail("GET /api/companions: %v", err)
+	}
+	list, _ := body["companions"].([]any)
+	var retired []string
+	for _, item := range list {
+		c, _ := item.(object)
+		if voice := str(c["voice_invalid"]); voice != "" {
+			retired = append(retired, str(c["id"])+" -> "+voice)
+		}
+	}
+	if len(retired) > 0 {
+		return warn("retired stored voices use the default: %s; patch companion voice to repair", strings.Join(retired, ", "))
+	}
+	return pass("%d companions use installed voices", len(list))
+}
+
 func (d *doctor) checkLibrary(ctx context.Context) doctorResult {
 	body, err := d.fetch(ctx, "/api/library", &d.library)
 	if err != nil {
@@ -422,6 +487,9 @@ func (d *doctor) checkLibrary(ctx context.Context) doctorResult {
 			part += " " + humanBytes(jsonInt(pack["installed_bytes"]))
 		} else if reason := str(pack["reason"]); reason != "" {
 			part += " (" + reason + ")"
+		}
+		if lastErr := str(pack["last_error"]); lastErr != "" {
+			part += "; last error: " + lastErr
 		}
 		parts = append(parts, part)
 		if state != packStateInstalled {
@@ -458,6 +526,23 @@ func (d *doctor) checkDCAccounts(ctx context.Context) doctorResult {
 			withAccount++
 		}
 	}
+	diag, err := d.fetch(ctx, "/api/diagnostics", &d.diag)
+	if err == nil {
+		accounts, _ := diag["deltachat_accounts"].(object)
+		var orphans []string
+		if raw, ok := accounts["orphans"].([]any); ok {
+			for _, id := range raw {
+				orphans = append(orphans, fmt.Sprint(id))
+			}
+		}
+		if pending := jsonInt(accounts["pending_removal"]); pending > 0 {
+			return warn("%d of %d companions linked; %d account removal(s) pending", withAccount, len(list), pending)
+		}
+		if len(orphans) > 0 {
+			return warn("%d of %d companions linked; orphaned Delta Chat accounts: %s",
+				withAccount, len(list), strings.Join(orphans, ", "))
+		}
+	}
 	if withAccount < len(list) {
 		return warn("%d of %d companions have accounts", withAccount, len(list))
 	}
@@ -490,7 +575,7 @@ func (d *doctor) checkTerminal(ctx context.Context, id string) doctorResult {
 	if term == nil {
 		return fail("terminal disappeared")
 	}
-	online := boolOf(term["online"]) || boolOf(term["connected"])
+	online := boolOf(term["online"])
 	firmware := str(term["firmware"])
 	if firmware == "" {
 		firmware = "unknown"

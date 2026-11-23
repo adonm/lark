@@ -105,6 +105,17 @@ func (s *stubDCRPC) GetConfig(accID uint32, key string) (*string, error) {
 
 func (s *stubDCRPC) StartIoForAllAccounts() error { return nil }
 
+func (s *stubDCRPC) GetAllAccountIds() ([]uint32, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]uint32, 0, len(s.configs))
+	for id := range s.configs {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
 func (s *stubDCRPC) RemoveAccount(accID uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

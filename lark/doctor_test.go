@@ -76,8 +76,17 @@ func doctorTestEnv(t *testing.T) doctor {
 	if zone == "" {
 		zone = "UTC"
 	}
+	if err := os.MkdirAll(filepath.Join(repo, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "agents", "lark.md"), []byte("Use exact companion IDs."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(repo, "lark.db")
+	testDB(t, dbPath)
 	return doctor{
 		repo:         repo,
+		dbPath:       dbPath,
 		configPath:   config,
 		relay:        "relay.test",
 		zone:         zone,
