@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +40,37 @@ func newCLIClient() (*cliClient, error) {
 		token: token,
 		http:  &http.Client{Timeout: 15 * time.Second},
 	}, nil
+}
+
+func (c *cliClient) postRaw(ctx context.Context, path string, body []byte) (object, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Lark-Token", c.token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	var out object
+	if len(raw) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		_ = dec.Decode(&out)
+	}
+	if res.StatusCode >= 400 {
+		if msg := str(out["error"]); msg != "" {
+			return nil, errors.New(msg)
+		}
+		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
+	}
+	return out, nil
 }
 
 func (c *cliClient) do(ctx context.Context, method, path string, body any) (object, error) {
@@ -96,6 +128,49 @@ func runCLI(ctx context.Context, cmd string, args []string, out, errOut io.Write
 		return err
 	}
 	return runCLIWithClient(ctx, c, cmd, args, out, errOut)
+}
+
+func benchFiles(args []string) ([]string, error) {
+	var files []string
+	for _, arg := range args {
+		info, err := os.Stat(arg)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			files = append(files, arg)
+			continue
+		}
+		entries, err := os.ReadDir(arg)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".wav") {
+				files = append(files, filepath.Join(arg, e.Name()))
+			}
+		}
+	}
+	return files, nil
+}
+
+func jsonNumberText(v any) string {
+	switch n := v.(type) {
+	case json.Number:
+		return n.String()
+	case float64:
+		return fmt.Sprintf("%.0f", n)
+	}
+	return "?"
+}
+
+func speedup(res object) float64 {
+	stt, _ := strconv.ParseFloat(jsonNumberText(res["stt_ms"]), 64)
+	audio, _ := strconv.ParseFloat(jsonNumberText(res["audio_ms"]), 64)
+	if stt <= 0 {
+		return 0
+	}
+	return audio / stt
 }
 
 func printLibraryPlan(out io.Writer, lib object) {
@@ -257,6 +332,56 @@ func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []stri
 		}
 		fmt.Fprintln(errOut, "Usage: lark terminals [attach <terminal> <companion> | detach <terminal>]")
 		return errors.New("invalid terminals arguments")
+
+	case "capture":
+		if len(args) < 1 || len(args) > 2 {
+			return captureUsage()
+		}
+		seconds := 20
+		if len(args) == 2 {
+			n, convErr := strconv.Atoi(args[1])
+			if convErr != nil || n < 1 || n > 60 {
+				return errors.New("seconds must be between 1 and 60")
+			}
+			seconds = n
+		}
+		slow := *c
+		slow.http = &http.Client{Timeout: time.Duration(seconds+20) * time.Second}
+		fmt.Fprintf(errOut, "Recording %ds of microphone audio; stay quiet or speak normally.\n", seconds)
+		res, err := slow.do(ctx, http.MethodPost, "/api/capture", object{"companion_id": args[0], "seconds": seconds})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "%s\t%v ms\n", str(res["path"]), res["audio_ms"])
+		return nil
+
+	case "stt-bench":
+		if len(args) == 0 {
+			return errors.New("usage: lark stt-bench <wav|dir>...")
+		}
+		files, err := benchFiles(args)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return errors.New("no WAV files found")
+		}
+		for _, file := range files {
+			pcm, err := readWAVPCM16k(file)
+			if err != nil {
+				fmt.Fprintf(out, "%s\tERROR\t%v\n", file, err)
+				continue
+			}
+			res, err := c.postRaw(ctx, "/api/stt", pcm)
+			if err != nil {
+				fmt.Fprintf(out, "%s\tERROR\t%v\n", file, err)
+				continue
+			}
+			fmt.Fprintf(out, "%s\t%s ms (%s audio, %.0fx)\t%s\n", file,
+				jsonNumberText(res["stt_ms"]), jsonNumberText(res["audio_ms"]),
+				speedup(res), str(res["transcript"]))
+		}
+		return nil
 
 	case "tunnels":
 		switch {

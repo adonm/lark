@@ -307,6 +307,10 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 		return b.terminalAPI(w, r, path)
 	case path == "/api/tts" && r.Method == http.MethodPost:
 		return nil, b.ttsAPI(w, r)
+	case path == "/api/capture" && r.Method == http.MethodPost:
+		return b.captureAPI(r)
+	case path == "/api/stt" && r.Method == http.MethodPost:
+		return b.sttAPI(r)
 	}
 	if r.Method == http.MethodGet {
 		switch {

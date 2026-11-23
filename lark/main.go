@@ -284,7 +284,7 @@ func productionDB(path string) bool {
 
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: lark <command> [args]")
-	fmt.Fprintln(w, "Commands: serve, status, doctor, companions, terminals, tunnels, sim, device, ota, mcp, library")
+	fmt.Fprintln(w, "Commands: serve, status, doctor, companions, terminals, tunnels, sim, device, capture, stt-bench, ota, mcp, library")
 }
 
 func main() {
@@ -300,7 +300,7 @@ func main() {
 			os.Exit(2)
 		}
 		err = run()
-	case "status", "companions", "terminals", "tunnels":
+	case "status", "companions", "terminals", "tunnels", "capture", "stt-bench":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		err = runCLI(ctx, os.Args[1], os.Args[2:], os.Stdout, os.Stderr)
 		cancel()
