@@ -61,11 +61,26 @@ func isSTTProbe(ctx context.Context) bool {
 	return v
 }
 
+// setSTT swaps the transcription backend. Tests change it mid-flight while
+// capture probes read it.
+func (b *larkServer) setSTT(fn func(context.Context, []byte) (string, error)) {
+	b.sttMu.Lock()
+	b.stt = fn
+	b.sttMu.Unlock()
+}
+
+func (b *larkServer) sttFunc() func(context.Context, []byte) (string, error) {
+	b.sttMu.RLock()
+	defer b.sttMu.RUnlock()
+	return b.stt
+}
+
 func (b *larkServer) decodeClip(ctx context.Context, pcm []byte) (string, error) {
-	if b.stt == nil {
+	fn := b.sttFunc()
+	if fn == nil {
 		return "", errors.New("STT unavailable")
 	}
-	return b.stt(ctx, pcm)
+	return fn(ctx, pcm)
 }
 
 // The host can check the installed TTS and STT together without creating a
@@ -75,7 +90,7 @@ func (b *larkServer) probeSTT(r *http.Request) (object, error) {
 	if !net.ParseIP(host).IsLoopback() {
 		return nil, problem(404, "Not found")
 	}
-	if b.stt == nil || b.worker == nil || !b.worker.ready.Load() {
+	if b.sttFunc() == nil || b.worker == nil || !b.worker.ready.Load() {
 		return nil, problem(503, "Speech engines not ready")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), ttsWait)

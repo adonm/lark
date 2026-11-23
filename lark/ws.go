@@ -13,7 +13,6 @@ import (
 
 const (
 	wsBinary = 2
-	wsPing   = 9
 )
 
 type wsFrame struct {
@@ -25,11 +24,6 @@ type wsClient struct {
 	native        *nativeClient
 	ctx           context.Context
 	cancel        context.CancelFunc
-	out           chan wsFrame
-	outMu         sync.Mutex
-	drained       chan struct{}
-	txSeq         atomic.Uint32
-	kind          string // "hardware"
 	terminal      *wsTerminal
 	activeCapture atomic.Pointer[endpointCapture]
 	pingMu        sync.Mutex
@@ -68,16 +62,9 @@ type wsHub struct {
 	settingsMu        sync.Mutex
 	conns             sync.WaitGroup
 	clients           map[*wsClient]struct{}
-	pending           int
 	terminals         map[string]*wsTerminal
 	closed            bool
-	peersKey          string
-	storedPeers       []peerDisplay
-	storedCompanions  []companionState
-	refreshing        bool
-	refreshNeeded     bool
 	atmosphere        bool
-	udpPort           uint16
 	stateSeq          uint32
 	voiceOwners       map[string]string
 	companionStatuses map[string]companionStatusState
@@ -127,10 +114,6 @@ func (h *wsHub) shutdown() {
 	}
 	h.mu.Unlock()
 	h.conns.Wait()
-}
-
-func (c *wsClient) stop(code uint16) {
-	c.cancel()
 }
 
 func (c *wsClient) remoteAddr() net.Addr {

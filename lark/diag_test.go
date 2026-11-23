@@ -243,10 +243,10 @@ func TestDiagnosticsTTSQueueDropsCanceledSpeechWithoutRestart(t *testing.T) {
 func TestAccessibleRecordingControls(t *testing.T) {
 	transcribed := make(chan struct{}, 2)
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.stt = func(context.Context, []byte) (string, error) {
+		b.setSTT(func(context.Context, []byte) (string, error) {
 			transcribed <- struct{}{}
 			return "", nil
-		}
+		})
 	})
 	dev := testConnectWS(t, base, "unit", false)
 	const id = "vocat-mic0"
@@ -255,7 +255,7 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	record := func() {
 		dev.recStart(t, "")
 		waitSVG(t, b.ws, id, "rec-send")
-		dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, []byte{12, 0})
+		dev.sendRTP(t, rtpPTRecPCM, 1, 320, []byte{12, 0})
 	}
 	record()
 	tap(110, 290)
@@ -329,7 +329,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 		cancelled <- true
 	})
 	// The rasterizer cannot commit the thinking frame while the hub lock is held.
-	b.ws.pointer(d, "tap", 180, 180, 0, now, true)
+	b.ws.pointer(d, "tap", 180, 180, 0, now)
 	b.ws.mu.Unlock()
 	waitSVG(t, b.ws, id, "stop")
 

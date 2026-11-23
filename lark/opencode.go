@@ -689,12 +689,9 @@ func (m ocMessage) chat(source string) chatEntry {
 		}
 		if action, ok := strings.CutPrefix(name, "lark_"); p.Type == "tool" && ok {
 			label := map[string]string{"state": "Checked live state", "patch": "Changed saved or device state",
-				"app": "Used an app", "emit": "Sent a signal", "library": "Searched the local library"}[action]
+				"emit": "Sent a signal", "library": "Searched the local library"}[action]
 			if label != "" && !slices.Contains(notes, label) {
 				notes = append(notes, label)
-			}
-			if action == "app" {
-				entry.SceneTitle = shortText(p.State.Input.Title, 48, false)
 			}
 		}
 	}

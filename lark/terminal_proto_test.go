@@ -11,15 +11,15 @@ import (
 )
 
 type testNativeClient struct {
-	t        *testing.T
-	conn     net.Conn
-	udpConn  *net.UDPConn
-	udpPort  uint16
-	srvAddr  *net.UDPAddr
-	ssrc     uint32
-	txSeq    uint16
-	rtpSeq   uint16
-	rtpTS    uint32
+	t       *testing.T
+	conn    net.Conn
+	udpConn *net.UDPConn
+	udpPort uint16
+	srvAddr *net.UDPAddr
+	ssrc    uint32
+	txSeq   uint16
+	rtpSeq  uint16
+	rtpTS   uint32
 }
 
 func dialNativeDevice(t *testing.T, srv *terminalServer, id, token string, caps uint32) (*testNativeClient, []byte) {
@@ -236,7 +236,7 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 	gotPCM := make(chan []byte, 1)
 	b, _ := wsHarness(t, func(b *larkServer, _ string) {
-		b.stt = func(_ context.Context, pcm []byte) (string, error) {
+		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
 			cp := make([]byte, len(pcm))
 			copy(cp, pcm)
 			select {
@@ -244,7 +244,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 			default:
 			}
 			return "", nil
-		}
+		})
 	})
 	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
 	if err != nil {

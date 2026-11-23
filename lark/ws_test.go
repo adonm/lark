@@ -28,12 +28,47 @@ func (s *testWS) helloV2(t *testing.T, id, cat string) wsFrame {
 var (
 	testTermMu    sync.Mutex
 	testTermAddrs = map[string]string{}
+	testUDPFeeds  = map[string]*udpFeed{}
 )
 
+// udpFeed lets a test wait until the terminal server consumed each RTP packet,
+// preserving the ordering the old in-band media frames gave for free.
+type udpFeed struct {
+	mu      sync.Mutex
+	packets int
+}
+
+func (u *udpFeed) received() {
+	u.mu.Lock()
+	u.packets++
+	u.mu.Unlock()
+}
+
+func (u *udpFeed) wait(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		u.mu.Lock()
+		got := u.packets
+		u.mu.Unlock()
+		if got >= want {
+			return
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+	t.Fatalf("terminal server did not consume RTP packet %d", want)
+}
+
 type testWS struct {
-	conn    net.Conn
-	in      *bufio.Reader
-	timeout time.Duration
+	conn     net.Conn
+	in       *bufio.Reader
+	timeout  time.Duration
+	udp      *net.UDPConn
+	udpPort  uint16
+	ssrc     uint32
+	feed     *udpFeed
+	feedBase int
+	udpSent  int
 }
 
 func apiObjects(t *testing.T, url, field string) []any {
@@ -45,6 +80,7 @@ func testConnectWS(t *testing.T, base, _ string, _ bool) *testWS {
 	t.Helper()
 	testTermMu.Lock()
 	addr := testTermAddrs[base]
+	feed := testUDPFeeds[base]
 	testTermMu.Unlock()
 	if addr == "" {
 		t.Fatalf("no terminal server for %s", base)
@@ -54,7 +90,13 @@ func testConnectWS(t *testing.T, base, _ string, _ bool) *testWS {
 		t.Fatal("cannot connect to terminal test address:", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return &testWS{conn: conn, in: bufio.NewReader(conn)}
+	start := 0
+	if feed != nil {
+		feed.mu.Lock()
+		start = feed.packets
+		feed.mu.Unlock()
+	}
+	return &testWS{conn: conn, in: bufio.NewReader(conn), feed: feed, feedBase: start}
 }
 
 func (s *testWS) write(t *testing.T, data []byte) {
@@ -70,11 +112,30 @@ func (s *testWS) sendProto(t *testing.T, msgType uint8, payload []byte) {
 	s.write(t, packProtoPacket(msgType, 0, payload))
 }
 
-func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) {
+// sendRTP sends microphone audio over UDP like the firmware does. The welcome
+// frame carries the server's UDP port and the SSRC it bound to this terminal.
+func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts uint32, pcm []byte) {
 	t.Helper()
-	pkt := make([]byte, rtpHeaderSize+len(pcm))
-	n := encodeRTPPacket(pkt, pt, seq, ts, ssrc, pcm)
-	s.sendProto(t, msgMedia, pkt[:n])
+	if s.udp == nil {
+		t.Fatal("sendRTP requires a terminal hello with a UDP address")
+	}
+	// Datagrams stay within the firmware's 320-sample record cadence, which is
+	// also the server's UDP read buffer.
+	const chunk = 320 * 2
+	pkt := make([]byte, rtpHeaderSize+chunk)
+	for off := 0; off < len(pcm); off += chunk {
+		part := pcm[off:min(len(pcm), off+chunk)]
+		n := encodeRTPPacket(pkt, pt, seq, ts+uint32(off/2), s.ssrc, part)
+		_ = s.udp.SetWriteDeadline(time.Now().Add(4 * time.Second))
+		if _, err := s.udp.Write(pkt[:n]); err != nil {
+			t.Fatal("cannot send RTP:", err)
+		}
+		s.udpSent++
+		if s.feed != nil {
+			s.feed.wait(t, s.feedBase+s.udpSent)
+		}
+		seq++
+	}
 }
 
 func (s *testWS) tap(t *testing.T, x, y int, rev uint16) {
@@ -236,7 +297,21 @@ func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) wsF
 		firmware:       "0.12.0",
 		token:          "unit",
 	}))
-	s.until(t, hasProto(msgWelcome, ""))
+	welcome := framePayload(s.until(t, hasProto(msgWelcome, "")))
+	if len(welcome) < 12 {
+		t.Fatal("short welcome frame")
+	}
+	s.udpPort = binary.LittleEndian.Uint16(welcome[2:4])
+	s.ssrc = binary.LittleEndian.Uint32(welcome[4:8])
+	if s.udp == nil {
+		addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(s.udpPort)}
+		udp, err := net.DialUDP("udp4", nil, addr)
+		if err != nil {
+			t.Fatal("cannot open terminal test UDP:", err)
+		}
+		s.udp = udp
+		t.Cleanup(func() { udp.Close() })
+	}
 	return s.until(t, isDisplay)
 }
 
@@ -260,13 +335,17 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 	if err != nil {
 		t.Fatal(err)
 	}
+	feed := &udpFeed{}
+	termSrv.onUDP = feed.received
 	srv := httptest.NewServer(b)
 	testTermMu.Lock()
 	testTermAddrs[srv.URL] = termSrv.tcpLn.Addr().String()
+	testUDPFeeds[srv.URL] = feed
 	testTermMu.Unlock()
 	t.Cleanup(func() {
 		testTermMu.Lock()
 		delete(testTermAddrs, srv.URL)
+		delete(testUDPFeeds, srv.URL)
 		testTermMu.Unlock()
 		termSrv.shutdown()
 		b.ws.shutdown()
@@ -327,7 +406,7 @@ func TestWSRecordingLimits(t *testing.T) {
 			pcm := tc.pcm[:min(len(tc.pcm), maxPCM)]
 			sttCalled := make(chan struct{}, 1)
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
-				b.stt = func(_ context.Context, got []byte) (string, error) {
+				b.setSTT(func(_ context.Context, got []byte) (string, error) {
 					if !bytes.Equal(got, pcm) {
 						t.Errorf("STT received %d bytes, want %d with the captured PCM intact", len(got), len(pcm))
 					}
@@ -337,7 +416,7 @@ func TestWSRecordingLimits(t *testing.T) {
 						t.Error("STT ran more than once for one recording")
 					}
 					return "", nil
-				}
+				})
 			})
 			const id = "vocat-e001"
 			if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
@@ -353,7 +432,7 @@ func TestWSRecordingLimits(t *testing.T) {
 			var seq uint16
 			for chunk := range slices.Chunk(tc.pcm, pcmPacket) {
 				seq++
-				dev.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, chunk)
+				dev.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, chunk)
 			}
 			if tc.timeout {
 				// Wait for the server to consume the PCM before aging the recording.
@@ -411,16 +490,16 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			}
 			clips := make(chan []byte, 2)
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
-				b.stt = func(_ context.Context, got []byte) (string, error) {
+				b.setSTT(func(_ context.Context, got []byte) (string, error) {
 					clips <- slices.Clone(got)
 					return "", nil
-				}
+				})
 			})
 			dev := testConnectWS(t, base, "unit", false)
 			dev.hello(t, id, "Cake")
 			dev.recStart(t, "")
 			waitSVG(t, b.ws, id, "rec-send")
-			dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, first)
+			dev.sendRTP(t, rtpPTRecPCM, 1, 320, first)
 			dev.tap(t, 247, 290, 0)
 			dev.until(t, func(f wsFrame) bool {
 				p := framePayload(f)
@@ -434,7 +513,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 				t.Fatal("Send finalized before it could receive the final DMA packet")
 			}
 			if recEnd {
-				dev.sendRTP(t, rtpPTRecPCM, 2, 640, 1, tail)
+				dev.sendRTP(t, rtpPTRecPCM, 2, 640, tail)
 				dev.recEnd(t, "", false)
 			}
 			select {
@@ -458,7 +537,7 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &larkServer{root: t.Context()}
-		c := &wsClient{kind: "hardware", ctx: t.Context(), out: make(chan wsFrame, 8)}
+		c := &wsClient{ctx: t.Context()}
 		d := &wsTerminal{client: c, key: "vocat-noac", id: "vocat-noac", kind: "hardware", screen: roundScreen, companion: blankCompanion()}
 		d.recording.start(time.Now(), "", false)
 		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}}
@@ -487,14 +566,14 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	allowSTT := make(chan struct{})
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.stt = func(ctx context.Context, _ []byte) (string, error) {
+		b.setSTT(func(ctx context.Context, _ []byte) (string, error) {
 			select {
 			case <-allowSTT:
 				return "Voice caption.", nil
 			case <-ctx.Done():
 				return "", ctx.Err()
 			}
-		}
+		})
 	})
 	closed := false
 	defer func() {
@@ -510,9 +589,9 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	to.hello(t, "vocat-000b", "mint")
 	pcm := bytes.Repeat([]byte{12, 0}, 120)
 	from.recStart(t, "mint")
-	from.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm[:100])
-	from.sendRTP(t, 99, 1, 320, 1, []byte{1, 2}) // unknown RTP payload type is ignored
-	from.sendRTP(t, rtpPTRecPCM, 2, 640, 1, pcm[100:])
+	from.sendRTP(t, rtpPTRecPCM, 1, 320, pcm[:100])
+	from.sendRTP(t, 99, 1, 320, []byte{1, 2}) // unknown RTP payload type is ignored
+	from.sendRTP(t, rtpPTRecPCM, 2, 640, pcm[100:])
 	from.recEnd(t, "", false)
 	to.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
@@ -747,12 +826,12 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	const last = "That lights nearby planets."
 	const raw = first + last + "\n```lark-screen\n{\"title\":\"Night sky\",\"shapes\":[{\"t\":\"btn\",\"x\":121,\"y\":212,\"w\":118,\"h\":34,\"c\":\"#ffaa33\",\"s\":\"Fact\",\"tap\":\"Stars are bright.\"}]}\n```"
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
-		b.stt = func(_ context.Context, got []byte) (string, error) {
+		b.setSTT(func(_ context.Context, got []byte) (string, error) {
 			if !bytes.Equal(got, pcm) {
 				t.Error("STT did not receive the captured PCM")
 			}
 			return "What are stars?", nil
-		}
+		})
 		b.worker = &synthWorker{requests: make(chan ttsRequest), done: make(chan struct{})}
 		b.worker.ready.Store(true)
 		go func() {
@@ -827,7 +906,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-a000", "Cake")
 	dev.recStart(t, "")
-	dev.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	dev.sendRTP(t, rtpPTRecPCM, 1, 320, pcm)
 	dev.recEnd(t, "", false)
 	start := dev.until(t, func(f wsFrame) bool {
 		p := framePayload(f)

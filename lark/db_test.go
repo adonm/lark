@@ -164,3 +164,34 @@ func (o *openCode) save(device, sid string) error {
 	o.sig.notify()
 	return nil
 }
+
+func TestRetiredTimerColumnIsDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lark.db")
+	d, err := openLarkDB(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`ALTER TABLE timers ADD COLUMN app_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = testDB(t, path)
+	rows, err := d.Query(`PRAGMA table_info(timers)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "app_name" {
+			t.Fatal("retired timers.app_name survived schema init")
+		}
+	}
+}

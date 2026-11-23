@@ -36,11 +36,11 @@ func decodeQRFromPNG(path string) (string, error) {
 }
 
 type qaDCClient struct {
-	tr      *deltachat.IOTransport
-	rpc     *deltachat.Rpc
-	accID   uint32
-	dir     string
-	paired  []uint32
+	tr     *deltachat.IOTransport
+	rpc    *deltachat.Rpc
+	accID  uint32
+	dir    string
+	paired []uint32
 }
 
 func startQADCClient(ctx context.Context, relay string) (*qaDCClient, error) {

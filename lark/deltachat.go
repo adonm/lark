@@ -885,10 +885,11 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			log.Printf("Delta Chat voice decode error: %v", err)
 			return
 		}
-		if s.b.stt == nil {
+		transcribe := s.b.sttFunc()
+		if transcribe == nil {
 			return
 		}
-		spoken, err := s.b.stt(ctx, pcm)
+		spoken, err := transcribe(ctx, pcm)
 		if err != nil {
 			log.Printf("Delta Chat voice STT error: %v", err)
 			return

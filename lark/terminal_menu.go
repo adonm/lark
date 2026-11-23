@@ -19,40 +19,12 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		return
 	}
 	now := time.Now()
-	if c.kind == "" {
-		h.mu.Unlock()
-		switch msgType {
-		case msgHello:
-			hello, err := parseTerminalHello(payload)
-			if err != nil {
-				c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid hello"))
-				return
-			}
-			h.handleHello(c, hello, now)
-		case msgResume:
-			res, err := parseTerminalResume(payload)
-			if err != nil {
-				c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid resume"))
-				return
-			}
-			h.handleResume(c, res, now)
-		default:
-			c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "expected hello or resume"))
-		}
-		return
-	}
-	if msgType == msgMedia {
-		h.mu.Unlock()
-		h.handleRTPPacket(c, payload)
-		return
-	}
 	defer h.mu.Unlock()
 	d := c.terminal
 	if d == nil || !h.active(d) {
 		return
 	}
 
-	native := c.kind == "hardware"
 	switch msgType {
 	case msgTelemetry:
 		if st, ok := parseTelemetry(payload); ok {
@@ -65,10 +37,9 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		}
 		h.clearDoneOrErrorStatus(d)
 		if evName == "tap" {
-			h.pointer(d, evName, x, y, rev, now, native)
-		} else if d.caps.Drag && (native || c.kind == "web") && !d.asleep &&
-			(d.drawer == "" && d.view == nil && d.card == nil) {
-			h.pointer(d, evName, x, y, rev, now, native)
+			h.pointer(d, evName, x, y, rev, now)
+		} else if d.caps.Drag && !d.asleep && (d.drawer == "" && d.view == nil && d.card == nil) {
+			h.pointer(d, evName, x, y, rev, now)
 		}
 	case msgRecStart:
 		_, target, ok := parseRecStart(payload)
@@ -80,9 +51,7 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 			if c.terminal == d {
 				h.takeVoiceOwnership(d)
 			}
-			if c.kind == "web" && c.terminal == d && h.bridgeEndpoint(d) && !d.recording.active() && tgt == "" {
-				h.startRecording(d, tgt, now, true)
-			} else if d.recording.acceptsStart() {
+			if d.recording.acceptsStart() {
 				if d.recording.active() {
 					d.recording.acknowledge()
 				} else {
@@ -99,12 +68,6 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 		if d.recording.active() {
 			h.endRecording(d, target, cancelled, now)
 		}
-	case msgSetVolume:
-		auto, level, ok := parseSetVolume(payload)
-		if !ok || c.terminal != d {
-			return
-		}
-		_ = h.setVolume(c.ctx, d, auto, level, "")
 	case msgTTSAck:
 		aborted, audioID, ok := parseTTSAck(payload)
 		if !ok || audioID == 0 || audioID != d.audio {
@@ -120,11 +83,8 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	}
 }
 
-func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now time.Time, native bool) {
-	width, height := screenSize, screenSize
-	if native {
-		width, height = d.screen.width, d.screen.height
-	}
+func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now time.Time) {
+	width, height := d.screen.width, d.screen.height
 	if x < 0 || x >= width || y < 0 || y >= height {
 		return
 	}
@@ -144,7 +104,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		key = hitID(d.svg.hits, x, y)
 	}
 	a := d.scene.actions[key]
-	if native && !d.acceptPointerRevision(a.kind, &rev) {
+	if !d.acceptPointerRevision(a.kind, &rev) {
 		return
 	}
 	if evName == "drag" || evName == "up" {

@@ -3,15 +3,9 @@ package main
 import (
 	"context"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
-)
-
-var (
-	webTerminalID      = regexp.MustCompile(`^web-[0-9a-f]{8}$`)
-	hardwareTerminalID = regexp.MustCompile(`^(?:vocat|box3)-[0-9a-f]{4}$`)
 )
 
 type terminalRecord struct {

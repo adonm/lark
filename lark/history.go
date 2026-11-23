@@ -242,14 +242,6 @@ func canonicalMessage(e chatEntry) (chatEntry, bool) {
 		e.Role = "companion"
 		e.Text = strings.TrimSpace(fenced.ReplaceAllString(e.Text, ""))
 	case "intercom", "card":
-	case "system":
-		e.Role = "card"
-		if e.Source != "timer" {
-			if e.SceneTitle == "" || e.Source != "mcp" {
-				return e, false
-			}
-			e.Text = "Drew: " + e.SceneTitle
-		}
 	default:
 		return e, false
 	}

@@ -28,6 +28,7 @@ type larkServer struct {
 	root            context.Context
 	token           string
 	terminals       *store[terminalRecord]
+	sttMu           sync.RWMutex
 	stt             func(context.Context, []byte) (string, error)
 	endpoint        *endpointSettings
 	oc              *openCode
@@ -866,7 +867,7 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			if ready {
 				engine = kokoroEngine
 			}
-			return object{"ok": true, "stt": b.stt != nil, "stt_engine": sttEngine,
+			return object{"ok": true, "stt": b.sttFunc() != nil, "stt_engine": sttEngine,
 				"opencode": o, "tts": ready, "tts_engine": engine,
 				"deltachat": b.dc != nil && b.dc.ready.Load()}, nil
 		case path == "/api/diagnostics":

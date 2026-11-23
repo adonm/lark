@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/netip"
 	"regexp"
 	"sort"
 	"strings"
@@ -121,20 +120,6 @@ func (v companionVoices) save(id, voice string) error {
 		return problem(404, "Companion not found")
 	}
 	return nil
-}
-
-func lanIP(value string, loopback bool) (string, error) {
-	ip, err := netip.ParseAddr(value)
-	if err != nil {
-		return "", problem(400, "Expected a numeric LAN IP address")
-	}
-	if ip.Is4In6() {
-		return "", problem(400, "Peer address must be on the LAN")
-	}
-	if ip.IsPrivate() || (ip.Is4() && ip.IsLinkLocalUnicast()) || (loopback && ip.IsLoopback()) {
-		return ip.String(), nil
-	}
-	return "", problem(400, "Peer address must be on the LAN")
 }
 
 type companionTarget struct {

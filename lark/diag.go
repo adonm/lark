@@ -574,7 +574,7 @@ func (b *larkServer) sampleDiagnostics(start time.Time, path string) func() {
 			if b.oc != nil && b.oc.config != nil {
 				report.Services.OpenCode = b.oc.reachable(ctx, "/api/info")
 			}
-			report.Services.STT = b.stt != nil
+			report.Services.STT = b.sttFunc() != nil
 			report.Services.STTEngine = sttEngine
 			report.Services.OpenTunnel = b.remote != nil && b.remote.available()
 			b.diag.mu.Lock()

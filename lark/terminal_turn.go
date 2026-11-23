@@ -161,9 +161,6 @@ func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
 		c.endpoint.commitAt = now
 	}
 	h.pushRecStop(d, "", false)
-	if d.virtual() && c.endpoint == nil {
-		return
-	}
 	// Keep accepting DMA packets until the board's rec_end. The timer is
 	// tied to this stop request, so it cannot end a subsequent recording.
 	var timer *time.Timer
@@ -176,17 +173,6 @@ func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
 		}
 	})
 	c.stopTimer = timer
-}
-
-func (h *wsHub) handleRTPPacket(c *wsClient, pkt []byte) {
-	if len(pkt) < rtpHeaderSize+2 || (len(pkt)-rtpHeaderSize)%2 != 0 {
-		return
-	}
-	pt, _, _, _, ok := decodeRTPHeader(pkt)
-	if !ok {
-		return
-	}
-	h.dispatchRTPPCM(c, pt, pkt[rtpHeaderSize:])
 }
 
 func (h *wsHub) dispatchRTPPCM(c *wsClient, pt uint8, pcm []byte) {

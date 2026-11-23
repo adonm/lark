@@ -91,12 +91,12 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 			}
 		}
 		b.endpoint = ep
-		b.stt = func(_ context.Context, pcm []byte) (string, error) {
+		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
 			if bytes.Count(pcm, bytes.Repeat([]byte{17, 0}, endpointBytes/2)) >= 15 {
 				return "what is two plus two?", nil
 			}
 			return "what is", nil
-		}
+		})
 	})
 	const id = "vocat-st01"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -110,7 +110,7 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 		for len(p) > 0 {
 			n := min(2*pcmPacket, len(p))
 			seq++
-			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, p[:n])
 			p = p[n:]
 		}
 	}
@@ -145,6 +145,8 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	}
 
 	// 2. Incomplete (< threshold) keeps listening, then re-checks on next pause and commits when >= threshold.
+	// Let any inference from the first recording drain before counting again.
+	time.Sleep(150 * time.Millisecond)
 	prob.Store(2)
 	calls.Store(0)
 	b.ws.mu.Lock()
@@ -159,8 +161,9 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	for calls.Load() < 1 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("expected 1 smartTurn call on first pause, got %d", calls.Load())
+	firstPause := calls.Load()
+	if firstPause < 1 {
+		t.Fatalf("expected a smartTurn call on first pause, got %d", firstPause)
 	}
 	// Now user speaks again and pauses with complete prosody.
 	prob.Store(1)
@@ -169,8 +172,8 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	d.until(t, recStop)
 	d.recEnd(t, "", false)
 	d.until(t, idleOrDone)
-	if calls.Load() < 2 {
-		t.Fatalf("expected >= 2 smartTurn calls after second pause, got %d", calls.Load())
+	if calls.Load() <= firstPause {
+		t.Fatalf("expected another smartTurn call after second pause, got %d before and %d after", firstPause, calls.Load())
 	}
 }
 
@@ -203,10 +206,10 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 			newVAD:    func() endpointVAD { return &alwaysSpeechVAD{} },
 			smartTurn: func([]byte) (float32, error) { return 0.10, nil },
 		}
-		b.stt = func(_ context.Context, _ []byte) (string, error) {
+		b.setSTT(func(_ context.Context, _ []byte) (string, error) {
 			clips.Add(1)
 			return "unfinished thought, um", nil
-		}
+		})
 	})
 	const id = "vocat-cap1"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -227,7 +230,7 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 		for len(p) > 0 {
 			n := min(2*pcmPacket, len(p))
 			seq++
-			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, p[:n])
 			p = p[n:]
 		}
 	}
@@ -263,10 +266,10 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 			newVAD:    func() endpointVAD { return &testEndpointVAD{} },
 			smartTurn: func([]byte) (float32, error) { return 0.15, nil },
 		}
-		b.stt = func(_ context.Context, _ []byte) (string, error) {
+		b.setSTT(func(_ context.Context, _ []byte) (string, error) {
 			clips.Add(1)
 			return "hello there", nil
-		}
+		})
 	})
 	const id = "vocat-lst1"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -287,7 +290,7 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 		for len(p) > 0 {
 			n := min(2*pcmPacket, len(p))
 			seq++
-			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, p[:n])
 			p = p[n:]
 		}
 	}
@@ -345,10 +348,10 @@ func TestEndpointIncompleteTrailingWaitsForCap(t *testing.T) {
 			newVAD:    func() endpointVAD { return &testEndpointVAD{} },
 			smartTurn: func([]byte) (float32, error) { return 0.99, nil },
 		}
-		b.stt = func(_ context.Context, _ []byte) (string, error) {
+		b.setSTT(func(_ context.Context, _ []byte) (string, error) {
 			sttCalls.Add(1)
 			return "I want apples and", nil
-		}
+		})
 	})
 	const id = "vocat-inc1"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -364,7 +367,7 @@ func TestEndpointIncompleteTrailingWaitsForCap(t *testing.T) {
 		for len(p) > 0 {
 			n := min(2*pcmPacket, len(p))
 			seq++
-			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, p[:n])
 			p = p[n:]
 		}
 	}

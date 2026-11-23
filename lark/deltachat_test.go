@@ -407,10 +407,10 @@ func TestDeltaChatIntercomBetweenCompanions(t *testing.T) {
 func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 	b, _, stub := dcTestHarness(t)
 	var sttCalled bool
-	b.stt = func(_ context.Context, pcm []byte) (string, error) {
+	b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
 		sttCalled = len(pcm) > 0
 		return "Hello from voice note", nil
-	}
+	})
 	cake, err := b.createCompanion(t.Context(), object{"name": "Cake", "form": "a cat"})
 	if err != nil {
 		t.Fatal(err)

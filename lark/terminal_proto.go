@@ -25,8 +25,6 @@ const (
 	msgRecStart    uint8 = 0x06
 	msgRecEnd      uint8 = 0x07
 	msgTTSAck      uint8 = 0x08
-	msgMedia     uint8 = 0x0A
-	msgSetVolume uint8 = 0x0E
 	msgPing      uint8 = 0x0F
 	msgPong      uint8 = 0x10
 
@@ -464,13 +462,6 @@ func encodeTTSAck(aborted bool, audioID uint64) []byte {
 	}
 	binary.LittleEndian.PutUint64(b[1:9], audioID)
 	return b[:]
-}
-
-func parseSetVolume(b []byte) (auto bool, level int, ok bool) {
-	if len(b) < 2 {
-		return false, 0, false
-	}
-	return b[0] != 0, int(b[1]), true
 }
 
 func encodeRecCtrl(op, flags uint8, session uint16, target string) []byte {

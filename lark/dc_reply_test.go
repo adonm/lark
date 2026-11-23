@@ -94,7 +94,7 @@ func dcSent(stub *stubDCRPC) []stubDCSent {
 // tapUtterance records a tap-to-talk reply without waiting for spoken audio.
 func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText string) {
 	t.Helper()
-	b.stt = func(context.Context, []byte) (string, error) { return sttText, nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
 	b.ws.mu.Lock()
 	d := b.ws.terminals[termID]
 	b.ws.startRecording(d, "", time.Now(), true)
@@ -352,7 +352,7 @@ func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
 	}
 	ackNotice(t, hw)
 
-	b.stt = func(context.Context, []byte) (string, error) { return "See you at six", nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return "See you at six", nil })
 	b.ws.mu.Lock()
 	b.ws.startRecording(d, target, time.Now(), true)
 	b.ws.mu.Unlock()

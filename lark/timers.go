@@ -245,7 +245,6 @@ func (m *timerManager) update(ctx context.Context, id, companion string, args ob
 	if m.closed {
 		return t, problem(503, "Timers unavailable")
 	}
-	// A library rename can also change app_name; read and update atomically.
 	tx, err := m.b.db.BeginTx(ctx, nil)
 	unavailable := problem(502, "Cannot update timer")
 	if err != nil {

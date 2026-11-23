@@ -69,57 +69,6 @@ func shortText(v any, limit int, plain bool) string {
 }
 
 var (
-	hexColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 	targetRE = regexp.MustCompile(`^[\pL\pN_ .'’-]{1,64}$`)
 	fenced   = regexp.MustCompile("(?ms)^[ \t]*```[^\n]*(?:\n|\\z).*?(^[ \t]*```[ \t]*\r?$|\\z)")
 )
-
-func color(v any) string {
-	if s := str(v); hexColor.MatchString(s) {
-		return strings.ToUpper(s)
-	}
-	return ""
-}
-
-func cardLines(text string) []string {
-	return wrapCardLines(text, 27, 3)
-}
-
-func wrapCardLines(text string, width, count int) []string {
-	var lines []string
-	line := ""
-words:
-	for word := range strings.FieldsSeq(text) {
-		for word != "" {
-			n := width - runeLen(line)
-			if line != "" {
-				n--
-				if runeLen(word) > n {
-					lines = append(lines, line)
-					if len(lines) == count {
-						last := &lines[count-1]
-						if runeLen(*last) == width {
-							if i := strings.LastIndexByte(*last, ' '); i >= 0 {
-								*last = (*last)[:i]
-							} else {
-								*last = truncate(*last, width-1)
-							}
-						}
-						*last += "…"
-						break words
-					}
-					line = ""
-					continue
-				}
-				line += " "
-			}
-			chunk := truncate(word, n)
-			line += chunk
-			word = word[len(chunk):]
-		}
-	}
-	if len(lines) < count && line != "" {
-		lines = append(lines, line)
-	}
-	return lines
-}

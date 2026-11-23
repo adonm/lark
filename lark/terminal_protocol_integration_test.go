@@ -101,10 +101,10 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing.T) {
 	sttGot := make(chan []byte, 1)
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
-		b.stt = func(_ context.Context, pcm []byte) (string, error) {
+		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
 			sttGot <- bytes.Clone(pcm)
 			return "", nil
-		}
+		})
 	})
 	if _, err := b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"}); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
 	})
 	pcm := bytes.Repeat([]byte{0x31, 0x00}, rtpSamples)
-	hw2.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	hw2.sendRTP(t, rtpPTRecPCM, 1, 320, pcm)
 	hw2.recEnd(t, "", false)
 	select {
 	case got := <-sttGot:

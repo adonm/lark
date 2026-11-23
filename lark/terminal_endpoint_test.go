@@ -109,13 +109,13 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	clips := make(chan []byte, 8)
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.endpoint = testEndpointSettings()
-		b.stt = func(_ context.Context, pcm []byte) (string, error) {
+		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
 			clips <- slices.Clone(pcm)
 			if bytes.Count(pcm, bytes.Repeat([]byte{17, 0}, endpointBytes/2)) >= 2 {
 				return "hello world", nil
 			}
 			return "hello", nil
-		}
+		})
 	})
 	const id = "vocat-e021"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -135,7 +135,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 		for len(p) > 0 {
 			n := min(2*pcmPacket, len(p))
 			seq++
-			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, p[:n])
 			p = p[n:]
 		}
 	}
@@ -208,7 +208,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	var decodes atomic.Int32
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.endpoint = testEndpointSettings()
-		b.stt = func(ctx context.Context, pcm []byte) (string, error) {
+		b.setSTT(func(ctx context.Context, pcm []byte) (string, error) {
 			switch decodes.Add(1) {
 			case 1:
 				first <- struct{}{}
@@ -220,7 +220,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 				t.Error("already transcribed the silence; do not decode it again")
 				return "", nil
 			}
-		}
+		})
 	})
 	const id = "vocat-e025"
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
@@ -238,7 +238,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 		for len(p) > 0 {
 			n := min(2*pcmPacket, len(p))
 			seq++
-			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, p[:n])
+			d.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, p[:n])
 			p = p[n:]
 		}
 	}
@@ -388,7 +388,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	var count atomic.Int32
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.endpoint = testEndpointSettings()
-		b.stt = func(context.Context, []byte) (string, error) { return "and add stars", nil }
+		b.setSTT(func(context.Context, []byte) (string, error) { return "and add stars", nil })
 		b.oc = testOpenCode(t, b.root, dir, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/session", "/api/session/" + sid:
@@ -441,7 +441,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	d.recStart(t, "")
 	pcm := make([]byte, endpointBytes)
 	pcm[0] = 18
-	d.sendRTP(t, rtpPTRecPCM, 1, 320, 1, pcm)
+	d.sendRTP(t, rtpPTRecPCM, 1, 320, pcm)
 	d.recEnd(t, "", false)
 	d.barrier(t)
 	select {

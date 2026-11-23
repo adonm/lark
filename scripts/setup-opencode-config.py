@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-directory, bridge = map(Path, sys.argv[1:3])
+directory, lark_bin = map(Path, sys.argv[1:3])
 source = Path(__file__).resolve().parent.parent / "config/opencode/lark-fallback.js"
 config = directory / "opencode.jsonc"
 package = "./lark-model-router"
@@ -90,7 +90,7 @@ if not config.exists():
     update = {
         "$schema": "https://opencode.ai/config.json",
         "default_agent": "lark",
-        "mcp": {"servers": {"lark": {"type": "local", "command": [str(bridge), "mcp"]}}},
+        "mcp": {"servers": {"lark": {"type": "local", "command": [str(lark_bin), "mcp"]}}},
         "agents": {
             "lark": {"model": PRIMARY_MODEL},
             "deep": {

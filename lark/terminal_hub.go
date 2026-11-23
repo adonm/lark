@@ -50,7 +50,7 @@ type wsTerminal struct {
 	client      *wsClient
 	id             string
 	key            string
-	kind           string // "hardware" or "web"
+	kind           string // "hardware"
 	protoKind      uint8
 	companionID    string
 	ip             string
@@ -128,24 +128,6 @@ type wsTerminal struct {
 	audioUntil time.Time
 }
 
-func (d *wsTerminal) virtual() bool { return d.kind == "web" || d.client.kind == "web" }
-
-func (c *wsClient) ping(now time.Time) wsFrame {
-	c.pingMu.Lock()
-	c.pingSentAt = now
-	c.pingMu.Unlock()
-	return wsFrame{wsPing, le.AppendUint64(nil, uint64(now.UnixNano()))}
-}
-
-func (c *wsClient) pong(data []byte) {
-	c.pingMu.Lock()
-	defer c.pingMu.Unlock()
-	if len(data) == 8 && !c.pingSentAt.IsZero() && le.Uint64(data) == uint64(c.pingSentAt.UnixNano()) {
-		c.rtt = new(milliseconds(time.Since(c.pingSentAt)))
-		c.pingSentAt = time.Time{}
-	}
-}
-
 func (c *wsClient) pingRTT() *float64 {
 	c.pingMu.Lock()
 	defer c.pingMu.Unlock()
@@ -158,45 +140,6 @@ func (h *wsHub) peerSnapshot(sender string) ([]companionTarget, error) {
 
 func (b *larkServer) peerSnapshot(sender string) ([]companionTarget, error) {
 	return b.companionTargets(sender)
-}
-
-type peerDisplay struct {
-	id          string
-	kind        string
-	companionID string
-	ip          string
-	port        int
-	lastSeen    int64
-	auto        bool
-	online      bool
-	firmware    string
-	caps        terminalCaps
-}
-
-func (h *wsHub) onlineTerminals() map[string]peerDisplay {
-	out := make(map[string]peerDisplay, len(h.terminals))
-	for _, d := range h.terminals {
-		if !h.active(d) {
-			continue
-		}
-		ip := d.ip
-		if d.virtual() {
-			ip = ""
-		}
-		out[d.key] = peerDisplay{
-			id:          d.id,
-			kind:        d.kind,
-			companionID: d.companionID,
-			ip:          ip,
-			port:        d.port,
-			lastSeen:    d.lastSeen,
-			auto:        d.autoVol,
-			online:      true,
-			firmware:    d.firmware,
-			caps:        d.caps,
-		}
-	}
-	return out
 }
 
 func (h *wsHub) broadcastPeers() {
@@ -331,8 +274,6 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		return false
 	}
 	termID := strings.ToLower(strings.TrimSpace(ev.terminalID))
-	kindStr := "hardware"
-	clientKind := "hardware"
 	screen, board := roundScreen, ""
 	dispFmt := ev.displayFormats
 	if dispFmt == 0 {
@@ -342,7 +283,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 	if frameCodecs == 0 && dispFmt&dispRGB565 != 0 {
 		frameCodecs = codecBitAll
 	}
-	if !terminalIDRE.MatchString(termID) || webTerminalID.MatchString(termID) {
+	if !terminalIDRE.MatchString(termID) {
 		c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid hardware terminal ID"))
 		return false
 	}
@@ -392,7 +333,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		client:         c,
 		id:             rec.ID,
 		key:            rec.ID,
-		kind:           kindStr,
+		kind:           "hardware",
 		protoKind:      ev.kind,
 		companionID:    rec.CompanionID,
 		ip:             rec.IP,
@@ -432,7 +373,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		h.stopPlayback(old, true)
 		d.rev = old.rev
 	}
-	h.terminals[d.key], c.terminal, c.kind = d, d, clientKind
+	h.terminals[d.key], c.terminal = d, d
 	if d.companionID != "" && h.voiceOwners[d.companionID] == "" {
 		h.voiceOwners[d.companionID] = d.id
 	}
@@ -477,18 +418,12 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 	if exists {
 		compID = rec.CompanionID
 	}
-	kindStr := "web"
-	clientKind := "web"
-	if entry.kind == termKindHardware {
-		kindStr = "hardware"
-		clientKind = "hardware"
-	}
 	d := &wsTerminal{
 		client:         c,
 		id:             entry.terminalID,
 		key:            entry.terminalID,
-		kind:           kindStr,
-		protoKind:      entry.kind,
+		kind:           "hardware",
+		protoKind:      termKindHardware,
 		companionID:    compID,
 		ip:             rec.IP,
 		port:           rec.Port,
@@ -522,7 +457,7 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 		h.stopPlayback(old, true)
 		d.rev = old.rev
 	}
-	h.terminals[d.key], c.terminal, c.kind = d, d, clientKind
+	h.terminals[d.key], c.terminal = d, d
 	if d.companionID != "" {
 		if entry.hadVoiceOwner {
 			h.voiceOwners[d.companionID] = d.id
@@ -651,7 +586,7 @@ func (h *wsHub) companionPose(d *wsTerminal, now time.Time, mood string) compani
 }
 
 func (h *wsHub) frameGrade(d *wsTerminal, now time.Time) gradeKey {
-	if !h.atmosphere || d.virtual() {
+	if !h.atmosphere {
 		return gradeDay
 	}
 	return gradeAt(now, nil)
@@ -1186,7 +1121,7 @@ func (h *wsHub) animate(ctx context.Context) {
 					continue
 				}
 				turnActive := d.recording.active() || d.busy || d.ttsStarted || d.awaitAck
-				if checkGrade && !turnActive && !d.virtual() && !(d.asleep && d.caps.PanelSleep) &&
+				if checkGrade && !turnActive && !(d.asleep && d.caps.PanelSleep) &&
 					d.svg.grade != h.frameGrade(d, now) {
 					h.render(d, now, false)
 				}
@@ -1198,7 +1133,7 @@ func (h *wsHub) animate(ctx context.Context) {
 				case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
 					h.render(d, now, false)
-				case d.asleep && d.caps.PanelSleep && !d.virtual():
+				case d.asleep && d.caps.PanelSleep:
 					// The battery board's panel is off; skip idle updates.
 				case d.drawer == "stats" && !d.asleep && !turnActive && now.Sub(d.statsAt) >= diagInterval:
 					h.render(d, now, false)

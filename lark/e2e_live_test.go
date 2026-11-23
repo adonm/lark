@@ -387,7 +387,7 @@ func (c *e2eCompanion) audio(t *testing.T, prefix byte, pcm []byte) {
 	for offset := 0; offset < len(pcm); offset += rtpPCMBytes {
 		part := pcm[offset:min(offset+rtpPCMBytes, len(pcm))]
 		seq++
-		c.sendRTP(t, pt, seq, uint32(seq)*320, 1, part)
+		c.sendRTP(t, pt, seq, uint32(seq)*320, part)
 	}
 }
 

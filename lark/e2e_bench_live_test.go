@@ -85,7 +85,7 @@ func TestTurnBench(t *testing.T) {
 			for offset := 0; offset < len(pcm) && !stopped; offset += rtpPCMBytes {
 				part := pcm[offset:min(offset+rtpPCMBytes, len(pcm))]
 				seq++
-				c.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, 1, part)
+				c.sendRTP(t, rtpPTRecPCM, seq, uint32(seq)*320, part)
 				<-ticker.C
 			}
 			ticker.Stop()

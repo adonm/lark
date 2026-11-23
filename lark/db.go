@@ -45,7 +45,7 @@ var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS memory (scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key))`,
 	`CREATE TABLE IF NOT EXISTS stories (id TEXT PRIMARY KEY, title TEXT NOT NULL, twee TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, passages INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS story_progress (companion_id TEXT NOT NULL, story_id TEXT NOT NULL, passage TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 0, flags_json TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL, PRIMARY KEY (companion_id, story_id))`,
-	`CREATE TABLE IF NOT EXISTS timers (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, label TEXT NOT NULL, say TEXT NOT NULL, chime TEXT NOT NULL, wake_agent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, fire_at TEXT NOT NULL, notes_json TEXT NOT NULL DEFAULT '[]', app_name TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE IF NOT EXISTS timers (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, label TEXT NOT NULL, say TEXT NOT NULL, chime TEXT NOT NULL, wake_agent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, fire_at TEXT NOT NULL, notes_json TEXT NOT NULL DEFAULT '[]')`,
 }
 
 type larkDB struct {
@@ -253,7 +253,45 @@ func (d *larkDB) initSchema(ctx context.Context) error {
 			return fmt.Errorf("initialize Lark schema: %w", err)
 		}
 	}
+	// Columns retired from the baseline. SQLite has no DROP COLUMN IF EXISTS,
+	// so probe the table first; fresh databases never have them.
+	for _, col := range []struct{ table, column string }{
+		{"timers", "app_name"},
+	} {
+		exists, err := columnExists(ctx, tx, col.table, col.column)
+		if err != nil {
+			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE "+col.table+" DROP COLUMN "+col.column); err != nil {
+			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+	}
 	return tx.Commit()
+}
+
+func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 const initialAutoVolume = 55

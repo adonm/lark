@@ -114,13 +114,13 @@ func sendTestUtterance(t *testing.T, hw *testWS) {
 	var seq uint16 = 1
 	var ts uint32 = 320
 	for range 5 {
-		hw.sendRTP(t, rtpPTRecPCM, seq, ts, 1, voiced)
+		hw.sendRTP(t, rtpPTRecPCM, seq, ts, voiced)
 		seq++
 		ts += 320
 	}
 	silent := make([]byte, endpointBytes)
 	for range 235 {
-		hw.sendRTP(t, rtpPTRecPCM, seq, ts, 1, silent)
+		hw.sendRTP(t, rtpPTRecPCM, seq, ts, silent)
 		seq++
 		ts += 320
 	}
@@ -128,7 +128,7 @@ func sendTestUtterance(t *testing.T, hw *testWS) {
 
 func sendSpeechAndWaitTTS(t *testing.T, hw *testWS, b *larkServer, termID, sttText string) uint64 {
 	t.Helper()
-	b.stt = func(context.Context, []byte) (string, error) { return sttText, nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
 	b.ws.mu.Lock()
 	d := b.ws.terminals[termID]
 	b.ws.startRecording(d, "", time.Now(), true)
@@ -188,7 +188,7 @@ func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 
-	b.stt = func(context.Context, []byte) (string, error) { return "Tell me a story", nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return "Tell me a story", nil })
 	sendTestUtterance(t, hw)
 	hw.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
@@ -277,7 +277,7 @@ func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 
-	b.stt = func(context.Context, []byte) (string, error) { return "Tell her I'm coming", nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return "Tell her I'm coming", nil })
 	sendTestUtterance(t, hw)
 	hw.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
@@ -313,7 +313,7 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 
-	b.stt = func(context.Context, []byte) (string, error) { return "um", nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return "um", nil })
 	sendTestUtterance(t, hw)
 	hw.until(t, func(f wsFrame) bool {
 		p := framePayload(f)
@@ -338,7 +338,7 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 
-	b.stt = func(context.Context, []byte) (string, error) { return "Overheard chatter", nil }
+	b.setSTT(func(context.Context, []byte) (string, error) { return "Overheard chatter", nil })
 	sendTestUtterance(t, hw)
 	hw.until(t, func(f wsFrame) bool {
 		p := framePayload(f)

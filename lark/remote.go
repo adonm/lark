@@ -528,7 +528,7 @@ func (m *remoteManager) handleAuthorized(w http.ResponseWriter, r *http.Request,
 func (b *larkServer) serveRemoteAsset(w http.ResponseWriter, path string) {
 	name := strings.TrimPrefix(path, remotePath+"/")
 	switch name {
-	case "style.css", "app.js", "oat.min.css", "oat.min.js", "icon.svg":
+	case "style.css", "app.js", "oat.min.css", "oat.min.js":
 	default:
 		sendError(w, problem(404, "Not found"))
 		return
@@ -628,7 +628,6 @@ func (b *larkServer) serveRemotePWA(w http.ResponseWriter, r *http.Request, path
 			"background_color": "#faf7f2",
 			"icons":            icons,
 		})
-		w.Header().Set("Content-Type", "application/manifest+json")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		sendBytes(w, 200, "application/manifest+json", data)
 		return
@@ -642,7 +641,6 @@ func (b *larkServer) serveRemotePWA(w http.ResponseWriter, r *http.Request, path
 			sendError(w, problem(502, "Cannot render remote icon"))
 			return
 		}
-		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		sendBytes(w, 200, "image/png", icon)
 		return
@@ -972,9 +970,6 @@ func (b *larkServer) remoteStory(r *http.Request, companionID string, restart bo
 		return nil, err
 	}
 	storyID := strings.TrimSpace(str(args["story"]))
-	if storyID == "" {
-		storyID = strings.TrimSpace(str(args["app"]))
-	}
 	if storyID == "" {
 		return nil, problem(400, "Missing story ID.")
 	}
