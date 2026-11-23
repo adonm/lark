@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -42,13 +43,20 @@ func vadModelPath() string {
 	if p := os.Getenv("LARK_VAD_MODEL"); p != "" {
 		return p
 	}
-	return "/var/home/bazzite/.local/share/lark/stt-models/silero_vad_v5.onnx"
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "lark", "stt-models", sileroModel)
 }
 
 // Loading per capture measured ~23 ms; reuse after the first capture is a
 // reset. Both benchmarks skip without the pinned model.
 func BenchmarkSileroVADLoad(b *testing.B) {
 	path := vadModelPath()
+	if path == "" {
+		b.Skip("no home directory")
+	}
 	if _, err := os.Stat(path); err != nil {
 		b.Skip("no VAD model")
 	}
@@ -64,6 +72,9 @@ func BenchmarkSileroVADLoad(b *testing.B) {
 
 func BenchmarkSileroVADAcquire(b *testing.B) {
 	path := vadModelPath()
+	if path == "" {
+		b.Skip("no home directory")
+	}
 	if _, err := os.Stat(path); err != nil {
 		b.Skip("no VAD model")
 	}
