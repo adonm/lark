@@ -73,6 +73,10 @@ type wsHub struct {
 // against long histories of replaced portraits.
 const assetsCacheLimit = 16
 
+// debugScreenText builds the labelled hit trace that DOM tests wait on. It is
+// off in production, where nothing reads svgScreen.source.
+var debugScreenText = false
+
 type cachedAssets struct {
 	bg    *image.RGBA
 	poses [4]*image.RGBA

@@ -40,12 +40,11 @@ func hitID(hits []hitBox, x, y int) string {
 }
 
 type svgScreen struct {
-	raw, source string
-	hits        []hitBox
-	hitWarnings []string
-	fb          []uint16
-	render      time.Duration
-	grade       gradeKey
+	source string
+	hits   []hitBox
+	fb     []uint16
+	render time.Duration
+	grade  gradeKey
 }
 
 func pack565(r, g, b uint8) uint16 {

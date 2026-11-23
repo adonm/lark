@@ -25,7 +25,7 @@ const (
 	endpointSpecQuiet           = 250 * time.Millisecond
 	endpointCap                 = 1200 * time.Millisecond
 	endpointProbeEvery          = 250 * time.Millisecond
-	endpointProbeWindow         = 8 * sampleRate * 2 // last <= 8 s
+	endpointProbeWindow         = 4 * sampleRate * 2 // last <= 4 s
 	vadTail                     = 320 * time.Millisecond
 	speechEnergyRatio           = 0.20
 	smartTurnThreshold          = float32(0.90)

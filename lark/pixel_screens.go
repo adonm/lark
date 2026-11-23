@@ -58,6 +58,7 @@ type pixelMemoryItem struct {
 }
 
 func finishPixelScreen(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp) *image.RGBA {
+	defer releasePixelCanvas(c)
 	phys := c.scaleNearest(spec.artScale)
 	for _, t := range texts {
 		drawTextPhysical(phys, t.x, t.y, t.text, t.font, t.scale, t.color)
@@ -84,7 +85,7 @@ func pixelNavHeight(spec pixelDisplaySpec) int {
 	return 16 // 48 px physical on VoCat (3x)
 }
 
-func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page, totalPages int, centerLabel string, border imagecolor.RGBA) []pixelTextOp {
+func drawNavBar(c *pixelCanvas, spec pixelDisplaySpec, texts []pixelTextOp, page, totalPages int, border imagecolor.RGBA) []pixelTextOp {
 	s := spec.artScale
 	navH := pixelNavHeight(spec)
 	y := spec.safe.Max.Y - navH
@@ -295,7 +296,7 @@ func renderPixelMenuGrid(spec pixelDisplaySpec, title string, items []pixelMenuI
 		})
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
+	texts = drawNavBar(c, spec, texts, page, totalPages, th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 
@@ -359,7 +360,7 @@ func renderPixelStoriesList(spec pixelDisplaySpec, stories []pixelStory, page in
 		)
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
+	texts = drawNavBar(c, spec, texts, page, totalPages, th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 
@@ -414,7 +415,7 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 		})
 	}
 
-	texts = drawNavBar(c, spec, texts, page, len(pages), fmt.Sprintf("%d/%d", page+1, len(pages)), th.border)
+	texts = drawNavBar(c, spec, texts, page, len(pages), th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 
@@ -525,7 +526,7 @@ func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, c
 		endBox := physicalRect(image.Rect(panelRect.Min.X+4, panelRect.Max.Y-12, panelRect.Max.X-4, panelRect.Max.Y-2), s)
 		texts = addCenteredText(texts, endBox, "— The End —", dogica.Bold, bodyScale, th.accent2)
 	}
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
+	texts = drawNavBar(c, spec, texts, page, totalPages, th.border)
 	hits, acts := navBarHits(spec, page, totalPages)
 	if page == 0 {
 		acts["menu-back"] = sceneAction{"menu-back", ""}
@@ -693,7 +694,7 @@ func renderPixelMemoriesList(spec pixelDisplaySpec, items []pixelMemoryItem, tit
 		)
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, fmt.Sprintf("%d/%d", page+1, totalPages), th.border)
+	texts = drawNavBar(c, spec, texts, page, totalPages, th.border)
 	return finishPixelScreen(c, spec, texts)
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -160,10 +161,15 @@ func (w *synthWorker) synthesizeOn(ctx context.Context, queue chan<- ttsRequest,
 	}
 }
 
+// Synthesized clips are cached by text until their bytes exceed the budget.
+// Fillers and openers are pinned: they are the clips a turn reaches for first.
+const clipCacheBytes = 24 << 20
+
 type speechClips struct {
 	mu    sync.Mutex
 	clips map[clipKey]*clip
 	order []clipKey
+	bytes int
 }
 
 type clipKey struct{ voice, text string }
@@ -293,13 +299,36 @@ func (c *speechClips) reserve(voice, text string) (item *clip, owner bool) {
 		return existing, false
 	}
 	item = &clip{done: make(chan struct{})}
-	if len(c.clips) == 128 {
-		delete(c.clips, c.order[0])
-		c.order = c.order[1:]
-	}
 	c.clips[key] = item
 	c.order = append(c.order, key)
 	return item, true
+}
+
+func pinnedClip(text string) bool {
+	return slices.Contains(thinkingFillers, text) || slices.Contains(commonOpeners, text)
+}
+
+// evictLocked drops least-recently reserved finished clips until the byte
+// budget holds. Pinned phrases and in-flight clips stay.
+func (c *speechClips) evictLocked() {
+	remaining := c.order[:0]
+	for _, key := range c.order {
+		item := c.clips[key]
+		if c.bytes <= clipCacheBytes || item == nil || pinnedClip(key.text) {
+			if item != nil {
+				remaining = append(remaining, key)
+			}
+			continue
+		}
+		select {
+		case <-item.done:
+			delete(c.clips, key)
+			c.bytes -= len(item.pcm)
+		default:
+			remaining = append(remaining, key)
+		}
+	}
+	c.order = remaining
 }
 
 // fill synthesizes a reserved clip and publishes it to awaiters.
@@ -310,9 +339,9 @@ func (c *speechClips) fill(ctx context.Context, w *synthWorker, voice, text stri
 
 func (c *speechClips) complete(voice, text string, item *clip) {
 	key := clipKey{voice, text}
-	if item.err != nil {
-		c.mu.Lock()
-		if c.clips[key] == item {
+	c.mu.Lock()
+	if c.clips[key] == item {
+		if item.err != nil {
 			delete(c.clips, key)
 			for i, ordered := range c.order {
 				if ordered == key {
@@ -320,9 +349,12 @@ func (c *speechClips) complete(voice, text string, item *clip) {
 					break
 				}
 			}
+		} else if item.pcm != nil {
+			c.bytes += len(item.pcm)
+			c.evictLocked()
 		}
-		c.mu.Unlock()
 	}
+	c.mu.Unlock()
 	close(item.done)
 }
 
@@ -371,6 +403,31 @@ func (s *AudioStream) append(pcm []byte) bool {
 	}
 	s.chunks = append(s.chunks, pcm)
 	s.size += len(pcm)
+	s.cond.Broadcast()
+	return true
+}
+
+// speechPause is shared zero PCM inserted between sentences.
+var speechPause = make([]byte, sampleRate/5)
+
+func (s *AudioStream) appendSilence(n int) bool {
+	if n <= 0 {
+		return true
+	}
+	s.cond.L.Lock()
+	defer s.cond.L.Unlock()
+	if s.done || n > maxPCM-s.size {
+		return false
+	}
+	if len(s.chunks) == 0 {
+		s.firstAt = time.Now()
+	}
+	chunk := speechPause
+	if n > len(chunk) {
+		chunk = make([]byte, n)
+	}
+	s.chunks = append(s.chunks, chunk[:n])
+	s.size += n
 	s.cond.Broadcast()
 	return true
 }
@@ -549,8 +606,9 @@ func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorke
 		defer cancel()
 		first := true
 		emitPCM := func(pcm []byte) bool {
-			if !first {
-				pcm = append(make([]byte, sampleRate/5, sampleRate/5+len(pcm)), pcm...)
+			if !first && !t.stream.appendSilence(sampleRate/5) {
+				t.stream.finish(errTTS)
+				return false
 			}
 			if !t.stream.append(pcm) {
 				t.stream.finish(errTTS)

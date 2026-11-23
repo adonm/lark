@@ -484,3 +484,27 @@ func TestListenCaptureCapCoversWholeWindow(t *testing.T) {
 		t.Fatalf("listen capture not bounded by the window: %d bytes", got)
 	}
 }
+
+func TestEndpointRingPushDoesNotAllocate(t *testing.T) {
+	free := make(chan int, 1)
+	free <- 0
+	c := &endpointCapture{
+		free:    free,
+		packets: make(chan micPacket, 1),
+		slots:   new(endpointRing),
+	}
+	pcm := make([]byte, endpointSlotBytes)
+	allocs := testing.AllocsPerRun(100, func() {
+		if !c.push(pcm, time.Now()) {
+			t.Fatal("push rejected")
+		}
+		pkt := <-c.packets
+		if len(pkt.pcm) != len(pcm) {
+			t.Fatal("short packet")
+		}
+		c.free <- pkt.slot
+	})
+	if allocs != 0 {
+		t.Fatalf("ring push allocated %v times/op, want 0", allocs)
+	}
+}

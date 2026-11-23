@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 
 	xdraw "golang.org/x/image/draw"
 )
@@ -476,7 +477,29 @@ func derivePixelTheme(bg *image.RGBA, poses []*image.RGBA) pixelTheme {
 	return th
 }
 
+var (
+	placeholderOnce       sync.Once
+	placeholderCache      [4]*image.RGBA
+	placeholderThemeOnce  sync.Once
+	placeholderThemeCache pixelTheme
+)
+
+// pixelPlaceholderPoses returns one shared immutable set: every terminal
+// without a portrait draws the same creature.
 func pixelPlaceholderPoses() [4]*image.RGBA {
+	placeholderOnce.Do(func() { placeholderCache = buildPlaceholderPoses() })
+	return placeholderCache
+}
+
+func placeholderPixelTheme() pixelTheme {
+	placeholderThemeOnce.Do(func() {
+		poses := pixelPlaceholderPoses()
+		placeholderThemeCache = derivePixelTheme(nil, poses[:])
+	})
+	return placeholderThemeCache
+}
+
+func buildPlaceholderPoses() [4]*image.RGBA {
 	// Cute 16x16 creature scaled 4x -> 64x64 for idle, blink, talk, think.
 	body := []string{
 		"....kkkkkkkk....",

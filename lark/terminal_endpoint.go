@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -14,7 +15,14 @@ type endpointSettings struct {
 	smartTurn func([]byte) (float32, error)
 }
 
-const endpointRingSlots = 256
+const (
+	endpointRingSlots = 256
+	endpointSlotBytes = rtpPCMBytes // one firmware record chunk (20 ms)
+)
+
+type endpointRing [endpointRingSlots][endpointSlotBytes]byte
+
+var endpointRings = sync.Pool{New: func() any { return new(endpointRing) }}
 
 type endpointCapture struct {
 	ctx         context.Context
@@ -22,7 +30,7 @@ type endpointCapture struct {
 	owner       *wsClient
 	packets     chan micPacket
 	free        chan int
-	slots       *[endpointRingSlots][2 * pcmPacket]byte
+	slots       *endpointRing
 	stop        chan struct{}
 	result      chan captureResult
 	listening   chan struct{}
@@ -42,6 +50,9 @@ type micPacket struct {
 }
 
 func (c *endpointCapture) push(pcm []byte, at time.Time) bool {
+	if c.slots == nil {
+		return false
+	}
 	if c.free == nil {
 		select {
 		case c.packets <- micPacket{pcm: append([]byte(nil), pcm...), at: at, slot: -1}:
@@ -52,9 +63,19 @@ func (c *endpointCapture) push(pcm []byte, at time.Time) bool {
 	}
 	select {
 	case idx := <-c.free:
-		n := copy(c.slots[idx][:], pcm)
-		c.packets <- micPacket{pcm: c.slots[idx][:n], at: at, slot: idx}
-		return true
+		if len(pcm) <= endpointSlotBytes {
+			n := copy(c.slots[idx][:], pcm)
+			c.packets <- micPacket{pcm: c.slots[idx][:n], at: at, slot: idx}
+			return true
+		}
+		// Rare oversized chunk: keep the slot and copy out of band.
+		c.free <- idx
+		select {
+		case c.packets <- micPacket{pcm: append([]byte(nil), pcm...), at: at, slot: -1}:
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -110,7 +131,7 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 		owner:       d.client,
 		packets:     make(chan micPacket, endpointRingSlots),
 		free:        free,
-		slots:       new([endpointRingSlots][2 * pcmPacket]byte),
+		slots:       endpointRings.Get().(*endpointRing),
 		stop:        make(chan struct{}),
 		result:      make(chan captureResult, 1),
 		listening:   make(chan struct{}),
@@ -134,6 +155,12 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 
 func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	defer close(c.result)
+	defer func() {
+		if ring := c.slots; ring != nil {
+			c.slots = nil
+			endpointRings.Put(ring)
+		}
+	}()
 	vad := h.b.endpoint.newVAD()
 	if vad != nil {
 		defer vad.close()
@@ -311,6 +338,10 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			decision = u.policy.decision(at, endpointCap, c.limitSpan, smartTurnCommit, c.listen)
 		}
 		if decision != endpointWait {
+			if probeCancel != nil {
+				probeCancel()
+				probe, probeCancel = nil, nil
+			}
 			if debugEndpoint {
 				mode := "cap"
 				if smartTurnCommit {
@@ -328,9 +359,13 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 			}
 			h.mu.Unlock()
 		} else {
+			// No transcript can change the decision once the quiet window has
+			// passed or the cap is imminent; skip the extra STT work.
 			if vad != nil && probe == nil && u.policy.voiced &&
 				len(u.pcm) > lastProbeAudioLen &&
 				at-lastProbeAt >= endpointProbeEvery &&
+				(!u.policy.inVoice || at-u.policy.lastWordAt < endpointQuiet) &&
+				at-u.policy.lastWordAt < endpointCap-endpointProbeEvery &&
 				(u.policy.inVoice || lastGateOpenLen > lastProbeAudioLen) {
 				lastProbeAt = at
 				lastProbeAudioLen = len(u.pcm)

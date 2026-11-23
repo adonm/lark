@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -38,7 +37,7 @@ type wsStatus struct {
 }
 
 type wsTerminal struct {
-	client      *wsClient
+	client         *wsClient
 	id             string
 	key            string
 	kind           string // "hardware"
@@ -55,49 +54,47 @@ type wsTerminal struct {
 	caps           terminalCaps
 	resumeToken    [resumeTokenLen]byte
 	hasResumeToken bool
-	voice       string
-	announcing  bool
-	companion   companionState
-	vol         int
-	autoVol     bool
-	ambientEMA  float64
-	hasAmbient  bool
-	pct         int
-	charging    bool
-	telemetry   wsStatus
-	frame       *diagFrame
-	svg         svgScreen
-	grade       atomic.Uint32
-	encoder     frameEncoder
-	renderGen   uint64
-	rendering   bool
-	renderNext  *renderRequest
+	voice          string
+	announcing     bool
+	companion      companionState
+	vol            int
+	autoVol        bool
+	ambientEMA     float64
+	hasAmbient     bool
+	pct            int
+	charging       bool
+	telemetry      wsStatus
+	frame          *diagFrame
+	svg            svgScreen
+	scratchFB      []uint16
+	encoder        frameEncoder
+	renderGen      uint64
+	rendering      bool
+	renderNext     *renderRequest
 
-	scene     sceneView
-	view      *sceneView
-	pending   *sceneView
-	card      *sceneView
+	scene         sceneView
+	view          *sceneView
+	pending       *sceneView
+	card          *sceneView
 	drawer        string
 	menuPage      int
 	homePage      int
 	menuData      *menuContent
-	menuHintUntil time.Time
-	bootHint      bool
 	story         *storySession
 	storyPage     int
 	statsAt       time.Time
-	rev       uint64
+	rev           uint64
 	nativeRev     uint16
 	actionRev     uint16
 	hasActionRev  bool
 	actionHitsKey string
-	pose      companionPose
-	moodAt    time.Time
-	last      time.Time
-	meter     time.Time
-	asleep     bool
-	reply      *turnReply // Delta Chat read-out awaiting an in-person reply
-	replyUntil time.Time
+	pose          companionPose
+	moodAt        time.Time
+	last          time.Time
+	meter         time.Time
+	asleep        bool
+	reply         *turnReply // Delta Chat read-out awaiting an in-person reply
+	replyUntil    time.Time
 
 	recording     deviceCapture
 	recSession    uint16
@@ -674,7 +671,6 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 		pose:         pose,
 		listenWindow: d.recording.active() && d.recording.listen,
 	}
-	d.grade.Store(uint32(r.grade))
 	switch {
 	case d.drawer != "" && (mood == "idle" || (d.drawer == drawerStoryReader && (mood == "speaking" || d.recording.listen))):
 		r.drawer = d.drawer
@@ -784,8 +780,7 @@ func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA,
 		return bg, poses, th
 	}
 	poses := pixelPlaceholderPoses()
-	th := derivePixelTheme(nil, poses[:])
-	return nil, poses, th
+	return nil, poses, placeholderPixelTheme()
 }
 
 // invalidateAssets drops the decoded background and poses for a portrait so
@@ -891,7 +886,12 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			if err == nil && img != nil {
 				b := img.Bounds()
 				w, h := b.Dx(), b.Dy()
-				fb := make([]uint16, w*h)
+				var fb []uint16
+				if cap(d.scratchFB) >= w*h {
+					fb = d.scratchFB[:w*h]
+				} else {
+					fb = make([]uint16, w*h)
+				}
 				for y := range h {
 					for x := range w {
 						c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
@@ -900,75 +900,78 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 				}
 				screen = svgScreen{fb: fb, hits: hits}
 				screen.grade = r.grade
+				releasePixelImage(img)
 				var srcParts []string
-				if r.drawer != "" {
-					srcParts = append(srcParts, r.drawer)
-					if r.drawer == drawerMenu {
-						for _, it := range pixelHomeMenuItems {
-							srcParts = append(srcParts, it.label)
+				if debugScreenText {
+					if r.drawer != "" {
+						srcParts = append(srcParts, r.drawer)
+						if r.drawer == drawerMenu {
+							for _, it := range pixelHomeMenuItems {
+								srcParts = append(srcParts, it.label)
+							}
 						}
+						if r.drawer == drawerMore {
+							for _, it := range pixelMoreMenuItems {
+								srcParts = append(srcParts, it.label)
+							}
+						}
+						if r.drawer == drawerVoice {
+							for _, v := range voiceCatalog {
+								srcParts = append(srcParts, v.Name)
+							}
+						}
+						if r.drawer == drawerStats {
+							for _, row := range r.statsRows {
+								srcParts = append(srcParts, row.title, row.text)
+							}
+						}
+						if r.drawer == drawerVolume {
+							mode := "Manual"
+							if r.autoVol {
+								mode = "Auto"
+							}
+							srcParts = append(srcParts, fmt.Sprintf("%s · %d%%", mode, r.vol))
+						}
+						if r.view.menu != nil {
+							if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {
+								srcParts = append(srcParts, "menu-detail-view")
+							}
+							if r.view.menu.notice != "" {
+								srcParts = append(srcParts, r.view.menu.notice)
+							}
+							for _, g := range r.view.menu.games {
+								srcParts = append(srcParts, g.label)
+							}
+							for _, st := range r.view.menu.stories {
+								srcParts = append(srcParts, st.Title)
+							}
+							for _, row := range r.view.menu.rows {
+								srcParts = append(srcParts, row.title, row.text)
+							}
+						}
+						if r.drawer == drawerStoryReader {
+							srcParts = append(srcParts, r.storyTitle, r.storyText)
+							for _, ch := range r.storyChoices {
+								srcParts = append(srcParts, ch.Label)
+							}
+						}
+					} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
+						srcParts = append(srcParts, "home")
 					}
-					if r.drawer == drawerMore {
-						for _, it := range pixelMoreMenuItems {
-							srcParts = append(srcParts, it.label)
-						}
+					if r.view.title != "" {
+						srcParts = append(srcParts, r.view.title)
 					}
-					if r.drawer == drawerVoice {
-						for _, v := range voiceCatalog {
-							srcParts = append(srcParts, v.Name)
-						}
+					if r.view.heading != "" {
+						srcParts = append(srcParts, r.view.heading)
 					}
-					if r.drawer == drawerStats {
-						for _, row := range r.statsRows {
-							srcParts = append(srcParts, row.title, row.text)
-						}
+					if r.view.text != "" {
+						srcParts = append(srcParts, r.view.text)
 					}
-					if r.drawer == drawerVolume {
-						mode := "Manual"
-						if r.autoVol {
-							mode = "Auto"
-						}
-						srcParts = append(srcParts, fmt.Sprintf("%s · %d%%", mode, r.vol))
+					for _, hb := range hits {
+						srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.id, hb.x1, hb.y1, hb.x2, hb.y2))
 					}
-					if r.view.menu != nil {
-						if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {
-							srcParts = append(srcParts, "menu-detail-view")
-						}
-						if r.view.menu.notice != "" {
-							srcParts = append(srcParts, r.view.menu.notice)
-						}
-						for _, g := range r.view.menu.games {
-							srcParts = append(srcParts, g.label)
-						}
-						for _, st := range r.view.menu.stories {
-							srcParts = append(srcParts, st.Title)
-						}
-						for _, row := range r.view.menu.rows {
-							srcParts = append(srcParts, row.title, row.text)
-						}
-					}
-					if r.drawer == drawerStoryReader {
-						srcParts = append(srcParts, r.storyTitle, r.storyText)
-						for _, ch := range r.storyChoices {
-							srcParts = append(srcParts, ch.Label)
-						}
-					}
-				} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
-					srcParts = append(srcParts, "home")
+					screen.source = strings.Join(srcParts, " ")
 				}
-				if r.view.title != "" {
-					srcParts = append(srcParts, r.view.title)
-				}
-				if r.view.heading != "" {
-					srcParts = append(srcParts, r.view.heading)
-				}
-				if r.view.text != "" {
-					srcParts = append(srcParts, r.view.text)
-				}
-				for _, hb := range hits {
-					srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.id, hb.x1, hb.y1, hb.x2, hb.y2))
-				}
-				screen.source = strings.Join(srcParts, " ")
 			}
 		}
 
@@ -1004,6 +1007,9 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 		if err != nil {
 			log.Printf("Lark screen: %v", err)
 			continue
+		}
+		if prev.fb != nil && len(prev.fb) == d.screen.width*d.screen.height {
+			d.scratchFB = prev.fb
 		}
 		d.scene, d.svg = r.view, screen
 		h.sig.notify()

@@ -215,3 +215,13 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 	_ = slices.Clone(entries)
 	_ = context.Canceled
 }
+
+func TestSpeechSilenceChunkIsShared(t *testing.T) {
+	s := newAudioStream()
+	if !s.appendSilence(sampleRate/5) || !s.append([]byte{1, 2}) {
+		t.Fatal("stream rejected chunks")
+	}
+	if &s.chunks[0][0] != &speechPause[0] {
+		t.Fatal("silence was copied instead of referencing the shared chunk")
+	}
+}

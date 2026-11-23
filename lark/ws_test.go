@@ -943,7 +943,10 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	}
 	closeRelease()
 	got = dev.until(t, isPlayback)
-	if len(framePayload(got)) != sampleRate/5+len(speech) || !bytes.HasSuffix(framePayload(got), speech) {
+	if len(framePayload(got)) == sampleRate/5 && bytes.Equal(framePayload(got), make([]byte, sampleRate/5)) {
+		got = dev.until(t, isPlayback) // Silence is its own zero chunk.
+	}
+	if !bytes.Equal(framePayload(got), speech) {
 		t.Fatal("did not receive tail sentence")
 	}
 	end := dev.until(t, func(f wsFrame) bool {

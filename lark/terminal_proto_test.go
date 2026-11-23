@@ -299,9 +299,15 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 
 	b.ws.mu.Lock()
 	d := b.ws.terminals["lark-udprace"]
+	free := make(chan int, 16)
+	for i := range 16 {
+		free <- i
+	}
 	ep := &endpointCapture{
 		cancel:    func() {},
 		packets:   make(chan micPacket, 16),
+		free:      free,
+		slots:     new(endpointRing),
 		result:    make(chan captureResult, 1),
 		listening: make(chan struct{}),
 		deadline:  time.NewTimer(time.Minute),
@@ -386,7 +392,7 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 		owner:     d.client,
 		packets:   make(chan micPacket, endpointRingSlots),
 		free:      free,
-		slots:     new([endpointRingSlots][2 * pcmPacket]byte),
+		slots:     new(endpointRing),
 		listening: make(chan struct{}),
 		deadline:  time.NewTimer(time.Minute),
 	}

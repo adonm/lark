@@ -38,12 +38,12 @@ const (
 	drawerStories     = "stories"
 	drawerStoryReader = "story-reader"
 	drawerMemories    = "memories"
-	drawerPair       = "pair"
-	drawerUnpair     = "unpair"
-	drawerVolume     = "volume"
-	drawerVoice      = "voice"
-	drawerIntercom   = "intercom"
-	drawerStats      = "stats"
+	drawerPair        = "pair"
+	drawerUnpair      = "unpair"
+	drawerVolume      = "volume"
+	drawerVoice       = "voice"
+	drawerIntercom    = "intercom"
+	drawerStats       = "stats"
 )
 
 const (
@@ -281,7 +281,7 @@ func renderPixelListWithHits(spec pixelDisplaySpec, title string, items []tile, 
 		panel := image.Rect(spec.safe.Min.X, listTop, spec.safe.Max.X, listBottom)
 		c.panel(panel.Min.X, panel.Min.Y, panel.Dx(), panel.Dy(), pxTileBG, th.border)
 		texts = addCenteredText(texts, physicalRect(panel, s), empty, dogica.Regular, spec.bodyTextScale, pxMuted)
-		texts = drawNavBar(c, spec, texts, page, totalPages, "", th.border)
+		texts = drawNavBar(c, spec, texts, page, totalPages, th.border)
 		return finishPixelScreen(c, spec, texts), hits, actions
 	}
 
@@ -327,7 +327,7 @@ func renderPixelListWithHits(spec pixelDisplaySpec, title string, items []tile, 
 		}
 	}
 
-	texts = drawNavBar(c, spec, texts, page, totalPages, "", th.border)
+	texts = drawNavBar(c, spec, texts, page, totalPages, th.border)
 	return finishPixelScreen(c, spec, texts), hits, actions
 }
 

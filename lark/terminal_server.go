@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -22,6 +23,7 @@ type nativeClient struct {
 	server   *terminalServer
 	hub      *wsHub
 	conn     net.Conn
+	br       *bufio.Reader
 	remoteIP netip.Addr
 	ssrc     uint32
 	client   *wsClient
@@ -148,8 +150,9 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 		_ = tc.SetWriteBuffer(128 << 10)
 	}
 
+	br := bufio.NewReaderSize(conn, 16<<10)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	msgType, _, payload, err := readProtoFrame(conn)
+	msgType, _, payload, err := readProtoFrame(br)
 	if err != nil {
 		return
 	}
@@ -205,6 +208,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 		server:      s,
 		hub:         s.hub,
 		conn:        conn,
+		br:          br,
 		remoteIP:    remoteIP,
 		ssrc:        ssrc,
 		ctrlOut:     make(chan nativeOutMsg, 64),
@@ -266,7 +270,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
-		mType, _, mPayload, err := readProtoFrame(conn)
+		mType, _, mPayload, err := readProtoFrame(nc.br)
 		if err != nil || c.ctx.Err() != nil {
 			return
 		}
@@ -338,10 +342,15 @@ func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 }
 
 func (nc *nativeClient) writePacket(msgType uint8, payload []byte) bool {
-	pkt := packProtoPacket(msgType, nc.txSeq, payload)
+	var hdr [protoHeaderSize]byte
+	hdr[0] = protoMagic
+	hdr[1] = msgType
+	binary.LittleEndian.PutUint16(hdr[2:4], nc.txSeq)
+	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(payload)))
 	nc.txSeq++
 	_ = nc.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_, err := nc.conn.Write(pkt)
+	bufs := net.Buffers{hdr[:], payload}
+	_, err := bufs.WriteTo(nc.conn)
 	return err == nil
 }
 

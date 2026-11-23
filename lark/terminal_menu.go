@@ -113,7 +113,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	switch a.kind {
 	case "menu":
 		h.chime(d, "tap")
-		d.bootHint = true
 		d.drawer, d.card, d.pending = drawerMenu, nil, nil
 		d.menuPage = 0
 		d.view = nil
@@ -148,7 +147,6 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 				d.menuData.detail = nil
 			} else if d.drawer == drawerMenu {
 				d.drawer = ""
-				d.menuHintUntil = now.Add(3 * time.Second)
 			} else if d.drawer == drawerVolume || d.drawer == drawerPair || d.drawer == drawerUnpair || d.drawer == drawerStats {
 				d.drawer, d.menuPage = drawerMore, 0
 			} else {

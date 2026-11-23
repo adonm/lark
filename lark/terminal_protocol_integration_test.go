@@ -160,6 +160,9 @@ func TestProtocolWireSizesAndAllocs(t *testing.T) {
 	if rtpAllocs != 0 {
 		t.Fatalf("RTP path allocated %v times/op, want 0", rtpAllocs)
 	}
+	if frameAllocs > 2 {
+		t.Fatalf("frame path allocated %v times/op, want <= 2", frameAllocs)
+	}
 	t.Logf("MEASURE pointer_bytes=%d status_bytes=%d frame_allocs=%.1f rtp_allocs=%.1f",
 		ptrBytes, statusBytes, frameAllocs, rtpAllocs)
 	if !strings.Contains("ok", "ok") {

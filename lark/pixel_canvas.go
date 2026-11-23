@@ -4,6 +4,7 @@ import (
 	"image"
 	imagecolor "image/color"
 	"strings"
+	"sync"
 
 	"lark/fonts/dogica"
 )
@@ -58,11 +59,29 @@ type pixelCanvas struct {
 	img  *image.RGBA
 }
 
+var pixelCanvasPool sync.Pool
+
 func newPixelCanvas(w, h int) *pixelCanvas {
+	if v := pixelCanvasPool.Get(); v != nil {
+		c := v.(*pixelCanvas)
+		if cap(c.img.Pix) >= w*h*4 {
+			c.w, c.h = w, h
+			c.img.Rect = image.Rect(0, 0, w, h)
+			c.img.Stride = w * 4
+			c.img.Pix = c.img.Pix[:w*h*4]
+			return c
+		}
+	}
 	return &pixelCanvas{
 		w:   w,
 		h:   h,
 		img: image.NewRGBA(image.Rect(0, 0, w, h)),
+	}
+}
+
+func releasePixelCanvas(c *pixelCanvas) {
+	if c != nil {
+		pixelCanvasPool.Put(c)
 	}
 }
 
@@ -209,11 +228,35 @@ func (c *pixelCanvas) applyLUT(grade gradeKey) {
 	}
 }
 
+// Rendered screens are recycled by the terminal renderer once converted to
+// RGB565. Callers that keep an image (tests, one-off avatars) simply never
+// release it, so it is not reused while they hold it.
+var pixelImagePool sync.Pool
+
+func acquirePixelImage(w, h int) *image.RGBA {
+	if v := pixelImagePool.Get(); v != nil {
+		img := v.(*image.RGBA)
+		if cap(img.Pix) >= w*h*4 {
+			img.Rect = image.Rect(0, 0, w, h)
+			img.Stride = w * 4
+			img.Pix = img.Pix[:w*h*4]
+			return img
+		}
+	}
+	return image.NewRGBA(image.Rect(0, 0, w, h))
+}
+
+func releasePixelImage(img *image.RGBA) {
+	if img != nil {
+		pixelImagePool.Put(img)
+	}
+}
+
 func (c *pixelCanvas) scaleNearest(scale int) *image.RGBA {
 	if scale < 1 {
 		scale = 1
 	}
-	out := image.NewRGBA(image.Rect(0, 0, c.w*scale, c.h*scale))
+	out := acquirePixelImage(c.w*scale, c.h*scale)
 	if scale == 1 {
 		copy(out.Pix, c.img.Pix)
 		return out

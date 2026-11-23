@@ -25,3 +25,16 @@ func BenchmarkRenderPixelMenu(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkRenderPixelHomeRecycled(b *testing.B) {
+	poses := pixelPlaceholderPoses()
+	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
+		b.Run(spec.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				img := renderPixelHome(spec, nil, poses[0], gradeDay, "listening", "")
+				releasePixelImage(img)
+			}
+		})
+	}
+}
