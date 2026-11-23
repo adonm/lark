@@ -65,7 +65,7 @@ func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, requ
 		h.pushRecStart(d, target, bridgeEndpoint, false)
 	}
 	h.takeVoiceOwnership(d)
-	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
+	h.setCompanionStatus(d.companionID, statusListening)
 	h.render(d, now, false)
 }
 
@@ -86,7 +86,7 @@ func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
 	d.recSession++
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
-	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
+	h.setCompanionStatus(d.companionID, statusListening)
 	h.render(d, now, false)
 	return true
 }
@@ -112,7 +112,7 @@ func (h *wsHub) startStoryChoiceListen(d *wsTerminal, now time.Time) bool {
 	d.recSession++
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
-	h.setCompanionStatus(d.companionID, statusListening, 0, promptNone, "")
+	h.setCompanionStatus(d.companionID, statusListening)
 	h.render(d, now, false)
 	return true
 }
@@ -131,7 +131,7 @@ func (h *wsHub) tryStoryVoiceChoice(d *wsTerminal, turnID uint64, text string) b
 	target := d.story.choices[idx].Target
 	d.busy = false
 	d.turn = 0
-	h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
+	h.setCompanionStatus(d.companionID, statusIdle)
 	h.advanceStoryPassage(d, target, true)
 	h.mu.Unlock()
 	return true
@@ -240,7 +240,7 @@ func (h *wsHub) endRecording(d *wsTerminal, reqTarget string, cancelled bool, no
 		if cancelled {
 			h.pushChime(d, "cancel")
 		}
-		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
+		h.setCompanionStatus(d.companionID, statusIdle)
 		h.wake(d, now)
 		if !h.maybeStartNoticeLocked(d, now) {
 			h.render(d, now, false)
@@ -310,7 +310,7 @@ func (h *wsHub) beginTurn(d *wsTerminal, now time.Time, keepView bool, source st
 	if !keepView {
 		h.pushChime(d, "think")
 	}
-	h.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
+	h.setCompanionStatus(d.companionID, statusThinking)
 	h.render(d, now, false)
 	go run(ctx, id)
 }
@@ -365,9 +365,9 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 	}
 	if !d.ttsStarted && !d.awaitAck && d.stopAudio == nil && d.replyAudio == nil {
 		if d.queuedVoice != nil {
-			h.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
+			h.setCompanionStatus(d.companionID, statusThinking)
 		} else if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
-			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
+			h.setCompanionStatus(d.companionID, statusDone)
 		}
 	}
 	if h.maybeStartNoticeLocked(d, now) {
@@ -389,7 +389,7 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 func (h *wsHub) turnError(d *wsTerminal, id uint64, message string) {
 	h.mu.Lock()
 	if h.active(d) && d.turn == id {
-		h.setCompanionStatus(d.companionID, statusError, 0, promptNone, message)
+		h.setCompanionStatus(d.companionID, statusError)
 	}
 	h.mu.Unlock()
 	view := noticeScene("Try again", message)
@@ -708,7 +708,7 @@ func (h *wsHub) streamPlayback(ctx context.Context, d *wsTerminal, id uint64, st
 			}
 			d.ttsStarted = true
 			h.applyAmbientVolume(d)
-			h.setCompanionStatus(d.companionID, statusSpeaking, 0, promptNone, "")
+			h.setCompanionStatus(d.companionID, statusSpeaking)
 			h.mu.Unlock()
 			if !control("start") {
 				return context.Canceled
@@ -809,7 +809,7 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time, aborted bool) {
 	d.last = now
 	if !d.busy {
 		if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
-			h.setCompanionStatus(d.companionID, statusDone, 100, promptNone, "")
+			h.setCompanionStatus(d.companionID, statusDone)
 		}
 	}
 	if h.maybeStartVoice(d, now) || h.maybeStartNoticeLocked(d, now) {

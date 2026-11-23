@@ -366,16 +366,13 @@ type diagTerminal struct {
 	Kind         string     `json:"kind"`
 	Board        string     `json:"board,omitempty"`
 	Firmware     string     `json:"firmware,omitempty"`
-	OTA          string     `json:"ota,omitempty"`
 	OTABundle    bool       `json:"ota_bundle"`
-	WS           bool       `json:"ws_connected"`
 	NoteEndpoint string     `json:"note_endpoint,omitempty"`
 	Mode         string     `json:"mode"`
 	RTT          *float64   `json:"rtt_ms"`
 	Frame        *diagFrame `json:"last_frame"`
 	Ambient      *float64   `json:"ambient_rms"`
 	Auto         bool       `json:"auto_volume"`
-	DeviceVol    *int       `json:"reported_volume"`
 	wsStatus
 }
 
@@ -383,8 +380,8 @@ func (d *wsTerminal) diagTerminal() diagTerminal {
 	s := d.telemetry
 	s.Volume = new(d.vol)
 	out := diagTerminal{ID: d.id, CompanionID: d.companionID, Character: d.companion.Name, Kind: d.kind, Board: d.board,
-		Firmware: d.firmware, OTA: s.Partition, WS: true, Mode: d.pose.mood, RTT: d.client.pingRTT(),
-		Frame: d.frame, Auto: d.autoVol, DeviceVol: d.telemetry.Volume, wsStatus: s}
+		Firmware: d.firmware, Mode: d.pose.mood, RTT: d.client.pingRTT(),
+		Frame: d.frame, Auto: d.autoVol, wsStatus: s}
 	if d.hasAmbient {
 		out.Ambient = new(d.ambientEMA)
 	}

@@ -32,11 +32,7 @@ type wsClient struct {
 }
 
 type companionStatusState struct {
-	seq      uint32
-	state    uint8
-	progress uint8
-	kind     uint8
-	text     string
+	state uint8
 }
 
 type resumeEntry struct {
@@ -65,7 +61,6 @@ type wsHub struct {
 	terminals         map[string]*wsTerminal
 	closed            bool
 	atmosphere        bool
-	stateSeq          uint32
 	voiceOwners       map[string]string
 	companionStatuses map[string]companionStatusState
 	resumes           map[[resumeTokenLen]byte]*resumeEntry
@@ -97,11 +92,6 @@ func newWSHub(b *larkServer, atmosphere bool) *wsHub {
 	}
 	go h.animate(b.root)
 	return h
-}
-
-func (h *wsHub) nextSeq() uint32 {
-	h.stateSeq++
-	return h.stateSeq
 }
 
 func (h *wsHub) shutdown() {
@@ -262,7 +252,7 @@ func (h *wsHub) broadcastVoiceOwner(companionID, terminalID string) {
 	if cid == "" {
 		return
 	}
-	pkt := encodeVoiceOwner(h.nextSeq(), cid, terminalID)
+	pkt := encodeVoiceOwner(cid, terminalID)
 	for _, t := range h.terminalsFor(cid) {
 		t.client.enqueueProto(msgVoiceOwner, pkt)
 	}
@@ -301,20 +291,13 @@ func (h *wsHub) fallbackVoiceOwnership(companionID, excludeID string) {
 	}
 }
 
-func (h *wsHub) setCompanionStatus(companionID string, state, progress, kind uint8, text string) {
+func (h *wsHub) setCompanionStatus(companionID string, state uint8) {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return
 	}
-	seq := h.nextSeq()
-	h.companionStatuses[cid] = companionStatusState{
-		seq:      seq,
-		state:    state,
-		progress: progress,
-		kind:     kind,
-		text:     text,
-	}
-	pkt := encodeStatus(seq, state, progress, kind, text)
+	h.companionStatuses[cid] = companionStatusState{state: state}
+	pkt := encodeStatus(state)
 	for _, t := range h.terminalsFor(cid) {
 		t.client.enqueueProto(msgStatus, pkt)
 	}
@@ -325,7 +308,7 @@ func (h *wsHub) clearDoneOrErrorStatus(d *wsTerminal) {
 		return
 	}
 	if st, ok := h.companionStatuses[d.companionID]; ok && (st.state == statusDone || st.state == statusError) {
-		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
+		h.setCompanionStatus(d.companionID, statusIdle)
 	}
 }
 

@@ -69,7 +69,7 @@ func TestLeaveSceneResetsCompanionStatus(t *testing.T) {
 
 	b.ws.mu.Lock()
 	d := b.ws.terminals[id]
-	b.ws.setCompanionStatus(d.companionID, statusSpeaking, 0, promptNone, "")
+	b.ws.setCompanionStatus(d.companionID, statusSpeaking)
 	d.ttsStarted = true
 	b.ws.tapStop(d, d.last)
 	st := b.ws.companionStatuses[d.companionID]

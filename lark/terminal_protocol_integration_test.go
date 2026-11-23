@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"image"
 	"strings"
 	"testing"
@@ -28,10 +27,6 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 	hw2.until(t, isDisplay)
 	var resumeTok [resumeTokenLen]byte
 	copy(resumeTok[:], welcome[20:36])
-	snapSeq := binary.LittleEndian.Uint32(welcome[16:20])
-	if snapSeq == 0 {
-		t.Fatal("expected non-zero snapshot seq in WELCOME")
-	}
 
 	// Second hardware terminal takes voice ownership via rec_start.
 	hw2.recStart(t, "")
@@ -49,13 +44,8 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 	})
 
 	hw2r := testConnectWS(t, base, "unit", false)
-	hw2r.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, resumeTok, snapSeq, "vocat-2cac"))
-	w2 := framePayload(hw2r.until(t, hasProto(msgWelcome, "")))
-	newSeq := binary.LittleEndian.Uint32(w2[16:20])
-	if newSeq <= snapSeq {
-		t.Fatalf("resume welcome seq %d <= prior %d", newSeq, snapSeq)
-	}
-	var vo wsFrame
+	hw2r.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, resumeTok, "vocat-2cac"))
+	hw2r.until(t, hasProto(msgWelcome, ""))
 	var gotDisplay, gotVO bool
 	for !gotDisplay || !gotVO {
 		f := hw2r.read(t)
@@ -63,15 +53,9 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 			gotDisplay = true
 		}
 		if hasProto(msgVoiceOwner, "vocat-2cac")(f) {
-			vo = f
 			gotVO = true
 		}
 	}
-	voSeq := binary.LittleEndian.Uint32(framePayload(vo)[0:4])
-	if voSeq <= newSeq {
-		t.Fatalf("snapshot VOICE_OWNER seq %d <= welcome seq %d", voSeq, newSeq)
-	}
-
 	// Expired resume token gets REJECT(rejectUnknownTerminal), then fresh HELLO works.
 	hw2r.conn.Close()
 	b.ws.sig.wait(t, func() bool {
@@ -88,8 +72,8 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 
 	hw2e := testConnectWS(t, base, "unit", false)
 	var expiredTok [resumeTokenLen]byte
-	copy(expiredTok[:], w2[20:36])
-	hw2e.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, expiredTok, newSeq, "vocat-2cac"))
+	copy(expiredTok[:], resumeTok[:])
+	hw2e.sendProto(t, msgResume, encodeTerminalResume(protoVersion1, expiredTok, "vocat-2cac"))
 	rej := framePayload(hw2e.until(t, hasProto(msgReject, "")))
 	if rej[0] != rejectUnknownTerminal {
 		t.Fatalf("expected rejectUnknownTerminal for expired resume, got %d", rej[0])
@@ -148,8 +132,8 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 
 func TestProtocolWireSizesAndAllocs(t *testing.T) {
 	ptrBytes := len(packProtoPacket(msgPointer, 1, encodePointer(ptrTap, 180, 180, 42)))
-	statusBytes := len(packProtoPacket(msgStatus, 2, encodeStatus(1, statusThinking, 50, promptNone, "thinking")))
-	if ptrBytes != 16 || statusBytes != 25 {
+	statusBytes := len(packProtoPacket(msgStatus, 2, encodeStatus(statusThinking)))
+	if ptrBytes != 16 || statusBytes != 17 {
 		t.Fatalf("unexpected wire sizes: pointer=%d status=%d", ptrBytes, statusBytes)
 	}
 

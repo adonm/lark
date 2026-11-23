@@ -625,7 +625,7 @@ func TestFinishTurnWaitsForPendingTTS(t *testing.T) {
 	d.awaitAck = false
 	d.stopAudio = func() {}
 	d.replyAudio = &turnAudio{turn: 1}
-	b.ws.setCompanionStatus(d.companionID, statusThinking, 255, promptNone, "")
+	b.ws.setCompanionStatus(d.companionID, statusThinking)
 	b.ws.mu.Unlock()
 
 	b.ws.finishTurn(d, 1, nil, nil)

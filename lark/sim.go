@@ -73,18 +73,18 @@ func defaultSimID() string {
 }
 
 type simTerminal struct {
-	id       string
-	spec     simBoardSpec
-	tcp      net.Conn
-	udp      *net.UDPConn
-	srvUDP   *net.UDPAddr
-	ssrc     uint32
-	client   *cliClient
-	started  time.Time
-	seq      uint16
-	rtpSeq   uint16
-	rtpTS    uint32
-	recSess  uint16
+	id      string
+	spec    simBoardSpec
+	tcp     net.Conn
+	udp     *net.UDPConn
+	srvUDP  *net.UDPAddr
+	ssrc    uint32
+	client  *cliClient
+	started time.Time
+	seq     uint16
+	rtpSeq  uint16
+	rtpTS   uint32
+	recSess uint16
 
 	mu            sync.Mutex
 	cond          *sync.Cond

@@ -327,7 +327,7 @@ func (h *wsHub) terminalStatus(entry object, id string, full bool) {
 			entry["battery_pct"] = d.pct
 		}
 		if full {
-			entry["battery_mv"], entry["charging"], entry["has_battery"] = d.telemetry.MV, d.telemetry.Charge, d.telemetry.HasBattery
+			entry["charging"], entry["has_battery"] = d.telemetry.Charge, d.telemetry.HasBattery
 			entry["wifi_rssi"], entry["cpu_pct"] = d.telemetry.WiFi, d.telemetry.CPU
 			title := d.scene.title
 			if title == "" {

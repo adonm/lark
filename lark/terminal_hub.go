@@ -27,23 +27,14 @@ type terminalCaps struct {
 }
 
 type wsStatus struct {
-	Battery        *int     `json:"battery_pct"`
-	MV             *int     `json:"battery_mv"`
-	Charge         *bool    `json:"charging"`
-	WiFi           *int     `json:"wifi_rssi"`
-	HasBattery     *bool    `json:"has_battery"`
-	Volume         *int     `json:"volume"`
-	FreeHeap       *uint64  `json:"free_heap"`
-	MinHeap        *uint64  `json:"min_free_heap"`
-	FreePSRAM      *uint64  `json:"free_psram"`
-	Uptime         *uint64  `json:"uptime_s"`
-	CPU            *float64 `json:"cpu_pct"`
-	Partition      string   `json:"running_partition,omitempty"`
-	LastFrameRev   *uint16  `json:"last_frame_rev,omitempty"`
-	DisplayFlushMS *uint32  `json:"display_flush_ms,omitempty"`
-	InputDrops     *uint32  `json:"input_drops,omitempty"`
-	AudioUnderruns *uint32  `json:"audio_underruns,omitempty"`
-	AudioDrops     *uint32  `json:"audio_drops,omitempty"`
+	Battery    *int     `json:"battery_pct"`
+	Charge     *bool    `json:"charging"`
+	WiFi       *int     `json:"wifi_rssi"`
+	HasBattery *bool    `json:"has_battery"`
+	Volume     *int     `json:"volume"`
+	FreeHeap   *uint64  `json:"free_heap"`
+	Uptime     *uint64  `json:"uptime_s"`
+	CPU        *float64 `json:"cpu_pct"`
 }
 
 type wsTerminal struct {
@@ -252,12 +243,12 @@ func (h *wsHub) sendSnapshotState(d *wsTerminal) {
 	c := d.client
 	if d.companionID != "" {
 		if st, ok := h.companionStatuses[d.companionID]; ok {
-			c.enqueueProto(msgStatus, encodeStatus(st.seq, st.state, st.progress, st.kind, st.text))
+			c.enqueueProto(msgStatus, encodeStatus(st.state))
 		} else {
-			c.enqueueProto(msgStatus, encodeStatus(h.nextSeq(), statusIdle, 0, promptNone, ""))
+			c.enqueueProto(msgStatus, encodeStatus(statusIdle))
 		}
 		if owner := h.voiceOwner(d.companionID); owner != nil {
-			c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(h.nextSeq(), d.companionID, owner.id))
+			c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(d.companionID, owner.id))
 		}
 	}
 	h.pushVolume(d, false, true)
@@ -387,8 +378,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		udpPort = c.native.server.udpPort
 		ssrc = c.native.ssrc
 	}
-	snapSeq := h.nextSeq()
-	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
+	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID))
 	h.render(d, now, true)
 	if d.companionID != "" && h.b.oc != nil {
 		go h.b.oc.prewarm(c.ctx, d.companionID, d.companion.Name)
@@ -475,8 +465,7 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 		udpPort = c.native.server.udpPort
 		ssrc = c.native.ssrc
 	}
-	snapSeq := h.nextSeq()
-	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, snapSeq, d.resumeToken, d.id, d.companionID))
+	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID))
 	h.render(d, now, true)
 	if d.companionID != "" && h.b.oc != nil {
 		go h.b.oc.prewarm(c.ctx, d.companionID, d.companion.Name)
@@ -501,9 +490,6 @@ func (d *wsTerminal) status(s wsStatus) {
 				t.Battery = nil
 			}
 		}
-		if s.MV != nil {
-			t.MV = new(min(6000, max(0, *s.MV)))
-		}
 		if s.Charge != nil {
 			d.charging = *s.Charge
 			t.Charge = s.Charge
@@ -518,35 +504,11 @@ func (d *wsTerminal) status(s wsStatus) {
 	if s.FreeHeap != nil {
 		t.FreeHeap = s.FreeHeap
 	}
-	if s.MinHeap != nil {
-		t.MinHeap = s.MinHeap
-	}
-	if s.FreePSRAM != nil {
-		t.FreePSRAM = s.FreePSRAM
-	}
 	if s.Uptime != nil {
 		t.Uptime = s.Uptime
 	}
 	if s.CPU != nil && !math.IsNaN(*s.CPU) {
 		t.CPU = new(min(100., max(0., *s.CPU)))
-	}
-	if s.Partition != "" {
-		t.Partition = shortText(s.Partition, 24, false)
-	}
-	if s.LastFrameRev != nil {
-		t.LastFrameRev = s.LastFrameRev
-	}
-	if s.DisplayFlushMS != nil {
-		t.DisplayFlushMS = s.DisplayFlushMS
-	}
-	if s.InputDrops != nil {
-		t.InputDrops = s.InputDrops
-	}
-	if s.AudioUnderruns != nil {
-		t.AudioUnderruns = s.AudioUnderruns
-	}
-	if s.AudioDrops != nil {
-		t.AudioDrops = s.AudioDrops
 	}
 }
 

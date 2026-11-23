@@ -136,7 +136,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		t.Fatalf("invalid diagnostics response: %s", raw)
 	}
 	d := report.Terminals[0]
-	if !d.WS || d.Board != "esp-box-3" || d.Firmware != "0.12.0" || d.RTT == nil || *d.RTT < 12 ||
+	if d.Board != "esp-box-3" || d.Firmware != "0.12.0" || d.RTT == nil || *d.RTT < 12 ||
 		d.CPU == nil || *d.CPU != 27 || *d.WiFi != -60 || *d.FreeHeap != 65536 || *d.Uptime != 320 ||
 		*d.HasBattery || d.Frame.Bytes >= d.Frame.RawBytes || (d.Frame.Codec != "RLE565" && d.Frame.Codec != "LZ4") {
 		t.Fatalf("invalid device telemetry: %+v", d)

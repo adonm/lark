@@ -172,7 +172,6 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 					},
 					"battery": object{
 						"battery_pct": te["battery_pct"],
-						"battery_mv":  te["battery_mv"],
 						"charging":    te["charging"],
 						"has_battery": te["has_battery"],
 					},

@@ -218,7 +218,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		}
 	case "volume-auto":
 		if err := h.setVolume(d.client.ctx, d, false, 0, "vol-auto"); err != nil && h.active(d) {
-			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
+			h.setCompanionStatus(d.companionID, statusError)
 		}
 	case "volume-step":
 		op := "vol-plus"
@@ -226,7 +226,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 			op = "vol-minus"
 		}
 		if err := h.setVolume(d.client.ctx, d, false, 0, op); err != nil && h.active(d) {
-			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
+			h.setCompanionStatus(d.companionID, statusError)
 		}
 	case "voice-set":
 		h.selectAndPreviewVoice(d, a.value)
@@ -268,7 +268,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 		h.selectAndPreviewVoice(d, a.value)
 	case "vol-auto", "vol-minus", "vol-plus":
 		if err := h.setVolume(d.client.ctx, d, false, 0, a.kind); err != nil && h.active(d) {
-			h.setCompanionStatus(d.companionID, statusError, 0, promptNone, err.Error())
+			h.setCompanionStatus(d.companionID, statusError)
 		}
 	case "listen", "reply":
 		if (key == "companion-ring" || key == "listen") && (d.busy || d.ttsStarted || d.awaitAck) {
@@ -375,7 +375,7 @@ func (h *wsHub) leaveScene(d *wsTerminal, now time.Time, reason string) {
 	h.stopPlayback(d, true)
 	h.clearView(d)
 	if !d.recording.active() {
-		h.setCompanionStatus(d.companionID, statusIdle, 0, promptNone, "")
+		h.setCompanionStatus(d.companionID, statusIdle)
 	}
 	h.render(d, now, true)
 }

@@ -18,28 +18,28 @@ const (
 	frameTag        byte   = 3
 
 	// Terminal -> Lark message types
-	msgHello       uint8 = 0x01
-	msgResume      uint8 = 0x02
-	msgTelemetry   uint8 = 0x03
-	msgPointer     uint8 = 0x04
-	msgRecStart    uint8 = 0x06
-	msgRecEnd      uint8 = 0x07
-	msgTTSAck      uint8 = 0x08
+	msgHello     uint8 = 0x01
+	msgResume    uint8 = 0x02
+	msgTelemetry uint8 = 0x03
+	msgPointer   uint8 = 0x04
+	msgRecStart  uint8 = 0x06
+	msgRecEnd    uint8 = 0x07
+	msgTTSAck    uint8 = 0x08
 	msgPing      uint8 = 0x0F
 	msgPong      uint8 = 0x10
 
 	// Lark -> Terminal message types
-	msgWelcome      uint8 = 0x81
-	msgReject       uint8 = 0x82
-	msgFrame        uint8 = 0x83
-	msgRecCtrl      uint8 = 0x86
-	msgTTSCtrl      uint8 = 0x87
-	msgTTSPCM       uint8 = 0x88
-	msgChime        uint8 = 0x8A
-	msgPower        uint8 = 0x8B
-	msgVolume       uint8 = 0x8C
-	msgStatus       uint8 = 0x8D
-	msgVoiceOwner   uint8 = 0x8E
+	msgWelcome    uint8 = 0x81
+	msgReject     uint8 = 0x82
+	msgFrame      uint8 = 0x83
+	msgRecCtrl    uint8 = 0x86
+	msgTTSCtrl    uint8 = 0x87
+	msgTTSPCM     uint8 = 0x88
+	msgChime      uint8 = 0x8A
+	msgPower      uint8 = 0x8B
+	msgVolume     uint8 = 0x8C
+	msgStatus     uint8 = 0x8D
+	msgVoiceOwner uint8 = 0x8E
 
 	// Terminal kind
 	termKindHardware uint8 = 0
@@ -89,9 +89,6 @@ const (
 	statusError     uint8 = 6
 
 	// Prompt / status kinds
-	promptNone       uint8 = 0
-	promptPermission uint8 = 1
-	promptQuestion   uint8 = 2
 
 	// Pointer kinds
 	ptrTap  uint8 = 0
@@ -156,7 +153,6 @@ type terminalHello struct {
 type terminalResume struct {
 	protoVersion uint8
 	resumeToken  [resumeTokenLen]byte
-	lastSeq      uint32
 	terminalID   string
 }
 
@@ -307,7 +303,6 @@ func parseTerminalResume(b []byte) (terminalResume, error) {
 	var r terminalResume
 	r.protoVersion = b[0]
 	copy(r.resumeToken[:], b[1:17])
-	r.lastSeq = binary.LittleEndian.Uint32(b[17:21])
 	idLen := int(b[21])
 	if len(b) < 22+idLen {
 		return terminalResume{}, errProtoShort
@@ -316,11 +311,13 @@ func parseTerminalResume(b []byte) (terminalResume, error) {
 	return r, nil
 }
 
-func encodeTerminalResume(protoVer uint8, token [resumeTokenLen]byte, lastSeq uint32, terminalID string) []byte {
+// The resume frame still carries the retired last-state sequence as zero so
+// the 0.20.0 firmware's fixed layout keeps decoding.
+func encodeTerminalResume(protoVer uint8, token [resumeTokenLen]byte, terminalID string) []byte {
 	b := make([]byte, 0, 22+len(terminalID))
 	b = append(b, protoVer)
 	b = append(b, token[:]...)
-	b = binary.LittleEndian.AppendUint32(b, lastSeq)
+	b = binary.LittleEndian.AppendUint32(b, 0)
 	return appendStr8(b, terminalID)
 }
 
@@ -354,14 +351,14 @@ func capsMaskFromCaps(c terminalCaps) uint32 {
 	return m
 }
 
-func encodeWelcome(flags uint8, udpPort uint16, ssrc, maxMsgBytes, resumeWinMS, seq uint32, token [resumeTokenLen]byte, terminalID, companionID string) []byte {
+func encodeWelcome(flags uint8, udpPort uint16, ssrc, maxMsgBytes, resumeWinMS uint32, token [resumeTokenLen]byte, terminalID, companionID string) []byte {
 	b := make([]byte, 0, 38+len(terminalID)+len(companionID))
 	b = append(b, protoVersion1, flags)
 	b = binary.LittleEndian.AppendUint16(b, udpPort)
 	b = binary.LittleEndian.AppendUint32(b, ssrc)
 	b = binary.LittleEndian.AppendUint32(b, maxMsgBytes)
 	b = binary.LittleEndian.AppendUint32(b, resumeWinMS)
-	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = binary.LittleEndian.AppendUint32(b, 0) // retired snapshot sequence
 	b = append(b, token[:]...)
 	tidLen := min(len(terminalID), 255)
 	cidLen := min(len(companionID), 255)
@@ -509,16 +506,17 @@ func encodeVolumeMsg(level int, persist, auto bool, terminalID, companionID stri
 	return appendStr8(b, companionID)
 }
 
-func encodeStatus(seq uint32, state, progress, kind uint8, text string) []byte {
-	b := make([]byte, 0, 9+len(text))
-	b = binary.LittleEndian.AppendUint32(b, seq)
-	b = append(b, state, progress, kind)
-	return appendStr16(b, text)
+// The payload keeps its 9-byte layout for 0.20.0 firmware; sequence, progress,
+// kind and text are retired, so only the state byte carries information.
+func encodeStatus(state uint8) []byte {
+	b := make([]byte, 9)
+	b[4] = state
+	return b
 }
 
-func encodeVoiceOwner(seq uint32, companionID, terminalID string) []byte {
+func encodeVoiceOwner(companionID, terminalID string) []byte {
 	b := make([]byte, 0, 6+len(companionID)+len(terminalID))
-	b = binary.LittleEndian.AppendUint32(b, seq)
+	b = binary.LittleEndian.AppendUint32(b, 0)
 	b = appendStr8(b, companionID)
 	return appendStr8(b, terminalID)
 }
