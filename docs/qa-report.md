@@ -43,7 +43,7 @@ The library tool phase is **50× faster end-to-end** and **300× faster in-proce
 ### Content
 
 - Simple English Wikipedia: 285,974 pages, 538 MB SQLite FTS5 index.
-- Project Gutenberg: 2,987 of the 3,000 pinned titles (children's, fairy, myth, poetry, and classics), 1.03 GB of UTF-8 text, 1.4 MB title/author FTS5 index.
+- Project Gutenberg: 2,994 of the 3,000 pinned titles (children's, fairy, myth, poetry, and classics), 1.07 GB of UTF-8 text, 1.4 MB title/author FTS5 index.
 - Full English Wikipedia: the 24.1 GB dump downloaded at ~21 MB/s and passed SHA-1 verification. The FTS5 build runs in the background after the final Gutenberg retry (~240 pages/s in the probe; several hours). `enwiki.db` appears atomically when it finishes, so search starts using it without a restart.
 
 ### Tests
