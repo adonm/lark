@@ -9,6 +9,9 @@ Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 (
                                               `-- Kokoro   (FP32, embedded via sherpa-onnx)
 ```
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the component and data map, the
+voice-turn budget, and the invariants an agent must not break.
+
 **Targets:** ESP-VoCat v1.2 and ESP32-S3-BOX-3. Both use a 360×360 logical canvas,
 centered on the BOX-3’s rectangular display. Lark renders RGB565 frames for
 the boards. Boards draw a fallback face offline.
@@ -156,7 +159,9 @@ and fall back to the companion's theme voice. Mint defaults to Fable
 
 Open **Menu → Stats** for a compact on-device HUD, or query `GET /api/diagnostics`
 (or `lark status`) for device status, pipeline timings, and CPU and memory
-usage for the server and host. The server totals include Kokoro. Firmware
+usage for the server and host. `lark doctor` prints one pass/warn/fail line per
+check (health, models, firmware, disk, Delta Chat, tunnels, turn errors, clock)
+and exits non-zero on failures. The server totals include Kokoro. Firmware
 reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM, Wi-Fi RSSI,
 and uptime every five seconds. Turn diagnostics separate
 OpenCode gate wait and first sentence, TTS queue and inference time, first frame
