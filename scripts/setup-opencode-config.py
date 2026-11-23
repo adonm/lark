@@ -9,8 +9,10 @@ from pathlib import Path
 
 directory, lark_bin = map(Path, sys.argv[1:3])
 source = Path(__file__).resolve().parent.parent / "config/opencode/lark-fallback.js"
+context_source = Path(__file__).resolve().parent.parent / "config/opencode/lark-context/index.js"
 config = directory / "opencode.jsonc"
 package = "./lark-model-router"
+context_package = "./lark-context"
 
 
 def put(path, content):
@@ -69,6 +71,20 @@ def migrate(path):
     put(path, (json.dumps(current, indent=2) + "\n").encode())
 
 
+def ensure_context_plugin(path):
+    """Keep the request-side state stripper installed without touching other plugins."""
+    try:
+        current = json.loads(path.read_text())
+        plugins = current.setdefault("plugins", [])
+        if not isinstance(plugins, list) or any(
+                isinstance(p, dict) and p.get("package") == context_package for p in plugins):
+            return
+        plugins.append({"package": context_package})
+    except (OSError, ValueError, TypeError, AttributeError):
+        return
+    put(path, (json.dumps(current, indent=2) + "\n").encode())
+
+
 def ensure_deep_guidance(path):
     """Add the local-library guidance without overwriting user selections."""
     try:
@@ -86,6 +102,9 @@ def ensure_deep_guidance(path):
 router = directory / package
 router.mkdir(mode=0o700, parents=True, exist_ok=True)
 put(router / "index.js", source.read_bytes())
+context = directory / context_package
+context.mkdir(mode=0o700, parents=True, exist_ok=True)
+put(context / "index.js", context_source.read_bytes())
 if not config.exists():
     update = {
         "$schema": "https://opencode.ai/config.json",
@@ -101,9 +120,13 @@ if not config.exists():
                 "permissions": DEEP_PERMISSIONS,
             },
         },
-        "plugins": [{"package": package, "options": {"fallback": FALLBACK_MODEL}}],
+        "plugins": [
+            {"package": package, "options": {"fallback": FALLBACK_MODEL}},
+            {"package": context_package},
+        ],
     }
     put(config, (json.dumps(update, indent=2) + "\n").encode())
 else:
     migrate(config)
 ensure_deep_guidance(config)
+ensure_context_plugin(config)
