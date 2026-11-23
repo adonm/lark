@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -22,13 +23,23 @@ const (
 	endpointQuiet = 400 * time.Millisecond
 	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
 	// call overlaps the remaining quiet window instead of racing the commit.
-	endpointSpecQuiet           = 180 * time.Millisecond
-	endpointEarlyQuiet          = 400 * time.Millisecond // Must not preempt the 400 ms Smart Turn check that starts speculation.
-	endpointCap                 = 1200 * time.Millisecond
-	endpointProbeEvery          = 250 * time.Millisecond
-	endpointProbeWindow         = 4 * sampleRate * 2 // last <= 4 s
-	vadTail                     = 320 * time.Millisecond
-	speechEnergyRatio           = 0.20
+	endpointSpecQuiet   = 180 * time.Millisecond
+	endpointEarlyQuiet  = 400 * time.Millisecond // Must not preempt the 400 ms Smart Turn check that starts speculation.
+	endpointCap         = 1200 * time.Millisecond
+	endpointProbeEvery  = 250 * time.Millisecond
+	endpointProbeWindow = 4 * sampleRate * 2 // last <= 4 s
+	// A monologue with no pause still has to become a turn.
+	endpointMonologue = 20 * time.Second
+	vadTail           = 320 * time.Millisecond
+	// Floor-relative gate margins, in RMS counts. The live boards deliver
+	// speech around 20-25 RMS over a room floor of 1-4, so the margins are
+	// small on purpose; Silero still owns the actual speech decision.
+	gateMargin = 5.0
+	// Calibration frames: one second of 20 ms frames.
+	gateCalibFrames = 50
+	// Below this fraction of the running speech level, VAD-positive audio is
+	// room noise (its 320 ms tail, a fan, a bump), not a quieter word.
+	speechEnergyRatio           = 0.12
 	smartTurnThreshold          = float32(0.90)
 	smartTurnEarlyThreshold     = float32(0.95)
 	smartTurnSpeculateThreshold = float32(0.40)
@@ -104,6 +115,56 @@ type endpointPolicy struct {
 	wordCount  int
 	lastWordAt time.Duration
 	lastText   string
+	// Silence-driven endpointing. lastVoicedAt only advances on frames that
+	// are both VAD-positive and above the adaptive noise floor, so transcript
+	// churn on room noise cannot hold a turn open.
+	lastVoicedAt  time.Duration
+	firstVoicedAt time.Duration
+	speechFrames  int
+	vadFrames     int
+	gate          energyGate
+}
+
+// energyGate learns the room noise floor when the window opens and keeps
+// tracking it during non-speech. A fixed relative-energy floor misses quiet,
+// distant speech while steady background noise can hold an absolute gate open.
+type energyGate struct {
+	buf   [gateCalibFrames]float64
+	n     int
+	next  int
+	floor float64
+	ready bool
+}
+
+func (g *energyGate) observe(rms float64, vad bool) {
+	g.buf[g.next] = rms
+	g.next = (g.next + 1) % len(g.buf)
+	if g.n < len(g.buf) {
+		g.n++
+	}
+	if !g.ready && g.n == len(g.buf) {
+		ordered := g.buf[:]
+		slices.Sort(ordered)
+		g.floor = ordered[len(ordered)/10]
+		g.ready = true
+	}
+	if !vad {
+		// Fast downward tracking keeps a new quiet room from being mistaken
+		// for speech; slow upward tracking follows drifting noise.
+		if !g.ready || rms < g.floor {
+			g.floor = rms
+		} else {
+			g.floor += (rms - g.floor) * 0.002
+		}
+	}
+}
+
+func (g *energyGate) enter() float64 {
+	return g.floor + max(gateMargin, g.floor)
+}
+
+func (g *energyGate) stay() float64 {
+	return g.floor + max(gateMargin*0.6, g.floor*0.5)
 }
 
 func frameRMS(pcm []byte) float64 {
@@ -119,27 +180,44 @@ func frameRMS(pcm []byte) float64 {
 	return math.Sqrt(sum / float64(n))
 }
 
-func (p *endpointPolicy) observeEnergy(_ time.Duration, vadSpeech bool, rms float64) {
+func (p *endpointPolicy) observeEnergy(at time.Duration, vadSpeech bool, rms float64) {
 	if !vadSpeech {
+		p.gate.observe(rms, false)
+		p.inVoice = false
+		return
+	}
+	p.vadFrames++
+	if p.voiced && rms < p.speechRMS*speechEnergyRatio {
+		// Let the floor learn noise that the VAD keeps calling speech; the
+		// ratio also closes the gate on a loud room after a loud word.
+		p.gate.observe(rms, false)
+		p.inVoice = false
+		return
+	}
+	p.gate.observe(rms, true)
+	// Enter above floor+margin, then keep a lower sustain threshold so brief
+	// dips inside a word or a quiet breath do not end the segment.
+	limit := p.gate.stay()
+	if !p.voiced || !p.inVoice {
+		limit = p.gate.enter()
+	}
+	if rms < limit {
 		p.inVoice = false
 		return
 	}
 	if !p.voiced {
 		p.voiced = true
+		p.firstVoicedAt = at
 		p.speechRMS = rms
-		p.inVoice = true
-		return
 	}
-	if p.speechRMS > 0 && rms < p.speechRMS*speechEnergyRatio {
-		p.inVoice = false
-		return
-	}
+	p.inVoice = true
+	p.lastVoicedAt = at
+	p.speechFrames++
 	if rms > p.speechRMS {
 		p.speechRMS = p.speechRMS*0.85 + rms*0.15
 	} else if rms > 0 {
 		p.speechRMS = p.speechRMS*0.95 + rms*0.05
 	}
-	p.inVoice = true
 }
 
 func isIncompleteWord(w string) bool {
@@ -215,8 +293,11 @@ func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, win
 		p.lastText = text
 		return true
 	}
+	// A probe that re-hears the same clip can replace an earlier guess with a
+	// same-length transcript. That is still progress for completeness (and a
+	// reason to abort speculation); only shrinkage is ignored.
 	if !windowed {
-		if words > p.wordCount {
+		if words >= p.wordCount && text != p.lastText {
 			p.wordCount = words
 			p.lastWordAt = probeAt
 			p.lastText = text
@@ -259,28 +340,53 @@ func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnRe
 
 func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, early bool, listen bool) endpointDecision {
 	if at >= limitDur {
-		if p.hasWords || p.voiced {
+		if p.speechFrames > 0 {
 			return endpointCommit
 		}
+		// Noise that never crossed the speech gate must not become a turn.
 		return endpointDiscard
 	}
-	if !p.hasWords {
+	if !p.voiced {
 		if !listen && at >= endpointIdle {
 			return endpointDiscard
 		}
 		return endpointWait
 	}
-	sinceWord := at - p.lastWordAt
-	if sinceWord >= capDur {
+	if p.inVoice {
+		// A monologue should not wait for silence past this point.
+		if p.lastVoicedAt-p.firstVoicedAt >= endpointMonologue {
+			return endpointCommit
+		}
+		return endpointWait
+	}
+	// The segment is over acoustically. Transcript growth on quiet audio is
+	// not allowed to extend this: only new voiced frames can.
+	silence := at - p.lastVoicedAt
+	if !p.hasWords {
+		// Speech was heard but no usable transcript arrived; commit so the
+		// caller can say "didn't catch that" instead of dropping it silently.
+		if silence >= capDur {
+			return endpointCommit
+		}
+		return endpointWait
+	}
+	if silence >= capDur {
 		return endpointCommit
 	}
-	if sinceWord >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {
+	if silence >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {
 		return endpointCommit
 	}
-	if sinceWord >= endpointEarlyQuiet && early && !p.incomplete {
+	if silence >= endpointEarlyQuiet && early && !p.incomplete {
 		return endpointCommit
 	}
 	return endpointWait
+}
+
+// speechSpan is how much speech-like audio this segment contained. It decides
+// whether an unusable transcript deserves feedback ("didn't catch that") or
+// was just a cough, door, or sub-threshold noise.
+func (p endpointPolicy) speechSpan() time.Duration {
+	return pcmDuration(p.speechFrames * endpointBytes)
 }
 
 // One capture worker owns this accumulator. Keep the original clip for the

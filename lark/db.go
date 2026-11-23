@@ -36,7 +36,7 @@ func sqliteDSN(path string, writer bool) string {
 
 var schemaBaseline = []string{
 	`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '', listen_seconds INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE TABLE IF NOT EXISTS companions (id TEXT PRIMARY KEY, name TEXT NOT NULL, configured INTEGER NOT NULL DEFAULT 0, personality TEXT NOT NULL DEFAULT '', voice TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, dc_account_id INTEGER NOT NULL DEFAULT 0, form TEXT NOT NULL DEFAULT '', portrait_id TEXT NOT NULL DEFAULT '', listening INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS terminals (id TEXT PRIMARY KEY, kind TEXT NOT NULL, companion_id TEXT REFERENCES companions(id) ON DELETE SET NULL, ip TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS terminal_prefs (terminal_id TEXT PRIMARY KEY, auto_volume INTEGER NOT NULL DEFAULT 1, manual_volume INTEGER NOT NULL DEFAULT 55)`,
 	`CREATE TABLE IF NOT EXISTS sessions (companion_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL, contract_hash TEXT NOT NULL DEFAULT '', context_after_ms INTEGER NOT NULL DEFAULT 0)`,
@@ -250,6 +250,29 @@ func (d *larkDB) initSchema(ctx context.Context) error {
 	defer tx.Rollback()
 	for _, q := range schemaBaseline {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+	}
+	// Listening became a boolean. Backfill from the retired duration column
+	// before dropping it; fresh databases only ever have `listening`.
+	hasListening, err := columnExists(ctx, tx, "companions", "listening")
+	if err != nil {
+		return fmt.Errorf("initialize Lark schema: %w", err)
+	}
+	hasSeconds, err := columnExists(ctx, tx, "companions", "listen_seconds")
+	if err != nil {
+		return fmt.Errorf("initialize Lark schema: %w", err)
+	}
+	if hasSeconds {
+		if !hasListening {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE companions ADD COLUMN listening INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return fmt.Errorf("initialize Lark schema: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE companions SET listening=1 WHERE listen_seconds>0`); err != nil {
+			return fmt.Errorf("initialize Lark schema: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE companions DROP COLUMN listen_seconds`); err != nil {
 			return fmt.Errorf("initialize Lark schema: %w", err)
 		}
 	}

@@ -246,7 +246,7 @@ var mcpTools = func() []object {
 				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "auto_volume": flag, "sleep": flag}),
 				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "form": text,
 					"personality": text, "voice": voice, "portrait": portraitSchema, "configured": flag,
-					"listen_seconds": object{"type": "integer", "minimum": 0, "maximum": 300}}),
+					"listening": object{"type": "boolean"}}),
 				"memory": object{"anyOf": []object{memory, array(memory)}},
 				"timer":  schema(object{"op": enum("set", "update", "cancel"), "companion_id": text, "id": text, "all": flag, "in_seconds": number, "at": text, "label": text, "say": text, "chime": enum(basicChimes...), "notes": notes, "wake_agent": flag})})),
 		tool("story", "Create, update, get, or delete a Twee 3 story (validates links, reachability, <=3 choices, <=600 chars).",

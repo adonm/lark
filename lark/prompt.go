@@ -62,8 +62,8 @@ func turnStateLine(now time.Time, companion companionState, terminals, timers, s
 	if companion.Form != "" {
 		parts = append(parts, "form: "+companion.Form)
 	}
-	if companion.ListenSeconds > 0 {
-		parts = append(parts, fmt.Sprintf("listen: on (%ds spans)", companion.ListenSeconds))
+	if companion.Listening {
+		parts = append(parts, "listen: on")
 	} else {
 		parts = append(parts, "listen: off")
 	}

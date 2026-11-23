@@ -304,7 +304,7 @@ func TestQADeltaChatLive(t *testing.T) {
 	listenOK := false
 	for time.Now().Before(deadline) {
 		comp, err := c.do(ctx, http.MethodGet, "/api/companions/"+compID, nil)
-		if err == nil && fmt.Sprint(comp["listen_seconds"]) == "60" {
+		if err == nil && comp["listening"] == true {
 			listenOK = true
 			break
 		}

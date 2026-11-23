@@ -53,7 +53,7 @@ function stateUpdate(over = {}, companion = {}, terminals) {
   return {
     companion: Object.assign({
       id: "greg", name: "greg", form: "an old chameleon", voice: "af_heart",
-      listen_seconds: 0, live_state: "idle", portrait: PORTRAIT,
+      listening: false, live_state: "idle", portrait: PORTRAIT,
     }, companion),
     terminals: terminals || [{ id: "box3-b324", name: "BOX-3", online: true, volume: 60, battery_pct: 84, charging: true }],
     stories: [
@@ -242,11 +242,11 @@ test("Say posts, shows feedback, and listening and volume controls send the righ
     assert.equal(await p.page.getAttribute("#feedback", "data-tone"), "ok");
     assert.equal(await p.page.getAttribute('#body-status button[type="submit"]', "aria-busy"), null);
 
-    await p.page.click('#body-status .pill-btn:has-text("2m")');
+    await p.page.click('#body-status .pill-btn:has-text("Listen")');
     const listen = await p.waitForRequest((r) => r.path === "/remote/api/listen");
-    assert.deepEqual(listen.request.body, { seconds: 120 });
-    p.answer(listen.index, { ok: true, message: "Listening mode updated.", state: stateUpdate({}, { listen_seconds: 120 }) });
-    await p.page.waitForFunction(() => document.querySelector('#body-status .pill-btn[aria-pressed="true"]').textContent === "2m");
+    assert.deepEqual(listen.request.body, { listening: true });
+    p.answer(listen.index, { ok: true, message: "Listening mode updated.", state: stateUpdate({}, { listening: true }) });
+    await p.page.waitForFunction(() => document.querySelector('#body-status .pill-btn[aria-pressed="true"]').textContent === "Listen");
 
     const slider = p.page.locator('input[type="range"][aria-label="Volume for BOX-3"]');
     await slider.fill("75");

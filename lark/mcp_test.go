@@ -329,7 +329,7 @@ func TestMCPControl(t *testing.T) {
 	} {
 		toolTest(t, base, "patch", object{"companion_id": id, "terminal": invalid}, true)
 	}
-	missingErr := toolTest(t, base, "patch", object{"companion": object{"listen_seconds": 60}}, true)
+	missingErr := toolTest(t, base, "patch", object{"companion": object{"listening": true}}, true)
 	if !strings.Contains(str(missingErr["error"]), "companion_id") {
 		t.Fatalf("expected companion_id error when omitted, got %v", missingErr)
 	}

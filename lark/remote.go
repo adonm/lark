@@ -752,12 +752,12 @@ func remoteSnapshotKey(snapshot object) string {
 func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, portrait bool) object {
 	c := b.companionFor(companionID)
 	comp := object{
-		"id":             c.ID,
-		"name":           c.Name,
-		"form":           c.Form,
-		"voice":          b.voiceFor(c.ID),
-		"listen_seconds": c.ListenSeconds,
-		"live_state":     b.companionLiveState(c.ID),
+		"id":         c.ID,
+		"name":       c.Name,
+		"form":       c.Form,
+		"voice":      b.voiceFor(c.ID),
+		"listening":  c.Listening,
+		"live_state": b.companionLiveState(c.ID),
 	}
 	if portrait {
 		if pngBytes, err := companionAvatarPNG(b, c); err == nil {
@@ -896,11 +896,11 @@ func (b *larkServer) remoteListen(r *http.Request, companionID string) (any, err
 	if err != nil {
 		return nil, err
 	}
-	seconds, ok := companionInt(args["seconds"])
-	if !ok || !slices.Contains([]int{0, 30, 60, 120, 300}, seconds) {
-		return nil, problem(400, "Invalid listening duration.")
+	on, ok := args["listening"].(bool)
+	if !ok {
+		return nil, problem(400, "Expected listening to be true or false.")
 	}
-	if _, err := b.patchCompanion(r.Context(), companionID, object{"listen_seconds": seconds}); err != nil {
+	if _, err := b.patchCompanion(r.Context(), companionID, object{"listening": on}); err != nil {
 		return nil, err
 	}
 	return remoteStateResponse(b, r.Context(), companionID, "Listening mode updated."), nil

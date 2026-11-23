@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -83,17 +84,17 @@ func listenHarness(t *testing.T, replyFn func(string) string) (*larkServer, stri
 	return b, base, &prompts
 }
 
-func setupListenTerminal(t *testing.T, b *larkServer, base, termID, compName string, listenSeconds int) (*testWS, string) {
+func setupListenTerminal(t *testing.T, b *larkServer, base, termID, compName string, listening bool) (*testWS, string) {
 	t.Helper()
 	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
 		"name": compName,
 		"form": "a mossy chameleon",
 	}, 201))
 	cid := str(created["id"])
-	if listenSeconds > 0 {
+	if listening {
 		toolTest(t, base, "patch", object{
 			"companion_id": cid,
-			"companion":    object{"listen_seconds": listenSeconds},
+			"companion":    object{"listening": true},
 		}, false)
 	}
 	hw := testConnectWS(t, base, "unit", false)
@@ -109,8 +110,9 @@ func setupListenTerminal(t *testing.T, b *larkServer, base, termID, compName str
 
 func sendTestUtterance(t *testing.T, hw *testWS) {
 	t.Helper()
-	voiced := make([]byte, endpointBytes)
-	voiced[0] = 1
+	// Audible frames clear the adaptive noise floor; zeros would look like a
+	// quiet room even though the test VAD calls them speech.
+	voiced := bytes.Repeat([]byte{0x40, 0x1f}, endpointBytes/2)
 	var seq uint16 = 1
 	var ts uint32 = 320
 	for range 5 {
@@ -158,7 +160,7 @@ func isListenRecStart(f protocolFrame) bool {
 
 func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
 	b, base, _ := listenHarness(t, func(string) string { return "Hello there." })
-	hw, _ := setupListenTerminal(t, b, base, "box3-off", "Greg", 0)
+	hw, _ := setupListenTerminal(t, b, base, "box3-off", "Greg", false)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-off", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	hw.barrier(t)
@@ -167,13 +169,13 @@ func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
 	active := d != nil && d.recording.active()
 	b.hub.mu.Unlock()
 	if active {
-		t.Fatal("listening window opened when listen_seconds=0")
+		t.Fatal("listening window opened when listening is off")
 	}
 }
 
 func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 	b, base, prompts := listenHarness(t, func(string) string { return "Got it." })
-	hw, _ := setupListenTerminal(t, b, base, "box3-on", "Greg", 30)
+	hw, _ := setupListenTerminal(t, b, base, "box3-on", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-on", "Hi Greg")
 
 	b.hub.mu.Lock()
@@ -210,8 +212,11 @@ func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 }
 
 func TestListenModeSilenceTimesOut(t *testing.T) {
+	old := listenWindow
+	listenWindow = time.Second
+	t.Cleanup(func() { listenWindow = old })
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
-	hw, _ := setupListenTerminal(t, b, base, "box3-sil", "Greg", 1)
+	hw, _ := setupListenTerminal(t, b, base, "box3-sil", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-sil", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	hw.until(t, isListenRecStart)
@@ -228,7 +233,7 @@ func TestListenModeSilenceTimesOut(t *testing.T) {
 
 func TestListenModeTapEndsWindowWithoutMenu(t *testing.T) {
 	b, base, _ := listenHarness(t, func(string) string { return "Okay." })
-	hw, _ := setupListenTerminal(t, b, base, "box3-tap", "Greg", 30)
+	hw, _ := setupListenTerminal(t, b, base, "box3-tap", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-tap", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	hw.until(t, isListenRecStart)
@@ -251,7 +256,7 @@ func TestListenModeTapEndsWindowWithoutMenu(t *testing.T) {
 
 func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 	b, base, prompts := listenHarness(t, func(string) string { return "Sent to Mum." })
-	hw, cid := setupListenTerminal(t, b, base, "box3-dc", "Greg", 30)
+	hw, cid := setupListenTerminal(t, b, base, "box3-dc", "Greg", true)
 
 	cardSender := blankCompanion()
 	cardSender.ID = "Mum"
@@ -307,7 +312,7 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 	}
 
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
-	hw, _ := setupListenTerminal(t, b, base, "box3-fill", "Greg", 1)
+	hw, _ := setupListenTerminal(t, b, base, "box3-fill", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-fill", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	hw.until(t, isListenRecStart)
@@ -331,7 +336,7 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 		}
 		return "Hello!"
 	})
-	hw, _ := setupListenTerminal(t, b, base, "box3-silrep", "Greg", 30)
+	hw, _ := setupListenTerminal(t, b, base, "box3-silrep", "Greg", true)
 
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-silrep", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
@@ -359,7 +364,7 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 
 func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 	b, base, _ := listenHarness(t, func(string) string { return "Hello." })
-	hw1, cid := setupListenTerminal(t, b, base, "box3-owner", "Greg", 30)
+	hw1, cid := setupListenTerminal(t, b, base, "box3-owner", "Greg", true)
 	hw2 := testConnectWS(t, base, "unit", false)
 	hw2.helloHardware(t, "vocat-other", cid, capDrag|capBridgeEndpoint)
 	b.hub.mu.Lock()

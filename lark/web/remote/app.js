@@ -5,10 +5,6 @@
   const tabs = ["status", "stories", "history", "settings"];
   const stateLabels = { idle: "Idle", listening: "Listening", thinking: "Thinking", speaking: "Speaking", sleeping: "Sleeping", offline: "Offline" };
   const chanLabels = { in_person: "In person", deltachat: "Delta Chat", intercom: "Intercom", timer: "Timer" };
-  const LISTEN_OPTIONS = [
-    { seconds: 0, label: "Off" }, { seconds: 30, label: "30s" },
-    { seconds: 60, label: "1m" }, { seconds: 120, label: "2m" }, { seconds: 300, label: "5m" },
-  ];
   const HISTORY_CHANNELS = [
     { id: "all", label: "All" }, { id: "in_person", label: "In person" },
     { id: "deltachat", label: "Delta Chat" }, { id: "intercom", label: "Intercom" },
@@ -152,26 +148,22 @@
         sayInput.value = "";
         runCommand("say", { text }, "Speaking on device…", sayBtn);
       } }, [el("label", { for: "say-input", class: "visually-hidden", text: "Words to say aloud" }), sayInput, sayBtn]);
-      const pills = el("div", { class: "pill-group", role: "group", "aria-label": "Listening duration" });
-      for (const opt of LISTEN_OPTIONS) {
-        const btn = el("button", {
-          type: "button", class: "pill-btn", "aria-pressed": "false", text: opt.label,
-          onclick: () => runCommand("listen", { seconds: opt.seconds }, `Listening: ${opt.label}…`, btn),
-        });
-        btn.dataset.seconds = String(opt.seconds);
-        pills.appendChild(btn);
-      }
+      const listenBtn = el("button", {
+        type: "button", class: "pill-btn", "aria-pressed": "false", text: "Listen",
+        onclick: () => {
+          const on = listenBtn.getAttribute("aria-pressed") !== "true";
+          runCommand("listen", { listening: on }, on ? "Listening on…" : "Listening off…", listenBtn);
+        },
+      });
       quick = el("section", { class: "card-box status-quick" }, [
         el("div", { class: "row-title", text: "Quick actions" }), sayForm,
-        el("div", { class: "row-sub", text: "Listening mode" }), pills,
+        el("div", { class: "row-sub", text: "Listening mode" }), listenBtn,
         el("div", { id: "volume-rows", class: "volume-rows" }),
       ]);
       root.append(quick, el("p", { class: "section-label", text: "Devices" }), el("div", { id: "device-list", class: "panel-list" }));
     }
-    const currentSec = Number(state.companion.listen_seconds || 0);
-    for (const btn of quick.querySelectorAll(".pill-btn")) {
-      btn.setAttribute("aria-pressed", Number(btn.dataset.seconds) === currentSec ? "true" : "false");
-    }
+    const listenBtn = quick.querySelector(".pill-btn");
+    if (listenBtn) listenBtn.setAttribute("aria-pressed", state.companion.listening ? "true" : "false");
     const volumes = quick.querySelector("#volume-rows");
     const terminalKeys = new Set(state.terminals.map((t) => t.id));
     prune(volumes, ".volume-row", terminalKeys);

@@ -100,6 +100,7 @@ type captureResult struct {
 
 type pauseTranscript struct {
 	at               time.Duration
+	from             time.Duration // start of the decoded audio within the clip
 	audioLen         int
 	windowed         bool
 	text             string
@@ -209,7 +210,18 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		probeCancel()
 		probe, probeCancel = nil, nil
 		if result.err == nil {
-			if u.policy.observeProgress(result.at, result.text, result.windowed) {
+			// Only audio that actually contains gated speech may move the
+			// transcript forward. Parakeet happily invents words on room
+			// noise, and those guesses must never extend a window.
+			wordCount, fillerOnly, incomplete := inspectTranscript(result.text)
+			spoken := u.policy.lastVoicedAt > result.from
+			if spoken {
+				u.policy.incomplete = incomplete
+			}
+			newTokens := wordCount - u.policy.wordCount
+			grew := spoken && !fillerOnly && wordCount > 0 &&
+				(u.policy.wordCount == 0 || newTokens >= 2 || (result.windowed && result.text != u.policy.lastText))
+			if grew && u.policy.observeProgress(result.at, result.text, result.windowed) {
 				smartTurnCommit = false
 				smartTurnCheckedAt = -1
 				smartTurnCheckedQuiet = 0
@@ -222,9 +234,14 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					abortSpec()
 				}
 			}
+			if debugEndpoint && !spoken && !fillerOnly && wordCount > 0 {
+				log.Printf("endpoint probe ignored_unvoiced term=%s at=%v text=%q from=%v lastVoicedAt=%v",
+					d.id, result.at, result.text, result.from, u.policy.lastVoicedAt)
+			}
 			cached = result
 		}
 	}
+	wasInVoice := false
 	processPacket := func(packet micPacket) {
 		if wait := time.Since(packet.at); wait > maxVADQueue {
 			maxVADQueue = wait
@@ -232,6 +249,11 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		u.addFor(packet.pcm, vad, c.listen)
 		if c.free != nil && packet.slot >= 0 {
 			c.free <- packet.slot
+		}
+		if debugEndpoint && u.policy.inVoice != wasInVoice {
+			wasInVoice = u.policy.inVoice
+			log.Printf("endpoint gate term=%s open=%v rms=%.1f floor=%.1f enter=%.1f at=%v",
+				d.id, wasInVoice, frameRMS(packet.pcm), u.policy.gate.floor, u.policy.gate.enter(), pcmDuration(len(u.pcm)))
 		}
 		if u.policy.inVoice {
 			lastGateOpenLen = len(u.pcm)
@@ -354,16 +376,27 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				probe, probeCancel = nil, nil
 			}
 			if debugEndpoint {
+				silence := at - u.policy.lastVoicedAt
 				mode := "cap"
-				if smartTurnCommit {
-					mode = "smart_turn"
-				} else if decision == endpointCommit && at-u.policy.lastWordAt >= endpointEarlyQuiet {
-					mode = "early"
-				} else if decision == endpointDiscard {
+				switch {
+				case decision == endpointDiscard:
 					mode = "discard"
+				case at >= c.limitSpan:
+					mode = "limit"
+				case u.policy.inVoice && u.policy.lastVoicedAt-u.policy.firstVoicedAt >= endpointMonologue:
+					mode = "monologue"
+				case smartTurnCommit:
+					mode = "smart_turn"
+				case silence >= endpointQuiet && u.policy.hasWords && !u.policy.incomplete:
+					mode = "quiet"
+				case silence >= endpointEarlyQuiet && u.policy.hasWords && !u.policy.incomplete:
+					mode = "early"
+				case !u.policy.hasWords:
+					mode = "no_words"
 				}
-				log.Printf("endpoint decide term=%s decision=%d mode=%s listen=%v at=%v lastWordAt=%v words=%d rms=%.1f",
-					d.id, decision, mode, c.listen, at, u.policy.lastWordAt, u.policy.wordCount, u.policy.speechRMS)
+				log.Printf("endpoint decide term=%s decision=%d mode=%s listen=%v at=%v lastVoicedAt=%v silence=%v words=%d speech=%v floor=%.1f rms=%.1f",
+					d.id, decision, mode, c.listen, at, u.policy.lastVoicedAt, silence,
+					u.policy.wordCount, u.policy.speechSpan(), u.policy.gate.floor, u.policy.speechRMS)
 			}
 			h.mu.Lock()
 			// Don't stop on an old decision while more speech is queued.
@@ -377,8 +410,8 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			if vad != nil && probe == nil && u.policy.voiced &&
 				len(u.pcm) > lastProbeAudioLen &&
 				at-lastProbeAt >= endpointProbeEvery &&
-				(!u.policy.inVoice || at-u.policy.lastWordAt < endpointQuiet) &&
-				at-u.policy.lastWordAt < endpointCap-endpointProbeEvery &&
+				(!u.policy.inVoice || at-u.policy.lastVoicedAt < endpointQuiet) &&
+				at-u.policy.lastVoicedAt < endpointCap-endpointProbeEvery &&
 				(u.policy.inVoice || lastGateOpenLen > lastProbeAudioLen) {
 				lastProbeAt = at
 				lastProbeAudioLen = len(u.pcm)
@@ -389,15 +422,15 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				result := make(chan pauseTranscript, 1)
 				probe, probeCancel = result, cancel
 				// The prefix is immutable; the capture worker only appends.
-				go func(pcm []byte, probeAt time.Duration, audioLen int, windowed bool) {
+				go func(pcm []byte, probeAt, from time.Duration, audioLen int, windowed bool) {
 					start := time.Now()
 					sttCtx, timing := withSTTTiming(withSTTProbe(ctx))
 					text, err := h.b.decodeClip(sttCtx, pcm)
 					result <- pauseTranscript{
-						at: probeAt, audioLen: audioLen, windowed: windowed,
+						at: probeAt, from: from, audioLen: audioLen, windowed: windowed,
 						text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run,
 					}
-				}(clip, pcmDuration(lastGateOpenLen), len(u.pcm), windowed)
+				}(clip, pcmDuration(lastGateOpenLen), pcmDuration(startOff), len(u.pcm), windowed)
 			}
 			if h.b.endpoint.smartTurn != nil && vad != nil && u.policy.hasWords &&
 				!u.policy.incomplete && smartTurnCh == nil &&

@@ -280,7 +280,7 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 	if _, err := b.createCompanion(t.Context(), object{"id": "echo", "name": "Echo", "form": "a cat"}); err != nil {
 		t.Fatal(err)
 	}
-	toolTest(t, base, "patch", object{"companion_id": "echo", "companion": object{"listen_seconds": 30}}, false)
+	toolTest(t, base, "patch", object{"companion_id": "echo", "companion": object{"listening": true}}, false)
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
 
@@ -328,7 +328,14 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 
 func TestEndpointNoiseNeverFormsWordsDiscards(t *testing.T) {
 	var p endpointPolicy
-	p.observeEnergy(20*time.Millisecond, true, 200)
+	// A second of room noise teaches the floor that this level is not speech.
+	for i := range 50 {
+		p.observeEnergy(time.Duration(i+1)*endpointFrame, false, 150)
+	}
+	p.observeEnergy(time.Second+endpointFrame, true, 200)
+	if p.voiced {
+		t.Fatal("noise above the floor margin must not start a segment")
+	}
 	// Empty or filler-only transcripts from noise never start a turn.
 	for _, noiseText := range []string{"", "   ", "um", "uh-huh", "hmm"} {
 		if p.observeProgress(300*time.Millisecond, noiseText, false) {
@@ -343,6 +350,9 @@ func TestEndpointNoiseNeverFormsWordsDiscards(t *testing.T) {
 	}
 	if got := p.decision(endpointIdle, endpointCap, endpointLimit, true, false); got != endpointDiscard {
 		t.Fatalf("expected discard at endpointIdle, got %v", got)
+	}
+	if got := p.decision(endpointLimit, endpointCap, endpointLimit, true, true); got != endpointDiscard {
+		t.Fatalf("noise-only listen window must close without a turn, got %v", got)
 	}
 }
 

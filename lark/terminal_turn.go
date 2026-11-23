@@ -17,6 +17,11 @@ const (
 	deviceReplyTTL = time.Minute
 )
 
+// listenWindow bounds one listening window. Listening is a single on/off
+// setting; a window re-arms after each reply and closes on this much silence
+// (or a tap, or the cap). It is a variable only so tests can shorten it.
+var listenWindow = 30 * time.Second
+
 func recordTarget(s string) (string, bool) {
 	s = strings.TrimSpace(s)
 	return s, s == "" || targetRE.MatchString(s)
@@ -70,7 +75,7 @@ func (h *terminalHub) startRecording(d *terminalSession, target string, now time
 }
 
 func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bool {
-	if !h.active(d) || d.companion.ListenSeconds <= 0 || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+	if !h.active(d) || !d.companion.Listening || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
 		return false
 	}
 	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck || d.drawer != "" {
@@ -78,7 +83,7 @@ func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bo
 	}
 	h.wake(d, now)
 	d.drawer, d.card, d.pending, d.view = "", nil, nil, nil
-	span := time.Duration(d.companion.ListenSeconds) * time.Second
+	span := listenWindow
 	d.recording.start(now, "", true)
 	d.recording.listen = true
 	d.recording.listenSpan = span
@@ -100,11 +105,7 @@ func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) 
 		return false
 	}
 	h.wake(d, now)
-	secs := d.companion.ListenSeconds
-	if secs <= 0 {
-		secs = 12
-	}
-	span := time.Duration(secs) * time.Second
+	span := listenWindow
 	d.recording.start(now, "", true)
 	d.recording.listen = true
 	d.recording.listenSpan = span

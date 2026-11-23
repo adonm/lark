@@ -158,7 +158,7 @@ func TestCompanionFormAndPortraitPrompt(t *testing.T) {
 	}
 }
 
-func TestCompanionListenSeconds(t *testing.T) {
+func TestCompanionListeningToggle(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	created := testObject(t, testRequest(t, http.MethodPost, base+"/api/companions", "unit", object{
 		"name": "Greg",
@@ -166,23 +166,26 @@ func TestCompanionListenSeconds(t *testing.T) {
 	}, 201))
 	id := str(created["id"])
 	me := stateMe(t, base, id)
-	if got := me["companion"].(object)["listen_seconds"]; got != json.Number("0") {
-		t.Fatalf("default listen_seconds = %v, want 0", got)
+	if got := me["companion"].(object)["listening"]; got != false {
+		t.Fatalf("default listening = %v, want false", got)
 	}
 	res := toolTest(t, base, "patch", object{
 		"companion_id": id,
-		"companion":    object{"listen_seconds": 60},
+		"companion":    object{"listening": true},
 	}, false)
-	if got := res["companion"].(object)["listen_seconds"]; got != json.Number("60") {
-		t.Fatalf("patched listen_seconds = %v, want 60", got)
+	if got := res["companion"].(object)["listening"]; got != true {
+		t.Fatalf("patched listening = %v, want true", got)
 	}
 	me = stateMe(t, base, id)
-	if got := me["companion"].(object)["listen_seconds"]; got != json.Number("60") {
-		t.Fatalf("state me.companion.listen_seconds = %v, want 60", got)
+	if got := me["companion"].(object)["listening"]; got != true {
+		t.Fatalf("state me.companion.listening = %v, want true", got)
 	}
-	for _, bad := range []any{-1, 301, 12.5, "60"} {
-		if _, err := updateCompanion(b.companionFor(id), object{"listen_seconds": bad}, b.voices); err == nil {
-			t.Fatalf("expected error for listen_seconds=%v", bad)
+	for _, bad := range []any{1, "on", nil} {
+		if _, err := updateCompanion(b.companionFor(id), object{"listening": bad}, b.voices); err == nil {
+			t.Fatalf("expected error for listening=%v", bad)
 		}
+	}
+	if _, err := updateCompanion(b.companionFor(id), object{"listen_seconds": 60}, b.voices); err == nil {
+		t.Fatal("listen_seconds must be rejected after the boolean migration")
 	}
 }

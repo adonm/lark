@@ -165,6 +165,40 @@ func (o *openCode) save(device, sid string) error {
 	return nil
 }
 
+func TestListeningBoolMigratesFromSeconds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lark.db")
+	d, err := openLarkDB(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO companions (id,name,configured,personality,voice,updated_at,form,listening)
+		VALUES ('cake','Cake',1,'','',1,'',1)`); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the pre-boolean shape: a duration column and no boolean.
+	if _, err := d.Exec(`ALTER TABLE companions ADD COLUMN listen_seconds INTEGER NOT NULL DEFAULT 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE companions SET listen_seconds=300`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`ALTER TABLE companions DROP COLUMN listening`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = testDB(t, path)
+	var listening int
+	if err := d.QueryRow(`SELECT listening FROM companions WHERE id='cake'`).Scan(&listening); err != nil || listening != 1 {
+		t.Fatalf("listening = %d, %v; want 1", listening, err)
+	}
+	var retired int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('companions') WHERE name='listen_seconds'`).Scan(&retired); err != nil || retired != 0 {
+		t.Fatalf("listen_seconds still present: %d, %v", retired, err)
+	}
+}
+
 func TestRetiredTimerColumnIsDropped(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lark.db")
 	d, err := openLarkDB(t.Context(), path)

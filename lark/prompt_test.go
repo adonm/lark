@@ -28,7 +28,7 @@ func TestTurnPromptListsOwnOnlineHardwareTerminal(t *testing.T) {
 
 	companion := companionState{
 		companionLook: companionLook{Name: "Cake", Configured: true, Form: "a playful young fox"},
-		ListenSeconds: 300,
+		Listening:     true,
 	}
 	got := b.turnPromptWithState(t.Context(), "cake", "voice", "How much battery?", companion, turnChannel{}, time.Now())
 	if !strings.Contains(got, "vocat-33d8(esp-vocat,online,battery:87,sleeping,vol:42)") {
@@ -37,7 +37,7 @@ func TestTurnPromptListsOwnOnlineHardwareTerminal(t *testing.T) {
 	if strings.Contains(got, "sim-cleanup") || strings.Contains(got, "vocat-2cac") {
 		t.Fatalf("offline or foreign terminal leaked into prompt: %q", got)
 	}
-	if !strings.Contains(got, "listen: on (300s spans)") || !strings.Contains(got, "form: a playful young fox") {
+	if !strings.Contains(got, "listen: on") || !strings.Contains(got, "form: a playful young fox") {
 		t.Fatalf("state line lost listening spans or form: %q", got)
 	}
 

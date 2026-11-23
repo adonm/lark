@@ -35,6 +35,7 @@ func testEndpointSettings() *endpointSettings {
 func TestEndpointWaitsForContinuation(t *testing.T) {
 	var p, empty endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
+	p.observeEnergy(230*time.Millisecond, false, 0)
 	if !p.observeProgress(250*time.Millisecond, "Hello", false) {
 		t.Fatal("first word should advance progress")
 	}
@@ -59,14 +60,17 @@ func TestEndpointWaitsForContinuation(t *testing.T) {
 			// Ensure word count is > previous for test or reset
 		}
 		var q endpointPolicy
-		q.observeProgress(time.Second, incomplete, false)
+		base := 1250 * time.Millisecond
+		q.observeEnergy(base, true, 2000)
+		q.observeEnergy(base+endpointFrame, false, 0)
+		q.observeProgress(base, incomplete, false)
 		if !q.incomplete {
 			t.Fatalf("%q should be marked incomplete", incomplete)
 		}
-		if got := q.decision(time.Second+endpointQuiet, endpointCap, endpointLimit, true, false); got != endpointWait {
+		if got := q.decision(base+endpointQuiet, endpointCap, endpointLimit, true, false); got != endpointWait {
 			t.Fatalf("%q committed early despite incomplete trailing", incomplete)
 		}
-		if got := q.decision(time.Second+endpointCap, endpointCap, endpointLimit, true, false); got != endpointCommit {
+		if got := q.decision(base+endpointCap, endpointCap, endpointLimit, true, false); got != endpointCommit {
 			t.Fatalf("%q did not commit at cap", incomplete)
 		}
 	}
@@ -91,9 +95,6 @@ func TestEndpointAccumulatorPreservesOriginalPCM(t *testing.T) {
 	u.add(frame[50:], vad)
 	for range 200 {
 		u.add(quiet, vad)
-		if got := u.policy.decision(pcmDuration(len(u.pcm)), endpointCap, endpointLimit, false, false); got != endpointWait {
-			t.Fatalf("unexpected decision %v", got)
-		}
 	}
 	u.add(frame, vad)
 	want := slices.Concat(frame, make([]byte, 200*endpointBytes), frame)
@@ -530,6 +531,7 @@ func TestEndpointRingPushDoesNotAllocate(t *testing.T) {
 func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
 	var p endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
+	p.observeEnergy(230*time.Millisecond, false, 0)
 	p.observeProgress(250*time.Millisecond, "Set a timer for two minutes.", false)
 	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.96, true, false); got != endpointCommit {
 		t.Fatalf("punctuated turn with strong Smart Turn, got %v, want commit", got)

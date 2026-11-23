@@ -141,7 +141,7 @@ func TestRemotePagePWAAndScopedAuth(t *testing.T) {
 	}
 	remoteHTTP(t, http.MethodGet, h.base, "", "/remote", nil, 401)
 	remoteHTTP(t, http.MethodGet, h.base, "", "/remote?token=wrong", nil, 401)
-	remoteHTTP(t, http.MethodPost, h.base, "wrong", "/remote/api/listen", object{"seconds": 30}, 401)
+	remoteHTTP(t, http.MethodPost, h.base, "wrong", "/remote/api/listen", object{"listening": true}, 401)
 
 	scoped := h.scopedBase()
 	remoteHTTP(t, http.MethodGet, scoped, "", "/remote?token=wrong", nil, 401)
@@ -179,8 +179,8 @@ func TestRemoteRESTCommandsAndHistoryCursor(t *testing.T) {
 	}
 
 	// Listen.
-	res := remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/listen", object{"seconds": 120}, 200)
-	if res["ok"] != true || b.companionFor("greg").ListenSeconds != 120 {
+	res := remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/listen", object{"listening": true}, 200)
+	if res["ok"] != true || !b.companionFor("greg").Listening {
 		t.Fatalf("listen failed: %+v", res)
 	}
 	// Say records the spoken turn.
@@ -335,7 +335,7 @@ func TestRemoteTunnelCommandIssueRotateAndRevoke(t *testing.T) {
 		t.Fatal("/remote did not mint a fresh link")
 	}
 	remoteHTTP(t, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(b.remote.routes["greg"].LocalPort), "", "/remote?token="+url.QueryEscape(oldToken), nil, 401)
-	remoteJSON(t, http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(b.remote.routes["greg"].LocalPort), "", "/remote/api/listen", object{"seconds": 30}, 401)
+	remoteJSON(t, http.MethodPost, "http://127.0.0.1:"+strconv.Itoa(b.remote.routes["greg"].LocalPort), "", "/remote/api/listen", object{"listening": true}, 401)
 
 	// /remote off revokes the current token and removes the tunnel.
 	stub.mu.Lock()

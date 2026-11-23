@@ -153,7 +153,7 @@ func (h *terminalHub) publishCompanion(id string, companion companionState, clea
 			h.clearView(d)
 			d.agentSetScene = d.busy
 		}
-		if companion.ListenSeconds <= 0 && d.recording.active() && d.recording.listen {
+		if !companion.Listening && d.recording.active() && d.recording.listen {
 			h.stopListeningWindow(d, now)
 		}
 		h.render(d, now, true)
