@@ -4,6 +4,42 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-23 — Listening on/off and silence-driven endpoints
+
+### Affects
+- Server / SQLite (`~/.local/share/lark/lark.db`) / Lark API & MCP / Web (`/remote`) / Agent prompt
+
+### Breaking Changes
+- `companions.listen_seconds` (0–300) is gone. `companions.listening` is a boolean on/off setting; the window length is one server constant (30 s).
+- `patch.companion.listen_seconds` is rejected. Use `patch.companion.listening: true|false`. `/remote/api/listen` takes `{"listening":true|false}`; the six duration pills and "Off" pill are replaced by one Listen toggle.
+- `state` returns `me.companion.listening` instead of `listen_seconds`; the turn state line says `listen: on` / `listen: off`.
+- The server performs the one-time backfill and drop at startup, guarded like other retired columns.
+
+### How to Detect
+```sh
+sqlite3 ~/.local/share/lark/lark.db "PRAGMA table_info(companions);" | grep -E 'listen_seconds|listening'
+curl -s -H "X-Lark-Token: $LARK_TOKEN" http://127.0.0.1:8765/api/companions
+```
+A `listen_seconds` column or any `listen_seconds` JSON key means the upgrade is pending.
+
+### Upgrade Steps
+1. Stop the service, back up, and apply the schema step (the server also does it at startup):
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   sqlite3 ~/.local/share/lark/lark.db "ALTER TABLE companions ADD COLUMN listening INTEGER NOT NULL DEFAULT 0; UPDATE companions SET listening = CASE WHEN listen_seconds > 0 THEN 1 ELSE 0 END; ALTER TABLE companions DROP COLUMN listen_seconds;"
+   ```
+2. Run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart.
+3. No firmware change is needed on `0.20.0`.
+
+### Verification
+- `GET /api/companions` shows boolean `listening` for every companion and no `listen_seconds`.
+- `sqlite3 ... "SELECT id,listening FROM companions;"` matches the old durations (`>0` becomes `1`).
+- `/remote` shows one Listen toggle; no duration pills.
+- A window with quiet speech commits within ~1.6 s of the last voiced frame; noise-only windows close at 30 s without a turn.
+
+---
+
 ## 2026-11-23 — Companion Visibility, Reply Routing and Patch Defaults
 
 ### Affects

@@ -66,7 +66,7 @@ are no runtime migrations.
 
 | Table | Purpose |
 | --- | --- |
-| `companions` | Name, setup state, personality/vibe, voice, form, portrait id, listen window, Delta Chat account id. |
+| `companions` | Name, setup state, personality/vibe, voice, form, portrait id, listening on/off, Delta Chat account id. |
 | `terminals` | Connected board id, kind, attached companion, last IP/port, last-seen time. |
 | `terminal_prefs` | Per-terminal auto-volume and manual volume. |
 | `sessions` | Companion → OpenCode session id, contract hash, last binding write, context cutoff. |
@@ -91,13 +91,18 @@ On disk:
 1. **Tap → mic ≈ 24 ms.** Firmware starts capture and acknowledges
    `rec_start` (measured 14.5–28.7 ms). Audio is 16 kHz mono PCM over UDP;
    the bridge holds a 400 ms pre-roll for listening mode.
-2. **Transcript-progress endpointing.** Silero VAD plus relative speech energy
-   gate Parakeet probes every 250 ms. `lastWordAt` moves only when non-filler
-   words grow. Speculation starts at **180 ms** quiet when Smart Turn ≥ 0.40.
-   Commit at **300 ms** when Smart Turn ≥ 0.95 *and* the transcript ends in
-   `.`/`?`/`!`; otherwise at **400 ms** with Smart Turn ≥ 0.90 and no
-   incomplete cue; hard cap **1.2 s**; discard after 6 s without speech;
-   capture limit 60 s. A new word cancels a speculative call.
+2. **Silence-driven endpointing.** Silero VAD must agree with an adaptive
+   room floor (learned for the first second and tracked during non-speech)
+   before audio counts as speech. Silence is measured from the last gated
+   voice frame, never from transcript growth. Commit after **400 ms** of
+   gated silence when Smart Turn ≥ 0.90 and the transcript does not end in a
+   function word, possessive, article, preposition, auxiliary or filler;
+   otherwise at the **1.2 s** cap. A continuous monologue commits at **20 s**.
+   Parakeet probes run every 250 ms, but probe text only advances when the
+   decoded audio contained gated speech; unvoiced hallucinations are ignored.
+   Speculation starts after 180 ms quiet when Smart Turn ≥ 0.40. A window
+   with no gated speech discards at its span; tap-to-talk discards after 6 s
+   without speech; capture limit 60 s. A new word cancels a speculative call.
 3. **STT.** Whole-clip Parakeet on Vulkan: p50 **96 ms**, p95 **133 ms** in
    the engine benchmark; live turns usually report 54–74 ms.
 4. **OpenCode.** A speculative or committed prompt goes to the companion's
@@ -125,6 +130,15 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 - **Audio and control beat frames.** Outbound terminal messages are ordered
   control → TTS PCM → latest coalesced frame. Frames may be dropped; audio and
   control may not.
+- **Listening.** Listening is one boolean setting per companion. A window
+  re-arms after each reply, lasts at most **30 s**, and closes on a tap or
+  silence. After **10 s** without a reply, a new turn must contain the
+  companion's name (normalised edit distance ≤2, checked in the first five
+  words); nameless speech is ignored as background chatter. Speech with the
+  name but no usable transcript gets one short pre-cached "didn't catch that"
+  line and re-arms. `/api/diagnostics` exposes per-window counters for gate
+  drops, empty/filler transcripts, commits, silent replies, feedback, name
+  ignores, and close reason, plus text length and duration of recent segments.
 - **Screens are static.** No animations, tickers, or continuous redraws; all
   layout is deterministic for both geometries.
 - **Floristry layout.** One focal element per screen, quieter secondary

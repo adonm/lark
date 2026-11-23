@@ -14,32 +14,58 @@ The bridge does not download models or need an endpoint environment flag.
 Install the model before upgrading the bridge binary.
 
 Silero v5 runs on CPU with 512-sample windows, a 0.50 speech threshold,
-120 ms minimum speech and a 320 ms silence tail. The separate release threshold
-and tail keep brief dips from toggling speech state. The bridge subtracts the
-tail to estimate acoustic end. Defaults in `endpoint.go` are measured from that
-estimate, not added on top of the VAD tail:
+120 ms minimum speech and a 320 ms silence tail. A frame only counts as
+speech when VAD is positive **and** its RMS clears an adaptive room floor.
+The floor is the 10th percentile of the first second of non-speech frames and
+then tracks upward slowly (instant downward) during non-speech. Floor-relative
+margins are small in RMS counts, not dB: live boards report speech near 20–25
+RMS over a room floor of 1–4. VAD still owns the speech decision; the floor
+only vetoes noise, including VAD false positives and its silence tail.
 
-| Threshold | Default | Rule |
+| Rule | Default | Behaviour |
 | --- | ---: | --- |
-| Decode a pause | 600 ms | One local Parakeet decode of the accumulated clip per pause |
-| Strongly complete | 950 ms | Punctuated direct question (e.g. “why” + `?`) or a punctuated timer command with a duration |
-| Other complete | 2,100 ms | Terminal `.`, `?` or `!`, enough content, no unfinished cue |
-| Missing punctuation | 3,300 ms | Sufficient text but no final mark or unfinished cue |
-| Patient / max silence after speech | 4,500 ms | Unfinished text, trailing filler, list/continuation cue, too few words, absent/failed probe, or story |
+| Probe pause | 250 ms | Decode up to the last 4 s of one growing clip |
+| Quiet commit | 400 ms | Gated silence; Smart Turn ≥ 0.90 and no incomplete trailing word |
+| Cap | 1,200 ms | Gated silence; commits regardless of transcript completeness |
+| Monologue | 20 s | Continuous gated speech commits even without a pause |
+| No-speech discard | 6 s tap / window span | A window with no gated speech closes without a turn |
+| Listen window | 30 s | Re-arms after each reply; tap or this cap closes it |
 
-Three words count as enough content (leading question contractions like
-“what’s” count as two words). Narrative starts, a span of at least 8 s from
-first voice to estimated end, or at least 23 words select the patient tier.
-Punctuation is only a hint: Parakeet can add it before a thought is finished,
-or omit it on a finished turn. A complete-sounding prefix followed by a pause
-longer than its tier can still be cut off.
+Silence is measured from the last frame that was both VAD-positive and above
+the floor. Transcript growth cannot extend it. Parakeet probes can hallucinate
+words on room noise, so probe text only advances the transcript when the
+decoded audio contained gated speech; a first nonempty decode still counts,
+and later edits need two new tokens (a sliding window may replace text without
+growing the count). Speculation starts after 180 ms of quiet when Smart Turn
+is at least 0.40 and is cancelled by new voiced audio or a changed transcript.
 
-The capture worker keeps reading PCM while decoding on the local GPU. New
-speech cancels and invalidates the old guess, including during stop
-acknowledgement, and PCM from both clauses remains in the same clip. A
-nonempty successful decode is reused only when the same pause survives
-through `rec_end`. Otherwise the worker decodes the final clip. No guess is
-sent to OpenCode, and the mic indicator remains on while listening.
+The quiet-commit path refuses to cut a turn that ends in a conjunction,
+article, possessive, preposition, auxiliary, copula, filler, or trailing comma:
+`his, her, the, a, an, and, but, or, so, because, if, to, of, in, on, at, is,
+was, are, um, uh…` all wait for the 1.2 s cap or the next word. A segment with
+at least one second of gated speech but no usable transcript speaks one short
+cached line ("I didn't catch that.", "Sorry, what was that?", "Say that
+again?"), re-arms the window, and never creates an agent turn. A cough or a
+door does not trigger it.
+
+## Listening mode
+
+Listening is a single boolean per companion (`patch.companion.listening`).
+After a reply the voice-owner terminal opens a 30 s window. For 10 s after the
+reply finishes, follow-ups need no name. After that a new turn must contain the
+companion's name in the first five words; a normalised edit distance up to 2
+tolerates STT near misses ("Kate" for Cake, "Minty" for Mint). Nameless speech
+is dropped silently as background chatter. When the name is present but the
+rest is empty or filler, the companion says "didn't catch that" and re-arms.
+`[silent]` replies and ignored speech both re-arm through normal playback
+completion.
+
+`GET /api/diagnostics` reports `listening` counters: windows, segments with
+speech, gate drops, empty and filler transcripts, commits, silent replies,
+"didn't catch that", name-required ignores, close reason (silence, tap, cap),
+and recent segments with text length, capture duration, and speech duration.
+Set `LARK_DEBUG_ENDPOINT=1` to log every gate transition, probe, Smart Turn
+check, and commit decision with energy, floor, VAD, silence, and word counts.
 
 ## Wire and follow-up behavior
 

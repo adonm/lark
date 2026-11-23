@@ -50,8 +50,9 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
 
     STT needs a Vulkan GPU, not Hex or an X display. Lark recognizes
     English without custom vocabulary. On firmware 0.9.5+,
-    Lark listens through thinking pauses and uses local transcription
-    to decide when to send a turn. Clients without the capability keep their
+    Lark listens through thinking pauses and ends the turn on gated silence,
+    using VAD plus an adaptive room floor rather than transcript growth.
+    Clients without the capability keep their
     local VAD. You can still Send or Cancel while the mic is open. See
     [endpoint policy and replay results](lark/turn-taking.md) and
     [STT measurements and artifact pins](lark/stt-speed.md).
@@ -165,14 +166,24 @@ and exits non-zero on failures. The server totals include Kokoro. Firmware
 reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM, Wi-Fi RSSI,
 and uptime every five seconds. Turn diagnostics separate
 OpenCode gate wait and first sentence, TTS queue and inference time, first frame
-render, and elapsed time to the first queued PCM.
+render, and elapsed time to the first queued PCM. `GET /api/diagnostics` also
+reports listening-mode counters (windows, speech segments, gate drops, empty
+and filler transcripts, commits, silent and "didn't catch that" replies,
+name-required ignores, and how each window closed) plus the text length,
+duration, and speech duration of recent segments.
+
+`lark capture <companion> [seconds]` records the companion's voice-owner
+microphone through the ordinary listening path into a 16 kHz mono WAV under
+`~/.local/share/lark/debug/` (directory `0700`, file `0600`). Captures are
+local only: never synced, uploaded, or used as fixtures. `lark stt-bench <wav|dir>`
+prints Parakeet transcripts with timing per file.
 
 ## Remote controls
 
 Send `/remote` to a companion from a verified Delta Chat contact and it replies
 with one tappable link. The link opens a phone-first control page over an
 OpenTunnel (`opentunnel.xyz`) subdomain and carries a scoped token for that
-companion. The page has live companion state, Say, listening mode, per-terminal
+companion. The page has live companion state, Say, a listening on/off toggle, per-terminal
 volume, story progress with Continue and Start over, history with filters and
 cursor paging, and voice selection with an on-device preview. It also installs
 to a home screen with the companion's name and portrait.
@@ -323,7 +334,7 @@ Lark also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
 Companions are stored in `companions` and attached terminals in `terminals`.
-A companion is its name, `form`, voice, listening window, and an optional
+A companion is its name, `form`, voice, listening on/off, and an optional
 portrait. Changing `form` regenerates the pixel-art background; the four poses
 come from one 2×2 portrait sheet.
 
@@ -369,6 +380,8 @@ over SSE.
 | `POST /api/terminals/{id}/pair` | Generate and push a Delta Chat QR pairing card (`image/png`) to an attached terminal |
 | `GET /api/terminals/{id}/hits` | Live screen state, revision, and touch hit targets for a connected terminal |
 | `POST /api/tts` | `{"text":"Hello!"}`, optional `voice` → WAV audio (`audio/wav`) |
+| `POST /api/capture` | `{"companion_id":"cake","seconds":20}` → raw RTP capture saved as a 16 kHz mono WAV under `~/.local/share/lark/debug/` (host-local, `0700`, never synced) |
+| `POST /api/stt` | 16 kHz mono WAV or raw s16le PCM → Parakeet transcript and timing (host-local) |
 | `GET /api/remote/tunnels`, `DELETE /api/remote/tunnels/{companion}` | List or stop saved scoped remote tunnels (no tokens exposed) |
 | `GET /remote?token=...` | Scoped control page (also served through the companion's OpenTunnel) |
 | `GET /remote/events?token=...` | Server-Sent Events stream for live state and story progress |
@@ -380,7 +393,7 @@ over SSE.
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 
 Use `lark status`, `lark doctor`, `lark companions`, `lark terminals`, `lark tunnels`,
-`lark sim`, `lark device`, `lark ota`, and `lark mcp` from the CLI to inspect and
+`lark capture`, `lark stt-bench`, `lark sim`, `lark device`, `lark ota`, and `lark mcp` from the CLI to inspect and
 control the server.
 
 | Device · port 80 | Request → response |

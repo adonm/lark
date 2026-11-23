@@ -1,3 +1,109 @@
+## 2026-11-23 — Listening reliability (silence, cut-offs, deafness)
+
+Three failures drove this change: turns that never sent after speech, turns cut
+mid-sentence, and speech silently dropped. All three reproduced in the live
+`LARK_DEBUG_ENDPOINT=1` logs and in synthetic RTP tests.
+
+### Root causes and evidence
+
+1. **Silence never ended the turn.** Commit was measured from `lastWordAt`, the
+   probe that last changed the transcript. Parakeet probes on room noise kept
+   "growing" the text, so `lastWordAt` advanced and the quiet/cap timers never
+   expired. Live log: probe at 760 ms `"This thing might just"`, replacement at
+   880 ms `"Listening mode is too"`, then commit at 1.96 s while speech was
+   still arriving. The replacement had the same word count, so
+   `observeProgress` rejected it and speech-ended timers were unrelated to the
+   VAD.
+2. **Cut-offs came from the cap ignoring ongoing speech.** The 1.2 s cap fired
+   on `lastWordAt` even when VAD still reported speech. Function words were
+   only partly covered (`and`, `but`, `or`, …), so `"can you put his"` and
+   `"what to worry is"` passed the early gate.
+3. **Deafness was a commit race.** `finishEndpoint` closed `stop` and then
+   `clear()` cancelled the capture context. If the worker scheduled late, it
+   selected `ctx.Done()` instead of `stop`, exited without sending a result,
+   and the turn saw an empty capture. `lark capture` reproduced it: `POST
+   /api/capture` returned `No microphone audio arrived` in 31 ms while the
+   worker had just started. The same race silently dropped real listening
+   speech.
+4. **The gate was VAD-only plus a fixed 20 % relative energy floor.** It missed
+   quiet distant speech after a loud word and admitted steady noise that Silero
+   flickered on.
+
+### Fixes
+
+- Silence is measured from the last frame that was both VAD-positive and above
+  an adaptive floor. Quiet commit 400 ms, cap 1.2 s, continuous monologue 20 s;
+  transcript text cannot extend any of them. Probe text only advances when the
+  decoded audio contained gated speech; hallucinated words on silence are
+  ignored. Equal-word-count replacements now update completeness.
+- The floor is learned from one second of non-speech after the window opens (or
+  after a full second of quiet) and tracks downward instantly / upward slowly.
+  Windows that open mid-speech keep the conservative zero floor until the room
+  is quiet.
+- The closing-pause guard now covers articles, possessives, prepositions,
+  auxiliaries and copulas in addition to conjunctions and fillers.
+- A committed endpoint is marked before `stop` closes, so `clear()` no longer
+  cancels its result; a late `rec_end` from the previous capture is ignored
+  while the new one is still requested.
+- A segment with >=1 s of gated speech and no usable transcript speaks one
+  pinned "I didn't catch that." line and re-arms. After 10 s without a reply,
+  a listening turn must contain the companion's name (edit distance <=2 in the
+  first five words); nameless speech re-arms silently.
+- Listening is one boolean (`listening`), one 30 s window, one `/remote`
+  toggle. The duration column was backfilled and dropped.
+
+### Measurements
+
+Turn bench, real model (`deepseek-v4.1-flash#low`), 7 runs x 3 utterances;
+one first-turn row was lost during startup, leaving 20 diagnostic turns:
+
+| Metric | Before (live diagnostics, 8 turns, old build) | After |
+| --- | ---: | ---: |
+| End-of-speech → commit p50 / p95 | 241–1,080 ms spread | **400.3 / 407.5 ms** |
+| E2E p50 / p95 | 1.35–2.36 s spread (p50 ≈ 1.83 s) | **1,192 / 1,895 ms** |
+| Speculation | not counted (debug off) | started 21, hit 21, abort 0, avg overlap 638 ms |
+| Commits while speech still voiced | observed | 0 in 20 |
+
+STT bench on synthetic Kokoro fixtures (adult and +20 % pitch-shifted kid
+voices, pink-noise bed):
+
+| Fixture | Parakeet | Audio | Transcript |
+| --- | ---: | ---: | --- |
+| adult1 | 57.5 ms | 2.2 s | exact |
+| adult1 + pink noise | 66.3 ms | 2.2 s | exact |
+| kid1 (+20 %) | 57.6 ms | 2.2 s | exact |
+| kid2 (+20 %) | 55.9 ms | 2.3 s | exact, dropped final period |
+| kid3 (+20 %) | 55.4 ms | 2.0 s | exact |
+| pink noise only | 77.0 ms | 12 s | empty |
+
+The pitch shift is not a real child at a distance; these numbers must not be
+quoted as kid WER.
+
+### Verification
+
+- `./scripts/check.sh`: PASS (Go race suite, Node, host C for both boards,
+  tracked-file hygiene). New regressions: quiet speech over a floor, noise-only
+  windows, transcript churn, monologue cap, window close, name matching and all
+  three name paths, feedback playback/re-arm, commit-vs-cancel race, capture
+  WAV permissions, diagnostics counters, listening boolean migration.
+- `./scripts/check.sh --qa`: PASS 10.9 s (4 sim scenarios); `--qa-hw`: PASS
+  22.5 s, including `box3-b324/AutoCommitNoisyMic` (speech + ~350 RMS noise,
+  no Send).
+- `lark doctor`: server, models, firmware, disk, library, Delta Chat, tunnels
+  and all three terminals green after clearing QA turn failures.
+- Live: `lark capture cake 15` and `lark capture mint 12` while injecting
+  Kokoro speech and pink noise through `lark device … mic` wrote private WAVs
+  (`0700` dir, `0600` file) and re-transcribed the injected speech exactly.
+
+### Still needed: real kid speech
+
+Every STT number above is synthetic. To measure real WER at distance, collect
+2–3 minutes from the actual room: `lark capture cake 60` (and `mint`) while a
+child talks naturally, then `lark stt-bench ~/.local/share/lark/debug/`. Compare
+the printed transcript with what was said; keep the files local.
+
+---
+
 ## 2026-11-23 — Server Cleanup (bug fixes, deletions, performance, cohesion)
 
 Four approved cleanup tiers landed in review order; firmware `0.20.0` shipped in the same rollout and the server was rebased on it before deploy.
