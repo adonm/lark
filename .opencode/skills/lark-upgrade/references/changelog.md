@@ -4,6 +4,26 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-23 — Remote microphone capture
+
+### Affects
+- Server / Lark API & MCP / Web (`/remote`) / Local debug captures
+
+### Breaking Changes
+- None. This adds scoped routes and a Diagnostics tab; no schema, wire, or config change.
+
+### Upgrade Steps
+1. Back up `lark.db` and `lark.env`, then run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart `lark.service`.
+2. No firmware or database step is needed.
+
+### Verification
+- `/remote` has five tabs; Diagnostics shows 15/30/60 s duration buttons, one Start button, and the privacy line.
+- Start creates `~/.local/share/lark/debug/capture-<companion>-<stamp>.wav` (`0600` in a `0700` directory) and progress arrives as `capture` SSE events.
+- A second start while one runs returns `409`; Play streams the WAV with range support, Transcribe writes the `.txt` sidecar, and Delete removes both files.
+- `lark capture <companion> <seconds>` still records through the same path and prints the WAV path and duration.
+
+---
+
 ## 2026-11-23 — Listening on/off and silence-driven endpoints
 
 ### Affects

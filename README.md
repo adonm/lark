@@ -176,7 +176,8 @@ duration, and speech duration of recent segments.
 microphone through the ordinary listening path into a 16 kHz mono WAV under
 `~/.local/share/lark/debug/` (directory `0700`, file `0600`). Captures are
 local only: never synced, uploaded, or used as fixtures. `lark stt-bench <wav|dir>`
-prints Parakeet transcripts with timing per file.
+prints Parakeet transcripts with timing per file. The `/remote` Diagnostics tab
+records, plays, transcribes, and deletes the same captures from a phone.
 
 ## Remote controls
 
@@ -185,8 +186,9 @@ with one tappable link. The link opens a phone-first control page over an
 OpenTunnel (`opentunnel.xyz`) subdomain and carries a scoped token for that
 companion. The page has live companion state, Say, a listening on/off toggle, per-terminal
 volume, story progress with Continue and Start over, history with filters and
-cursor paging, and voice selection with an on-device preview. It also installs
-to a home screen with the companion's name and portrait.
+cursor paging, voice selection with an on-device preview, and a Diagnostics tab
+for opt-in microphone captures (15/30/60 s) with playback and transcription. It
+also installs to a home screen with the companion's name and portrait.
 
 Each `/remote` request mints a fresh token and invalidates the previous one for
 that contact; `/remote off` revokes it. Tunnels start lazily on the first
@@ -387,6 +389,9 @@ over SSE.
 | `GET /remote/events?token=...` | Server-Sent Events stream for live state and story progress |
 | `POST /remote/api/say`, `listen`, `volume`, `voice`, `story/open`, `story/restart`, `revoke` | One scoped JSON command per route; `revoke` drops every token and tunnel for that companion |
 | `GET /remote/api/history?cursor=...` | Scoped history page with channel, search, and cursor parameters |
+| `POST /remote/api/capture` | `{"seconds":15}` → start an opt-in microphone capture on the companion's voice owner; `409` while one is running |
+| `GET /remote/api/captures` | Scoped list of local captures with size, duration, transcript, and computing flag |
+| `POST /remote/api/captures/{name}/transcribe`, `GET /remote/api/captures/{name}.wav`, `DELETE /remote/api/captures/{name}` | Transcribe to a `.txt` sidecar, play the WAV with range support, or delete both files |
 | `POST /mcp` | Loopback-only MCP JSON-RPC endpoint used by `lark mcp`; memory is read through `state` and written through `patch` |
 | `GET /debug/pprof/...` | Loopback + token Go profiles (`cmdline`, `profile`, `symbol`, `trace`, index) |
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |

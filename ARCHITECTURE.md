@@ -51,7 +51,12 @@ milliseconds, so the agent checks it before `websearch`.
 through an OpenTunnel subdomain. REST commands live under `/remote/api/…`;
 live state is one Server-Sent Events stream at `/remote/events`. Tokens are
 scoped to one companion and one contact, minted per request, revoked by
-`/remote off` or `remote/api/revoke`.
+`/remote off` or `remote/api/revoke`. The Diagnostics tab starts an opt-in
+capture with `POST /remote/api/capture`, lists it at `GET
+/remote/api/captures`, transcribes to a `.txt` sidecar with `POST
+/remote/api/captures/{name}/transcribe`, streams the WAV with range support at
+`GET /remote/api/captures/{name}.wav`, and removes both files with `DELETE
+/remote/api/captures/{name}`. Capture progress arrives as `capture` SSE events.
 
 **Firmware.** ESP-IDF C for ESP-VoCat v1.2 and ESP32-S3-BOX-3. Renders
 360×360 (VoCat) or 320×240 (BOX-3) RGB565 frames, draws a fallback face when
@@ -150,6 +155,11 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 - **Remote links are scoped and revocable.** A new `/remote` invalidates the
   previous token for that contact; `/remote off` and `revoke` stop the tunnel
   and drop every token.
+- **Microphone captures stay local.** `lark capture` and the `/remote`
+  Diagnostics tab share one listening-window path. WAVs and their transcripts
+  live only in `~/.local/share/lark/debug/` (directory `0700`, files `0600`);
+  they are never synced, uploaded, or used as fixtures, one capture runs per
+  companion at a time, and delete removes both files.
 - **Library provisioning keeps 20% free.** The planner reserves 20 % of the
   volume and spends only 90 % of the remainder. Installed packs and builds in
   progress are never restarted.
