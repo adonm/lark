@@ -472,3 +472,38 @@ func TestPortraitInteriorMatchesBGStaysOpaque(t *testing.T) {
 		}
 	}
 }
+
+// An unfinished portrait must not decode (and fail) on every frame, and a load
+// that raced an invalidation must not repopulate the old bytes.
+func TestCompanionAssetsCachePartialsAndRespectEpoch(t *testing.T) {
+	t.Parallel()
+	h := &terminalHub{b: &larkServer{portraits: &portraitStore{dir: t.TempDir()}}}
+	c := companionState{ID: "p1", PortraitID: "missing"}
+	h.companionAssets(&c)
+	h.assetsMu.RLock()
+	entry, ok := h.assets["missing"]
+	h.assetsMu.RUnlock()
+	if !ok {
+		t.Fatal("placeholder portrait was not cached")
+	}
+	if entry.expires.IsZero() || time.Until(entry.expires) > partialAssetTTL {
+		t.Fatalf("partial entry expiry = %v, want within %v", entry.expires, partialAssetTTL)
+	}
+
+	epoch := h.assetsEpoch["p2"] // the epoch a load reads before decoding
+	h.invalidateAssets("p2")
+	h.storeAssets("p2", cachedAssets{theme: placeholderPixelTheme()}, epoch)
+	h.assetsMu.RLock()
+	_, stale := h.assets["p2"]
+	h.assetsMu.RUnlock()
+	if stale {
+		t.Fatal("a load from the pre-invalidation epoch was cached")
+	}
+	h.storeAssets("p2", cachedAssets{theme: placeholderPixelTheme()}, h.assetsEpoch["p2"])
+	h.assetsMu.RLock()
+	_, fresh := h.assets["p2"]
+	h.assetsMu.RUnlock()
+	if !fresh {
+		t.Fatal("a load from the current epoch was not cached")
+	}
+}

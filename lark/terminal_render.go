@@ -338,11 +338,15 @@ func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image
 		h.assetsClock++
 		clock := h.assetsClock
 		if cached, ok := h.assets[c.PortraitID]; ok {
-			cached.used = clock
-			h.assets[c.PortraitID] = cached
-			h.assetsMu.Unlock()
-			return cached.bg, cached.poses, cached.theme
+			if cached.expires.IsZero() || time.Now().Before(cached.expires) {
+				cached.used = clock
+				h.assets[c.PortraitID] = cached
+				h.assetsMu.Unlock()
+				return cached.bg, cached.poses, cached.theme
+			}
+			delete(h.assets, c.PortraitID)
 		}
+		epoch := h.assetsEpoch[c.PortraitID]
 		h.assetsMu.Unlock()
 		dir := filepath.Join(h.b.portraits.dir, c.PortraitID)
 		var bg *image.RGBA
@@ -359,20 +363,33 @@ func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image
 			poses = pixelPlaceholderPoses()
 		}
 		th := derivePixelTheme(bg, poses[:])
-		if loaded {
-			h.assetsMu.Lock()
-			if h.assets == nil {
-				h.assets = make(map[string]cachedAssets)
-			}
-			h.assets[c.PortraitID] = cachedAssets{bg: bg, poses: poses, theme: th, used: clock}
-			h.evictAssetsLocked()
-			h.assetsMu.Unlock()
+		assets := cachedAssets{bg: bg, poses: poses, theme: th, used: clock}
+		if !loaded {
+			assets.expires = time.Now().Add(partialAssetTTL)
 		}
+		h.storeAssets(c.PortraitID, assets, epoch)
 		return bg, poses, th
 	}
 	poses := pixelPlaceholderPoses()
 	return nil, poses, placeholderPixelTheme()
 }
+
+// storeAssets discards a load that raced an invalidation: its bytes describe
+// the replaced portrait and must not become the new cache entry.
+func (h *terminalHub) storeAssets(portraitID string, assets cachedAssets, epoch uint64) {
+	h.assetsMu.Lock()
+	defer h.assetsMu.Unlock()
+	if h.assetsEpoch[portraitID] != epoch {
+		return
+	}
+	if h.assets == nil {
+		h.assets = make(map[string]cachedAssets)
+	}
+	h.assets[portraitID] = assets
+	h.evictAssetsLocked()
+}
+
+const partialAssetTTL = 2 * time.Second
 
 // invalidateAssets drops the decoded background and poses for a portrait so
 // the next render reloads them from disk.
@@ -382,6 +399,10 @@ func (h *terminalHub) invalidateAssets(portraitID string) {
 	}
 	h.assetsMu.Lock()
 	delete(h.assets, portraitID)
+	if h.assetsEpoch == nil {
+		h.assetsEpoch = make(map[string]uint64)
+	}
+	h.assetsEpoch[portraitID]++
 	h.assetsMu.Unlock()
 }
 

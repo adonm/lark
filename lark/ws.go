@@ -67,6 +67,7 @@ type terminalHub struct {
 	assetsMu          sync.RWMutex
 	assets            map[string]cachedAssets
 	assetsClock       uint64
+	assetsEpoch       map[string]uint64
 }
 
 // Keep every companion's decoded assets resident; the bound only guards
@@ -82,6 +83,10 @@ type cachedAssets struct {
 	poses [4]*image.RGBA
 	theme pixelTheme
 	used  uint64
+	// A portrait whose sheet is missing renders placeholders. Cache those too
+	// so frames do not decode (and fail) per frame, but let them expire so a
+	// portrait that finishes generating appears shortly after.
+	expires time.Time
 }
 
 func newTerminalHub(b *larkServer, atmosphere bool) *terminalHub {
