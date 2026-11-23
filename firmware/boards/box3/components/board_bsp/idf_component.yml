@@ -1,4 +1,4 @@
 dependencies:
-  espressif/esp-box-3:
+  espressif/esp-box-3_noglib:
     version: "3.2.1"
     require: public
