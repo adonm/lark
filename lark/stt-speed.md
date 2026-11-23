@@ -15,7 +15,7 @@ retain Hex as a historical baseline. Capable clients now use
 | Precision and engine | `transcribe.cpp` 0.4.1 fork at `bcb639faa4c74a2300ba19e30360cb2355b1663a`, ggml/Vulkan encoder + one CPU decoder thread; GGUF Q8_0 (225 Q8_0, 688 F32, 48 F16 tensors) | Same source revision, compiler options for the backend/shader subset and GGUF; one decoder thread | FP32 or ONNX dynamic int8, which is not ggml's block quantization; CPU only |
 | Head and search | Full attention for whole clips; greedy RNN-T (no beam or LM), up to 10 symbols/encoder frame; not TDT/CTC | Same | Full attention offline and greedy RNN-T, likewise up to 10 symbols/frame; different runtime, numerics and frontend |
 | Streaming | Buffered `(left, chunk, right) = (5.60, 1.04, 1.04)` s; ≥2.08 s initial window, carries RNN-T state; native finalize adds 1.04 s of right context, and Hex feeds 0.4 s model padding | No live stream; full attention on the available clip | Buffered presets `240/560/1120 ms` specify **chunk + right**, not chunk: `(5.60,.08,.16)`, `(5.60,.16,.40)`, `(5.60,.56,.56)` s. Not Hex's largest preset. |
-| PCM and VAD | Mono 16 kHz input, s16 `/32768`; no resample for bridge PCM. Whole-clip: Lark adds 150 ms at each end of voiced PCM; Hex pads to ≥1.5 s and appends another 400 ms. No VAD or segmentation before decoding the measured whole clips; keyboard dictation and meetings are separate paths. | Same PCM scaling and padding; no added VAD in STT | Same source PCM, without bridge/Hex clip padding in the CPU runs. No programmatic VAD used. |
+| PCM and VAD | Mono 16 kHz input, s16 `/32768`; no resample for device PCM. Whole-clip: Lark adds 150 ms at each end of voiced PCM; Hex pads to ≥1.5 s and appends another 400 ms. No VAD or segmentation before decoding the measured whole clips; keyboard dictation and meetings are separate paths. | Same PCM scaling and padding; no added VAD in STT | Same source PCM, without Hex clip padding in the CPU runs. No programmatic VAD used. |
 | Features | 128-bin Slaney log mel, 512 FFT, 25 ms Hann / 10 ms hop, pre-emphasis 0.97, 0–8 kHz, constant STFT pad, per-feature normalization. GGUF metadata stores `dither=1e-5`, but the runtime does not pass it to `MelConfig` (no added noise). | Same code and metadata | NeMo metadata selects 128 bins and per-feature normalization (over each window in streaming); 25/10 ms, 0.97 pre-emphasis, no dither. Kaldi-native/librosa feature implementation is not identical. |
 | Text | English-only model; no runtime language hint; model outputs casing/punctuation. Raw API, no LLM formatting. Hex trims whitespace, keeps the repetition guard's partial result, and strips known trailing subtitle credits. Host vocabulary biasing is off. | Same tested raw output path and filter, no Hex settings import | Model-native English casing/punctuation, no Hex filters or vocabulary rescoring. Accuracy equivalence not established. |
 
@@ -60,7 +60,7 @@ as significant.
 
 Hex runs showed a fast ~65 ms mode and slower ~600 ms calls; the probe
 cannot attribute the latter to queueing, residency or other host activity.
-Use the fast mode as the replacement bar. The tagged bridge reached
+Use the fast mode as the replacement bar. The tagged server reached
 readiness in 876 ms with an isolated DB and prewarmed weights; no X/Wayland
 display was set. Its six whole-clip transcripts matched Hex byte-for-byte
 on a separate pass; not an accuracy study. In-process Vulkan RSS
@@ -121,9 +121,9 @@ CMake/Ninja/C++17, `glslc`, Vulkan and SPIR-V headers. The stripped binary
 grew from 39.6 to 49.8 MiB (+10.2 MiB) and now links `libvulkan.so.1`.
 At runtime it needs the Vulkan loader and working driver, not Hex, Xvfb, a stream lease,
 an HTTP token or any other service. A native driver crash now takes down
-the bridge, not only STT. Errors do not silently move inference to CPU.
+the server, not only STT. Errors do not silently move inference to CPU.
 The production setup verifies the source archive and GGUF by SHA-256.
-The bridge verifies the model again at startup. The build records the
+The server verifies the model again at startup. The build records the
 static library digests; deployed Sherpa/ORT libraries come from the Go module
 verified against `go.sum` and have a SHA-256 manifest in `$ORIGIN/lib`.
 The Vulkan loader and driver are system dependencies, not bundled copies.
@@ -139,7 +139,7 @@ For headers outside the system prefix, set `CMAKE_PREFIX_PATH` to the
 SPIR-V installation and add its include directory to `CXXFLAGS`.
 
 ```sh
-cd bridge
+cd lark
 CGO_CFLAGS="-I$stage/native/include" CGO_LDFLAGS="-L$stage/native/lib" \
   go test -tags parakeet -c -o "$stage/bakeoff"
 mkdir -p "$stage/audio"

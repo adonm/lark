@@ -1,6 +1,6 @@
 # Lark
 
-[Lark](https://github.com/adonm/lark) is a tap-to-talk companion with interactive diagrams, voice notes, and live calls. It starts as a friendly cat, then can shift into any creature or character a child imagines.
+[Lark](https://github.com/adonm/lark) is a tap-to-talk companion with interactive stories, voice notes, and intercom. It starts as a friendly cat, then can shift into any creature or character a child imagines.
 
 ```text
 Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 (HTTP admin, MCP, OTA)
@@ -19,17 +19,17 @@ the boards. Boards draw a fallback face offline.
 **New in 0.9.3:** Both boards use the touchscreen for all touch controls.
 VoCat’s capacitive head pads are disabled.
 
-**New in 0.9.2:** Live two-way **Call** and a paged voice picker in the
-on-device picker. Firmware announces features in `hello` and flushes only the
-dirty LCD columns within changed rows. The server and dashboard add paginated
-chat history, faster face rendering, and separate turn and hardware diagnostics.
+**New in 0.9.2:** A paged voice picker in the on-device menu. Firmware
+announces features in `hello` and flushes only the dirty LCD columns within
+changed rows. The server adds paginated chat history, faster face rendering,
+and separate turn and hardware diagnostics.
 
 ## Quickstart
 
 1. On Linux, install Go 1.26, GCC, a C++17 compiler, CMake ≥3.19, Ninja,
    Vulkan drivers and development headers/loader, `glslc`, the SPIR-V Headers
-   CMake package, Python 3.11+, OpenCode V2, Podman, `uvx` (USB flashing only),
-   and `curl`. Use a systemd user session.
+   CMake package, Python 3.11+, OpenCode V2, Podman, `ffmpeg`, `uvx` (USB
+   flashing only), and `curl`. Use a systemd user session.
 
    ```sh
    ./scripts/setup-host.sh
@@ -49,16 +49,17 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
     the [dedicated OpenCode config](#companion-models).
 
    Rebuild and restart just the server from the checkout with
-   `~/.local/share/lark/lark deploy`. It reuses the cached Parakeet bridge,
-   installs the binary atomically, waits for each model and the terminals, and
-   prints the timings. Setup remains the first-install path.
+   `~/.local/share/lark/lark deploy`. It reuses the cached Parakeet build,
+   installs the binary atomically, refreshes the dedicated OpenCode config,
+   waits for each model and the terminals, and prints the timings. Setup
+   remains the first-install path.
 
     STT needs a Vulkan GPU, not Hex or an X display. Lark recognizes
-    English without custom vocabulary. On firmware 0.9.5+,
-    Lark listens through thinking pauses and ends the turn on gated silence,
-    using VAD plus an adaptive room floor rather than transcript growth.
-    Clients without the capability keep their
-    local VAD. You can still Send or Cancel while the mic is open. See
+    English without custom vocabulary. On firmware that advertises
+    `caps.bridge_endpoint`, Lark listens through thinking pauses and ends the
+    turn on gated silence, using VAD plus an adaptive room floor rather than
+    transcript growth. Older clients keep their local VAD. You can still Send
+    or Cancel while the mic is open. See
     [endpoint policy and replay results](lark/turn-taking.md) and
     [STT measurements and artifact pins](lark/stt-speed.md).
 
@@ -70,8 +71,8 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    ```
 
    Set `CONFIG_LARK_WIFI_SSID`, `CONFIG_LARK_WIFI_PASSWORD`,
-   `CONFIG_LARK_URL` (`http://<lark-host>:8765` or `lark://<lark-host>:8766`, no trailing slash), and
-   `CONFIG_LARK_TOKEN` (copy `LARK_TOKEN` from
+   `CONFIG_LARK_URL` (native protocol, `lark://<lark-host>:8766`, no trailing
+   slash), and `CONFIG_LARK_TOKEN` (copy `LARK_TOKEN` from
    `~/.config/lark/lark.env`, or use `$XDG_CONFIG_HOME`).
    Both board builds use the ESP-IDF 5.5 container and read the same
    `firmware/sdkconfig.local`. Never commit that file or share the resulting binaries.
@@ -98,7 +99,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    Builds are incremental: `ccache` lives in `~/.cache/lark-ccache` and the
    ESP-IDF build tree stays in the repo, so a rebuild after a source edit takes
    seconds. Unchanged sources print `up to date` and exit immediately;
-   `--force` rebuilds, and `--watch` rebuilds whenever firmware sources change.
+   `--force` rebuilds.
 
 4. Update via `~/.local/share/lark/lark ota <ip|host>`; add `--no-build` to reuse the
    image, and prefix with `BOARD=box3` for BOX-3. The script refuses a board
@@ -107,11 +108,12 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
     initialization and Wi-Fi DHCP; the script checks the running partition.
    Builds use `lark` and `lark_box3` as the firmware project names.
 
-5. Run `./scripts/check.sh` for ShellCheck (if installed), Node tests, Go vet
-   and race tests, strict GCC/ASan/UBSan host tests for both board layouts,
-   and tracked-file hygiene. GitHub Actions runs this offline without model
-   weights or a Vulkan GPU; it does not build ESP-IDF images. Build those locally with the
-   commands above (`BOARD=vocat` and `BOARD=box3`).
+5. Run `./scripts/check.sh` for ShellCheck (if installed), Node tests, Python
+   setup tests, Go vet and race tests, strict GCC/ASan/UBSan host tests for both
+   board layouts, and tracked-file hygiene. GitHub Actions runs this offline
+   without model weights or a Vulkan GPU. A separate job builds both ESP-IDF
+   images on pushes to `main` and nightly. Build locally with the commands
+   above (`BOARD=vocat` and `BOARD=box3`).
 
    For the inner loop, `./scripts/check.sh --fast` builds, vets, and runs only
    the tests related to the current diff (~10 s) and prints what it chose.
@@ -120,13 +122,13 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
 
    Add `--live` to exercise the product with virtual companions and firmware
    clients for both board layouts. It builds a fresh loopback server with a
-   temporary database, real Parakeet Vulkan, Silero and Kokoro, synthetic
-   photos, and a deterministic model stub. It does not connect to the installed server, use
-   model quota, or test wake word. Allow at least two minutes for the actual
-   idle timeout. Set `LARK_PARAKEET_NATIVE` to the `native/` prefix from
+   temporary database, real Parakeet Vulkan, Silero and Kokoro, and a
+   deterministic model stub. It does not connect to the installed server or use
+   model quota. Allow at least two minutes for the actual idle timeout. Set
+   `LARK_PARAKEET_NATIVE` to the `native/` prefix from
    `scripts/build-parakeet.sh` to reuse its verified static libraries.
-   `scripts/setup-host.sh --models-only` installs the pinned Kokoro and Silero
-   assets without replacing the server or restarting services.
+   `scripts/setup-host.sh --models-only` installs the pinned Kokoro, Silero,
+   and Smart Turn assets without replacing the server or restarting services.
 
    `--e2e-real` uses the dedicated local OpenCode server, its configured companion
    model and fallback, and disposable sessions; it can spend model quota.
@@ -137,7 +139,7 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    remote-page tests (needs `playwright` or `playwright-core`; set
    `LARK_PLAYWRIGHT_MODULE` if it is not in a standard location).
 
-## Controls, voice notes, and calls
+## Controls and voice notes
 
 ### Using a companion
 
@@ -154,10 +156,6 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
   good morning.” Lark bypasses OpenCode and relays a chime, sender announcement, and normalized voice.
 - Tap **Reply to \<Sender\>** on a message card or choose a peer in
   **Menu → Talk to…** to record directly to that companion.
-- Tap **Call** on an incoming Intercom card, pick a peer in **Menu → Call**, or
-  say “call \<name\>.” Both devices must be online and call-capable. The recipient
-  can answer or decline; either side can mute its mic or hang up. Unlike a
-  voice note, a call streams both ways in real time.
 - Ask for a composed message (“Send Mint a knock-knock joke”). The agent uses
   `emit` to deliver a card and synthesized speech to the recipient.
 
@@ -172,12 +170,13 @@ and fall back to the companion's theme voice. Mint defaults to Fable
 `LARK_TTS_VOICE` sets a different fallback.
 
 Open **Menu → Stats** for a compact on-device HUD, or query `GET /api/diagnostics`
-(or `lark status`) for device status, pipeline timings, and CPU and memory
-usage for the server and host. `lark doctor` prints one pass/warn/fail line per
-check (health, models, firmware, disk, Delta Chat, tunnels, turn errors, clock)
-and exits non-zero on failures. The server totals include Kokoro. Firmware
-reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM, Wi-Fi RSSI,
-and uptime every five seconds. Turn diagnostics separate
+for device status, pipeline timings, and CPU and memory usage. `lark status`
+summarises health, models, library, companions, and terminals. `lark doctor`
+prints one pass/warn/fail line per check (server, models, OpenCode routing,
+firmware, disk, library, Delta Chat, each terminal, tunnels, recent turns,
+clock) and exits non-zero on failures. The server totals include Kokoro.
+Firmware reports ESP32-S3 CPU usage, free and minimum free heap, free PSRAM,
+Wi-Fi RSSI, and uptime every five seconds. Turn diagnostics separate
 OpenCode gate wait and first sentence, TTS queue and inference time, first frame
 render, and elapsed time to the first queued PCM. `GET /api/diagnostics` also
 reports listening-mode counters (windows, speech segments, gate drops, empty
@@ -187,21 +186,24 @@ duration, and speech duration of recent segments.
 
 `lark capture <companion> [seconds]` records the companion's voice-owner
 microphone through the ordinary listening path into a 16 kHz mono WAV under
-`~/.local/share/lark/debug/` (directory `0700`, file `0600`). Captures are
-local only: never synced, uploaded, or used as fixtures. `lark stt-bench <wav|dir>`
+`~/.local/share/lark/debug/` (directory `0700`, file `0600`). Captures are never
+uploaded to a third party; the holder of a scoped link can play, transcribe,
+and delete them. They are never used as fixtures. `lark stt-bench <wav|dir>`
 prints Parakeet transcripts with timing per file. The `/remote` Diagnostics tab
-records, plays, transcribes, and deletes the same captures from a phone.
+does the same from a phone.
 
 ## Remote controls
 
 Send `/remote` to a companion from a verified Delta Chat contact and it replies
 with one tappable link. The link opens a phone-first control page over an
-OpenTunnel (`opentunnel.xyz`) subdomain and carries a scoped token for that
-companion. The page has live companion state, Say, a listening on/off toggle, per-terminal
-volume, story progress with Continue and Start over, history with filters and
-cursor paging, voice selection with an on-device preview, and a Diagnostics tab
-for opt-in microphone captures (15/30/60 s) with playback and transcription. It
-also installs to a home screen with the companion's name and portrait.
+OpenTunnel (`opentunnel.xyz`) subdomain and carries a token scoped to that
+companion and contact. The page has live companion state, Say, a listening
+on/off toggle, per-terminal volume, story progress with Continue and Start over,
+history with filters and cursor paging, voice selection with an on-device
+preview, and a Diagnostics tab for opt-in microphone captures (15/30/60 s) with
+playback and transcription. History exposes in-person room messages and that
+contact's own Delta Chat messages; captures are room-wide and labelled as such.
+The page installs to a home screen with the companion's name and portrait.
 
 Each `/remote` request mints a fresh token and invalidates the previous one for
 that contact; `/remote off` revokes it. Tunnels start lazily on the first
@@ -221,7 +223,7 @@ token.
 Setup generates its password in the private `lark.env` and gives it separate
 configuration, session data, cache, state, and workspace under
 `~/.local/share/lark/opencode/` (or `$XDG_DATA_HOME`). It installs the model
-fallback plugin, links the `lark` agent and legacy `auth.json`, and imports the
+fallback and context plugins, links the `lark` agent, and imports the
 configured model providers' current V2 credentials once through OpenCode's
 CLI. It does not share your session database or load personal plugins, MCP
 servers, or coding `AGENTS.md`.
@@ -237,9 +239,12 @@ Edit the dedicated `~/.local/share/lark/opencode/config/opencode/opencode.jsonc`
 
 ```jsonc
 {
-  "agents": { "lark": { "model": "opencode/gemini-4-hydrogen#low" } },
+  "agents": {
+    "lark": { "model": "opencode/deepseek-v4.1-flash#low" },
+    "deep": { "model": "opencode/glm-5.3#high" }
+  },
   "plugins": [
-    { "package": "./lark-model-router", "options": { "fallback": "opencode/claude-haiku-5-5" } },
+    { "package": "./lark-model-router", "options": { "fallback": "opencode/glm-5.3-flash#low" } },
     { "package": "./lark-context" }
   ]
 }
@@ -249,9 +254,10 @@ Use `provider/model`, optionally with `#variant`, and keep both models on the
 same provider: OpenCode only supports routing within a provider. Keep the other
 config entries. Once OpenCode reloads the file, the next Lark turn uses the
 new selection without rotating the companion's session or restarting services. Use
-`/reload` in dedicated OpenCode if needed. Setup migrates an old
-`LARK_OPENCODE_MODEL` on upgrade; after that, `lark.env` does not control
-models. If you change providers, connect them on the dedicated server.
+`/reload` in dedicated OpenCode if needed. Setup rewrites the older
+`opencode-go/...` defaults once when it finds an untouched generated config;
+`lark.env` never selects models. If you change providers, connect them on the
+dedicated server.
 
 An explicit rate-limit or supported upstream rejection before output or tools
 can retry once on the configured fallback. The next turn starts on the
@@ -260,12 +266,13 @@ primary. Stalls, interruptions and permission failures do not switch models.
 ## Local library
 
 `lark serve` provisions the local text library itself, in the background, one
-pack at a time: Project Gutenberg, Simple English Wikipedia, then full English
-Wikipedia only when the volume can hold it. The planner keeps 20% of the data
-volume free and leaves a further 10% margin, so a full Wikipedia index appears
-only on disks with room for roughly 65 GiB more. Progress goes to
-`~/.local/share/lark/library/setup.log`; the downloaded dumps are deleted after
-indexing. Installed packs and runs already in progress are never restarted.
+pack at a time, smallest first: Simple English Wikipedia, Project Gutenberg,
+then full English Wikipedia only when the volume can hold it. The planner keeps
+20% of the data volume free and leaves a further 10% margin, so a full
+Wikipedia index appears only on disks with room for roughly 65 GiB more.
+Progress goes to `~/.local/share/lark/library/setup.log`; the downloaded dumps
+are deleted after indexing. Installed packs and runs already in progress are
+never restarted.
 
 `lark status` shows `installed`, `building (pct)`, `pending`, or
 `skipped (space)` per pack plus the volume line and budget. `lark library
@@ -279,8 +286,10 @@ interrupted downloads; use `--source enwiki|simple|gutenberg` to limit a run.
 
 ## Upgrading
 
-Lark carries no runtime database migrations or backwards-compatibility shims.
-Upgrades are documented as changelog entries in
+Lark carries no backwards-compatibility shims at runtime. The one schema
+exception is `initSchema`, which idempotently renames or drops columns retired
+by an upgrade after probing for them; it runs before the server serves requests.
+All other upgrades are documented as changelog entries in
 [`.opencode/skills/lark-upgrade/references/changelog.md`](.opencode/skills/lark-upgrade/references/changelog.md)
 and executed by OpenCode using the
 [`.opencode/skills/lark-upgrade/SKILL.md`](.opencode/skills/lark-upgrade/SKILL.md)
@@ -294,11 +303,11 @@ reads the token from its environment or the private `lark.env`; the
 OpenCode config contains only the executable and its argument, no secrets.
 On server startup after a change to MCP schemas, instructions, the agent
 prompt, or the runtime contract version, Lark reconnects `lark` MCP and
-verifies that OpenCode loaded its catalog. While that refresh is pending,
-model turns fail without dispatch; local history and device settings remain
-available. Diagnostics distinguish a verified catalog (`current`) from a
-failed attempt awaiting retry (`waiting`). Startup never compacts sessions or
-sends model prompts.
+verifies that OpenCode loaded its catalog. A model turn that lands during that
+refresh waits up to 30 s for it; if it does not arrive, the turn fails without
+dispatch. Local history and device settings remain available. Diagnostics
+distinguish a verified catalog (`current`) from a failed attempt awaiting retry
+(`waiting`). Startup never compacts sessions or sends model prompts.
 
 Each companion's next user turn that needs the model replaces a stale or
 unversioned binding lazily. A current binding also gets replaced if OpenCode's
@@ -322,7 +331,7 @@ Code Mode exposes the `tools.lark` MCP tools:
 | Tool | Purpose |
 | --- | --- |
 | `state` | Read keyed companions, terminals, timers, and scoped JSON. Select slices with `include`; add `messages`, `contacts`, or `diagnostics` when needed. |
-| `patch` | Update terminal volume/sleep, companion name/form/voice/portrait/listen window, memory, or a timer. Memory batches commit atomically; `expected_version:0` requires an absent key. |
+| `patch` | Update terminal volume/sleep, companion name/form/voice/portrait/listening, memory, or a timer. Memory batches commit atomically; `expected_version:0` requires an absent key. |
 | `story` | Create, update, get, or delete a validated Twee 3 story. |
 | `library` | Search, read, list, or import from the local text library (`simple`, `enwiki`, `gutenberg`); answers in milliseconds with no page fetch. |
 | `emit` | Send spoken intercom and a card, play notes, or play a named sound (`sfx` or `chime`). |
@@ -335,17 +344,21 @@ The agent checks `library` first for stories, books, and reference facts, and us
 pointer events and bounded ticks run in the server without keeping an OpenCode turn open.
 **One Voice Rule:** Only assistant prose is spoken as the reply, not tool
 output or reasoning. Lark checks the streamed speech against the final
-reply. The prompt starts with a short identity and source header, plus setup
-or personality hints when applicable. The agent uses `state` for live context.
+reply. Each turn starts with a `[Speaker: …]` or `[Event: timer]` header and
+ends with one `[state: …]` line. Companion identity is the session instruction
+entry, written at session create and refreshed when the name or personality
+changes. The agent uses `state` for live context.
 
 ## Server data
 
 Lark uses native SQLite (`go-sqlite3`) in WAL mode with split reader/writer pools. Persistent state lives
 in `~/.local/share/lark/lark.db` (or `$XDG_DATA_HOME/lark/lark.db`);
 `LARK_DB_PATH` overrides it. Keep the data directory private (0700, database
-0600). The schema is created fresh on first boot; Lark carries no JSON imports
-or runtime migrations. Upgrades that change storage go through the changelog
-skill, which applies the documented SQL while the service is stopped.
+0600). The schema is created fresh on first boot. `initSchema` also performs
+the guarded, idempotent column renames and drops that a documented upgrade
+requires; it probes before changing anything. Other storage changes go through
+the changelog skill, which applies the documented SQL while the service is
+stopped.
 Lark also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
@@ -374,8 +387,8 @@ Authenticated HTTP requests require `X-Lark-Token` (`/health` is unauthenticated
 `/mcp` and `/debug/pprof/...` are loopback + token only).
 Devices connect over TCP and UDP on `LARK_DEVICE_PORT` (default `8766`) for
 binary RGB565/RLE565/LZ4/JPEG frames, touch events, and 16 kHz signed 16-bit
-mono PCM audio. The bridge pads voiced whole-clip STT with 150 ms of silence on
-each side. Kokoro starts synthesizing sentences while OpenCode streams its reply
+mono PCM audio. Lark pads voiced whole-clip STT with 150 ms of silence on each
+side. Kokoro starts synthesizing sentences while OpenCode streams its reply
 over SSE.
 
 | Lark · port 8765 | Request → response |

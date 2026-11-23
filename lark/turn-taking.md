@@ -1,17 +1,17 @@
-# Bridge endpointing
+# Endpointing
 
 Lark keeps the mic open through thinking pauses and uses local transcription
 to decide when to send. **Send** ends recording now; **Cancel** discards it.
-Clients without bridge endpoint support keep their own VAD.
+Clients without `caps.bridge_endpoint` keep their own VAD.
 
 ## Policy
 
 `scripts/setup-host.sh` installs `silero_vad_v5.onnx` from the Sherpa ONNX
 `asr-models` release at `$XDG_DATA_HOME/lark/stt-models/` (defaults to
-`~/.local/share/lark/stt-models/`). Setup and bridge startup verify SHA-256
+`~/.local/share/lark/stt-models/`). Setup and server startup verify SHA-256
 `6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396`.
-The bridge does not download models or need an endpoint environment flag.
-Install the model before upgrading the bridge binary.
+The server does not download models or need an endpoint environment flag.
+Install the model before upgrading the server binary.
 
 Silero v5 runs on CPU with 512-sample windows, a 0.50 speech threshold,
 120 ms minimum speech and a 320 ms silence tail. A frame only counts as
@@ -69,31 +69,29 @@ check, and commit decision with energy, floor, VAD, silence, and word counts.
 
 ## Wire and follow-up behavior
 
-- Firmware 0.9.5 and `/app` offer `caps.bridge_endpoint:true` in `hello`.
-  Untargeted Talk, Say more, and enabled wake word use
+- Firmware that advertises `caps.bridge_endpoint:true` in `hello` drives
+  untargeted Talk through
   `{"op":"rec","action":"start","target":"","endpoint":"bridge"}` when
-  negotiated. `/app` waits for `{"op":"capabilities","bridge_endpoint":true}`
-  before asking the bridge to start. Targeted intercom and live calls
-  retain their existing paths.
+  negotiated. Targeted intercom recording keeps its existing path.
 - Audio is `0x01` followed by 16 kHz mono s16le PCM between `rec_start`
   and `rec_end`. An automatic cut sends `rec stop`; extra PCM is accepted
   until `rec_end` or a 450 ms timeout. `cancelled:true` discards the capture.
-  No speech discards at 7 s of audio; total capture is capped at 60 s.
-  Clients also retain their ~8 s silence / 60 s watchdog and close the
-  mic on Cancel, bridge stop, or disconnect. The mic is never silently
-  reopened.
+  The server discards a capture with no gated speech after 6 s of audio and
+  caps any capture at 60 s. The firmware watchdog sends at 8 s of silence or
+  60 s and closes the mic on Cancel, server stop, or disconnect. The mic is
+  never silently reopened.
 - Diagnostics `speech_end_to_commit_ms` measure estimated acoustic end to
-  bridge `rec stop` (or `rec_end` for client Send/watchdog), excluding
+  the server's `rec stop` (or `rec_end` for client Send/watchdog), excluding
   acknowledgement wait and final transcription. No end is recorded when
   speech is still heard at commit. `stt_ms` remains separate.
 - **Say more** holds unpublished audio while the mic is open. It queues
   one normal follow-up behind the active reply, without interrupting or
   replaying the original prompt. Explicit **Stop** discards the queued
-  follow-up. WebSocket tests cover the hold, prompt order, and Stop.
+  follow-up. Tests cover the hold, prompt order, and Stop.
 
 ### Why steering stays off
 
-Two disposable OpenCode 2.3.2 sessions used `opencode/claude-haiku-5-5`.
+Two disposable OpenCode 2.3.2 sessions on 2026-11-21 used a Haiku-class model.
 Both admitted a distinct `delivery:"steer"` input while the session was active
 and completed successfully:
 
@@ -150,7 +148,7 @@ Run with the `stage` prefix from the [STT build](stt-speed.md#build-and-reproduc
 ```sh
 source scripts/go-bin.sh
 GO_BIN=$(resolve_go)
-cd bridge
+cd lark
 LARK_REPLAY_SILERO=/path/to/silero_vad_v5.onnx \
 LARK_REPLAY_KOKORO=/path/to/kokoro-multi-lang-v1_0 \
 LARK_BAKEOFF_MODEL="$stage/models/parakeet-unified-en-0.6b-Q8_0.gguf" \

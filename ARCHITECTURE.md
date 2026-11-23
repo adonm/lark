@@ -17,7 +17,8 @@ Parakeet, Silero, Smart Turn and Kokoro in the background. `/health` reports
 each model as `loading`, `ready` or `error`, and `lark status` prints the same
 states. A turn that needs a model still loading waits for it (bounded by the
 turn deadline) instead of failing, so the first turn after a restart is safe.
-`lark deploy` builds, installs atomically, restarts and waits for readiness.
+`lark deploy` builds, installs atomically, refreshes the dedicated OpenCode
+config, restarts and waits for readiness.
 
 **Terminal protocol — TCP and UDP `:8766`.** Boards connect to the native
 protocol (not HTTP): binary frames in RGB565/RLE565/LZ4/JPEG, touch events,
@@ -33,7 +34,7 @@ companion. Lark talks to it over SSE. The agent gets the `tools.lark` MCP tools:
 | Tool | Purpose |
 | --- | --- |
 | `state` | Read keyed companions, terminals, timers, contacts, and scoped JSON. |
-| `patch` | Update terminal volume/sleep, companion name/form/voice/portrait, memory, timers. |
+| `patch` | Update terminal volume/sleep, companion name/form/voice/portrait/listening, memory, timers. |
 | `story` | Create, update, read, or delete a validated Twee 3 story. |
 | `library` | Search/read/list/import from the local text library. |
 | `emit` | Intercom, speak on a terminal, play notes or a named sound. |
@@ -49,16 +50,19 @@ device screen. Commands: `/say`, `/private`, `/help`, `/story`, `/stories`,
 `/remote` (and `/remote off`). Every companion has its own address; Lark keeps
 verified contacts and routes intercom through the Chatmail relay.
 
-**Library.** Three SQLite FTS5 packs provisioned in the background, smallest
-first: Project Gutenberg, Simple English Wikipedia, then English Wikipedia when
-the volume can hold the peak download plus index. Search returns in tens of
-milliseconds, so the agent checks it before `websearch`.
+**Library.** Three SQLite FTS5 packs provisioned in the background, pending
+packs smallest first: Simple English Wikipedia, Project Gutenberg, then English
+Wikipedia when the volume can hold the peak download plus index. Search returns
+in tens of milliseconds, so the agent checks it before `websearch`.
 
 **`/remote`.** A phone-first control page served at `/remote?token=…` and
-through an OpenTunnel subdomain. REST commands live under `/remote/api/…`;
-live state is one Server-Sent Events stream at `/remote/events`. Tokens are
-scoped to one companion and one contact, minted per request, revoked by
-`/remote off` or `remote/api/revoke`. The Diagnostics tab starts an opt-in
+through an OpenTunnel subdomain. It ships no framework bundle: Oat's theme
+variables and local CSS style the page. REST commands live under
+`/remote/api/…`; live state is one Server-Sent Events stream at
+`/remote/events`. A token is scoped to one companion and one contact, minted
+per request, and revoked by `/remote off` or `remote/api/revoke`. History
+exposes in-person room messages and that contact's own Delta Chat messages;
+room captures are room-wide and labelled. The Diagnostics tab starts an opt-in
 capture with `POST /remote/api/capture`, lists it at `GET
 /remote/api/captures`, transcribes to a `.txt` sidecar with `POST
 /remote/api/captures/{name}/transcribe`, streams the WAV with range support at
@@ -67,14 +71,15 @@ capture with `POST /remote/api/capture`, lists it at `GET
 
 **Firmware.** ESP-IDF C for ESP-VoCat v1.2 and ESP32-S3-BOX-3. Renders
 360×360 (VoCat) or 320×240 (BOX-3) RGB565 frames, draws a fallback face when
-offline, reports telemetry, accepts OTA, and runs bridge endpointing on
-firmware 0.9.5+ (`caps.bridge_endpoint`).
+offline, reports telemetry, accepts OTA, and drives endpointing when it
+advertises `caps.bridge_endpoint` in `hello`.
 
 ## Data model
 
 `~/.local/share/lark/lark.db`, SQLite WAL with separate reader and writer
-pools. Private (`0700` directory, `0600` file). Schema is created fresh; there
-are no runtime migrations.
+pools. Private (`0700` directory, `0600` file). `initSchema` creates the
+baseline and applies the guarded column renames/drops listed in the changelog;
+no other migration runs at startup.
 
 | Table | Purpose |
 | --- | --- |
@@ -131,8 +136,11 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 
 ## Invariants and policies
 
-- **No runtime compatibility shims.** Breaking database, config, protocol, or
-  API changes are changelog entries applied by the `lark-upgrade` skill
+- **No runtime compatibility shims.** One documented exception:
+  `initSchema` performs guarded, idempotent column renames and drops for a
+  storage upgrade, probing first so a current database is left untouched.
+  Every other breaking database, config, protocol, or API change is a
+  changelog entry applied by the `lark-upgrade` skill
   (`.opencode/skills/lark-upgrade/`) while services are stopped. Upgrades
   never carry old fields or fallback readers forward.
 - **One session per companion, cache-friendly prompts.** Context has four
@@ -172,8 +180,9 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 - **Microphone captures stay local.** `lark capture` and the `/remote`
   Diagnostics tab share one listening-window path. WAVs and their transcripts
   live only in `~/.local/share/lark/debug/` (directory `0700`, files `0600`);
-  they are never synced, uploaded, or used as fixtures, one capture runs per
-  companion at a time, and delete removes both files.
+  they are never uploaded to a third party, and only the holder of a scoped
+  link can play, transcribe, or delete them. They are never used as fixtures,
+  one capture runs per companion at a time, and delete removes both files.
 - **Library provisioning keeps 20% free.** The planner reserves 20 % of the
   volume and spends only 90 % of the remainder. Installed packs and builds in
   progress are never restarted.
@@ -183,9 +192,11 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 
 ## Testing and QA
 
-- `./scripts/check.sh` — ShellCheck, Node tests, Go vet and race tests, strict
-  host C tests for both board layouts, tracked-file hygiene. Offline; no GPU or
-  model weights.
+- `./scripts/check.sh` — ShellCheck, Node and Python tests, Go vet and race
+  tests, strict host C tests for both board layouts, tracked-file hygiene, and
+  shim/error-suppression guards. Offline; no GPU or model weights.
+- `--e2e-stub` — one isolated stub server and the non-hardware QA matrix
+  (~9 s); model output and TTS are stubbed, capture and turns are real.
 - `./scripts/check.sh --live` — virtual companions and firmware clients with
   real Parakeet, Silero, Kokoro, and a deterministic model stub.
 - `--qa` — repeatable `lark sim` scenarios from `lark/qa/*.sim`; `--qa-hw`
