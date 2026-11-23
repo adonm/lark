@@ -1,13 +1,9 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,8 +32,6 @@ type stubDCRPC struct {
 	chats         map[uint32]map[uint32]deltachat.BasicChat
 	chatContacts  map[uint32]map[uint32][]uint32
 	msgs          map[uint32]map[uint32]deltachat.Message
-	xdcUpdates    map[uint32]map[uint32][]json.RawMessage
-	webxdcInfo    map[uint32]map[uint32]deltachat.WebxdcMessageInfo
 	sent          []stubDCSent
 	qrJoined      []string
 	deleted       []uint32
@@ -53,8 +47,6 @@ func newStubDCRPC() *stubDCRPC {
 		chats:        make(map[uint32]map[uint32]deltachat.BasicChat),
 		chatContacts: make(map[uint32]map[uint32][]uint32),
 		msgs:         make(map[uint32]map[uint32]deltachat.Message),
-		xdcUpdates:   make(map[uint32]map[uint32][]json.RawMessage),
-		webxdcInfo:   make(map[uint32]map[uint32]deltachat.WebxdcMessageInfo),
 	}
 }
 
@@ -232,17 +224,6 @@ func (s *stubDCRPC) GetChatMedia(accID uint32, chatID *uint32, msgType deltachat
 	return ids, nil
 }
 
-func (s *stubDCRPC) GetWebxdcInfo(accID uint32, instanceMsgID uint32) (deltachat.WebxdcMessageInfo, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if m := s.webxdcInfo[accID]; m != nil {
-		if info, ok := m[instanceMsgID]; ok {
-			return info, nil
-		}
-	}
-	return deltachat.WebxdcMessageInfo{}, nil
-}
-
 func (s *stubDCRPC) DeleteMessagesForAll(_ uint32, msgIDs []uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -255,40 +236,6 @@ func (s *stubDCRPC) SendMsg(accID uint32, chatID uint32, data deltachat.MessageD
 	defer s.mu.Unlock()
 	s.sent = append(s.sent, stubDCSent{accID: accID, chatID: chatID, data: data})
 	return uint32(len(s.sent)), nil
-}
-
-func (s *stubDCRPC) GetWebxdcStatusUpdates(accID uint32, instanceMsgID uint32, lastKnownSerial uint32) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	list := s.xdcUpdates[accID][instanceMsgID]
-	var filtered []json.RawMessage
-	for _, raw := range list {
-		var env struct {
-			Serial uint32 `json:"serial"`
-		}
-		if json.Unmarshal(raw, &env) == nil && env.Serial > lastKnownSerial {
-			filtered = append(filtered, raw)
-		}
-	}
-	b, _ := json.Marshal(filtered)
-	return string(b), nil
-}
-
-func (s *stubDCRPC) SendWebxdcStatusUpdate(accID uint32, instanceMsgID uint32, updateStr string, _ *string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.xdcUpdates[accID] == nil {
-		s.xdcUpdates[accID] = make(map[uint32][]json.RawMessage)
-	}
-	serial := uint32(len(s.xdcUpdates[accID][instanceMsgID]) + 1)
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(updateStr), &obj); err != nil {
-		return err
-	}
-	obj["serial"] = serial
-	raw, _ := json.Marshal(obj)
-	s.xdcUpdates[accID][instanceMsgID] = append(s.xdcUpdates[accID][instanceMsgID], raw)
-	return nil
 }
 
 func dcTestHarness(t *testing.T) (*larkServer, string, *stubDCRPC) {
@@ -1065,7 +1012,7 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 	if *sent[1].data.Text != "Just between us." {
 		t.Fatalf("/private reply = %q", *sent[1].data.Text)
 	}
-	if !strings.Contains(*sent[2].data.Text, "Hi! I'm Greg, an old chameleon.") || !strings.Contains(*sent[2].data.Text, "/panel") {
+	if !strings.Contains(*sent[2].data.Text, "Hi! I'm Greg, an old chameleon.") || !strings.Contains(*sent[2].data.Text, "/remote") {
 		t.Fatalf("/help reply = %q", *sent[2].data.Text)
 	}
 	if !strings.Contains(*sent[3].data.Text, "Unknown command") {
@@ -1107,19 +1054,16 @@ func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
 	stub.contacts[greg.DCAccountID][12] = deltachat.Contact{Id: 12, DisplayName: "Cake", Address: stub.configs[cake.DCAccountID]["addr"], IsVerified: true, IsBot: true}
 	stub.mu.Unlock()
 
-	// Startup sync sends welcome + panel once to Mum, skips Stranger and Cake.
+	// Startup sync sends one welcome to Mum and skips Stranger and Cake.
 	b.dc.syncWelcomes(t.Context())
 	b.dc.syncWelcomes(t.Context())
 
 	stub.mu.Lock()
-	if len(stub.sent) != 2 {
-		t.Fatalf("expected 2 messages (welcome + panel) on startup sync, got %d: %+v", len(stub.sent), stub.sent)
+	if len(stub.sent) != 1 {
+		t.Fatalf("expected one welcome on startup sync, got %d: %+v", len(stub.sent), stub.sent)
 	}
-	if !strings.Contains(*stub.sent[0].data.Text, "Hi! I'm Greg, an old chameleon.") {
+	if !strings.Contains(*stub.sent[0].data.Text, "Hi! I'm Greg, an old chameleon.") || !strings.Contains(*stub.sent[0].data.Text, "/remote") {
 		t.Fatalf("unexpected welcome text: %q", *stub.sent[0].data.Text)
-	}
-	if stub.sent[1].data.Viewtype == nil || *stub.sent[1].data.Viewtype != deltachat.ViewtypeWebxdc {
-		t.Fatalf("expected panel webxdc message, got %+v", stub.sent[1].data)
 	}
 	// New human completes SecureJoin.
 	stub.contacts[greg.DCAccountID][13] = deltachat.Contact{Id: 13, DisplayName: "Dad", Address: "dad@example.org", IsVerified: true}
@@ -1129,135 +1073,10 @@ func TestDeltaChatWelcomeOnVerifyAndStartup(t *testing.T) {
 	b.dc.handleSecureJoinVerified(t.Context(), greg.DCAccountID, 13)
 
 	stub.mu.Lock()
-	if len(stub.sent) != 4 {
-		t.Fatalf("expected 4 total messages (2 welcomes + 2 panels) after SecureJoin, got %d: %+v", len(stub.sent), stub.sent)
+	if len(stub.sent) != 2 {
+		t.Fatalf("expected two welcomes after SecureJoin, got %d: %+v", len(stub.sent), stub.sent)
 	}
 	stub.mu.Unlock()
-}
-
-func TestWebxdcPanelDeliveryAndUpdates(t *testing.T) {
-	xdcBytes, err := buildPanelXDC("greg", []byte("\x89PNG\r\n\x1a\nicon"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	zr, err := zip.NewReader(bytes.NewReader(xdcBytes), int64(len(xdcBytes)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := map[string][]byte{}
-	for _, f := range zr.File {
-		rc, err := f.Open()
-		if err != nil {
-			t.Fatal(err)
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[f.Name] = data
-	}
-	for _, want := range []string{"index.html", "manifest.toml", "icon.png", "oat.min.css", "oat.min.js", "codec.js", "app.js"} {
-		if _, ok := files[want]; !ok {
-			t.Fatalf("panel xdc missing %s (got %v)", want, files)
-		}
-	}
-	if _, ok := files["codec.test.mjs"]; ok {
-		t.Fatal("panel xdc should not include test files")
-	}
-	manifest := string(files["manifest.toml"])
-	if !strings.Contains(manifest, `name = "greg"`) || !strings.Contains(manifest, `icon = "icon.png"`) {
-		t.Fatalf("unexpected manifest:\n%s", manifest)
-	}
-	if strings.Contains(manifest, "Lark Control") {
-		t.Fatalf("manifest still has old branding:\n%s", manifest)
-	}
-	if got := string(files["icon.png"]); got != "\x89PNG\r\n\x1a\nicon" {
-		t.Fatalf("icon.png not the companion portrait: %q", got)
-	}
-
-	b, base, stub := dcTestHarness(t)
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, "box3-xdc", "greg")
-	if _, _, err := b.saveStory(t.Context(), "lost_island", ":: StoryTitle\nLost Island\n\n:: Start\nPage one.\n\n[[Next->Page2]]\n\n:: Page2 {\"end\":true}\nPage two.\n", "", true); err != nil {
-		t.Fatal(err)
-	}
-
-	stub.mu.Lock()
-	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
-	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
-	stub.chatContacts[greg.DCAccountID][200] = []uint32{deltachat.ContactSelf, 10}
-	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "/panel", ViewType: deltachat.ViewtypeText}
-
-	// Unverified stranger chat.
-	stub.contacts[greg.DCAccountID][11] = deltachat.Contact{Id: 11, DisplayName: "Stranger", Address: "stranger@example.org", IsVerified: false}
-	stub.chats[greg.DCAccountID][201] = deltachat.BasicChat{Id: 201, ChatType: deltachat.ChatTypeSingle}
-	stub.chatContacts[greg.DCAccountID][201] = []uint32{deltachat.ContactSelf, 11}
-	stub.msgs[greg.DCAccountID][99] = deltachat.Message{Id: 99, ChatId: 201, FromId: 11, ViewType: deltachat.ViewtypeWebxdc}
-	stub.mu.Unlock()
-
-	// 1. /panel sends .xdc and initial state update (with portrait).
-	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
-	stub.mu.Lock()
-	if len(stub.sent) != 1 || stub.sent[0].data.Viewtype == nil || *stub.sent[0].data.Viewtype != deltachat.ViewtypeWebxdc {
-		t.Fatalf("expected webxdc message from /panel, got %+v", stub.sent)
-	}
-	// Map sent msgID 1 in stub.msgs so handleWebxdcUpdate can resolve its chat.
-	panelMsgID := uint32(1)
-	stub.msgs[greg.DCAccountID][panelMsgID] = deltachat.Message{Id: panelMsgID, ChatId: 200, FromId: deltachat.ContactSelf, ViewType: deltachat.ViewtypeWebxdc}
-	initialUpdates := len(stub.xdcUpdates[greg.DCAccountID][panelMsgID])
-	stub.mu.Unlock()
-	if initialUpdates != 1 || !strings.Contains(string(stub.xdcUpdates[greg.DCAccountID][panelMsgID][0]), "data:image/png;base64,") {
-		t.Fatalf("expected initial state update with portrait, got %d updates", initialUpdates)
-	}
-
-	// 2. Drive verified client updates: set_listen, set_voice, set_volume, open_book.
-	sendClientUpdate := func(msgID uint32, payload string) {
-		_ = stub.SendWebxdcStatusUpdate(greg.DCAccountID, msgID, payload, nil)
-		b.dc.handleWebxdcUpdate(t.Context(), greg.DCAccountID, msgID)
-	}
-	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_listen","seconds":120}}`)
-	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_voice","voice":"bf_lily"}}`)
-	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"set_volume","terminal":"box3-xdc","volume":45}}`)
-	sendClientUpdate(panelMsgID, `{"payload":{"v":1,"op":"open_story","app":"lost_island"}}`)
-
-	if got := b.companionFor("greg").ListenSeconds; got != 120 {
-		t.Fatalf("listen_seconds = %d, want 120", got)
-	}
-	if got := b.voiceFor("greg"); got != "bf_lily" {
-		t.Fatalf("voice = %q, want bf_lily", got)
-	}
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-xdc"]
-	vol := d.vol
-	drawer := d.drawer
-	storyID := ""
-	if d.story != nil {
-		storyID = d.story.id
-	}
-	b.ws.mu.Unlock()
-	if vol != 45 {
-		t.Fatalf("terminal volume = %d, want 45", vol)
-	}
-	if drawer != drawerStoryReader || storyID != "lost_island" {
-		t.Fatalf("expected story reader with lost_island, got drawer=%q story=%q", drawer, storyID)
-	}
-
-	// 3. Unverified sender update is ignored.
-	sendClientUpdate(99, `{"payload":{"v":1,"op":"set_listen","seconds":300}}`)
-	if got := b.companionFor("greg").ListenSeconds; got != 120 {
-		t.Fatalf("unverified update mutated listen_seconds to %d", got)
-	}
-	stub.mu.Lock()
-	unverifiedReplies := len(stub.xdcUpdates[greg.DCAccountID][99])
-	stub.mu.Unlock()
-	if unverifiedReplies != 1 { // only the injected client update itself, no ack/state reply
-		t.Fatalf("expected no reply updates for unverified sender, got %d", unverifiedReplies)
-	}
 }
 
 func TestDeltaChatStoryImportAndExport(t *testing.T) {
@@ -1295,7 +1114,7 @@ func TestDeltaChatStoryImportAndExport(t *testing.T) {
 		t.Fatalf("expected 2 imported stories, got %d (%v)", len(stories), err)
 	}
 
-	// /stories lists them; /story sends .twee + .xdc.
+	// /stories lists them; /story sends the plain .twee file.
 	stub.mu.Lock()
 	stub.msgs[greg.DCAccountID][3] = deltachat.Message{Id: 3, ChatId: 200, FromId: 10, Text: "/stories", ViewType: deltachat.ViewtypeText}
 	stub.msgs[greg.DCAccountID][4] = deltachat.Message{Id: 4, ChatId: 200, FromId: 10, Text: "/story the-whispering-woods", ViewType: deltachat.ViewtypeText}
@@ -1306,8 +1125,8 @@ func TestDeltaChatStoryImportAndExport(t *testing.T) {
 	stub.mu.Lock()
 	sent := slices.Clone(stub.sent)
 	stub.mu.Unlock()
-	if len(sent) < 5 {
-		t.Fatalf("expected import replies, /stories list, and .twee + .xdc sends, got %d messages", len(sent))
+	if len(sent) < 4 {
+		t.Fatalf("expected import replies, /stories list, and a .twee send, got %d messages", len(sent))
 	}
 	var sawList, sawTwee, sawXDC bool
 	for _, m := range sent {
@@ -1321,8 +1140,8 @@ func TestDeltaChatStoryImportAndExport(t *testing.T) {
 			sawXDC = true
 		}
 	}
-	if !sawList || !sawTwee || !sawXDC {
-		t.Fatalf("missing expected sends: list=%v twee=%v xdc=%v", sawList, sawTwee, sawXDC)
+	if !sawList || !sawTwee || sawXDC {
+		t.Fatalf("unexpected story sends: list=%v twee=%v xdc=%v", sawList, sawTwee, sawXDC)
 	}
 }
 
@@ -1347,426 +1166,5 @@ func TestDCIntercomMatchesRenamedPeer(t *testing.T) {
 	}
 	if len(sentTo) != 1 || sentTo[0] != "qa2" {
 		t.Fatalf("sentTo = %v, want [qa2]", sentTo)
-	}
-}
-
-func TestWebxdcPanelUpgradeDeletesOldPanelsAndStoryFiles(t *testing.T) {
-	b, _, stub := dcTestHarness(t)
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := b.saveStory(t.Context(), "lost_island", ":: StoryTitle\nLost Island\n\n:: Start {\"end\":true}\nPage one.\n", "", true); err != nil {
-		t.Fatal(err)
-	}
-
-	mum := deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
-	stub.mu.Lock()
-	stub.contacts[greg.DCAccountID][10] = mum
-	stub.chats[greg.DCAccountID][1010] = deltachat.BasicChat{Id: 1010, ChatType: deltachat.ChatTypeSingle}
-	stub.chatContacts[greg.DCAccountID][1010] = []uint32{deltachat.ContactSelf, 10}
-	// Existing older panel message in chat 1010 before dc_panel_msg was tracked.
-	if stub.webxdcInfo[greg.DCAccountID] == nil {
-		stub.webxdcInfo[greg.DCAccountID] = make(map[uint32]deltachat.WebxdcMessageInfo)
-	}
-	stub.msgs[greg.DCAccountID][50] = deltachat.Message{Id: 50, ChatId: 1010, FromId: deltachat.ContactSelf, ViewType: deltachat.ViewtypeWebxdc}
-	stub.webxdcInfo[greg.DCAccountID][50] = deltachat.WebxdcMessageInfo{IsAppSender: true, Name: "Lark Control"}
-	// Existing unrelated webxdc (e.g. a story player) should NOT be deleted.
-	stub.msgs[greg.DCAccountID][51] = deltachat.Message{Id: 51, ChatId: 1010, FromId: deltachat.ContactSelf, ViewType: deltachat.ViewtypeWebxdc}
-	stub.webxdcInfo[greg.DCAccountID][51] = deltachat.WebxdcMessageInfo{IsAppSender: true, Name: "Lost Island"}
-	stub.mu.Unlock()
-
-	// Mark welcome already sent, and panel at older version "2".
-	_ = b.db.setMeta(t.Context(), "dc_welcome:"+greg.ID+":"+dcContactKey(mum), dcWelcomeVersion)
-	_ = b.db.setMeta(t.Context(), "dc_panel:"+greg.ID+":"+dcContactKey(mum), "2")
-
-	// First sync after upgrade sends v3 panel (msgID=1) and deletes old panel 50 (not 51).
-	b.dc.syncWelcomes(t.Context())
-
-	stub.mu.Lock()
-	deleted1 := slices.Clone(stub.deletedForAll)
-	stub.deletedForAll = nil
-	stub.mu.Unlock()
-	if !slices.Equal(deleted1, []uint32{50}) {
-		t.Fatalf("expected old panel [50] deleted on upgrade, got %v", deleted1)
-	}
-
-	// Re-sending /panel sends msgID=2 and deletes tracked msgID=1.
-	stub.mu.Lock()
-	stub.msgs[greg.DCAccountID][90] = deltachat.Message{Id: 90, ChatId: 1010, FromId: 10, Text: "/panel", ViewType: deltachat.ViewtypeText}
-	stub.mu.Unlock()
-	b.dc.handleMessage(t.Context(), greg.DCAccountID, 90)
-
-	stub.mu.Lock()
-	deleted2 := slices.Clone(stub.deletedForAll)
-	stub.deletedForAll = nil
-	stub.mu.Unlock()
-	if !slices.Equal(deleted2, []uint32{1}) {
-		t.Fatalf("expected previous panel [1] deleted on /panel resend, got %v", deleted2)
-	}
-
-	// Re-sending /story lost_island deletes the first .twee (msg 3) and .xdc (msg 4).
-	stub.mu.Lock()
-	stub.msgs[greg.DCAccountID][91] = deltachat.Message{Id: 91, ChatId: 1010, FromId: 10, Text: "/story lost_island", ViewType: deltachat.ViewtypeText}
-	stub.mu.Unlock()
-	b.dc.handleMessage(t.Context(), greg.DCAccountID, 91)
-	b.dc.handleMessage(t.Context(), greg.DCAccountID, 91)
-
-	stub.mu.Lock()
-	deletedStory := slices.Clone(stub.deletedForAll)
-	stub.mu.Unlock()
-	if !slices.Equal(deletedStory, []uint32{3, 4}) {
-		t.Fatalf("expected previous story files [3, 4] deleted on resend, got %v", deletedStory)
-	}
-}
-
-func TestWebxdcPanelOpsSayRestartVoiceHistoryAndLiveState(t *testing.T) {
-	b, base, stub := dcTestHarness(t)
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dev := testConnectWS(t, base, "unit", false)
-	dev.hello(t, "box3-panel", "greg")
-
-	twee := ":: StoryTitle\nLost Island\n\n:: Start\nShore.\n\n[[Cave->Cave]]\n\n:: Cave {\"end\":true}\nFound treasure.\n"
-	if _, _, err := b.saveStory(t.Context(), "lost_island", twee, "", true); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.setStoryProgress(t.Context(), storyProgress{CompanionID: "greg", StoryID: "lost_island", Passage: "Cave"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Seed cached voice preview clip so set_voice plays it on the active terminal.
-	_, _ = b.clips.getWith(t.Context(), func(_ context.Context, _, _ string) ([]byte, error) {
-		return make([]byte, 320), nil
-	}, "bm_fable", voicePreviewText("bm_fable"))
-
-	// Seed history messages across channels with an internal header.
-	baseTS := time.Now().Add(-10 * time.Minute).UnixMilli()
-	seedMsg := func(id, role, sender, text, source string, offset int64) {
-		ch := channelForSource(source)
-		_, err := b.db.ExecContext(t.Context(),
-			`INSERT INTO messages (id,companion_id,role,sender,text,source,channel,card_title,ts_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
-			id, "greg", role, sender, text, source, ch, "", baseTS+offset)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	seedMsg("m1", "user", "You", "[You are Greg (greg). Speaker: in_person]\nHow is the weather?", "voice", 1000)
-	seedMsg("m2", "companion", "Greg", "Clear skies today.", "voice", 2000)
-	seedMsg("m3", "user", "Mum", "Dinner at seven.", "deltachat", 3000)
-	seedMsg("m4", "intercom", "Milo", "Tea is ready.", "intercom", 4000)
-
-	stub.mu.Lock()
-	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
-	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
-	stub.chatContacts[greg.DCAccountID][200] = []uint32{deltachat.ContactSelf, 10}
-	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "/panel", ViewType: deltachat.ViewtypeText}
-	stub.mu.Unlock()
-
-	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
-	panelMsgID := uint32(1)
-	stub.mu.Lock()
-	stub.msgs[greg.DCAccountID][panelMsgID] = deltachat.Message{Id: panelMsgID, ChatId: 200, FromId: deltachat.ContactSelf, ViewType: deltachat.ViewtypeWebxdc}
-	stub.mu.Unlock()
-
-	sendUpdate := func(payload string) {
-		_ = stub.SendWebxdcStatusUpdate(greg.DCAccountID, panelMsgID, payload, nil)
-		b.dc.handleWebxdcUpdate(t.Context(), greg.DCAccountID, panelMsgID)
-	}
-
-	// 1. say op
-	sendUpdate(`{"payload":{"v":1,"op":"say","text":"Good morning!"}}`)
-	b.history.flush("greg")
-	entries, err := b.history.list(t.Context(), "greg")
-	if err != nil || len(entries) < 5 {
-		t.Fatalf("expected say message persisted, got %d (%v)", len(entries), err)
-	}
-	if entries[len(entries)-1].Text != "/say Good morning!" || entries[len(entries)-1].Sender != "Mum" {
-		t.Fatalf("unexpected say history entry: %+v", entries[len(entries)-1])
-	}
-
-	// 2. restart_story clears story_progress and opens Start.
-	sendUpdate(`{"payload":{"v":1,"op":"restart_story","app":"lost_island"}}`)
-	if _, ok, err := b.getStoryProgress(t.Context(), "greg", "lost_island"); err != nil || ok {
-		t.Fatalf("expected story_progress cleared, ok=%v err=%v", ok, err)
-	}
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-panel"]
-	storyPassageName := ""
-	if d.story != nil {
-		storyPassageName = d.story.currentPassageName()
-	}
-	b.ws.mu.Unlock()
-	if storyPassageName != "Start" {
-		t.Fatalf("expected story restarted at Start, got %q", storyPassageName)
-	}
-
-	// 3. set_voice saves and triggers preview.
-	sendUpdate(`{"payload":{"v":1,"op":"set_voice","voice":"bm_fable"}}`)
-	if got := b.voiceFor("greg"); got != "bm_fable" {
-		t.Fatalf("voice = %q, want bm_fable", got)
-	}
-
-	// 4. history op: pagination, filters, search, header stripping, speaker names.
-	sendUpdate(`{"payload":{"v":1,"op":"history","channel":"all","limit":2}}`)
-	type histResp struct {
-		Payload struct {
-			Op         string `json:"op"`
-			HasMore    bool   `json:"has_more"`
-			Append     bool   `json:"append"`
-			NextCursor *struct {
-				TS int64  `json:"ts_ms"`
-				ID string `json:"id"`
-			} `json:"next_cursor"`
-			Items []struct {
-				ID      string `json:"id"`
-				Speaker string `json:"speaker"`
-				Channel string `json:"channel"`
-				Text    string `json:"text"`
-			} `json:"items"`
-		} `json:"payload"`
-	}
-	lastHistory := func() histResp {
-		stub.mu.Lock()
-		defer stub.mu.Unlock()
-		list := stub.xdcUpdates[greg.DCAccountID][panelMsgID]
-		for i := len(list) - 1; i >= 0; i-- {
-			var r histResp
-			if json.Unmarshal(list[i], &r) == nil && r.Payload.Op == "history" && r.Payload.Items != nil {
-				return r
-			}
-		}
-		t.Fatal("no history response found")
-		return histResp{}
-	}
-	h1 := lastHistory()
-	if len(h1.Payload.Items) != 2 || !h1.Payload.HasMore || h1.Payload.NextCursor == nil {
-		t.Fatalf("unexpected page 1 history: %+v", h1.Payload)
-	}
-
-	// Page 2 using cursor.
-	sendUpdate(fmt.Sprintf(`{"payload":{"v":1,"op":"history","channel":"all","limit":10,"before_ts":%d,"before_id":%q}}`,
-		h1.Payload.NextCursor.TS, h1.Payload.NextCursor.ID))
-	h2 := lastHistory()
-	if !h2.Payload.Append || len(h2.Payload.Items) == 0 {
-		t.Fatalf("expected appended page 2, got %+v", h2.Payload)
-	}
-
-	// Search with LIKE and verify header stripping + "Someone in person".
-	sendUpdate(`{"payload":{"v":1,"op":"history","channel":"in_person","q":"weather","limit":10}}`)
-	h3 := lastHistory()
-	if len(h3.Payload.Items) != 1 || h3.Payload.Items[0].Speaker != "Someone in person" || h3.Payload.Items[0].Text != "How is the weather?" {
-		t.Fatalf("unexpected search/strip result: %+v", h3.Payload.Items)
-	}
-
-	// Channel filter: intercom.
-	sendUpdate(`{"payload":{"v":1,"op":"history","channel":"intercom","limit":10}}`)
-	h4 := lastHistory()
-	if len(h4.Payload.Items) != 1 || h4.Payload.Items[0].Speaker != "Milo" {
-		t.Fatalf("unexpected intercom filter result: %+v", h4.Payload.Items)
-	}
-
-	// 5. Live state push when terminal state changes.
-	b.dc.mu.Lock()
-	if w := b.dc.activePanels[panelWatchKey{accID: greg.DCAccountID, msgID: panelMsgID}]; w != nil {
-		w.lastPush = time.Now().Add(-5 * time.Second)
-	}
-	b.dc.mu.Unlock()
-	b.ws.mu.Lock()
-	d.ttsStarted = false
-	d.awaitAck = false
-	d.busy = true
-	b.ws.mu.Unlock()
-
-	deadline := time.Now().Add(3 * time.Second)
-	sawThinking := false
-	for time.Now().Before(deadline) {
-		stub.mu.Lock()
-		for _, raw := range stub.xdcUpdates[greg.DCAccountID][panelMsgID] {
-			if strings.Contains(string(raw), `"op":"live_state"`) && strings.Contains(string(raw), `"thinking"`) {
-				sawThinking = true
-				break
-			}
-		}
-		stub.mu.Unlock()
-		if sawThinking {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !sawThinking {
-		t.Fatal("expected live_state thinking push for active panel")
-	}
-}
-
-type panelTestHarness struct {
-	b      *larkServer
-	stub   *stubDCRPC
-	accID  uint32
-	msgID  uint32
-	compID string
-}
-
-func newPanelTestHarness(t *testing.T) *panelTestHarness {
-	t.Helper()
-	b, _, stub := dcTestHarness(t)
-	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "greg", "form": "an old chameleon"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mum := deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
-	stub.mu.Lock()
-	stub.contacts[greg.DCAccountID][10] = mum
-	stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
-	stub.chatContacts[greg.DCAccountID][200] = []uint32{deltachat.ContactSelf, 10}
-	stub.msgs[greg.DCAccountID][1] = deltachat.Message{Id: 1, ChatId: 200, FromId: 10, Text: "/panel", ViewType: deltachat.ViewtypeText}
-	stub.mu.Unlock()
-	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
-	const panelMsgID = 1
-	stub.mu.Lock()
-	stub.msgs[greg.DCAccountID][panelMsgID] = deltachat.Message{Id: panelMsgID, ChatId: 200, FromId: deltachat.ContactSelf, ViewType: deltachat.ViewtypeWebxdc}
-	stub.mu.Unlock()
-	return &panelTestHarness{b: b, stub: stub, accID: greg.DCAccountID, msgID: panelMsgID, compID: greg.ID}
-}
-
-func (h *panelTestHarness) send(t *testing.T, payload string) {
-	t.Helper()
-	if err := h.stub.SendWebxdcStatusUpdate(h.accID, h.msgID, payload, nil); err != nil {
-		t.Fatal(err)
-	}
-	h.b.dc.handleWebxdcUpdate(t.Context(), h.accID, h.msgID)
-}
-
-func (h *panelTestHarness) updates(t *testing.T, op string) []map[string]any {
-	all := h.rawUpdates(t, op)
-	if op == "history" {
-		out := all[:0]
-		for _, payload := range all {
-			if _, ok := payload["has_more"]; ok {
-				out = append(out, payload)
-			}
-		}
-		return out
-	}
-	return all
-}
-
-func (h *panelTestHarness) rawUpdates(t *testing.T, op string) []map[string]any {
-	t.Helper()
-	h.stub.mu.Lock()
-	defer h.stub.mu.Unlock()
-	var out []map[string]any
-	for _, raw := range h.stub.xdcUpdates[h.accID][h.msgID] {
-		var env struct {
-			Payload map[string]any `json:"payload"`
-		}
-		if json.Unmarshal(raw, &env) == nil && env.Payload["op"] == op && env.Payload["dir"] == "out" {
-			out = append(out, env.Payload)
-		}
-	}
-	return out
-}
-
-// A status update pushed by the server is also returned by
-// GetWebxdcStatusUpdates. Re-applying it as a command made every history
-// response spawn another response, which is how one live panel collected
-// >700k history updates and stopped rendering.
-func TestWebxdcPanelDoesNotEchoOwnUpdates(t *testing.T) {
-	h := newPanelTestHarness(t)
-	baseTS := time.Now().Add(-time.Minute).UnixMilli()
-	for i := range 3 {
-		if _, err := h.b.db.ExecContext(t.Context(),
-			`INSERT INTO messages (id,companion_id,role,sender,text,source,channel,card_title,ts_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
-			fmt.Sprintf("m%d", i), "greg", "user", "You", "hello", "voice", "in_person", "", baseTS+int64(i)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	h.send(t, `{"payload":{"v":1,"op":"history","channel":"all","limit":2,"sid":"abc","seq":1}}`)
-	if got := len(h.updates(t, "history")); got != 1 {
-		t.Fatalf("one history request produced %d responses, want 1", got)
-	}
-
-	// Any later update event replays the bot's own history response first.
-	h.send(t, `{"payload":{"v":1,"op":"sync"}}`)
-	if got := len(h.updates(t, "history")); got != 1 {
-		t.Fatalf("server echo produced %d extra history responses", got-1)
-	}
-	if got := len(h.updates(t, "state")); got < 2 {
-		t.Fatalf("sync should still push state, got %d state updates", got)
-	}
-
-	// Outgoing payloads carry an explicit direction marker and are skipped even
-	// when they look like commands.
-	h.send(t, `{"payload":{"v":1,"op":"history","dir":"out","channel":"all","item":[]}}`)
-	if got := len(h.updates(t, "history")); got != 1 {
-		t.Fatalf("explicit outgoing update was applied as a command (%d history responses)", got)
-	}
-}
-
-func TestWebxdcPanelVoiceInAckAndState(t *testing.T) {
-	h := newPanelTestHarness(t)
-	h.send(t, `{"payload":{"v":1,"op":"set_voice","voice":"bm_fable"}}`)
-
-	acks := h.updates(t, "ack")
-	if len(acks) == 0 || acks[len(acks)-1]["voice"] != "bm_fable" {
-		t.Fatalf("set_voice ack missing voice: %+v", acks)
-	}
-	states := h.updates(t, "state")
-	if len(states) == 0 {
-		t.Fatal("no state push after set_voice")
-	}
-	companion, _ := states[len(states)-1]["companion"].(map[string]any)
-	if companion["voice"] != "bm_fable" {
-		t.Fatalf("state voice = %v, want bm_fable", companion["voice"])
-	}
-	if h.b.voiceFor(h.compID) != "bm_fable" {
-		t.Fatalf("voice not persisted")
-	}
-}
-
-func TestWebxdcPanelHistoryPaginationAcrossLiveState(t *testing.T) {
-	h := newPanelTestHarness(t)
-	baseTS := time.Now().Add(-10 * time.Minute).UnixMilli()
-	for i := range 5 {
-		if _, err := h.b.db.ExecContext(t.Context(),
-			`INSERT INTO messages (id,companion_id,role,sender,text,source,channel,card_title,ts_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
-			fmt.Sprintf("m%d", i), "greg", "user", "You", fmt.Sprintf("hello %d", i), "voice", "in_person", "", baseTS+int64(i)*1000); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h.send(t, `{"payload":{"v":1,"op":"history","channel":"all","limit":2,"sid":"sid1","seq":1}}`)
-	page1 := h.updates(t, "history")[0]
-	if page1["sid"] != "sid1" || page1["seq"] != float64(1) {
-		t.Fatalf("history response did not echo sid/seq: %+v", page1)
-	}
-	cursor, _ := page1["next_cursor"].(map[string]any)
-	if page1["has_more"] != true || cursor == nil {
-		t.Fatalf("expected a second page, got %+v", page1)
-	}
-
-	// Live state pushes while the History tab is open must not add history
-	// requests or responses.
-	h.b.dc.pushPanelLiveState(h.accID, h.msgID, "listening")
-	h.b.dc.pushPanelLiveState(h.accID, h.msgID, "idle")
-	h.send(t, `{"payload":{"v":1,"op":"sync"}}`)
-	if got := len(h.updates(t, "history")); got != 1 {
-		t.Fatalf("live state/sync produced %d history responses, want 1", got)
-	}
-
-	h.send(t, fmt.Sprintf(`{"payload":{"v":1,"op":"history","channel":"all","limit":20,"before_ts":%d,"before_id":%q,"sid":"sid1","seq":2}}`,
-		int64(cursor["ts_ms"].(float64)), cursor["id"]))
-	hist := h.updates(t, "history")
-	if len(hist) != 2 {
-		t.Fatalf("got %d history responses, want 2", len(hist))
-	}
-	if hist[1]["append"] != true || hist[1]["seq"] != float64(2) {
-		t.Fatalf("page 2 not an append for seq 2: %+v", hist[1])
-	}
-	items, _ := hist[1]["items"].([]any)
-	if len(items) != 3 {
-		t.Fatalf("page 2 has %d rows, want 3", len(items))
 	}
 }

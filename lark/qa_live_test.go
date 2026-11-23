@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -187,10 +189,6 @@ func TestQADeltaChatLive(t *testing.T) {
 	waitMsg(25*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeText && strings.Contains(m.Text, "/help")
 	})
-	panel := waitMsg(15*time.Second, func(m deltachat.Message) bool {
-		return m.ViewType == deltachat.ViewtypeWebxdc
-	})
-
 	sendText := func(txt string) {
 		_, err := qadc.rpc.SendMsg(qadc.accID, chatID, deltachat.MessageData{Text: &txt})
 		if err != nil {
@@ -198,60 +196,180 @@ func TestQADeltaChatLive(t *testing.T) {
 		}
 	}
 
-	// Panel v4 is named after the companion and carries its portrait icon.
-	info, err := qadc.rpc.GetWebxdcInfo(qadc.accID, panel.Id)
-	if err != nil {
-		t.Fatalf("GetWebxdcInfo: %v", err)
-	}
-	if info.Name != compID {
-		t.Fatalf("panel name = %q, want companion name %q", info.Name, compID)
+	sendText("/help")
+	help := waitMsg(15*time.Second, func(m deltachat.Message) bool {
+		return strings.Contains(m.Text, "/say") && strings.Contains(m.Text, "/remote")
+	})
+	if strings.Contains(help.Text, "/panel") {
+		t.Fatalf("welcome still advertises the removed panel: %q", help.Text)
 	}
 
-	panelUpdates := func() []map[string]any {
-		t.Helper()
-		raw, err := qadc.rpc.GetWebxdcStatusUpdates(qadc.accID, panel.Id, 0)
-		if err != nil {
-			t.Fatalf("GetWebxdcStatusUpdates: %v", err)
-		}
-		var envs []struct {
-			Payload map[string]any `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(raw), &envs); err != nil {
-			t.Fatalf("decode panel updates: %v", err)
-		}
-		out := make([]map[string]any, 0, len(envs))
-		for _, e := range envs {
-			if e.Payload != nil {
-				out = append(out, e.Payload)
-			}
-		}
-		return out
+	// /remote replies with one tappable link and nothing else.
+	sendText("/remote")
+	remoteMsg := waitMsg(20*time.Second, func(m deltachat.Message) bool {
+		return m.ViewType == deltachat.ViewtypeText && strings.HasPrefix(strings.TrimSpace(m.Text), "https://") && strings.Contains(m.Text, "/remote?token=")
+	})
+	firstLink := strings.TrimSpace(remoteMsg.Text)
+	if strings.ContainsAny(firstLink, " \n") {
+		t.Fatalf("/remote reply is not a bare link: %q", firstLink)
 	}
-	waitPanel := func(what string, pred func(map[string]any) bool) map[string]any {
+	parsed, err := url.Parse(firstLink)
+	if err != nil || parsed.Query().Get("token") == "" {
+		t.Fatalf("invalid /remote link: %q (%v)", firstLink, err)
+	}
+	remoteBase := parsed.Scheme + "://" + parsed.Host
+	oldToken := parsed.Query().Get("token")
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	waitPage := func(link string) []byte {
 		t.Helper()
-		deadline := time.Now().Add(15 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
-			for _, p := range panelUpdates() {
-				if pred(p) {
-					return p
+			res, err := client.Get(link)
+			if err == nil {
+				body, _ := io.ReadAll(res.Body)
+				res.Body.Close()
+				if res.StatusCode == 200 {
+					return body
 				}
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
-		t.Fatalf("timed out waiting for panel %s", what)
+		t.Fatal("remote page did not load over the tunnel")
 		return nil
 	}
-	sendPanel := func(payload string) {
-		t.Helper()
-		if err := qadc.rpc.SendWebxdcStatusUpdate(qadc.accID, panel.Id, payload, nil); err != nil {
-			t.Fatalf("SendWebxdcStatusUpdate: %v", err)
-		}
+	page := waitPage(firstLink)
+	if !bytes.Contains(page, []byte("/remote/app.js")) {
+		t.Fatal("remote page did not include its app")
 	}
 
-	sendText("/help")
-	waitMsg(15*time.Second, func(m deltachat.Message) bool {
-		return strings.Contains(m.Text, "/say") && strings.Contains(m.Text, "/stories")
+	remoteReq := func(method, path, token string, body any) (int, []byte) {
+		t.Helper()
+		var reader io.Reader
+		if body != nil {
+			raw, _ := json.Marshal(body)
+			reader = bytes.NewReader(raw)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, remoteBase+path+"?token="+url.QueryEscape(token), reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", jsonType)
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		data, _ := io.ReadAll(res.Body)
+		return res.StatusCode, data
+	}
+
+	if status, _ := remoteReq(http.MethodPost, "/remote/api/listen", oldToken, object{"seconds": 60}); status != 200 {
+		t.Fatalf("remote listen status = %d", status)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	listenOK := false
+	for time.Now().Before(deadline) {
+		comp, err := c.do(ctx, http.MethodGet, "/api/companions/"+compID, nil)
+		if err == nil && fmt.Sprint(comp["listen_seconds"]) == "60" {
+			listenOK = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !listenOK {
+		t.Fatal("remote listen=60 did not take effect")
+	}
+	if status, _ := remoteReq(http.MethodPost, "/remote/api/listen", oldToken, object{"seconds": 0}); status != 200 {
+		t.Fatalf("remote listen off status = %d", status)
+	}
+
+	// Voice and history round trips.
+	if status, body := remoteReq(http.MethodPost, "/remote/api/voice", oldToken, object{"voice": "bf_lily"}); status != 200 || !bytes.Contains(body, []byte("bf_lily")) {
+		t.Fatalf("remote voice failed: status=%d body=%s", status, body)
+	}
+	if status, body := remoteReq(http.MethodGet, "/remote/api/history", oldToken, object{"limit": 5}); status != 200 || !bytes.Contains(body, []byte("items")) {
+		t.Fatalf("remote history failed: status=%d body=%s", status, body)
+	}
+
+	// A fresh /remote link invalidates the old token.
+	sendText("/remote")
+	secondMsg := waitMsg(20*time.Second, func(m deltachat.Message) bool {
+		return m.ViewType == deltachat.ViewtypeText && strings.HasPrefix(strings.TrimSpace(m.Text), "https://") && strings.Contains(m.Text, "/remote?token=") && strings.TrimSpace(m.Text) != firstLink
 	})
+	secondURL, _ := url.Parse(strings.TrimSpace(secondMsg.Text))
+	newToken := secondURL.Query().Get("token")
+	if status, _ := remoteReq(http.MethodGet, "/remote/api/history", oldToken, nil); status != 401 {
+		t.Fatalf("old remote token still works: status=%d", status)
+	}
+	if status, _ := remoteReq(http.MethodGet, "/remote/api/history", newToken, nil); status != 200 {
+		t.Fatalf("new remote token failed: status=%d", status)
+	}
+
+	// REST command latency versus the old chatmail command path.
+	restSamples := make([]time.Duration, 0, 5)
+	for i := 0; i < 5; i++ {
+		seconds := 30
+		if i%2 == 1 {
+			seconds = 0
+		}
+		start := time.Now()
+		if status, _ := remoteReq(http.MethodPost, "/remote/api/listen", newToken, object{"seconds": seconds}); status != 200 {
+			t.Fatalf("latency listen status = %d", status)
+		}
+		restSamples = append(restSamples, time.Since(start))
+	}
+	chatSamples := make([]time.Duration, 0, 5)
+	for i := 0; i < 5; i++ {
+		before := map[uint32]bool{}
+		if ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false); err == nil {
+			for _, id := range ids {
+				before[id] = true
+			}
+		}
+		start := time.Now()
+		sendText(fmt.Sprintf("/say latency probe %d", i))
+		measured := false
+		probeDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(probeDeadline) {
+			ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false)
+			if err == nil {
+				for _, id := range ids {
+					if before[id] {
+						continue
+					}
+					m, err := qadc.rpc.GetMessage(qadc.accID, id)
+					if err == nil && m.FromId == deltachat.ContactSelf && m.ViewType == deltachat.ViewtypeText && m.Text == "Said it." {
+						chatSamples = append(chatSamples, time.Since(start))
+						measured = true
+						break
+					}
+				}
+			}
+			if measured {
+				break
+			}
+			// Bound each poll so a slow relay cannot stall the whole QA run.
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !measured {
+			t.Fatal("chatmail /say latency probe timed out")
+		}
+	}
+	slices.Sort(restSamples)
+	slices.Sort(chatSamples)
+	t.Logf("remote latency: REST listen p50=%s; chatmail /say p50=%s", restSamples[len(restSamples)/2], chatSamples[len(chatSamples)/2])
+
+	// /remote off revokes the current token and stops the tunnel.
+	sendText("/remote off")
+	waitMsg(20*time.Second, func(m deltachat.Message) bool {
+		return strings.Contains(m.Text, "Remote controls off.")
+	})
+	if status, _ := remoteReq(http.MethodGet, "/remote/api/history", newToken, nil); status != 401 {
+		t.Fatalf("revoked remote token still works: status=%d", status)
+	}
 
 	sendText("/say Hello from Delta Chat!")
 	waitMsg(15*time.Second, func(m deltachat.Message) bool {
@@ -276,102 +394,6 @@ func TestQADeltaChatLive(t *testing.T) {
 	waitMsg(15*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeFile && m.FileName != nil && strings.HasSuffix(*m.FileName, ".twee")
 	})
-	waitMsg(15*time.Second, func(m deltachat.Message) bool {
-		return m.ViewType == deltachat.ViewtypeWebxdc
-	})
-
-	_ = qadc.rpc.SendWebxdcStatusUpdate(qadc.accID, panel.Id, `{"payload":{"v":1,"op":"set_listen","seconds":60}}`, nil)
-	deadline := time.Now().Add(15 * time.Second)
-	listenOK := false
-	for time.Now().Before(deadline) {
-		comp, err := c.do(ctx, http.MethodGet, "/api/companions/"+compID, nil)
-		if err == nil && fmt.Sprint(comp["listen_seconds"]) == "60" {
-			listenOK = true
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if !listenOK {
-		t.Fatalf("webxdc set_listen=60 did not take effect")
-	}
-	sendPanel(`{"payload":{"v":1,"op":"set_listen","seconds":0}}`)
-
-	// Voice: the state and the ack both carry the saved voice.
-	sendPanel(`{"payload":{"v":1,"op":"set_voice","voice":"bf_lily"}}`)
-	waitPanel("ack with voice", func(p map[string]any) bool {
-		return p["dir"] == "out" && p["op"] == "ack" && p["req_op"] == "set_voice" && p["ok"] == true && p["voice"] == "bf_lily"
-	})
-	waitPanel("state with voice", func(p map[string]any) bool {
-		comp, _ := p["companion"].(map[string]any)
-		return p["dir"] == "out" && p["op"] == "state" && comp != nil && comp["voice"] == "bf_lily"
-	})
-
-	// One history request must yield exactly one response, even after more
-	// panel updates arrive (the v3 echo loop produced thousands).
-	sendPanel(`{"payload":{"v":1,"op":"history","channel":"all","limit":5,"sid":"qa","seq":1}}`)
-	historyResp := waitPanel("history response", func(p map[string]any) bool {
-		return p["dir"] == "out" && p["op"] == "history" && p["sid"] == "qa" && p["seq"] == float64(1)
-	})
-	if historyResp["dir"] != "out" {
-		t.Fatalf("history response missing direction marker: %+v", historyResp)
-	}
-	countHistory := func() int {
-		n := 0
-		for _, p := range panelUpdates() {
-			if p["op"] == "history" && p["has_more"] != nil {
-				n++
-			}
-		}
-		return n
-	}
-	before := countHistory()
-	sendPanel(`{"payload":{"v":1,"op":"sync"}}`)
-	waitPanel("state after sync", func(p map[string]any) bool { return p["dir"] == "out" && p["op"] == "state" })
-	time.Sleep(2 * time.Second)
-	if after := countHistory(); after != before {
-		t.Fatalf("history echo: %d responses before sync, %d after", before, after)
-	}
-
-	// /panel resends under the new version and deletes the previous panel.
-	sendText("/panel")
-	var newPanel deltachat.Message
-	deadline = time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false)
-		if err == nil {
-			for _, id := range ids {
-				m, err := qadc.rpc.GetMessage(qadc.accID, id)
-				if err == nil && m.ViewType == deltachat.ViewtypeWebxdc && m.Id != panel.Id {
-					newPanel = m
-				}
-			}
-		}
-		if newPanel.Id != 0 {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if newPanel.Id == 0 {
-		t.Fatal("resend did not deliver a new panel message")
-	}
-	if _, err := qadc.rpc.GetWebxdcInfo(qadc.accID, newPanel.Id); err != nil || info.Name != compID {
-		t.Fatalf("resent panel name = %q err=%v, want %q", info.Name, err, compID)
-	}
-	mediaDeadline := time.Now().Add(15 * time.Second)
-	oldGone := false
-	for time.Now().Before(mediaDeadline) {
-		mediaIDs, err := qadc.rpc.GetChatMedia(qadc.accID, &chatID, deltachat.ViewtypeWebxdc, nil, nil)
-		if err == nil {
-			oldGone = !slices.Contains(mediaIDs, panel.Id) && slices.Contains(mediaIDs, newPanel.Id)
-			if oldGone {
-				break
-			}
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if !oldGone {
-		t.Fatalf("old panel message %d was not deleted for everyone after resend", panel.Id)
-	}
 
 	ttsReq, _ := json.Marshal(object{"text": "What is one plus two?"})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/tts", bytes.NewReader(ttsReq))
