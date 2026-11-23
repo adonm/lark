@@ -1,4 +1,15 @@
-:root { --panel-max: 440px; }
+:root {
+  color-scheme: light dark;
+  --background: light-dark(#fff, #09090b);
+  --foreground: light-dark(#262626, #e5e5e5);
+  --card: light-dark(#fff, #18181b);
+  --primary: light-dark(#262626, #e5e5e5);
+  --primary-foreground: light-dark(#fafafa, #18181b);
+  --muted: light-dark(#f4f4f5, #27272a);
+  --muted-foreground: light-dark(#71717a, #a1a1aa);
+  --border: light-dark(#e4e4e7, #303036);
+  --panel-max: 440px;
+}
 * { box-sizing: border-box; }
 body { margin: 0; padding: 0; background: var(--background); color: var(--foreground); }
 .shell { max-width: var(--panel-max); margin: 0 auto; padding: 1.1rem 1rem 2.5rem; display: flex; flex-direction: column; gap: 1.1rem; }

@@ -1,5 +1,5 @@
 [Unit]
-Description=Lark LAN voice and OTA server
+Description=Lark companion server (voice, companions, remote controls, OTA)
 Wants=network-online.target lark-opencode.service
 After=network-online.target lark-opencode.service
 

@@ -7,7 +7,7 @@ description: Upgrade existing Lark or legacy EchoEar installations, companions, 
 
 ## Policy
 
-Lark carries **zero runtime migrations and zero backwards-compatibility shims** in the codebase.
+Lark carries **zero runtime migrations and zero backwards-compatibility shims** in the codebase. The only exception is the guarded column drop in `initSchema`, which is listed in the changelog like any other one-time step.
 
 - Breaking changes append a dated entry to `references/changelog.md`.
 - OpenCode agents execute upgrades directly on the host and through the live Lark server using those changelog entries.
@@ -16,42 +16,42 @@ Lark carries **zero runtime migrations and zero backwards-compatibility shims** 
 ## Upgrade an Installation
 
 1. **Identify starting state and back up before mutating anything**
-   - Inspect running services (`systemctl --user status lark lark-opencode` or legacy `lark-bridge` / `echoear-*`), config (`~/.config/lark/lark.env`, legacy `bridge.env`, or `~/.config/echoear/bridge.env`), and DB (`~/.local/share/lark/lark.db` or legacy `bridge.db` / `echoear.db`).
-   - Stop the Lark server before copying or editing SQLite files (`systemctl --user stop lark.service` / `lark-bridge.service` / `echoear-bridge.service`).
-   - Back up the database (for example with `sqlite3 <db> ".backup '<backup-path>'"`) and copy `lark.env` (or `bridge.env`) and `opencode.jsonc` before making changes.
+   - Inspect running services (`systemctl --user status lark lark-opencode`), config (`~/.config/lark/lark.env`), and DB (`~/.local/share/lark/lark.db`).
+   - Stop the Lark server before copying or editing SQLite files (`systemctl --user stop lark.service`).
+   - Back up the database (`sqlite3 <db> ".backup '<backup-path>'"`) and copy `lark.env` and the OpenCode `opencode.jsonc`.
+   - Legacy EchoEar installs still use `~/.config/echoear`, `~/.local/share/echoear`, `echoear-*` units, and tables such as `cats`; convert them while the service is stopped.
 
-2. **Read `references/changelog.md` chronologically**
-   - Read every entry from the installation's current commit/state up to the latest entry.
-   - Apply entries in chronological order; do not skip intermediate steps.
+2. **Read `references/changelog.md` newest first, apply bottom-up**
+   - Entries are ordered newest first; apply them from the oldest applicable entry up to the newest.
+   - Do not skip intermediate entries.
 
 3. **Apply offline host, config, systemd, and SQLite steps**
-   - Apply any required filesystem renames, `lark.env` key updates, systemd unit updates, and SQLite schema/data SQL from the applicable changelog entries.
-   - Run `./scripts/setup-host.sh` (or `--models-only` if only assets changed) and ensure `lark-opencode.service` and `lark.service` are running cleanly.
+   - Apply the changelog's filesystem renames, `lark.env` key updates, systemd unit updates, and SQLite schema/data SQL.
+   - Run `./scripts/setup-host.sh --gpu-index 0` (no `--library`), then confirm `lark.service` and `lark-opencode.service` are running cleanly.
 
-4. **Upgrade companions, memory, apps, and OpenCode sessions via the live Lark server**
-   - Authenticate HTTP requests with `X-Lark-Token: <LARK_TOKEN>` (from `lark.env`) or use the `lark_*` MCP tools (`lark_state`, `lark_patch`, `lark_app`, `lark_emit`) when connected to the Lark MCP server.
+4. **Upgrade companions, memory, and stories through the live server**
+   - Authenticate HTTP requests with `X-Lark-Token: <LARK_TOKEN>` (from `lark.env`), or use the `lark_*` MCP tools: `state`, `patch`, `story`, `library`, `emit`.
    - Inspect live state:
      - `GET /health`
-     - `GET /api/devices`
      - `GET /api/companions`
+     - `GET /api/companions/<id>`
+     - `GET /api/terminals`
      - `GET /api/diagnostics`
-     - `GET /api/memory/scopes` (and `GET /api/memory?scope=<scope>`)
-     - `GET /api/apps`
-   - Upgrade companion looks, presets, or portraits via `PUT /api/devices/{id}/companion` (or `lark_patch` with `companion.preset` / `companion.portrait`). Preserve user-chosen `name`, `personality`, `voice`, and custom `face_svg` unless a changelog entry explicitly replaces them.
-   - Upgrade old or stale OpenCode sessions:
-     - Inspect recent history via `GET /api/devices/{id}/messages`.
-     - If important continuity notes exist, save them to `memory` (via `lark_patch` `memory`) before resetting.
-     - Reset the session via `POST /api/devices/{id}/reset` (pass `{"archive_history": false}` to keep visible chat history on the device/dashboard while binding a fresh session, or `true` to archive) so the device binds cleanly to the current `lark` agent and MCP contract.
-     - When only context compaction or MCP reconnection is needed, use `POST /api/opencode/compact` (optionally with `{"device_id": "<id>", "reconnect_mcp": true}`).
+     - `GET /api/library`
+     - `GET /api/remote/tunnels`
+   - Companion changes use the `patch` tool (or `PATCH /api/companions/<id>` with the same body): `companion.name`, `companion.form` (regenerates the background), `companion.voice`, `companion.portrait`, `companion.listen_seconds`, and `memory` entries. Preserve user-chosen names, personalities, voices, and portraits unless a changelog entry explicitly replaces them.
+   - Reset a stale or broken OpenCode session with `POST /api/companions/<id>/reset` (`{"archive_history": true}` keeps visible history in an archive; omit or `false` to bind a fresh session and drop the old one).
+   - Inspect recent history through the `state` tool (`include: ["messages"]`) or the `/remote` page; save important continuity notes to memory before resetting.
+   - Delete companions with `DELETE /api/companions/<id>`; detach or remove their terminals first (`DELETE /api/terminals/<id>`). Deletion removes history, timers, story progress, memory scope, Delta Chat welcome state, remote links, and the portrait directory.
 
 5. **Verify**
    - Confirm `GET /health` reports `"ok": true`, `"opencode": true`, `"stt": true`, `"tts": true`.
-   - Confirm `GET /api/devices`, `GET /api/companions`, and `GET /api/diagnostics` succeed and show expected devices, companions, and voices.
-   - Note any manual steps the user must complete (such as USB firmware reflash or browser `localStorage` re-pair).
+   - Confirm `GET /api/companions`, `GET /api/terminals`, and `GET /api/diagnostics` succeed and show the expected companions, terminals, voices, and no retired telemetry keys.
+   - Note any manual step the user must complete (such as USB firmware reflash). There is no browser pairing step and no `localStorage` state.
 
 ## Record a New Breaking Change
 
-When landing a breaking change in the repo, append a new dated section to `references/changelog.md` using this exact template:
+Append a dated section at the **top** of `references/changelog.md` (newest first) using this exact structure:
 
 ```markdown
 ## YYYY-MM-DD — <Short Title> (<commit-or-range>)
@@ -70,5 +70,5 @@ When landing a breaking change in the repo, append a new dated section to `refer
 2. Exact live-server HTTP (`X-Lark-Token`) or `lark_*` MCP steps.
 
 ### Verification
-- Exact checks (`GET /health`, `GET /api/devices`, `sqlite3` queries, firmware/browser checks) confirming the upgrade succeeded.
+- Exact checks (`GET /health`, `GET /api/companions`, `sqlite3` queries, firmware checks) confirming the upgrade succeeded.
 ```

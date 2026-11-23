@@ -3,12 +3,6 @@ Lark
 Lark's source code is licensed under the Apache License, Version 2.0
 (see LICENSE). Third-party software and model weights keep their own terms.
 
-Browser:
-* Oat 1.1.0 — MIT, Copyright (c) 2026 Kailash Nadh.
-  https://unpkg.com/@knadh/oat@1.1.0/LICENSE
-* HTMX 4.0.2 — Zero-Clause BSD (0BSD).
-  https://unpkg.com/htmx.org@4.0.2/LICENSE
-
 Speech:
 * sherpa-onnx and its Go bindings — Apache-2.0; ONNX Runtime — MIT.
   https://github.com/k2-fsa/sherpa-onnx
@@ -36,6 +30,18 @@ Speech:
   redistributing the weights.
   https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/tree/7e948f21b7bdbac698d3318db9d350f1096f3b6c
   https://huggingface.co/nvidia/parakeet-unified-en-0.6b
+
+Offline content library:
+* Wikipedia and Simple English Wikipedia article text — Creative Commons
+  Attribution-ShareAlike 4.0 International (CC BY-SA 4.0), © Wikimedia
+  Foundation and Wikipedia contributors. Dumps from
+  https://dumps.wikimedia.org/ ; attribution and the share-alike terms
+  apply to redistributed text.
+* Project Gutenberg texts — public domain in the United States; Project
+  Gutenberg is a registered trademark. Texts from
+  https://gutenberg.pglaf.org/ ; remove the Project Gutenberg header only
+  as its licence allows and keep attribution when redistributing.
+  https://www.gutenberg.org/policy/license.html
 
 Optional components:
 * Dogica / Dogica Pixel, Copyright (c) 2020 Roberto Mocci, Reserved Font Name "Dogica", SIL OFL 1.1.

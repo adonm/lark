@@ -10,8 +10,8 @@ Device  <-- TCP/UDP :8766: binary frames, touch, RTP PCM --> Lark server :8765 (
 ```
 
 **Targets:** ESP-VoCat v1.2 and ESP32-S3-BOX-3. Both use a 360×360 logical canvas,
-centered on the BOX-3’s rectangular display. Lark runs apps and renders
-RGB565 updates for hardware. Boards draw a fallback face offline.
+centered on the BOX-3’s rectangular display. Lark renders RGB565 frames for
+the boards. Boards draw a fallback face offline.
 
 **New in 0.9.3:** Both boards use the touchscreen for all touch controls.
 VoCat’s capacitive head pads are disabled.
@@ -127,10 +127,10 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
   **Stop** to interrupt a reply.
 - The display dims after 120 seconds idle. Tap the touchscreen to wake it.
 - The on-device **Menu** provides touch controls:
-  **Games** launches saved apps, **Memories** shows the companion's saved memories,
-  and **History** shows the last 20 messages, newest first. Tap a row for details.
-  **Talk to…** opens intercom, **Volume** sets the level or enables **Auto**,
-  **Voice** pages through six curated voices, and **Stats** opens the diagnostics HUD.
+  **Memories** shows the companion's saved memories, **Stories** opens the
+  Twee reader, **Talk to…** opens intercom, **Volume** sets the level or enables
+  **Auto**, **Voice** pages through the eight curated voices, and **Stats**
+  opens the diagnostics HUD.
   Auto-volume estimates ambient noise from recordings and adjusts the DAC in RAM
   without writing to flash. **Home** returns to the companion.
 - Say “Tell Mint dinner is ready,” “Intercom Cake, come play,” or “Tell everyone
@@ -146,12 +146,13 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
 
 ### Voices and diagnostics
 
-Companions choose from six warm, kid-friendly storyteller voices:
-Heart, Bella, and Puck (US English), or Fable, Emma, and George (UK English).
-The choice is saved per companion in the Lark database. Mint defaults to Fable
+Companions choose from eight warm, kid-friendly storyteller voices:
+Heart, Bella, and Puck (US English), or Fable, Lily, George, Alice, and
+Isabella (UK English). The choice is saved per companion in the Lark database
+and validated strictly: unknown or retired ids (including Emma) are rejected
+and fall back to the companion's theme voice. Mint defaults to Fable
 (`bm_fable`). Cake and other companions default to Heart (`af_heart`) unless
-`LARK_TTS_VOICE` sets a different fallback. Retired UK voices resolve to
-Emma or Fable without rewriting existing profiles.
+`LARK_TTS_VOICE` sets a different fallback.
 
 Open **Menu → Stats** for a compact on-device HUD, or query `GET /api/diagnostics`
 (or `lark status`) for device status, pipeline timings, and CPU and memory
@@ -253,22 +254,6 @@ and executed by OpenCode using the
 [`.opencode/skills/lark-upgrade/SKILL.md`](.opencode/skills/lark-upgrade/SKILL.md)
 skill across host config, SQLite, and the live Lark API/MCP tools.
 
-### Background builds
-
-Say “Make me a dinosaur quiz,” “Edit this game to add a hard round,” or
-“Give yourself a bigger smile.” The companion acknowledges immediately and stays
-available for other requests. For edits, open the saved app first, or type its
-slug in backticks: ``Edit the app `dinosaur-quiz` to add a hard round``.
-If the target is unclear, the companion asks. Playing saved games, calls, intercom,
-and other simple controls don't start builds.
-
-The companion shows a **Ready** card and announces the result once when awake and
-idle. Saved builds appear in **Menu → Games**; they never replace the running
-app. Face changes apply only if the active form hasn't changed in the meantime. If
-the saved app changed while the builder worked, it keeps the newer version.
-Tap **Cancel build** on the progress card or say “Cancel the build.” Regular
-**Stop** only stops the foreground turn or speech.
-
 ### Lark MCP
 
 OpenCode runs the installed `lark mcp` stdio proxy, which forwards
@@ -304,65 +289,18 @@ Code Mode exposes the `tools.lark` MCP tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `state` | Read keyed companions, terminals, saved apps, timers, and scoped JSON. Select slices with `include`; add `messages` or `diagnostics` when needed. |
-| `patch` | Update device settings, companion form (`companion`), memory, or a timer. Use `companion.save_profile:true` to save under the current name or `false` to shift without replacing a favorite. Memory batches commit atomically; `expected_version:0` requires an absent key. |
+| `state` | Read keyed companions, terminals, timers, and scoped JSON. Select slices with `include`; add `messages`, `contacts`, or `diagnostics` when needed. |
+| `patch` | Update terminal volume/sleep, companion name/form/voice/portrait/listen window, memory, or a timer. Memory batches commit atomically; `expected_version:0` requires an absent key. |
 | `story` | Create, update, get, or delete a validated Twee 3 story. |
 | `library` | Search, read, list, or import from the local text library (`simple`, `enwiki`, `gutenberg`); answers in milliseconds with no page fetch. |
-| `app` | Show a declarative screen or SVG, run a template or JS app, save/load/delete by slug, or exit to the face. |
 | `emit` | Send spoken intercom and a card, play notes, or play a named sound (`sfx` or `chime`). |
 
-With `device_id`, `state` always returns `me.device`, `me.companion`, and
-`me.active_app`. Read source from `me.companion.face_svg` or fetch saved app source
-with `include_code:true`. Read persistent values as `memory[scope][key].value`.
+With `companion_id`, `state` returns `me.companion`, `me.terminals`, and
+`me.contacts`. Read persistent values as `memory[scope][key].value`; write them
+through `patch`'s `memory` argument.
 
 The agent checks `library` first for stories, books, and reference facts, and uses OpenCode's `websearch` only when the library misses or for current information. There is no `wait_event` tool:
 pointer events and bounded ticks run in the server without keeping an OpenCode turn open.
-Lark uses the pure-Go `goja` sandbox to run JS that renders SVG. Apps can
-target one player or share state across multiple devices with a separate SVG
-view for each player. `initial_state` seeds `ctx.initial_state` (or the state
-directly if there is no `init`). `state_patch` shallow-merges live state and
-redraws all players without restarting. App state must fit in 64 KB of JSON.
-`save_as` writes apps and drawings to SQLite's `apps` table; `load` reopens
-them. `storeGet(key)` reads persisted state in `init(ctx)`
-and `render(state, player)`; `storeSet(key, value)` is available only in event
-hooks. Use `onDrag` and `onUp` alongside `onTap` for sliders and drawing in
-`/app` or on boards with firmware `0.9.1` or newer. `sfx(name)`, `sfxAll(name)`,
-and `emit.sfx` support `boing`, `pop`, `win`, `buzz`, `ding`, and `whoosh`.
-In JS, `sfx` and `sfxAll` also accept chimes such as `tap`; unknown names are
-silent. App launches return `layout_warnings` for controls that overlap the
-Home button or clip on round displays. Custom exits can use `lark-exit`
-or the legacy `lark-exit`.
-
-Lark pairs tinted Storybook vectors with Oat chrome. The nine templates share
-24 stickers; you can also show them with no JS or SVG:
-
-```js
-app({devices: device_id, screen: {title: "Night sky", body: [
-  {type: "sticker", name: "star", size: 72, palette: "amber"},
-  {type: "text", text: "Wish on a star!"}
-], actions: [{id: "wish", label: "Wish", variant: "primary"}]}, save_as: "night-sky"})
-```
-
-`screen` also supports `badge`, `bg`, `accent`, meters (`label`, `value`, `max`)
-and grids of `{id, label, sprite?, sub?, active?, variant?}` items. It wraps
-text and fits controls above Home on both displays. For interactive behavior,
-return `ui.screen(spec)` from JS `render` and handle IDs in `onTap`.
-`ui.sticker(name, {x, y, size, palette, id})` returns a Storybook SVG fragment.
-`ui.sprite(rows, {x, y, scale, palette, id})` renders full rows as a crisp pixel
-fragment. The `screen` sprite block also takes full rows.
-`ui.palette` exposes the read-only palette (`.` is transparent;
-`k w p m l s y r g a b n d c o` are colors).
-Boards blend warm dawn and dusk and a cooler night using the device's Parent
-timezone (or server local time); the web shell uses the browser clock.
-Photo screens keep their original colors.
-
-Use `app = ui.pagedText({title, text})` for wrapped reading with built-in
-navigation, or return `ui.choices({title, prompt, choices})` from `render`
-for a card or quiz with up to four buttons. Both leave room for Home and
-fit the round screen. `ui.wrap` and `ui.esc` are available for custom SVG.
-Set `timer.app` to a saved app name to launch it on the connected device when
-the reminder goes off. See the [agent guide](agents/lark.md) for examples.
-
 **One Voice Rule:** Only assistant prose is spoken as the reply, not tool
 output or reasoning. Lark checks the streamed speech against the final
 reply. The prompt starts with a short identity and source header, plus setup
@@ -373,34 +311,30 @@ or personality hints when applicable. The agent uses `state` for live context.
 Lark uses native SQLite (`go-sqlite3`) in WAL mode with split reader/writer pools. Persistent state lives
 in `~/.local/share/lark/lark.db` (or `$XDG_DATA_HOME/lark/lark.db`);
 `LARK_DB_PATH` overrides it. Keep the data directory private (0700, database
-0600). The first boot imports valid rows from the six legacy JSON files in that
-directory in one transaction and never modifies those backups.
+0600). The schema is created fresh on first boot; Lark carries no JSON imports
+or runtime migrations. Upgrades that change storage go through the changelog
+skill, which applies the documented SQL while the service is stopped.
 Lark also writes private daily snapshots to `backups/lark-YYYY-MM-DD.db`
 under its data directory, keeps the seven latest, and reports the latest in
 **Diagnostics**.
 Companions are stored in `companions` and attached terminals in `terminals`.
-Shift instantly with `patch({device_id, companion: {preset: {species: "owl",
-palette: "lavender", accessory: "scarf"}, save_profile: false}})`. Ten species
-share eight colorways: peach, mint, lavender, sage, berry, amber, sky and
-midnight. Set `eyes`, `markings` or a palette object with `base` and hex tints
-to customize. Vector faces still support `face_edits` and `face_svg`. Existing
-saved artwork is unchanged.
+A companion is its name, `form`, voice, listening window, and an optional
+portrait. Changing `form` regenerates the pixel-art background; the four poses
+come from one 2×2 portrait sheet.
 
-For bespoke creatures, costumes or styles use `companion.portrait: {prompt, bg?, edit?, style?}`. The dedicated
-OpenCode service sends a billed request to `opencode/gemini-nano-banana-2.1`
-using its OpenCode Console connection. OAuth needs no separate key, and this
-request creates no OpenCode session. If `OPENCODE_API_KEY` is set in the server
-environment, Lark calls Console directly instead. `edit:true` sends the
-current sheet back as reference.
-Lark aligns four poses from a 2×2 sheet and uses them for the six face
-states. `style` defaults to `"storybook"`; `"pixel"` snaps each pose to a
-64×64 grid and upscales without smoothing. Only SVG references go into the database; private PNGs under the
-local `portraits/` and `blobs/photos/` directories are stored on disk. For local, no-cost art, use
-the instant vector companion.
-The canonical `messages` table drives browser history. The v2 migration
-backfills it from legacy chat events and OpenCode session history.
-New rows contain user text, final companion replies, intercom, and display cards,
-not tool traces or prompt headers.
+For bespoke creatures, costumes, or styles use `companion.portrait: {prompt, edit?}`.
+The dedicated OpenCode service sends a billed request to
+`opencode/gemini-nano-banana-2.1` using its OpenCode Console connection. OAuth
+needs no separate key, and this request creates no OpenCode session. If
+`OPENCODE_API_KEY` is set in the server environment, Lark calls Console
+directly instead. `edit:true` sends the current sheet back as reference.
+Lark aligns four poses from the sheet and uses them for the six face states.
+Private PNGs live under the local `portraits/` directory; the database stores
+only ids and metadata.
+
+The canonical `messages` table drives device and remote history. New rows
+contain user text, final companion replies, intercom, and display cards, not
+tool traces or prompt headers.
 
 ## API
 
@@ -432,9 +366,9 @@ over SSE.
 | `GET /api/remote/tunnels`, `DELETE /api/remote/tunnels/{companion}` | List or stop saved scoped remote tunnels (no tokens exposed) |
 | `GET /remote?token=...` | Scoped control page (also served through the companion's OpenTunnel) |
 | `GET /remote/events?token=...` | Server-Sent Events stream for live state and story progress |
-| `POST /remote/api/say`, `listen`, `volume`, `voice`, `story/open`, `story/restart` | One scoped JSON command per route |
+| `POST /remote/api/say`, `listen`, `volume`, `voice`, `story/open`, `story/restart`, `revoke` | One scoped JSON command per route; `revoke` drops every token and tunnel for that companion |
 | `GET /remote/api/history?cursor=...` | Scoped history page with channel, search, and cursor parameters |
-| `POST /mcp` | Loopback-only MCP JSON-RPC endpoint used by `lark mcp` |
+| `POST /mcp` | Loopback-only MCP JSON-RPC endpoint used by `lark mcp`; memory is read through `state` and written through `patch` |
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 

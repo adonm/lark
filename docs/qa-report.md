@@ -115,7 +115,9 @@ The library tool phase is **50× faster end-to-end** and **300× faster in-proce
 Date: 2026-11-23  
 Target: `main` (`e75a20a`..`34830e0`), firmware `0.19.0` (`vocat-33d8`, `vocat-2cac`, `box3-b324`)
 
-## Panel v4: naming, history, and voice selection
+## Panel v4: naming, history, and voice selection (historical)
+
+> Historical: the webxdc panel was deleted when `/remote` replaced it. This section is kept for the regression record; there is no panel to retest.
 
 The panel keeps the header design, but the app was still branded "Lark Control" and two bugs made it unusable: History vanished and changing voice never updated the selected button.
 
@@ -165,7 +167,7 @@ The panel keeps the header design, but the app was still branded "Lark Control" 
 | 5. Stories | Sim + HW | 100% | — | Open, page, tap/voice choices, Memories→Reading, voice-created branching story; fixed `openStory` start passage (`326424d`). |
 | 6. Memories, voice, volume | Sim | 100% | — | Menu + voice changes persisted; memory notes rendered in Memories. |
 | 7. Timers | Sim | 100% | — | Set, list, cancel, fire with chime + speech; survived `lark.service` restart. |
-| 8. Delta Chat | Live (`TestQADeltaChatLive`) | 100% | 44.37 s full suite | QR pair, welcome once, plain, `/say`, `/private`, `/help`, `/stories`, `/story`, `/panel` webxdc, opus voice note, `.twee` valid/invalid, unknown cmd, non-contact ignored, Unpair. |
+| 8. Delta Chat | Live (`TestQADeltaChatLive`) | 100% | 44.37 s full suite | QR pair, welcome once, plain, `/say`, `/private`, `/help`, `/stories`, `/story`, opus voice note, `.twee` valid/invalid, unknown cmd, non-contact ignored, `/remote` link over the real tunnel (REST + SSE), `/remote off`, Unpair. |
 | 9. Intercom | Sim (`qa1`→`qa2`) | 100% | ~10 s (DC relay) | Card + speech delivered; fixed renamed peer lookup in `dc.sendIntercom` (`a55cdc6`). |
 | 10. Multi-terminal | Sim + Sim; integration test | 100% | — | Frames & `STATUS` to both, tap ownership transfer, disconnect fallback, resume window. |
 | 11. Look changes | Sim (2 Nano Banana calls) | 100% | 16.9–39.4 s | Transparency rule rejected bad outline (#1), succeeded (#2), recolor kept cached style. |

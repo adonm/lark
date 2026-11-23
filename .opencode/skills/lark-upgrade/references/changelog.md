@@ -1,6 +1,47 @@
 # Lark Upgrade Changelog
 
-Apply entries chronologically from the installation's starting state to latest. Always back up `lark.db` and `lark.env` (or `bridge.env`) before mutating anything.
+Newest first; apply bottom-up (oldest entry to the newest) from the installation's starting state. Always back up `lark.db` and `lark.env` before mutating anything.
+
+---
+
+## 2026-11-23 — Server Cleanup: Retired Wire Status, Telemetry Fields, Timer Column
+
+### Affects
+- Server / SQLite (`~/.local/share/lark/lark.db`) / Firmware (`0.20.0`)
+
+### Breaking Changes
+- The server no longer sends meaningful state sequence numbers, status progress/kind/text, or voice-owner sequence fields. Payload sizes are unchanged so firmware `0.20.0` (which ignores them) and the server can ship independently.
+- `lark` no longer fills `battery_mv`, `min_free_heap`, `free_psram`, `running_partition`, display-flush/input-drop/audio-underrun counters, `ws_connected` or `reported_volume` in diagnostics; `/api/terminals` and the diagnostic report lose those keys.
+- Unrouted server code was deleted: `/api/memory`, `/api/timers`, the compact endpoint, legacy `/api/devices…` messaging helpers and the WebSocket-era terminal state. None had a route or MCP tool.
+- Fresh schemas drop `timers.app_name`; existing databases lose it once at startup. Message rows written before the channel column carry `channel=''` until the backfill below.
+
+### How to Detect
+```sh
+sqlite3 ~/.local/share/lark/lark.db "SELECT COUNT(*) FROM timers WHERE 1; PRAGMA table_info(timers);" | grep -c app_name
+sqlite3 ~/.local/share/lark/lark.db "SELECT COUNT(*) FROM messages WHERE channel='';"
+```
+Non-zero for either means the upgrade below is pending. Older firmware reports a version below `0.20.0`.
+
+### Upgrade Steps
+1. Stop the service and back up the database:
+   ```sh
+   systemctl --user stop lark.service
+   sqlite3 ~/.local/share/lark/lark.db ".backup ~/.local/share/lark/lark.db.bak.$(date +%Y%m%d-%H%M%S)"
+   ```
+2. Backfill the retired channel column and drop the timer column (the server also drops `app_name` at startup, guarded):
+   ```sql
+   UPDATE messages SET channel='in_person' WHERE channel='' AND source IN ('voice','typed','tap','text');
+   UPDATE messages SET channel='deltachat' WHERE channel='' AND source='deltachat';
+   UPDATE messages SET channel='intercom' WHERE channel='' AND source='intercom';
+   UPDATE messages SET channel=source WHERE channel='';
+   ALTER TABLE timers DROP COLUMN app_name;
+   ```
+3. Run `./scripts/setup-host.sh --gpu-index 0` to rebuild and restart, then OTA firmware `0.20.0` to every board.
+
+### Verification
+- `lark status` reports `ok=true` and all terminals on `0.20.0`.
+- The two detection queries return `0`.
+- `GET /api/diagnostics` has no `battery_mv`, `free_psram`, `ws_connected` or `reported_volume` keys.
 
 ---
 
@@ -31,56 +72,71 @@ Apply entries chronologically from the installation's starting state to latest. 
 ### Affects
 - Host / `~/.local/share/lark/library/`, `lark.service`, `setup-host.sh`
 
-### Changes
-- `lark serve` now provisions the content library itself in the background: Project Gutenberg, Simple English Wikipedia, then full English Wikipedia only when it fits. Setup no longer takes `--library`; `setup-host.sh` only installs the service and models.
-- Provisioning always leaves 20% of the data volume free (plus a 10% margin), counts peak download-plus-index space, and keeps one pack in flight at a time, smallest first. Installed packs, partial downloads, and builds that already hold their lock are never restarted.
-- Downloads and index builds write to `library/setup.log`; the planner logs `planned` versus `actual` bytes after each pack lands.
-- Successful indexing now deletes the temporary dump (about 24 GB for enwiki) automatically; a server launch also reclaims dumps left by older runs once their index exists.
-- `lark status` prints a `Library` section with `installed`, `building (pct)`, `pending`, or `skipped (space)` per pack, plus free/total/budget. `lark library --plan` prints the same decision as JSON. `lark library --download --build --force` remains the manual override.
+### Breaking Changes
+- `setup-host.sh` no longer accepts `--library`; the server provisions the content library itself. Manual `lark library --download --build --force` remains.
+- Provisioning decides by free disk: Gutenberg, then Simple English Wikipedia, then full English Wikipedia when it fits within a 20% reserve plus 10% margin. There is no fixed 100 GB/140 GB requirement.
+
+### How to Detect
+- `./scripts/setup-host.sh --library` errors with an unknown-option message.
+- `~/.local/share/lark/lark status` has no `Library` section.
 
 ### Upgrade Steps
 1. Run `./scripts/setup-host.sh --gpu-index 0` (no `--library`). It restarts `lark.service`, which plans against the current disk.
 2. Check `~/.local/share/lark/lark status`; packs already installed stay installed and an in-progress build is reported as `building`.
 3. Expect the existing enwiki dump to disappear after its index is present (`df` gains about 24 GB).
 
+### Verification
+- `lark status` reports `installed`, `building (pct)`, `pending`, or `skipped (space)` per pack plus free/total/budget.
+- `lark library --plan` prints the same decision as JSON.
+
 ---
 
 ## 2026-11-23 — Remote Controls Replace the Webxdc Panel
 
 ### Affects
-- Lark Server / Delta Chat / Host (`opentunnel`)
+- Server / Delta Chat / Host (`opentunnel`)
 
-### Changes
-- Deleted `lark/webxdc/`, `webxdc.go`, the webxdc status-update handler, panel versioning, and the story-player webxdc. `/panel` is gone.
-- Added `/remote` for verified Delta Chat contacts: it replies with one tappable `https://<opentunnel-route>/remote?token=...` link. Each request mints a fresh scoped token for that contact and invalidates the previous one. `/remote off` revokes it and stops the tunnel when no contacts remain.
-- Added the phone-first remote page: live companion state over one SSE stream, Say, listening mode, per-terminal volume, stories with progress and Start over, history with filters/search/cursor paging, voice preview, and a PWA manifest with the companion's portrait.
-- Commands are plain JSON REST routes under `/remote/api/...`; there is no WebSocket. Tokens live in `meta` (`remote_token:<companion>:<contact>`), routes in `remote_route:<companion>`. Tunnels start lazily on the first `/remote` and restore saved routes on boot.
-- Added `lark tunnels` and `lark tunnels stop <companion>`; deleting a companion removes its route and tokens.
-- `/story <name>` now sends only the plain `.twee` attachment. Existing panel messages in chats are inert; the old delete-for-everyone machinery was removed, so they are left in place.
-- Bumped `dcWelcomeVersion` to `3`, so verified contacts receive the updated `/help` text once (`/remote — open my remote controls`).
+### Breaking Changes
+- Deleted `lark/webxdc/`, `webxdc.go`, the webxdc status-update handler, panel versioning, and the story-player webxdc. `/panel` is gone; existing panel messages are inert.
+- `/remote` replaces it: one scoped `https://<opentunnel-route>/remote?token=...` link per verified contact. Each request mints a fresh token and invalidates the previous one; `/remote off` revokes it.
+- Panel feature entries below are superseded by this one and kept for history only.
+
+### How to Detect
+- Sending `/panel` to a companion gets no new panel message.
+- `/remote` gets the "not configured" reply when `opentunnel` is missing.
 
 ### Upgrade Steps
 1. Install `opentunnel` from https://opentunnel.xyz if it is not already available (or set `LARK_OPENTUNNEL_BIN`).
 2. Restart `lark.service`.
-3. Send `/remote` from a verified contact to mint the first link. Old `/panel` messages can be deleted manually; they no longer receive updates.
+3. Send `/remote` from a verified contact to mint the first link. Old `/panel` messages can be deleted manually.
+
+### Verification
+- The `/remote` link loads the companion page, shows live state, and accepts Say/listen/volume/story/history/voice commands.
+- `lark tunnels` lists the companion's route; `/remote off` removes it and the token.
 
 ---
 
 ## 2026-11-23 — Offline Content Library
 
 ### Affects
-- Host / `~/.local/share/lark/library/` (new, about 140 GB after the full Wikipedia index), `lark.service`, `lark-opencode.service`, `check.sh`, `setup-host.sh`
+- Host / `~/.local/share/lark/library/`, `lark.service`, `lark-opencode.service`, `check.sh`, `setup-host.sh`
 
-### Changes
-- **Content**: full English Wikipedia and Simple English Wikipedia plain text in SQLite FTS5 (`enwiki.db`, `simple.db`, article text capped at 24 KB after trimming reference/appendix tails; the full enwiki index build continues in the background at roughly 450 pages/s), plus a pinned set of 3,000 Project Gutenberg IDs (2,994 texts available) weighted toward children's and classic literature. The downloader resumes, fetches large files in 8 byte ranges over 3 workers, verifies Wikimedia SHA-1 and local SHA-256, and takes a per-file lock.
-- **Tool**: `tools.lark.library` (`search`, `read`, `list`, `import`) is available to `lark` and `deep`. Search uses FTS5 bm25 with short snippets; read returns 3.2 KB sections; import builds a validated Twee story (60 passages max, 575 characters each) with attribution and can open it silently on the reader. Call counts and recent timings are under `library` in `/api/diagnostics`.
-- **Prompt**: lark checks the library first for facts, stories, and books. The static prompt grew from 3,928 to 4,230 bytes (about +75 tokens), and real turns carry a trailing `[library: search before facts]` hint, plus a targeted story-import hint on story-shaped turns. `deep` gets short grounded-answer guidance and only lark/websearch permissions.
-- **Setup**: `./scripts/setup-host.sh --library` checks for 100 GB free, then downloads and indexes in the background (`systemctl --user status lark-library`; log at `library/setup.log`). Builds now include `sqlite_fts5`, and `check.sh` adds it for the test suite.
-- **Atomic switch**: `enwiki.db` is renamed into place only when its FTS5 build finishes, so search uses it without a restart.
+### Breaking Changes
+- Superseded by Library Auto-Provisioning above: `setup-host.sh --library` and the fixed free-space check are gone; the planner decides what fits. The 100 GB/140 GiB figures below are historical measurements, not requirements.
+- Adds `library` tool, FTS5 indexes and a prompt hint; existing installations gain them after provisioning.
+- `enwiki.db` is renamed into place only when its FTS5 build finishes, so search uses it without a restart.
+
+### How to Detect
+- `~/.local/share/lark/lark library --status` reports no installed packs.
+- `./scripts/setup-host.sh --library` is no longer a valid invocation.
 
 ### Upgrade Steps
-1. Run `./scripts/setup-host.sh --gpu-index 0 --library`. Expect about 140 GB under `~/.local/share/lark/library`; the job continues after the script exits.
-2. Restart `lark.service` and `lark-opencode.service` (setup does this). Verify with `~/.local/share/lark/lark library --status`.
+1. Run `./scripts/setup-host.sh --gpu-index 0` and let the server provision what the disk allows.
+2. Verify with `~/.local/share/lark/lark library --status`; index builds continue in the background and log to `library/setup.log`.
+
+### Verification
+- `lark status` lists the library packs; `lark library --plan` shows the decision.
+- `lark_*` MCP `library` search returns snippets for a known article once `enwiki.db` is installed.
 
 ---
 
@@ -89,8 +145,21 @@ Apply entries chronologically from the installation's starting state to latest. 
 ### Affects
 - Host / SQLite (`~/.local/share/lark/deltachat/`)
 
-### Changes
-- One-time housekeeping: the panel echo bug had grown greg's Delta Chat account DB (`dc=5`, `216ef3f6-f7b0-4e73-9cdc-c952af9ec643`) to 11 GB with 1.3M freelist pages; `VACUUM` reclaimed it to 5.7 GB. Delta Chat exposes no vacuum RPC, so stop `lark.service`, copy `dc.db`/`dc.db-wal` aside on the same filesystem, run `VACUUM` and `PRAGMA integrity_check` via Python `sqlite3`, then restart.
+### Breaking Changes
+- None; one-time housekeeping. Superseded by the wire-log purge below.
+
+### How to Detect
+```sh
+DB=~/.local/share/lark/deltachat/216ef3f6-f7b0-4e73-9cdc-c952af9ec643/dc.db
+sqlite3 "file:$DB?mode=ro" "PRAGMA freelist_count; PRAGMA page_count;"
+```
+A large freelist after the panel echo bug means reclaiming space is still pending.
+
+### Upgrade Steps
+1. Stop `lark.service`, copy `dc.db`/`dc.db-wal` aside on the same filesystem, run `VACUUM` and `PRAGMA integrity_check` via Python `sqlite3` (Delta Chat has no vacuum RPC), then restart.
+
+### Verification
+- `PRAGMA integrity_check` returns `ok` and the DB file size drops.
 
 ---
 
@@ -99,12 +168,10 @@ Apply entries chronologically from the installation's starting state to latest. 
 ### Affects
 - Host / SQLite (`dc.db`) and `~/.local/share/lark/deltachat/` account dirs
 
-### Changes
-- The 5.7 GB left after the first vacuum was not live chat data. Reading `dbstat` showed `msgs` 4.0 GiB + `smtp` 1.63 GiB; 52,957 rows were hidden core wire messages for queued webxdc status updates (`param LIKE '%S=30%'`, chat 17 = the `adonm` DM), each carrying up to 100 KB of batched panel updates, and 51,773 matching `smtp` rows were still unsent (state 20, `retries=0`, queue stuck behind the echo flood). After purging those rows plus 75 orphan `smtp` rows: 824 KB, `integrity_check` ok, and the queued panel `.xdc` + real messages were delivered.
-- Removed 58 unused QA Delta Chat accounts (54 MB) with `RemoveAccount` after the 8 QA companions (`bench3`, `new-companion`…`-7`) were removed via `lark companions rm`. Kept ids 1–8 (`cake`, `cake-classic`, `george`, `george-classic`, `greg`, `greg-classic`, `mint`, `mint-classic`).
-- Blobs (portrait PNG, story JPG, panel `.xdc`, 284 KB) and all real `adonm` messages were left untouched.
+### Breaking Changes
+- None; one-time housekeeping. Do not remove trash tombstones.
 
-### Detection
+### How to Detect
 ```sh
 DB=~/.local/share/lark/deltachat/216ef3f6-f7b0-4e73-9cdc-c952af9ec643/dc.db
 sqlite3 "file:$DB?mode=ro" "SELECT name, SUM(pgsize)/1048576 AS mb FROM dbstat GROUP BY name ORDER BY mb DESC LIMIT 5;"
@@ -122,27 +189,31 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
    VACUUM;
    PRAGMA integrity_check;
    ```
-   The `delete_messages` RPC only trashes rows (zeroed tombstones), so direct SQL is required to reclaim space. Do not remove trash tombstones — they stop deleted messages being re-downloaded.
-3. Prune unreferenced accounts with a one-off `RemoveAccount` client (`DC_ACCOUNTS_PATH` must point at `~/.local/share/lark/deltachat`, service stopped). Keep the `dc_account_id`s still present in `companions`; core rewrites `accounts.toml` and removes the dirs itself. Remove QA companions first (`lark companions rm <id>`), then restart.
-4. Restart and confirm `lark status` lists the household companions and `smtp` drains to 0.
+   The `delete_messages` RPC only trashes rows (zeroed tombstones), so direct SQL is required to reclaim space.
+3. Prune unreferenced accounts with a one-off `RemoveAccount` client (`DC_ACCOUNTS_PATH` must point at `~/.local/share/lark/deltachat`, service stopped). Keep the `dc_account_id`s still present in `companions`; remove QA companions first (`lark companions rm <id>`), then restart.
 
-### Notes
-- Do not run account/companion pruning while a live QA suite is creating throwaway companions and accounts; rerun it afterwards.
-- Delivered status-update wire copies on other devices are unaffected by purging the server-side rows.
+### Verification
+- `PRAGMA integrity_check` returns `ok`; the `S=30` count is single-digit and `smtp` drains to 0.
+- `lark status` lists the household companions.
 
 ---
 
 ## 2026-11-23 — Silent Story Opens
 
 ### Affects
-- Lark Server / Agents
+- Server / Agents
 
-### Changes
-- Opening a story from the device menu, Memories → Reading, or the panel's Open/Start over shows the passage silently — no TTS and nothing queued. Voice choices still narrate the next passage, and conversational story reads are unchanged.
-- `openStory`/`advanceStoryPassage` take an explicit narration flag; menu and panel entry points pass `false`.
+### Breaking Changes
+- None; additive. Opening a story from the device menu, Memories → Reading, or a remote Open/Start over shows the passage silently — no TTS and nothing queued. Voice choices still narrate the next passage.
+
+### How to Detect
+- A menu-opened story narrates its first passage on the previous release.
 
 ### Upgrade Steps
 1. Restart `lark.service`.
+
+### Verification
+- Open a story from the menu: the passage appears with no speech; choosing a voice option narrates the next passage.
 
 ---
 
@@ -151,39 +222,37 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 ### Affects
 - Config / Lark Server / Agents
 
-### Changes
-- **Models on `opencode` Zen**: `lark` now uses `opencode/deepseek-v4.1-flash#low`, the `deep` subagent `opencode/glm-5.3#high`, and the router fallback `opencode/glm-5.3-flash#low` (previously all `opencode-go/…`). `setup-opencode-config.py` rewrites only an untouched generated config; custom model choices are kept. The fallback plugin still requires the fallback on the same provider.
-- **Auth**: the dedicated instance imports `opencode` credentials once via `setup-host.sh` and marks `state/imported-provider-opencode`; no manual step when that marker exists.
-- **Measured** (20 interleaved warm chat turns each, same host): `session.step.started` p50/p95 **1,087/1,448 ms** on `opencode-go` vs **1,058/1,523 ms** on `opencode`; first text delta **1,087/1,448** vs **1,066/1,523 ms**; uncached input 18–139 tokens, cache read 3,456–3,712; 5/5 hard-prompt rubric (timer, story, intercom, reasoning, deep delegation).
+### Breaking Changes
+- Model ids moved from `opencode-go/…` to `opencode/…`: `lark` `deepseek-v4.1-flash#low`, `deep` `glm-5.3#high`, fallback `glm-5.3-flash#low`. `setup-opencode-config.py` rewrites only an untouched generated config; custom model choices are kept.
+- The dedicated instance imports `opencode` credentials once via `setup-host.sh` and marks `state/imported-provider-opencode`.
+- Measured (20 interleaved warm turns): step start p50/p95 1,087/1,448 ms vs 1,058/1,523 ms; first text delta 1,087/1,448 vs 1,066/1,523 ms; 5/5 hard-prompt rubric.
+
+### How to Detect
+- `grep opencode-go ~/.local/share/lark/opencode/config/opencode/opencode.jsonc` still matches.
+- `state/imported-provider-opencode` is absent from the OpenCode state dir.
 
 ### Upgrade Steps
 1. Re-run `./scripts/setup-host.sh` (migrates the generated config and imports Zen auth if missing), or edit `opencode.jsonc` to the three ids above and restart `lark-opencode.service`.
 
-## 2026-11-23 — Webxdc Panel v4: Companion Name, History Echo Fix
+### Verification
+- `lark-opencode.service` is active and `GET /api/diagnostics` reports a successful model call.
+
+## 2026-11-23 — Webxdc Panel v4 and v3 (superseded)
 
 ### Affects
-- Lark Server / Webxdc (`dc_panel` v4)
+- Server / Webxdc
 
-### Changes
-- **Panel v4 naming**: The webxdc manifest `name` is the companion's display name and `icon.png` is the companion's rasterised portrait. Renaming a companion re-sends the panel (`dc_panel` meta stores `<version>:<name>`) and deletes the previous message. The header logo and "Lark Control" branding are gone; `/help` says "/panel — open my panel".
-- **History/voice fixes**: Status updates pushed by the bot are no longer re-applied as commands (a history response could spawn another history request recursively; one live panel reached >700k updates). The panel correlates history responses by `sid`/`seq`, ignores replays, and applies the voice from the `set_voice` `ack`.
+### Breaking Changes
+- Superseded by "Remote Controls Replace the Webxdc Panel". Both panel releases were deleted with the webxdc code; no upgrade action remains.
 
-### Upgrade Steps
-1. Restart `lark.service`. On the next startup sync (or `/panel`) each verified contact gets the v4 panel named after the companion, and the old panel message is deleted for everyone (`dcPanelVersion` `"4.1"`; the patch bump re-sends the panel with the own-echo fix). No DB migration is needed; stale `msgs_status_updates` rows disappear with the old message.
-
----
-
-## 2026-11-22 — Webxdc Panel Upgrade, Old Panel Cleanup & History Tab
-
-### Affects
-- Lark Server / Webxdc (`dc_panel` v3)
-
-### Changes
-- **Old panel & story cleanup**: Track `dc_panel_msg:` and `dc_story_msgs:` in `meta`; on panel version bump, `/panel` resend, or `/story <name>` resend, delete previous messages for everyone via `DeleteMessagesForAll` (including a one-off scan of existing `"Lark Control"` webxdc messages on first v3 upgrade).
-- **Panel v3**: Added live companion state header pushes (throttled, active-panel only), quick Say input, story progress bars with Continue/Start over, curated voice preview taps, and a History tab with channel filters, `LIKE` search, and `(ts_ms, id)` cursor pagination.
+### How to Detect
+- None. The panel no longer exists.
 
 ### Upgrade Steps
-1. Restart `lark.service`; existing verified contacts automatically receive the v3 panel and have older panel messages deleted on next startup sync or `/panel`.
+1. None; follow the Remote Controls entry.
+
+### Verification
+- `/remote` works; `/panel` does not.
 
 ---
 
@@ -192,12 +261,19 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 ### Affects
 - Host (`stt-models`, `lark.service`) / Lark Server
 
-### Changes
-- **Smart Turn v3.2**: Added in-process Whisper log-mel + `smart-turn-v3.2-cpu.onnx` (via `onnxruntime_go` and bundled `libonnxruntime.so`) for ~200 ms pause semantic end-of-turn detection, falling back to tuned hangover.
-- **RSS plateau**: Added `MALLOC_ARENA_MAX=2` to `lark.service` and `mallopt(M_ARENA_MAX, 2)` on Linux to bound native C/C++ arena fragmentation.
+### Breaking Changes
+- Additive: in-process Whisper log-mel plus `smart-turn-v3.2-cpu.onnx` (via `onnxruntime_go`) for ~200 ms pause detection, falling back to the tuned hangover.
+- `MALLOC_ARENA_MAX=2` and `mallopt(M_ARENA_MAX, 2)` bound native arena fragmentation.
+
+### How to Detect
+- `~/.local/share/lark/stt-models/smart-turn-v3.2-cpu.onnx` is missing.
+- `systemctl --user show lark.service -p Environment` lacks `MALLOC_ARENA_MAX=2`.
 
 ### Upgrade Steps
-1. Re-run `./scripts/setup-host.sh` (or `--models-only` + rebuild) to download `smart-turn-v3.2-cpu.onnx` into `~/.local/share/lark/stt-models/` and restart `lark.service`.
+1. Re-run `./scripts/setup-host.sh` (or `--models-only` + rebuild) to download the model and restart `lark.service`.
+
+### Verification
+- `/api/diagnostics` shows smart-turn latency samples and the service RSS plateaus.
 
 ---
 
@@ -777,12 +853,19 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 ### Breaking Changes
 - **Hardware transport**: Firmware replaces WebSocket + cJSON (`espressif/esp_websocket_client`) with a packed binary TCP control/frame/TTS protocol and 20 ms 16 kHz PCM over UDP/RTP on `LARK_DEVICE_PORT` (default `8766`, `0` disables). Browser clients continue using `/ws` WebSocket.
 - **Device `/status` field**: Firmware `/status` now reports `connected` instead of `ws_connected` (updated in `scripts/push-ota.sh`).
+- Superseded: the browser `/ws` client and the legacy `0.9.5` two-hop OTA below are gone; current firmware uses only TCP+UDP.
+
+### How to Detect
+- `LARK_DEVICE_PORT` is unset or `0`, or the LAN firewall blocks UDP on it.
 
 ### Upgrade Steps
 1. Ensure `LARK_DEVICE_PORT=8766` is allowed on the LAN firewall (TCP + UDP) and rebuild/restart `lark-bridge.service`.
 2. Rebuild and flash/OTA firmware for `vocat` and `box3` (`./scripts/build.sh` / `./scripts/push-ota.sh`).
 
-#### Devices on 0.9.5 (OTA)
+### Verification
+- A board connects, renders, and plays audio; `lark status` shows it online on the current protocol.
+
+#### Devices on 0.9.5 (OTA, historical)
 Devices running legacy `0.9.5` built before `f48ed64` only accept `echoear` / `echoear_box3` project names, expect `X-EchoEar-Token` on `POST /ota/upload`, and cannot authenticate WebSocket sessions to the new bridge (so rollback would cancel a bridge-gated OTA). Upgrade them via a two-hop OTA through a throwaway worktree at `f48ed64`:
 1. **Rename `device_id` in `lark.db`** (while `lark-bridge.service` is stopped, after backing up `lark.db`) for `esp-vocat` devices (`echoear-<mac4>` → `lark-<mac4>`; `box3-<mac4>` stays unchanged):
    ```sql
@@ -807,6 +890,8 @@ Devices running legacy `0.9.5` built before `f48ed64` only accept `echoear` / `e
 ---
 
 ## 2026-11-22 — EchoEar → Lark Rename, Compat-Shim Removal, and Companion Unification (`e95476d`, `f4a5912`, `206da8c`)
+
+### Breaking Changes
 
 Config/data moved from `~/.config/echoear` and `~/.local/share/echoear` to `~/.config/lark` and `~/.local/share/lark`; env vars `ECHOEAR_*` → `LARK_*`; systemd units `echoear-*` → `lark-*`; OpenCode agent `echoear` → `lark`; tables `cats`/`saved_cats` → `companions`/`saved_companions`; `messages.role` `'cat'` → `'companion'`; routes `/api/cats*` → `/api/companions*`.
 
@@ -856,7 +941,31 @@ Config/data moved from `~/.config/echoear` and `~/.local/share/echoear` to `~/.c
 
 ---
 
+### How to Detect
+- `~/.config/echoear` or `~/.local/share/echoear` still exists, or `echoear-*` units are enabled.
+
+### Upgrade Steps
+1. Stop the legacy services, move the config/data directories to `~/.config/lark` and `~/.local/share/lark`, rename `ECHOEAR_*` env keys, and run `./scripts/setup-host.sh`.
+
+### Verification
+- `systemctl --user status lark.service lark-opencode.service` is clean and `lark status` lists the companions.
+
+---
+
 ## 2026-11-22 — Native SQLite WAL and Split Reader/Writer Pools
+
+### Breaking Changes
+- Additive: WAL mode with a writer connection and read-only readers; no data change.
+
+### How to Detect
+- `PRAGMA journal_mode` on `lark.db` returns `delete` instead of `wal`.
+
+### Upgrade Steps
+1. Restart `lark.service`; the database opens in WAL mode automatically.
+
+### Verification
+- `sqlite3 ~/.local/share/lark/lark.db "PRAGMA journal_mode;"` returns `wal`.
+
 
 Replaced `tursogo` with tuned native SQLite WAL. `LARK_TURSO_*` is no longer read:
 ```sh
@@ -868,6 +977,19 @@ sqlite3 ~/.local/share/lark/bridge.db "PRAGMA journal_mode;" # expect: wal
 ---
 
 ## 2026-11-22 — Remove Photo Uploads, Ente Photo Library, and ML Photo Indexing
+
+### Breaking Changes
+- Removed the photo pipeline and `photos` storage; superseded by companion backgrounds (`form` + generated `bg.png`).
+
+### How to Detect
+- `sqlite3 ~/.local/share/lark/lark.db ".tables"` still lists `photos`.
+
+### Upgrade Steps
+1. Drop the retired table after backing up: `DROP TABLE IF EXISTS photos;`
+2. Delete any Ente credentials from `lark.env` and restart `lark.service`.
+
+### Verification
+- `.tables` no longer lists `photos`; companion portraits and backgrounds still render.
 
 Removed `/api/photos/*`, `/api/devices/{id}/photo`, `/api/library*`, `photos` table, `photo_index.db`, `photo-models`, and `*-ente-photos.{service,timer}`:
 ```sh
@@ -884,6 +1006,18 @@ systemctl --user start lark-bridge.service
 ---
 
 ## 2026-11-22 — Message Channel Column
+
+### Breaking Changes
+- Added `messages.channel`; pre-column rows are backfilled by "Server Cleanup" above.
+
+### How to Detect
+- `PRAGMA table_info(messages)` lacks `channel`, or rows with `channel=''` remain.
+
+### Upgrade Steps
+1. Restart `lark.service`; new rows always carry a channel. Apply the backfill SQL from "Server Cleanup".
+
+### Verification
+- `SELECT COUNT(*) FROM messages WHERE channel='';` returns 0.
 
 Added `channel` column to `messages` (`'in_person'`, `'deltachat'`, `'intercom'`, `'timer'`).
 
@@ -905,6 +1039,9 @@ Added `form TEXT NOT NULL DEFAULT ''` to `companions` and exposed `form` in `me.
 
 ### Affects
 - SQLite / Lark API & MCP
+
+### Breaking Changes
+- Additive column; older rows read as an empty `form` until set.
 
 ### How to Detect
 ```sh

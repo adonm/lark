@@ -485,7 +485,7 @@ func (m *remoteManager) scopedHandler(companionID string) http.Handler {
 
 func publicRemoteAsset(path string) bool {
 	switch path {
-	case "/remote/style.css", "/remote/app.js", "/remote/oat.min.css", "/remote/oat.min.js":
+	case "/remote/style.css", "/remote/app.js":
 		return true
 	}
 	return false
@@ -528,7 +528,7 @@ func (m *remoteManager) handleAuthorized(w http.ResponseWriter, r *http.Request,
 func (b *larkServer) serveRemoteAsset(w http.ResponseWriter, path string) {
 	name := strings.TrimPrefix(path, remotePath+"/")
 	switch name {
-	case "style.css", "app.js", "oat.min.css", "oat.min.js":
+	case "style.css", "app.js":
 	default:
 		sendError(w, problem(404, "Not found"))
 		return
@@ -544,8 +544,6 @@ func (b *larkServer) serveRemoteAsset(w http.ResponseWriter, path string) {
 		kind = "text/css; charset=utf-8"
 	case ".js":
 		kind = "text/javascript; charset=utf-8"
-	case ".svg":
-		kind = "image/svg+xml"
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
