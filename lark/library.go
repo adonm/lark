@@ -218,6 +218,34 @@ func (b *larkServer) librarySearch(ctx context.Context, args object) (object, er
 		}
 		return 0
 	})
+	if source == "auto" && len(hits) > len(librarySourceOrder) && limit >= len(librarySourceOrder) {
+		// Keep one strong hit per source so a book request can still see a
+		// Gutenberg title when a short Simple Wikipedia article ranks higher.
+		best := map[string]libraryHit{}
+		for _, hit := range hits {
+			if _, ok := best[hit.Source]; !ok {
+				best[hit.Source] = hit
+			}
+		}
+		seen := map[string]bool{}
+		merged := make([]libraryHit, 0, limit)
+		for _, name := range librarySourceOrder {
+			if hit, ok := best[name]; ok {
+				merged = append(merged, hit)
+				seen[hit.Source+"\x00"+hit.Ref] = true
+			}
+		}
+		for _, hit := range hits {
+			if len(merged) >= limit {
+				break
+			}
+			if !seen[hit.Source+"\x00"+hit.Ref] {
+				merged = append(merged, hit)
+				seen[hit.Source+"\x00"+hit.Ref] = true
+			}
+		}
+		hits = merged
+	}
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
