@@ -26,10 +26,10 @@ func TestVirtualE2E(t *testing.T) {
 }
 
 func e2eFields(f protocolFrame, op string, pairs ...string) bool {
-	if f.op != wsBinary {
+	if f.op() != terminalBinary {
 		return false
 	}
-	mt, _, p, ok := unpackProtoPacket(f.data)
+	mt, _, p, ok := unpackProtoPacket(f.data())
 	if !ok {
 		return false
 	}

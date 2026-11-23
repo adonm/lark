@@ -212,7 +212,7 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 	out[9] = bestCodec
 	binary.LittleEndian.PutUint16(out[10:], uint16(rev))
 	copy(out[12:], bestPayload)
-	return protocolFrame{wsBinary, out}
+	return newProtocolFrame(terminalBinary, out)
 }
 
 func displayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) protocolFrame {

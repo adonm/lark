@@ -289,7 +289,7 @@ func (h *terminalHub) endRecording(d *terminalSession, reqTarget string, cancell
 
 func (h *terminalHub) interruptTurn(d *terminalSession, reason string) {
 	if d.busy && h.b.oc != nil && d.companionID != "" {
-		log.Printf("ws interrupt companion=%s reason=%s", d.companionID, reason)
+		log.Printf("terminal interrupt companion=%s reason=%s", d.companionID, reason)
 		h.b.oc.interruptDevice(d.companionID)
 	}
 }

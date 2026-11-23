@@ -303,9 +303,9 @@ func (h *terminalHub) renderFrames(d *terminalSession) {
 		}
 		d.scene, d.svg = r.view, screen
 		h.sig.notify()
-		if native.data != nil {
+		if native.data() != nil {
 			d.rev = rev
-			d.client.enqueueProto(msgFrame, native.data)
+			d.client.enqueueProto(msgFrame, native.data())
 			d.nativeRev = uint16(rev)
 			hk := pointerKey(screen.hits, r.view.actions)
 			if !d.hasActionRev || hk != d.actionHitsKey {
@@ -315,7 +315,7 @@ func (h *terminalHub) renderFrames(d *terminalSession) {
 			}
 			r.trace.measure(diagRender, screen.render)
 			codec := "RGB565"
-			switch native.data[9] {
+			switch native.data()[9] {
 			case frameCodecRLE565:
 				codec = "RLE565"
 			case frameCodecJPEG:
@@ -323,7 +323,7 @@ func (h *terminalHub) renderFrames(d *terminalSession) {
 			case frameCodecLZ4:
 				codec = "LZ4"
 			}
-			h.trackFrame(d, screen.render, len(native.data), rawBytes, codec)
+			h.trackFrame(d, screen.render, len(native.data()), rawBytes, codec)
 		}
 		if d.announcing {
 			h.announce(d)

@@ -299,7 +299,7 @@ func (c *e2eCompanion) apply(t *testing.T, f protocolFrame) {
 		t.Fatal("dirty rectangle exceeds advertised geometry:", r)
 	}
 	c.revision = rev
-	if _, _, p, ok := unpackProtoPacket(f.data); ok && len(p) > 9 && int(p[9]) < len(c.codecs) {
+	if _, _, p, ok := unpackProtoPacket(f.data()); ok && len(p) > 9 && int(p[9]) < len(c.codecs) {
 		c.codecs[p[9]]++
 	}
 	for y := range r.Dy() {
@@ -317,13 +317,13 @@ func (c *e2eCompanion) expect(t *testing.T, label string, matches func(protocolF
 		if matches(f) {
 			return f
 		}
-		mt, _, payload, ok := unpackProtoPacket(f.data)
+		mt, _, payload, ok := unpackProtoPacket(f.data())
 		if ok && mt == msgPing && len(payload) == 4 {
 			c.sendProto(t, msgPong, payload)
 		}
 	}
 	t.Fatalf("%s did not receive %s before the deadline", c.name, label)
-	return protocolFrame{}
+	return protocolFrame(nil)
 }
 
 func e2eNumber(v any) int {

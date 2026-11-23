@@ -10,7 +10,18 @@ import (
 	"time"
 )
 
-const idleSleep = 120 * time.Second
+const (
+	idleSleep = 120 * time.Second
+	// A non-listening capture that the board never ends (or a browser tab that
+	// vanished) is force-stopped so the companion cannot stay in "listening".
+	captureFailsafe = 90 * time.Second
+	// Playback acks are lossless once the firmware reports consumed audio; the
+	// timer only rescues an ack that never arrives. It must never fire while
+	// the device is still consuming audio (see animate).
+	ttsAckFallback = 4 * time.Second
+	// Peer cards refresh on this cadence while something is connected.
+	peerRefreshEvery = 15 * time.Second
+)
 
 type terminalCaps struct {
 	PanelSleep     bool `json:"panel_sleep,omitempty"`
@@ -710,9 +721,9 @@ func (h *terminalHub) animate(ctx context.Context) {
 					h.render(d, now, false)
 				}
 				switch {
-				case d.recording.active() && !d.recording.listen && d.recording.stopTimer == nil && now.Sub(d.recording.started) > 90*time.Second:
+				case d.recording.active() && !d.recording.listen && d.recording.stopTimer == nil && now.Sub(d.recording.started) > captureFailsafe:
 					h.stopRecordingAtLimit(d, now)
-				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(4*time.Second)):
+				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(ttsAckFallback)):
 					h.playbackDone(d, now, false)
 				case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)
@@ -725,7 +736,7 @@ func (h *terminalHub) animate(ctx context.Context) {
 					h.render(d, now, false)
 				}
 			}
-			if now.Sub(sincePeers) > 15*time.Second {
+			if now.Sub(sincePeers) > peerRefreshEvery {
 				h.broadcastPeers()
 				sincePeers = now
 			}

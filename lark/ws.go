@@ -11,13 +11,31 @@ import (
 	"time"
 )
 
-const (
-	wsBinary = 2
-)
+const terminalBinary = 2
 
-type protocolFrame struct {
-	op   byte
-	data []byte
+// protocolFrame is one terminal frame: a transport opcode followed by the
+// payload. A slice avoids a second allocation for every rendered frame.
+type protocolFrame []byte
+
+func (f protocolFrame) op() byte {
+	if len(f) == 0 {
+		return 0
+	}
+	return f[0]
+}
+
+func (f protocolFrame) data() []byte {
+	if len(f) < 2 {
+		return nil
+	}
+	return f[1:]
+}
+
+func newProtocolFrame(op byte, data []byte) protocolFrame {
+	f := make(protocolFrame, 1+len(data))
+	f[0] = op
+	copy(f[1:], data)
+	return f
 }
 
 type terminalClient struct {
@@ -64,6 +82,7 @@ type terminalHub struct {
 	voiceOwners       map[string]string
 	companionStatuses map[string]companionStatusState
 	resumes           map[[resumeTokenLen]byte]*resumeEntry
+	gate              *specGate
 	assetsMu          sync.RWMutex
 	assets            map[string]cachedAssets
 	assetsClock       uint64
@@ -98,6 +117,7 @@ func newTerminalHub(b *larkServer, atmosphere bool) *terminalHub {
 		voiceOwners:       make(map[string]string),
 		companionStatuses: make(map[string]companionStatusState),
 		resumes:           make(map[[resumeTokenLen]byte]*resumeEntry),
+		gate:              &specGate{},
 	}
 	go h.animate(b.root)
 	return h

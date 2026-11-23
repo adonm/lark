@@ -109,10 +109,10 @@ func TestTurnBench(t *testing.T) {
 				return e2eFields(f, "tts", "state", `"start"`)
 			})
 			c.expect(t, "first tts pcm", func(f protocolFrame) bool {
-				if f.op != wsBinary {
+				if f.op() != terminalBinary {
 					return false
 				}
-				mt, _, _, ok := unpackProtoPacket(f.data)
+				mt, _, _, ok := unpackProtoPacket(f.data())
 				return ok && mt == msgTTSPCM
 			})
 			end := c.expect(t, "tts end", func(f protocolFrame) bool {

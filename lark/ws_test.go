@@ -84,6 +84,7 @@ type testWS struct {
 	feed     *udpFeed
 	feedBase int
 	udpSent  int
+	rtpSeq   uint16
 	menuHub  *terminalHub
 	menuTerm string
 	menuSVG  string
@@ -142,12 +143,18 @@ func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts uint32, pcm []by
 		t.Fatal("sendRTP requires a terminal hello with a UDP address")
 	}
 	// Datagrams stay within the firmware's 320-sample record cadence, which is
-	// also the server's UDP read buffer.
+	// also the server's UDP read buffer. Keep one monotonic sequence per socket
+	// (the caller's seq only seeds the first datagram): the server drops
+	// duplicate and reordered RTP, and a chunked call must not reuse it.
 	const chunk = 320 * 2
 	pkt := make([]byte, rtpHeaderSize+chunk)
 	for off := 0; off < len(pcm); off += chunk {
 		part := pcm[off:min(len(pcm), off+chunk)]
-		n := encodeRTPPacket(pkt, pt, seq, ts+uint32(off/2), s.ssrc, part)
+		if s.rtpSeq == 0 {
+			s.rtpSeq = seq
+		}
+		s.rtpSeq++
+		n := encodeRTPPacket(pkt, pt, s.rtpSeq, ts+uint32(off/2), s.ssrc, part)
 		_ = s.udp.SetWriteDeadline(time.Now().Add(4 * time.Second))
 		if _, err := s.udp.Write(pkt[:n]); err != nil {
 			t.Fatal("cannot send RTP:", err)
@@ -156,7 +163,6 @@ func (s *testWS) sendRTP(t *testing.T, pt uint8, seq uint16, ts uint32, pcm []by
 		if s.feed != nil {
 			s.feed.wait(t, s.feedBase+s.udpSent)
 		}
-		seq++
 	}
 }
 
@@ -239,7 +245,7 @@ func (s *testWS) read(t *testing.T) protocolFrame {
 			s.recSession = m.session
 		}
 	}
-	return protocolFrame{wsBinary, pkt}
+	return newProtocolFrame(terminalBinary, pkt)
 }
 
 func (s *testWS) until(t *testing.T, match func(protocolFrame) bool) protocolFrame {
@@ -253,21 +259,21 @@ func (s *testWS) until(t *testing.T, match func(protocolFrame) bool) protocolFra
 		if match(f) {
 			return f
 		}
-		mt, _, payload, ok := unpackProtoPacket(f.data)
+		mt, _, payload, ok := unpackProtoPacket(f.data())
 		if ok && mt == msgPing && len(payload) == 4 {
 			s.sendProto(t, msgPong, payload)
 		}
 	}
 	t.Fatal("wanted operation not found in terminal frames")
-	return protocolFrame{}
+	return protocolFrame(nil)
 }
 
 func hasProto(msgType uint8, sample string) func(protocolFrame) bool {
 	return func(f protocolFrame) bool {
-		if f.op != wsBinary {
+		if f.op() != terminalBinary {
 			return false
 		}
-		mt, _, payload, ok := unpackProtoPacket(f.data)
+		mt, _, payload, ok := unpackProtoPacket(f.data())
 		return ok && mt == msgType && (sample == "" || bytes.Contains(payload, []byte(sample)))
 	}
 }
@@ -291,23 +297,23 @@ func waitSVG(t *testing.T, h *terminalHub, termID, sample string) string {
 }
 
 func isPlayback(f protocolFrame) bool {
-	if f.op != wsBinary {
+	if f.op() != terminalBinary {
 		return false
 	}
-	mt, _, payload, ok := unpackProtoPacket(f.data)
+	mt, _, payload, ok := unpackProtoPacket(f.data())
 	return ok && mt == msgTTSPCM && len(payload) > 0
 }
 
 func isDisplay(f protocolFrame) bool {
-	if f.op != wsBinary {
+	if f.op() != terminalBinary {
 		return false
 	}
-	mt, _, payload, ok := unpackProtoPacket(f.data)
+	mt, _, payload, ok := unpackProtoPacket(f.data())
 	return ok && mt == msgFrame && len(payload) > 0
 }
 
 func framePayload(f protocolFrame) []byte {
-	_, _, payload, _ := unpackProtoPacket(f.data)
+	_, _, payload, _ := unpackProtoPacket(f.data())
 	return payload
 }
 
@@ -728,7 +734,7 @@ func TestTerminalLongPlaybackWithBackpressure(t *testing.T) {
 		volume := false
 		for {
 			f := dev.read(t)
-			mt, _, p, ok := unpackProtoPacket(f.data)
+			mt, _, p, ok := unpackProtoPacket(f.data())
 			if !ok {
 				continue
 			}
@@ -1087,7 +1093,7 @@ func TestNativeClientPrioritizesControlAndCoalescesFrames(t *testing.T) {
 	}
 	for range 3 {
 		f := dev.read(t)
-		mt, _, p, ok := unpackProtoPacket(f.data)
+		mt, _, p, ok := unpackProtoPacket(f.data())
 		if !ok {
 			t.Fatal("invalid packet")
 		}

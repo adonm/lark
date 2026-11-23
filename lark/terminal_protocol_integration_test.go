@@ -147,7 +147,7 @@ func TestProtocolWireSizesAndAllocs(t *testing.T) {
 	_ = enc.encodeWithCodecs(fb, nil, rect, 1, 360, codecBitAll)
 	frameAllocs := testing.AllocsPerRun(20, func() {
 		f := enc.encodeWithCodecs(fb, nil, rect, 2, 360, codecBitAll)
-		if len(f.data) == 0 {
+		if len(f.data()) == 0 {
 			t.Fatal("empty frame")
 		}
 	})

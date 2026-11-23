@@ -224,11 +224,11 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 					continued = true
 				case ttsMsg(ttsOpStop)(f):
 					if mode != "divergent" || ttsAudio(f) != startAudio {
-						t.Fatal("unexpected audio abort", f.data)
+						t.Fatal("unexpected audio abort", f.data())
 					}
 				case ttsMsg(ttsOpStart)(f):
 					if mode != "divergent" || ttsAudio(f) == startAudio {
-						t.Fatal("unexpected audio generation", f.data)
+						t.Fatal("unexpected audio generation", f.data())
 					}
 				case ttsMsg(ttsOpEnd)(f):
 					endAudio = ttsAudio(f)

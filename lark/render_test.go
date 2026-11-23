@@ -14,11 +14,11 @@ import (
 // Interpret the wire with the firmware contract, independently of the encoder.
 func decodeDisplay(t *testing.T, f protocolFrame) (image.Rectangle, uint16, []uint16) {
 	t.Helper()
-	p := f.data
-	if f.op == wsBinary && len(p) >= protoHeaderSize && p[0] == protoMagic && p[1] == msgFrame {
+	p := f.data()
+	if f.op() == terminalBinary && len(p) >= protoHeaderSize && p[0] == protoMagic && p[1] == msgFrame {
 		_, _, p, _ = unpackProtoPacket(p)
 	}
-	if f.op != wsBinary || len(p) < 12 || p[0] != 0x03 {
+	if f.op() != terminalBinary || len(p) < 12 || p[0] != 0x03 {
 		t.Fatalf("not a display packet: %x", p[:min(len(p), 12)])
 	}
 	u := func(i int) int { return int(binary.LittleEndian.Uint16(p[i:])) }
@@ -118,7 +118,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 		t.Fatal(r)
 	}
 	frame := displayFrame(next, rect, 0x10303, roundScreen.width)
-	if got := frame.data[:12]; !slices.Equal(got, []byte{3, 18, 0, 20, 0, 6, 1, 2, 0, 1, 3, 3}) {
+	if got := frame.data()[:12]; !slices.Equal(got, []byte{3, 18, 0, 20, 0, 6, 1, 2, 0, 1, 3, 3}) {
 		t.Fatalf("header %x", got)
 	}
 	r, rev, p := decodeDisplay(t, frame)
@@ -131,7 +131,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 	}
 	frame = displayFrame(next, image.Rect(0, 1, 129, 2), 1, roundScreen.width)
 	_, _, p = decodeDisplay(t, frame)
-	if frame.data[9] != 0 || !slices.Equal(p, next[360:489]) || frame.data[12] != 0 || frame.data[13] != 1 {
+	if frame.data()[9] != 0 || !slices.Equal(p, next[360:489]) || frame.data()[12] != 0 || frame.data()[13] != 1 {
 		t.Fatal("incompressible pixels did not use raw big-endian fallback")
 	}
 	for i := range 300 {
@@ -143,7 +143,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 	}
 	frame = displayFrame(next, image.Rect(0, 0, 300, 1), 19, roundScreen.width)
 	_, _, p = decodeDisplay(t, frame)
-	if frame.data[9] != 1 || !slices.Equal(p, next[:300]) {
+	if frame.data()[9] != 1 || !slices.Equal(p, next[:300]) {
 		t.Fatal("mixed runs did not round-trip")
 	}
 }
@@ -183,8 +183,8 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 		fb[i] = uint16(i)*213 + 17
 	}
 	f := enc.encode(fb, nil, image.Rect(0, 0, 60, 1), 1, w)
-	if f.data[9] != frameCodecRaw {
-		t.Fatalf("small incompressible rect chose codec %d, want Raw (0)", f.data[9])
+	if f.data()[9] != frameCodecRaw {
+		t.Fatalf("small incompressible rect chose codec %d, want Raw (0)", f.data()[9])
 	}
 	if _, _, got := decodeDisplay(t, f); !slices.Equal(got, fb[:60]) {
 		t.Fatal("Raw round-trip mismatch")
@@ -196,8 +196,8 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 		}
 	}
 	f = enc.encode(fb, nil, image.Rect(0, 0, 128, 128), 2, w)
-	if f.data[9] != frameCodecRLE565 && f.data[9] != frameCodecLZ4 {
-		t.Fatalf("uniform rect chose codec %d, want lossless RLE565 or LZ4", f.data[9])
+	if f.data()[9] != frameCodecRLE565 && f.data()[9] != frameCodecLZ4 {
+		t.Fatalf("uniform rect chose codec %d, want lossless RLE565 or LZ4", f.data()[9])
 	}
 	if _, _, got := decodeDisplay(t, f); len(got) != 128*128 || got[0] != 0x1234 {
 		t.Fatal("uniform lossless round-trip mismatch")
@@ -209,8 +209,8 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 		}
 	}
 	f = enc.encode(fb, nil, image.Rect(0, 0, 48, 32), 3, w)
-	if f.data[9] != frameCodecLZ4 {
-		t.Fatalf("repeating pattern chose codec %d, want LZ4 (3)", f.data[9])
+	if f.data()[9] != frameCodecLZ4 {
+		t.Fatalf("repeating pattern chose codec %d, want LZ4 (3)", f.data()[9])
 	}
 	_, _, got := decodeDisplay(t, f)
 	for y := range 32 {
@@ -231,8 +231,8 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 		}
 	}
 	f = enc.encode(fb, nil, image.Rect(0, 0, 160, 160), 4, w)
-	if f.data[9] != frameCodecJPEG {
-		t.Fatalf("high-entropy 160x160 gradient chose codec %d, want JPEG (2)", f.data[9])
+	if f.data()[9] != frameCodecJPEG {
+		t.Fatalf("high-entropy 160x160 gradient chose codec %d, want JPEG (2)", f.data()[9])
 	}
 	r, rev, decoded := decodeDisplay(t, f)
 	if r != image.Rect(0, 0, 160, 160) || rev != 4 || len(decoded) != 160*160 {

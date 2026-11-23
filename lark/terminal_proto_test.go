@@ -368,7 +368,10 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 	pkt := make([]byte, rtpPacketBytes)
 	encodeRTPPacket(pkt, rtpPTRecPCM, 1, 0, ssrc, make([]byte, rtpPCMBytes))
 
+	var seq uint16
 	allocs := testing.AllocsPerRun(50, func() {
+		seq++
+		encodeRTPPacket(pkt, rtpPTRecPCM, seq, uint32(seq)*320, ssrc, pkt[rtpHeaderSize:])
 		ds.handleUDP(pkt, remote)
 	})
 	if allocs > 0 {
@@ -413,7 +416,10 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 	pkt := make([]byte, rtpPacketBytes)
 	encodeRTPPacket(pkt, rtpPTRecPCM, 1, 0, ssrc, make([]byte, rtpPCMBytes))
 
+	var seq uint16
 	allocs := testing.AllocsPerRun(50, func() {
+		seq++
+		encodeRTPPacket(pkt, rtpPTRecPCM, seq, uint32(seq)*320, ssrc, pkt[rtpHeaderSize:])
 		ds.handleUDP(pkt, remote)
 		p := <-ep.packets
 		ep.free <- p.slot

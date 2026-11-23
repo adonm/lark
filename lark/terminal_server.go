@@ -35,11 +35,17 @@ type nativeClient struct {
 	pendingFrame *nativeOutMsg
 	frameNotify  chan struct{}
 	txSeq        uint16
+	droppedCtrl  atomic.Uint64
 
 	udpMu   sync.Mutex
 	udpAddr *net.UDPAddr
 	rtpSeq  uint16
 	rtpTS   uint32
+
+	rtpMu      sync.Mutex
+	rtpSeen    bool
+	rtpLastSeq uint16
+	rtpDrops   atomic.Uint64
 }
 
 type terminalServer struct {
@@ -326,7 +332,7 @@ func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 	if len(pkt) < rtpHeaderSize+2 || (len(pkt)-rtpHeaderSize)%2 != 0 {
 		return
 	}
-	pt, _, _, ssrc, ok := decodeRTPHeader(pkt)
+	pt, seq, _, ssrc, ok := decodeRTPHeader(pkt)
 	if !ok || ssrc == 0 {
 		return
 	}
@@ -337,6 +343,9 @@ func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 		return
 	}
 
+	if !nc.acceptRTP(seq) {
+		return
+	}
 	nc.udpMu.Lock()
 	if nc.udpAddr == nil || nc.udpAddr.Port != int(remote.Port()) {
 		nc.udpAddr = net.UDPAddrFromAddrPort(remote)
@@ -347,6 +356,19 @@ func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
 	if s.onUDP != nil {
 		s.onUDP()
 	}
+}
+
+// acceptRTP drops duplicate and reordered datagrams. Both are harmless for
+// captured audio and replaying them would duplicate PCM into the turn.
+func (nc *nativeClient) acceptRTP(seq uint16) bool {
+	nc.rtpMu.Lock()
+	defer nc.rtpMu.Unlock()
+	if nc.rtpSeen && int16(seq-nc.rtpLastSeq) <= 0 {
+		nc.rtpDrops.Add(1)
+		return false
+	}
+	nc.rtpSeen, nc.rtpLastSeq = true, seq
+	return true
 }
 
 func (nc *nativeClient) writePacket(msgType uint8, payload []byte) bool {
@@ -360,6 +382,17 @@ func (nc *nativeClient) writePacket(msgType uint8, payload []byte) bool {
 	bufs := net.Buffers{hdr[:], payload}
 	_, err := bufs.WriteTo(nc.conn)
 	return err == nil
+}
+
+func (nc *nativeClient) takeFrame() (nativeOutMsg, bool) {
+	nc.outMu.Lock()
+	defer nc.outMu.Unlock()
+	if nc.pendingFrame == nil {
+		return nativeOutMsg{}, false
+	}
+	msg := *nc.pendingFrame
+	nc.pendingFrame = nil
+	return msg, true
 }
 
 func (nc *nativeClient) nextMsg() (nativeOutMsg, bool, bool) {
@@ -426,6 +459,12 @@ func (nc *nativeClient) writeLoop() {
 			if !nc.writePacket(msg.msgType, msg.payload) {
 				return
 			}
+			// A long TTS reply must not starve display and control traffic.
+			if isPCM {
+				if frame, ok := nc.takeFrame(); ok && !nc.writePacket(frame.msgType, frame.payload) {
+					return
+				}
+			}
 			continue
 		}
 		select {
@@ -483,8 +522,17 @@ func (nc *nativeClient) enqueue(msgType uint8, payload []byte) bool {
 	case dst <- nativeOutMsg{msgType: msgType, payload: payload}:
 		return true
 	default:
-		nc.client.cancel()
-		_ = nc.conn.Close()
+		if dst == nc.out {
+			// PCM overflow is fatal for this stream: the client cannot keep up.
+			nc.client.cancel()
+			if nc.conn != nil {
+				_ = nc.conn.Close()
+			}
+			return false
+		}
+		// Control frames are coalescing by nature. Drop and count instead of
+		// killing a healthy connection over one burst.
+		nc.droppedCtrl.Add(1)
 		return false
 	}
 }

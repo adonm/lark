@@ -388,7 +388,7 @@ func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
 
 	dev.tap(t, x, y, 0)
 	dev.until(t, func(f protocolFrame) bool {
-		if len(f.data) > 0 {
+		if len(f.data()) > 0 {
 			p := framePayload(f)
 			if hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart {
 				return true

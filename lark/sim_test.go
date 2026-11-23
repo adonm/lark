@@ -33,7 +33,7 @@ func TestSimDecodeFrames(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := enc.encodeWithCodecs(src, nil, r, 7, w, tc.codec)
 			dst := make([]uint16, w*h)
-			rev, ok := decodeFrameInto(dst, w, h, f.data)
+			rev, ok := decodeFrameInto(dst, w, h, f.data())
 			if !ok || rev != 7 {
 				t.Fatalf("decodeFrameInto(%s) failed: ok=%v rev=%d", tc.name, ok, rev)
 			}
