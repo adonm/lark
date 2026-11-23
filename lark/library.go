@@ -1167,9 +1167,6 @@ func downloadSegment(ctx context.Context, client *http.Client, url, path string,
 			_ = os.Remove(path)
 		} else {
 			offset = start + info.Size()
-			mu.Lock()
-			*written += info.Size()
-			mu.Unlock()
 		}
 	}
 	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
@@ -1716,6 +1713,15 @@ func buildWikipedia(ctx context.Context, dir, wiki string, force bool, out io.Wr
 	dbPath := filepath.Join(dir, librarySources[wiki].db)
 	if _, err := os.Stat(dbPath); err == nil && !force {
 		libraryLog(out, "%s: index exists", wiki)
+		return nil
+	}
+	lock, err := os.OpenFile(dbPath+".build.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		libraryLog(out, "%s: another index build is already running", wiki)
 		return nil
 	}
 	tmp := dbPath + ".building"
