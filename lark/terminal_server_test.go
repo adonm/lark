@@ -8,7 +8,7 @@ import (
 // the full liveness rate.
 func TestPingIntervalFollowsSleep(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,9 +20,9 @@ func TestPingIntervalFollowsSleep(t *testing.T) {
 		t.Fatalf("terminal rejected: %q", reject)
 	}
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
+	b.hub.mu.Unlock()
 	if d == nil || d.client.native == nil {
 		t.Fatal("terminal did not register a native client")
 	}
@@ -31,15 +31,15 @@ func TestPingIntervalFollowsSleep(t *testing.T) {
 	if got := nc.pingInterval(); got != pingAwake {
 		t.Fatalf("awake ping interval = %v, want %v", got, pingAwake)
 	}
-	b.ws.mu.Lock()
-	b.ws.setSleeping(d, true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.setSleeping(d, true)
+	b.hub.mu.Unlock()
 	if got := nc.pingInterval(); got != pingAsleep {
 		t.Fatalf("sleeping ping interval = %v, want %v", got, pingAsleep)
 	}
-	b.ws.mu.Lock()
-	b.ws.setSleeping(d, false)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.setSleeping(d, false)
+	b.hub.mu.Unlock()
 	if got := nc.pingInterval(); got != pingAwake {
 		t.Fatalf("woken ping interval = %v, want %v", got, pingAwake)
 	}

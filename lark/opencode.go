@@ -146,8 +146,8 @@ func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, se
 	return o
 }
 
-func (o *openCode) get(device string) (string, error) {
-	sid, _, err := o.store.get(device)
+func (o *openCode) get(companionID string) (string, error) {
+	sid, _, err := o.store.get(companionID)
 	return sid, err
 }
 
@@ -163,44 +163,44 @@ func (o *openCode) invalidateVerified(devices ...string) {
 	o.mu.Unlock()
 }
 
-func (o *openCode) prewarm(ctx context.Context, device, character string) {
-	if o == nil || device == "" {
+func (o *openCode) prewarm(ctx context.Context, companionID, character string) {
+	if o == nil || companionID == "" {
 		return
 	}
 	o.mu.Lock()
-	cached := o.verified[device]
+	cached := o.verified[companionID]
 	o.mu.Unlock()
 	if cached != "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	binding, err := o.readBinding(ctx, device)
+	binding, err := o.readBinding(ctx, companionID)
 	if err != nil || binding.sid == "" {
 		return
 	}
-	unlock, err := o.lock(ctx, device)
+	unlock, err := o.lock(ctx, companionID)
 	if err != nil {
 		return
 	}
 	defer unlock()
-	_, _ = o.ensureSession(ctx, device, character, false)
+	_, _ = o.ensureSession(ctx, companionID, character, false)
 }
 
-func (o *openCode) forget(device string) error {
-	o.invalidateVerified(device)
-	err := o.store.delete(device)
+func (o *openCode) forget(companionID string) error {
+	o.invalidateVerified(companionID)
+	err := o.store.delete(companionID)
 	o.sig.notify()
 	return err
 }
 
-func (o *openCode) lock(ctx context.Context, device string) (func(), error) {
-	return o.lockGate(ctx, o.turnGate(device))
+func (o *openCode) lock(ctx context.Context, companionID string) (func(), error) {
+	return o.lockGate(ctx, o.turnGate(companionID))
 }
 
-func (o *openCode) turnGate(device string) int {
+func (o *openCode) turnGate(companionID string) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(device))
+	_, _ = h.Write([]byte(companionID))
 	return int(h.Sum32() % uint32(len(o.turns)))
 }
 
@@ -231,67 +231,67 @@ func (o *openCode) interrupt(ctx context.Context, sid string) error {
 	return err // The API reports an idle no-op as success.
 }
 
-func (o *openCode) requestInterrupt(device string) bool {
+func (o *openCode) requestInterrupt(companionID string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.resets[device] != nil {
+	if o.resets[companionID] != nil {
 		return false // The mapping change already owns the interrupt for the old session.
 	}
-	return o.markInterrupted(device)
+	return o.markInterrupted(companionID)
 }
 
-func (o *openCode) markInterrupted(device string) bool {
-	if cancel := o.active[device]; cancel != nil {
+func (o *openCode) markInterrupted(companionID string) bool {
+	if cancel := o.active[companionID]; cancel != nil {
 		cancel()
 	}
-	queued := o.interrupts[device]
-	o.interrupts[device] = true
+	queued := o.interrupts[companionID]
+	o.interrupts[companionID] = true
 	return !queued
 }
 
 // Hold the turn gate through the interrupt. A failed interrupt stays pending
 // so neither a replacement prompt nor a reset can race the old execution.
-func (o *openCode) flushInterrupt(ctx context.Context, device string) error {
+func (o *openCode) flushInterrupt(ctx context.Context, companionID string) error {
 	o.mu.Lock()
-	pending := o.interrupts[device]
+	pending := o.interrupts[companionID]
 	o.mu.Unlock()
 	if !pending {
 		return nil
 	}
-	sid, err := o.get(device)
+	sid, err := o.get(companionID)
 	if err == nil {
 		err = o.interrupt(ctx, sid)
 	}
 	if err == nil {
 		o.mu.Lock()
-		delete(o.interrupts, device)
+		delete(o.interrupts, companionID)
 		o.mu.Unlock()
 	}
 	return err
 }
 
-func (o *openCode) interruptDevice(device string) {
-	if !o.requestInterrupt(device) {
+func (o *openCode) interruptDevice(companionID string) {
+	if !o.requestInterrupt(companionID) {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 		defer cancel()
-		if unlock, err := o.lock(ctx, device); err == nil {
+		if unlock, err := o.lock(ctx, companionID); err == nil {
 			defer unlock()
-			_ = o.flushInterrupt(ctx, device)
+			_ = o.flushInterrupt(ctx, companionID)
 		}
 	}()
 }
 
-func (o *openCode) reset(ctx context.Context, device string) error {
-	return o.prepareReset(device)(ctx)
+func (o *openCode) reset(ctx context.Context, companionID string) error {
+	return o.prepareReset(companionID)(ctx)
 }
 
-func (o *openCode) prepareReset(device string) func(context.Context) error {
-	run := o.prepareMappingChange(device)
+func (o *openCode) prepareReset(companionID string) func(context.Context) error {
+	run := o.prepareMappingChange(companionID)
 	return func(ctx context.Context) error {
-		return run(ctx, func() error { return o.forget(device) })
+		return run(ctx, func() error { return o.forget(companionID) })
 	}
 }
 
@@ -300,15 +300,15 @@ func (o *openCode) prepareMappingChange(devices ...string) func(context.Context,
 	o.invalidateVerified(devices...)
 	gates := make([]int, 0, len(devices))
 	o.mu.Lock()
-	for _, device := range devices {
-		reset := o.resets[device]
+	for _, companionID := range devices {
+		reset := o.resets[companionID]
 		if reset == nil {
 			reset = &ocReset{done: make(chan struct{})}
-			o.resets[device] = reset
+			o.resets[companionID] = reset
 		}
 		reset.count++
-		o.markInterrupted(device)
-		gates = append(gates, o.turnGate(device))
+		o.markInterrupted(companionID)
+		gates = append(gates, o.turnGate(companionID))
 	}
 	o.mu.Unlock()
 	slices.Sort(gates)
@@ -317,11 +317,11 @@ func (o *openCode) prepareMappingChange(devices ...string) func(context.Context,
 		defer func() {
 			o.mu.Lock()
 			defer o.mu.Unlock()
-			for _, device := range devices {
-				reset := o.resets[device]
+			for _, companionID := range devices {
+				reset := o.resets[companionID]
 				reset.count--
 				if reset.count == 0 {
-					delete(o.resets, device)
+					delete(o.resets, companionID)
 					close(reset.done)
 				}
 			}
@@ -333,8 +333,8 @@ func (o *openCode) prepareMappingChange(devices ...string) func(context.Context,
 			}
 			defer unlock()
 		}
-		for _, device := range devices {
-			if err := o.flushInterrupt(ctx, device); err != nil {
+		for _, companionID := range devices {
+			if err := o.flushInterrupt(ctx, companionID); err != nil {
 				return err
 			}
 		}
@@ -379,11 +379,11 @@ func (o *openCode) ReconnectMCP(ctx context.Context, name string) error {
 	return problem(502, "OpenCode MCP catalog not connected")
 }
 
-func larkTitle(device, character string) string {
-	if character = strings.TrimSpace(character); character != "" && character != device {
-		return "Lark: " + character + " (" + device + ")"
+func larkTitle(companionID, character string) string {
+	if character = strings.TrimSpace(character); character != "" && character != companionID {
+		return "Lark: " + character + " (" + companionID + ")"
 	}
-	return "Lark: " + device
+	return "Lark: " + companionID
 }
 
 func (o *openCode) configuredSettings(ctx context.Context) (ocSettings, error) {
@@ -442,17 +442,17 @@ func (o *openCode) ensureModel(ctx context.Context, sid string, model ocModel) e
 	return nil
 }
 
-func (o *openCode) fastSession(ctx context.Context, device, character string, replace bool) (string, error) {
+func (o *openCode) fastSession(ctx context.Context, companionID, character string, replace bool) (string, error) {
 	o.mu.Lock()
-	cached := o.verified[device]
+	cached := o.verified[companionID]
 	o.mu.Unlock()
 	if cached != "" {
 		return cached, nil
 	}
-	return o.ensureSession(ctx, device, character, replace)
+	return o.ensureSession(ctx, companionID, character, replace)
 }
 
-func (o *openCode) ensureSession(ctx context.Context, device, character string, replace bool) (string, error) {
+func (o *openCode) ensureSession(ctx context.Context, companionID, character string, replace bool) (string, error) {
 	if o.contract != "" {
 		catalog, err := o.db.getMeta(ctx, mcpSchemaMeta)
 		if err != nil {
@@ -462,7 +462,7 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 			return "", problem(503, "OpenCode MCP catalog refresh pending")
 		}
 	}
-	binding, err := o.readBinding(ctx, device)
+	binding, err := o.readBinding(ctx, companionID)
 	if err != nil {
 		return "", err
 	}
@@ -513,7 +513,7 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 			}
 			o.mu.Lock()
 			if o.verified != nil {
-				o.verified[device] = sid
+				o.verified[companionID] = sid
 			}
 			if o.sessionModel != nil {
 				o.sessionModel[sid] = settings.Model
@@ -534,7 +534,7 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 	}
 	var seed string
 	if sid != "" {
-		seed, err = o.recentDialogue(ctx, device, binding.after)
+		seed, err = o.recentDialogue(ctx, companionID, binding.after)
 		if err != nil {
 			return "", err
 		}
@@ -547,7 +547,7 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 		Title    string `json:"title"`
 		Location object `json:"location"`
 		ocSettings
-	}{larkTitle(device, character), object{"directory": o.project}, settings}
+	}{larkTitle(companionID, character), object{"directory": o.project}, settings}
 	created, err := ocData[session](ctx, o.upstream, http.MethodPost, "/api/session", in)
 	if err != nil {
 		return "", err
@@ -560,12 +560,12 @@ func (o *openCode) ensureSession(ctx context.Context, device, character string, 
 			return "", err
 		}
 	}
-	if err := o.replaceBinding(ctx, device, binding, created.ID, after); err != nil {
+	if err := o.replaceBinding(ctx, companionID, binding, created.ID, after); err != nil {
 		return "", err
 	}
 	o.mu.Lock()
 	if o.verified != nil {
-		o.verified[device] = created.ID
+		o.verified[companionID] = created.ID
 	}
 	if o.sessionModel != nil {
 		o.sessionModel[created.ID] = settings.Model
@@ -688,7 +688,7 @@ func (m ocMessage) chat(source string) chatEntry {
 			name = p.Tool
 		}
 		if action, ok := strings.CutPrefix(name, "lark_"); p.Type == "tool" && ok {
-			label := map[string]string{"state": "Checked live state", "patch": "Changed saved or device state",
+			label := map[string]string{"state": "Checked live state", "patch": "Changed saved or companionID state",
 				"emit": "Sent a signal", "library": "Searched the local library"}[action]
 			if label != "" && !slices.Contains(notes, label) {
 				notes = append(notes, label)
@@ -777,18 +777,18 @@ func (o *openCode) sessionMessagePage(ctx context.Context, sid, cursor, source s
 	return page, nil
 }
 
-func (o *openCode) lockPrompt(ctx context.Context, device string) (context.Context, func(), error) {
+func (o *openCode) lockPrompt(ctx context.Context, companionID string) (context.Context, func(), error) {
 	for {
-		unlock, err := o.lock(ctx, device)
+		unlock, err := o.lock(ctx, companionID)
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := o.flushInterrupt(ctx, device); err != nil {
+		if err := o.flushInterrupt(ctx, companionID); err != nil {
 			unlock()
 			return nil, nil, err
 		}
 		o.mu.Lock()
-		if reset := o.resets[device]; reset != nil {
+		if reset := o.resets[companionID]; reset != nil {
 			o.mu.Unlock()
 			unlock()
 			select {
@@ -798,18 +798,18 @@ func (o *openCode) lockPrompt(ctx context.Context, device string) (context.Conte
 				return nil, nil, o.unavailable(ctx.Err())
 			}
 		}
-		if !o.interrupts[device] {
+		if !o.interrupts[companionID] {
 			turn, cancel := context.WithCancel(ctx)
-			o.active[device] = cancel
+			o.active[companionID] = cancel
 			o.mu.Unlock()
 			return turn, func() {
 				defer unlock()
 				o.mu.Lock()
-				delete(o.active, device)
-				delete(o.activeSource, device)
+				delete(o.active, companionID)
+				delete(o.activeSource, companionID)
 				o.mu.Unlock()
 				cancel()
-				_ = o.flushInterrupt(context.WithoutCancel(turn), device)
+				_ = o.flushInterrupt(context.WithoutCancel(turn), companionID)
 			}, nil
 		}
 		o.mu.Unlock()
@@ -817,14 +817,14 @@ func (o *openCode) lockPrompt(ctx context.Context, device string) (context.Conte
 	}
 }
 
-func (o *openCode) askPrepared(ctx context.Context, device string, prepare func() (string, string), stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
-	return o.askPreparedWithModel(ctx, device, prepare, ocModel{}, stream, source, begin, onChat)
+func (o *openCode) askPrepared(ctx context.Context, companionID string, prepare func() (string, string), stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
+	return o.askPreparedWithModel(ctx, companionID, prepare, ocModel{}, stream, source, begin, onChat)
 }
 
-func (o *openCode) askPreparedWithModel(ctx context.Context, device string, prepare func() (string, string), model ocModel, stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
+func (o *openCode) askPreparedWithModel(ctx context.Context, companionID string, prepare func() (string, string), model ocModel, stream turnStream, source string, begin func() func(), onChat func(chatEntry)) (reply, sid string, err error) {
 	waiting := time.Now()
 	trace := traceFrom(ctx)
-	ctx, unlock, err := o.lockPrompt(ctx, device)
+	ctx, unlock, err := o.lockPrompt(ctx, companionID)
 	if err != nil {
 		return "", "", err
 	}
@@ -832,12 +832,12 @@ func (o *openCode) askPreparedWithModel(ctx context.Context, device string, prep
 	trace.measure(diagGate, admitted.Sub(waiting))
 	defer unlock()
 	character, prompt := prepare()
-	sid, err = o.fastSession(ctx, device, character, source != "timer")
+	sid, err = o.fastSession(ctx, companionID, character, source != "timer")
 	if err != nil {
 		return "", "", err
 	}
 	if err := o.ensureModel(ctx, sid, model); err != nil {
-		o.invalidateVerified(device)
+		o.invalidateVerified(companionID)
 		return "", "", err
 	}
 	if begin != nil {
@@ -847,11 +847,11 @@ func (o *openCode) askPreparedWithModel(ctx context.Context, device string, prep
 	trace.measure(diagPromptPrep, time.Since(admitted))
 	reply, err = o.runTurnStreamingWithModel(ctx, sid, prompt, model, stream, source, onChat)
 	if err != nil {
-		o.invalidateVerified(device)
+		o.invalidateVerified(companionID)
 		o.mu.Lock()
 		delete(o.sessionModel, sid)
 		o.mu.Unlock()
-		o.requestInterrupt(device)
+		o.requestInterrupt(companionID)
 	}
 	return reply, sid, err
 }

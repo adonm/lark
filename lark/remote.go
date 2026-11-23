@@ -789,8 +789,8 @@ func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, por
 			seen[strings.ToLower(dt.ID)] = true
 		}
 	}
-	if b.ws != nil {
-		for _, t := range b.ws.companionTerminals(companionID) {
+	if b.hub != nil {
+		for _, t := range b.hub.companionTerminals(companionID) {
 			tid := strings.ToLower(str(t["id"]))
 			if !seen[tid] {
 				terminals = append(terminals, t)
@@ -919,7 +919,7 @@ func (b *larkServer) remoteVolume(r *http.Request, companionID string) (any, err
 	if !ok || !strings.EqualFold(t.CompanionID, companionID) {
 		return nil, problem(403, "Terminal out of scope")
 	}
-	if b.ws == nil {
+	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
 	}
 	volArgs := object{}
@@ -940,7 +940,7 @@ func (b *larkServer) remoteVolume(r *http.Request, companionID string) (any, err
 	if len(volArgs) == 0 {
 		return nil, problem(400, `Expected {"volume":0..100} or {"auto":true}`)
 	}
-	if _, err := b.ws.terminalVolumeControl(r.Context(), terminalID, volArgs); err != nil {
+	if _, err := b.hub.terminalVolumeControl(r.Context(), terminalID, volArgs); err != nil {
 		return nil, err
 	}
 	return remoteStateResponse(b, r.Context(), companionID, "Volume updated."), nil
@@ -980,14 +980,14 @@ func (b *larkServer) remoteStory(r *http.Request, companionID string, restart bo
 			return nil, problem(502, "Could not reset progress.")
 		}
 	}
-	if b.ws != nil {
-		b.ws.mu.Lock()
-		for _, d := range b.ws.terminalsFor(companionID) {
-			if b.ws.active(d) {
-				b.ws.openStory(d, st, false)
+	if b.hub != nil {
+		b.hub.mu.Lock()
+		for _, d := range b.hub.terminalsFor(companionID) {
+			if b.hub.active(d) {
+				b.hub.openStory(d, st, false)
 			}
 		}
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 	}
 	message := "Opened on device."
 	if restart {
@@ -1124,32 +1124,25 @@ func (b *larkServer) sayOnCompanion(ctx context.Context, companionID, senderName
 	}
 	who := b.companionFor(companionID)
 	b.chat(companionID, newChat("user", senderName, "/say "+words, "deltachat"), true)
-	if b.ws != nil {
-		n := terminalNotice{
-			recipientIDs: []string{companionID},
-			sender:       who,
-			text:         words,
-			speakText:    words,
-			voice:        b.voiceFor(companionID),
-			chime:        "intercom",
-			showCard:     true,
-		}
+	if b.hub != nil {
+		n := intercomNotice(who, []string{companionID}, words, nil, b.voiceFor(companionID))
+		n.intro = ""
 		if chatID != 0 {
 			n.reply = &turnReply{name: senderName, companionID: companionID, chatID: chatID}
 			n.cardReply = senderName
 		}
-		b.ws.deliverNotice(ctx, n)
+		b.hub.deliverNotice(ctx, n)
 	}
 }
 
 func (b *larkServer) previewVoiceOnCompanion(companionID, voiceID string) {
-	if b == nil || b.ws == nil {
+	if b == nil || b.hub == nil {
 		return
 	}
-	h := b.ws
+	h := b.hub
 	previewText := voicePreviewText(voiceID)
 	h.mu.Lock()
-	var targets []*wsTerminal
+	var targets []*terminalSession
 	for _, d := range h.terminalsFor(companionID) {
 		if h.active(d) {
 			targets = append(targets, d)
@@ -1204,16 +1197,16 @@ func (b *larkServer) clearStoryProgress(ctx context.Context, companionID, storyI
 }
 
 func (b *larkServer) companionLiveState(companionID string) string {
-	if b == nil || b.ws == nil {
+	if b == nil || b.hub == nil {
 		return "offline"
 	}
-	b.ws.mu.Lock()
-	defer b.ws.mu.Unlock()
-	terms := b.ws.terminalsFor(companionID)
+	b.hub.mu.Lock()
+	defer b.hub.mu.Unlock()
+	terms := b.hub.terminalsFor(companionID)
 	if len(terms) == 0 {
 		return "offline"
 	}
-	best := b.ws.voiceOwner(companionID)
+	best := b.hub.voiceOwner(companionID)
 	if best == nil {
 		best = terms[0]
 	}

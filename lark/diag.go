@@ -250,7 +250,7 @@ func (b *larkServer) transcribe(ctx context.Context, pcm []byte) (string, error)
 	return text, err
 }
 
-func (h *wsHub) trackFrame(d *wsTerminal, elapsed time.Duration, size, raw int, codec string) {
+func (h *terminalHub) trackFrame(d *terminalSession, elapsed time.Duration, size, raw int, codec string) {
 	d.frame = &diagFrame{milliseconds(elapsed), size, raw, codec}
 	if codec == "svg" {
 		return
@@ -353,8 +353,8 @@ func (b *larkServer) diagnosticReport() diagReport {
 	}
 	slices.Reverse(out.Turns)
 	out.Library = b.libraryReport()
-	if b.ws != nil {
-		out.Terminals = b.ws.diagTerminals()
+	if b.hub != nil {
+		out.Terminals = b.hub.diagTerminals()
 	}
 	return out
 }
@@ -373,22 +373,22 @@ type diagTerminal struct {
 	Frame        *diagFrame `json:"last_frame"`
 	Ambient      *float64   `json:"ambient_rms"`
 	Auto         bool       `json:"auto_volume"`
-	wsStatus
+	terminalTelemetry
 }
 
-func (d *wsTerminal) diagTerminal() diagTerminal {
+func (d *terminalSession) diagTerminal() diagTerminal {
 	s := d.telemetry
 	s.Volume = new(d.vol)
 	out := diagTerminal{ID: d.id, CompanionID: d.companionID, Character: d.companion.Name, Kind: d.kind, Board: d.board,
 		Firmware: d.firmware, Mode: d.pose.mood, RTT: d.client.pingRTT(),
-		Frame: d.frame, Auto: d.autoVol, wsStatus: s}
+		Frame: d.frame, Auto: d.autoVol, terminalTelemetry: s}
 	if d.hasAmbient {
 		out.Ambient = new(d.ambientEMA)
 	}
 	return out
 }
 
-func (h *wsHub) diagTerminals() []diagTerminal {
+func (h *terminalHub) diagTerminals() []diagTerminal {
 	terms, _ := h.b.terminalSnapshot()
 	roundOTA, boxOTA := fileBytes(h.b.ota.path) > 0, fileBytes(h.b.box3OTA.path) > 0
 	outMap := make(map[string]diagTerminal, len(terms))

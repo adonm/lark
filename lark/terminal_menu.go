@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
+func (h *terminalHub) handleProto(c *terminalClient, msgType uint8, payload []byte) {
 	h.mu.Lock()
 	if h.closed || c.ctx.Err() != nil {
 		h.mu.Unlock()
@@ -83,7 +83,7 @@ func (h *wsHub) handleProto(c *wsClient, msgType uint8, payload []byte) {
 	}
 }
 
-func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now time.Time) {
+func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev uint16, now time.Time) {
 	width, height := d.screen.width, d.screen.height
 	if x < 0 || x >= width || y < 0 || y >= height {
 		return
@@ -280,7 +280,7 @@ func (h *wsHub) pointer(d *wsTerminal, evName string, x, y int, rev uint16, now 
 	}
 }
 
-func (h *wsHub) selectAndPreviewVoice(d *wsTerminal, voiceID string) {
+func (h *terminalHub) selectAndPreviewVoice(d *terminalSession, voiceID string) {
 	h.mu.Unlock()
 	err := h.saveVoice(d.companionID, voiceID)
 	h.mu.Lock()
@@ -311,7 +311,7 @@ func (h *wsHub) selectAndPreviewVoice(d *wsTerminal, voiceID string) {
 	h.chime(d, "tap")
 }
 
-func (d *wsTerminal) acceptPointerRevision(action string, rev *uint16) bool {
+func (d *terminalSession) acceptPointerRevision(action string, rev *uint16) bool {
 	switch action {
 	case "stop", "rec-cancel", "rec-send", "rec-continue", "listen", "reply":
 		if !d.caps.PointerRev {
@@ -339,15 +339,15 @@ func hitsLayoutKey(hits []hitBox) string {
 
 const stopTapWindow = 2500 * time.Millisecond
 
-func (d *wsTerminal) resetStopTaps() {
+func (d *terminalSession) resetStopTaps() {
 	d.stopTaps, d.stopTapAt = 0, time.Time{}
 }
 
-func (d *wsTerminal) stopTapsExpired(now time.Time) bool {
+func (d *terminalSession) stopTapsExpired(now time.Time) bool {
 	return d.stopTaps != 0 && now.Sub(d.stopTapAt) > stopTapWindow
 }
 
-func (h *wsHub) tapStop(d *wsTerminal, now time.Time) {
+func (h *terminalHub) tapStop(d *terminalSession, now time.Time) {
 	if d.busy && !d.ttsStarted && !d.awaitAck {
 		if d.stopTapsExpired(now) {
 			d.resetStopTaps()
@@ -368,7 +368,7 @@ func (h *wsHub) tapStop(d *wsTerminal, now time.Time) {
 	h.chime(d, "cancel")
 }
 
-func (h *wsHub) leaveScene(d *wsTerminal, now time.Time, reason string) {
+func (h *terminalHub) leaveScene(d *terminalSession, now time.Time, reason string) {
 	h.cancelTurn(d, reason)
 	h.stopPlayback(d, true)
 	h.clearView(d)
@@ -378,7 +378,7 @@ func (h *wsHub) leaveScene(d *wsTerminal, now time.Time, reason string) {
 	h.render(d, now, true)
 }
 
-func (h *wsHub) clearView(d *wsTerminal) {
+func (h *terminalHub) clearView(d *terminalSession) {
 	d.drawer, d.view, d.pending, d.card = "", nil, nil, nil
 }
 
@@ -395,7 +395,7 @@ type menuContent struct {
 	notice       string
 }
 
-func (h *wsHub) statsRows(d *wsTerminal) []menuRow {
+func (h *terminalHub) statsRows(d *terminalSession) []menuRow {
 	var rows []menuRow
 	if d.companion.Name != "" {
 		rows = append(rows, menuRow{"Companion", d.companion.Name})
@@ -411,7 +411,7 @@ func (h *wsHub) statsRows(d *wsTerminal) []menuRow {
 	return rows
 }
 
-func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, narrator *image.RGBA, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, error) {
+func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, narrator *image.RGBA, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, error) {
 	m := r.view.menu
 	if m == nil {
 		m = &menuContent{notice: "Loading…"}
@@ -535,7 +535,7 @@ func (h *wsHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, narrat
 }
 
 // The placeholder identifies this request even if another client moves the menu while SQL runs.
-func (h *wsHub) loadMenu(d *wsTerminal) {
+func (h *terminalHub) loadMenu(d *terminalSession) {
 	drawer, id, name := d.drawer, d.companionID, d.companion.Name
 	pending := &menuContent{notice: "Loading…"}
 	d.menuData = pending

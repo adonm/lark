@@ -117,11 +117,11 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	voiced := bytes.Repeat([]byte{17, 0}, endpointBytes/2)
 	silent := make([]byte, endpointBytes)
 
-	recStop := func(f wsFrame) bool {
+	recStop := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	}
-	idleOrDone := func(f wsFrame) bool {
+	idleOrDone := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
@@ -129,12 +129,12 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	// 1. Complete (>= threshold): commits after smartTurnPause (~200ms) + vadTail.
 	prob.Store(1)
 	calls.Store(0)
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
 	d.recStart(t, "")
 	d.barrier(t)
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	appendPCM(bytes.Repeat(voiced, 10))
 	appendPCM(bytes.Repeat(silent, 28)) // 560ms silence (> endpointQuiet 400ms)
 	d.until(t, recStop)
@@ -149,12 +149,12 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	prob.Store(2)
 	calls.Store(0)
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
 	d.recStart(t, "")
 	d.barrier(t)
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	appendPCM(bytes.Repeat(voiced, 10))
 	appendPCM(bytes.Repeat(silent, 22))
 	deadline := time.Now().Add(2 * time.Second)
@@ -234,21 +234,21 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 			p = p[n:]
 		}
 	}
-	recStop := func(f wsFrame) bool {
+	recStop := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	}
-	idleOrDone := func(f wsFrame) bool {
+	idleOrDone := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
 	d.recStart(t, "")
 	d.barrier(t)
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	appendPCM(bytes.Repeat(speechFrame, 15))                              // 300ms speech
 	appendPCM(bytes.Repeat(noiseFrame, int(endpointCap/endpointFrame)+5)) // > cap (1.2s) noisy silence
 	d.until(t, recStop)
@@ -294,18 +294,18 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 			p = p[n:]
 		}
 	}
-	recStop := func(f wsFrame) bool {
+	recStop := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	}
-	idleOrDone := func(f wsFrame) bool {
+	idleOrDone := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 
-	b.ws.mu.Lock()
-	ok := b.ws.startListeningWindow(b.ws.terminals[id], time.Now())
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	ok := b.hub.startListeningWindow(b.hub.terminals[id], time.Now())
+	b.hub.mu.Unlock()
 	if !ok {
 		t.Fatal("startListeningWindow returned false")
 	}
@@ -371,27 +371,27 @@ func TestEndpointIncompleteTrailingWaitsForCap(t *testing.T) {
 			p = p[n:]
 		}
 	}
-	recStop := func(f wsFrame) bool {
+	recStop := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	}
-	idleOrDone := func(f wsFrame) bool {
+	idleOrDone := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
 	d.recStart(t, "")
 	d.barrier(t)
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	appendPCM(bytes.Repeat(voiced, 15))
 	appendPCM(bytes.Repeat(silent, 25)) // 500ms > endpointQuiet (400ms), < endpointCap (1200ms)
 	d.barrier(t)
-	b.ws.mu.Lock()
-	stillOpen := b.ws.terminals[id].recording.phase == captureOpen
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	stillOpen := b.hub.terminals[id].recording.phase == captureOpen
+	b.hub.mu.Unlock()
 	if !stillOpen {
 		t.Fatal("committed early despite trailing 'and'")
 	}

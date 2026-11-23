@@ -349,6 +349,7 @@ over SSE.
 | Lark · port 8765 | Request → response |
 | --- | --- |
 | `GET /health` | STT engine/readiness, OpenCode, TTS, and Delta Chat readiness |
+| `GET /api/library` | Offline content library plan: installed packs, current build, pending or space-skipped packs, and free/budget bytes |
 | `GET /api/diagnostics` | Device telemetry, pipeline timings, Kokoro readiness, server and host resource usage, and MCP contract refresh state (`mcp_contract_refresh`) |
 | `GET /api/companions` | List all companions (`id`, `name`, `voice`, `online`, `dormant`, `terminals[]`) |
 | `POST /api/companions` | Create a companion (`{}` creates `"New Companion"`) |
@@ -369,6 +370,7 @@ over SSE.
 | `POST /remote/api/say`, `listen`, `volume`, `voice`, `story/open`, `story/restart`, `revoke` | One scoped JSON command per route; `revoke` drops every token and tunnel for that companion |
 | `GET /remote/api/history?cursor=...` | Scoped history page with channel, search, and cursor parameters |
 | `POST /mcp` | Loopback-only MCP JSON-RPC endpoint used by `lark mcp`; memory is read through `state` and written through `patch` |
+| `GET /debug/pprof/...` | Loopback + token Go profiles (`cmdline`, `profile`, `symbol`, `trace`, index) |
 | `GET /ota/version.json`, `GET /ota/latest.bin` | Build manifest or `firmware/build/lark.bin` with SHA-256 |
 | `GET /ota/box3/version.json`, `GET /ota/box3/latest.bin` | BOX-3 manifest or `firmware/build-box3/lark_box3.bin` with SHA-256 |
 

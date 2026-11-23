@@ -57,7 +57,7 @@ func (b *larkServer) terminalEntry(t terminalRecord, full bool) object {
 		"auto_volume":  auto,
 		"volume":       vol,
 		"online":       false,
-		"ws_connected": false,
+		"connected": false,
 		"mode":         "offline",
 		"sleeping":     false,
 	}
@@ -69,8 +69,8 @@ func (b *larkServer) terminalEntry(t terminalRecord, full bool) object {
 	if t.CreatedAt != "" {
 		entry["created_at"] = t.CreatedAt
 	}
-	if b.ws != nil {
-		b.ws.terminalStatus(entry, t.ID, full)
+	if b.hub != nil {
+		b.hub.terminalStatus(entry, t.ID, full)
 	}
 	return entry
 }
@@ -122,18 +122,18 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		return b.volumeAPI(r, id)
 	}
 	if id, ok := strings.CutSuffix(rest, "/pair"); ok && r.Method == http.MethodPost {
-		if b.ws == nil || b.dc == nil {
+		if b.hub == nil || b.dc == nil {
 			return nil, problem(503, "Pairing unavailable")
 		}
 		id = strings.ToLower(id)
-		b.ws.mu.Lock()
-		d := b.ws.terminals[id]
-		if d == nil || !b.ws.active(d) || d.companionID == "" {
-			b.ws.mu.Unlock()
+		b.hub.mu.Lock()
+		d := b.hub.terminals[id]
+		if d == nil || !b.hub.active(d) || d.companionID == "" {
+			b.hub.mu.Unlock()
 			return nil, problem(409, "Terminal not connected to a companion")
 		}
 		compID, compName, geom := d.companionID, d.companion.Name, d.screen
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 		invite, err := b.dc.pairInvite(compID)
 		if err != nil {
 			return nil, problem(502, err.Error())
@@ -146,32 +146,32 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		if err != nil {
 			return nil, problem(502, err.Error())
 		}
-		b.ws.mu.Lock()
-		if d = b.ws.terminals[id]; b.ws.active(d) && d.companionID == compID {
+		b.hub.mu.Lock()
+		if d = b.hub.terminals[id]; b.hub.active(d) && d.companionID == compID {
 			now := time.Now()
-			b.ws.wake(d, now)
+			b.hub.wake(d, now)
 			d.drawer = drawerPair
 			d.menuPage = 0
 			d.menuData = &menuContent{invite: invite}
-			b.ws.pushPower(d, 100, true)
-			b.ws.render(d, now, false)
+			b.hub.pushPower(d, 100, true)
+			b.hub.render(d, now, false)
 		}
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 		sendBytes(w, 200, "image/png", pngBytes)
 		return nil, nil
 	}
 	if id, ok := strings.CutSuffix(rest, "/hits"); ok && r.Method == http.MethodGet {
-		if b.ws == nil {
+		if b.hub == nil {
 			return nil, problem(503, "Terminal hub unavailable")
 		}
 		id = strings.ToLower(id)
 		if !terminalIDRE.MatchString(id) {
 			return nil, problem(400, "Invalid terminal ID")
 		}
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		d := b.ws.terminals[id]
-		if d == nil || !b.ws.active(d) {
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		d := b.hub.terminals[id]
+		if d == nil || !b.hub.active(d) {
 			return nil, problem(404, "Terminal not connected")
 		}
 		screen := "home"
@@ -274,21 +274,21 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			t, _ = b.terminalByID(id)
 		}
 		if _, hasAuto := obj["auto"]; hasAuto {
-			if b.ws == nil {
+			if b.hub == nil {
 				return nil, problem(503, "Terminal hub unavailable")
 			}
 			volArgs := object{"auto_volume": obj["auto"]}
 			if v, ok := obj["volume"]; ok {
 				volArgs["volume"] = v
 			}
-			if _, err := b.ws.terminalVolumeControl(r.Context(), id, volArgs); err != nil {
+			if _, err := b.hub.terminalVolumeControl(r.Context(), id, volArgs); err != nil {
 				return nil, err
 			}
 		} else if v, hasVol := obj["volume"]; hasVol {
-			if b.ws == nil {
+			if b.hub == nil {
 				return nil, problem(503, "Terminal hub unavailable")
 			}
-			if _, err := b.ws.terminalVolumeControl(r.Context(), id, object{"auto_volume": false, "volume": v}); err != nil {
+			if _, err := b.hub.terminalVolumeControl(r.Context(), id, object{"auto_volume": false, "volume": v}); err != nil {
 				return nil, err
 			}
 		}
@@ -301,8 +301,8 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			return nil, problem(502, "Cannot delete terminal")
 		}
 		_, _ = b.db.ExecContext(r.Context(), `DELETE FROM terminal_prefs WHERE terminal_id=?`, id)
-		if b.ws != nil {
-			b.ws.disconnectTerminal(id)
+		if b.hub != nil {
+			b.hub.disconnectTerminal(id)
 		}
 		w.WriteHeader(204)
 		return nil, nil
@@ -330,8 +330,8 @@ func (b *larkServer) attachTerminal(ctx context.Context, termID, compID string) 
 	if err := b.terminals.save(t.ID, t, false); err != nil {
 		return nil, problem(502, "Cannot attach terminal")
 	}
-	if b.ws != nil {
-		b.ws.attachTerminal(t.ID, compID)
+	if b.hub != nil {
+		b.hub.attachTerminal(t.ID, compID)
 	}
 	return b.terminalEntry(t, false), nil
 }
@@ -349,8 +349,8 @@ func (b *larkServer) detachTerminal(ctx context.Context, termID string) (object,
 	if err := b.terminals.save(t.ID, t, false); err != nil {
 		return nil, problem(502, "Cannot detach terminal")
 	}
-	if b.ws != nil {
-		b.ws.attachTerminal(t.ID, "")
+	if b.hub != nil {
+		b.hub.attachTerminal(t.ID, "")
 	}
 	return b.terminalEntry(t, false), nil
 }

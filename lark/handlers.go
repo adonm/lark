@@ -37,7 +37,7 @@ type larkServer struct {
 	clips           speechClips
 	ota             otaFile
 	box3OTA         otaFile
-	ws              *wsHub
+	hub             *terminalHub
 	dc              *dcService
 	history         *chatHistory
 	timers          *timerManager
@@ -205,12 +205,12 @@ func (b *larkServer) volumeAPI(r *http.Request, id string) (any, error) {
 	if !ok || len(args) > 2 || len(args) == 2 && args["volume"] == nil {
 		return nil, problem(400, `Expected {"auto":true} or {"auto":false,"volume":0..100}`)
 	}
-	if b.ws == nil {
+	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
 	}
 	delete(args, "auto")
 	args["auto_volume"] = auto
-	return b.ws.terminalVolumeControl(r.Context(), id, args)
+	return b.hub.terminalVolumeControl(r.Context(), id, args)
 }
 
 func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
@@ -223,8 +223,8 @@ func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
 		return nil, problem(400, "Unsupported voice")
 	}
 	save := b.voices.save
-	if b.ws != nil {
-		save = b.ws.saveVoice
+	if b.hub != nil {
+		save = b.hub.saveVoice
 	}
 	if err := save(id, voice); err != nil {
 		return nil, err
@@ -297,10 +297,11 @@ type turnChannel struct {
 }
 
 type turnOptions struct {
-	source  string
-	channel turnChannel
-	publish func(*AudioStream, time.Time)
-	spec    *specTurn
+	source   string
+	channel  turnChannel
+	publish  func(*AudioStream, time.Time)
+	spec     *specTurn
+	textOnly bool // skip TTS (Delta Chat text replies)
 }
 
 type specTurn struct {
@@ -733,7 +734,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		})
 	}
 	onSentence := func(s string) {
-		if isSilentReply(s) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "[silent") {
+		if options.textOnly || isSilentReply(s) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "[silent") {
 			return
 		}
 		start := time.Now()
@@ -771,6 +772,9 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 		}
 		b.chat(sender.ID, entry, true)
 	}
+	if options.textOnly {
+		onChat = nil // The caller records its own final line.
+	}
 	emitBase := b.emits.mark(sender.ID)
 	var raw, sid string
 	var err error
@@ -795,7 +799,7 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	}
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
-	if speechErr == nil && (eager != nil || b.worker != nil && b.worker.ready.Load()) {
+	if !options.textOnly && speechErr == nil && (eager != nil || b.worker != nil && b.worker.ready.Load()) {
 		ex := sentenceExtractor{firstChunk: true}
 		final := append(ex.add(clean), ex.flush()...)
 		if eager == nil || !eager.completeAfter(preToolCount, final) {

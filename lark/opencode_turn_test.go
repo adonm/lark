@@ -186,18 +186,18 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 			})
 			device := testConnectWS(t, base, "unit", false)
 			device.hello(t, id, "Cake")
-			b.ws.mu.Lock()
-			b.ws.startTurn(b.ws.terminals[id], time.Now(), false, "typed", func(ctx context.Context, turn uint64) {
-				b.ws.runTurn(ctx, b.ws.terminals[id], turn, "Speak two sentences.", "typed", nil)
+			b.hub.mu.Lock()
+			b.hub.startTurn(b.hub.terminals[id], time.Now(), false, "typed", func(ctx context.Context, turn uint64) {
+				b.hub.runTurn(ctx, b.hub.terminals[id], turn, "Speak two sentences.", "typed", nil)
 			})
-			b.ws.mu.Unlock()
-			ttsMsg := func(op uint8) func(wsFrame) bool {
-				return func(f wsFrame) bool {
+			b.hub.mu.Unlock()
+			ttsMsg := func(op uint8) func(protocolFrame) bool {
+				return func(f protocolFrame) bool {
 					p := framePayload(f)
 					return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == op
 				}
 			}
-			ttsAudio := func(f wsFrame) uint64 { return binary.LittleEndian.Uint64(framePayload(f)[1:9]) }
+			ttsAudio := func(f protocolFrame) uint64 { return binary.LittleEndian.Uint64(framePayload(f)[1:9]) }
 			startAudio := ttsAudio(device.until(t, ttsMsg(ttsOpStart)))
 			device.until(t, isPlayback) // The upstream is still blocked on finishSSE.
 			b.diag.sig.wait(t, func() bool {
@@ -236,7 +236,7 @@ func TestEagerReplyPublishesPCMBeforeSSEFinishes(t *testing.T) {
 	}
 }
 
-func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
+func TestTerminalEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 	for _, mode := range []string{"before-final", "after-final", "interrupted"} {
 		t.Run(mode, func(t *testing.T) {
 			const id, sid = "lark-eager", "ses-eager"
@@ -292,21 +292,21 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				}
 			}
 			idle := func() bool {
-				b.ws.mu.Lock()
-				defer b.ws.mu.Unlock()
-				d := b.ws.terminals[id]
+				b.hub.mu.Lock()
+				defer b.hub.mu.Unlock()
+				d := b.hub.terminals[id]
 				return !d.busy && d.stopAudio == nil && !d.awaitAck
 			}
 			board := testConnectWS(t, base, "unit", false)
 			board.helloV2(t, id, "Cake")
-			b.ws.mu.Lock()
-			b.ws.startTurn(b.ws.terminals[id], time.Now(), false, "typed", func(ctx context.Context, turn uint64) {
-				b.ws.runTurn(ctx, b.ws.terminals[id], turn, "Speak two sentences.", "typed", nil)
+			b.hub.mu.Lock()
+			b.hub.startTurn(b.hub.terminals[id], time.Now(), false, "typed", func(ctx context.Context, turn uint64) {
+				b.hub.runTurn(ctx, b.hub.terminals[id], turn, "Speak two sentences.", "typed", nil)
 			})
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 			nextSpeech(first).done <- ttsResult{pcm: make([]byte, 640)}
-			ttsMatch := func(op uint8) func(wsFrame) bool {
-				return func(f wsFrame) bool {
+			ttsMatch := func(op uint8) func(protocolFrame) bool {
+				return func(f protocolFrame) bool {
 					p := framePayload(f)
 					return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == op
 				}
@@ -331,10 +331,10 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				close(finish)
 			case "after-final":
 				close(finish)
-				b.ws.sig.wait(t, func() bool {
-					b.ws.mu.Lock()
-					defer b.ws.mu.Unlock()
-					return !b.ws.terminals[id].busy
+				b.hub.sig.wait(t, func() bool {
+					b.hub.mu.Lock()
+					defer b.hub.mu.Unlock()
+					return !b.hub.terminals[id].busy
 				})
 				tail.done <- ttsResult{err: errTTS}
 				board.until(t, ttsMatch(ttsOpStop))
@@ -343,19 +343,19 @@ func TestWSEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 				board.barrier(t)
 				tail.done <- ttsResult{err: errTTS}
 				close(finish)
-				b.ws.sig.wait(t, idle)
-				b.ws.mu.Lock()
-				view, pending := b.ws.terminals[id].view, b.ws.terminals[id].pending
-				b.ws.mu.Unlock()
+				b.hub.sig.wait(t, idle)
+				b.hub.mu.Lock()
+				view, pending := b.hub.terminals[id].view, b.hub.terminals[id].pending
+				b.hub.mu.Unlock()
 				if view != nil || pending != nil {
 					t.Fatal("interrupted speech displayed a failure card")
 				}
 				return
 			}
-			b.ws.sig.wait(t, func() bool {
-				b.ws.mu.Lock()
-				defer b.ws.mu.Unlock()
-				d := b.ws.terminals[id]
+			b.hub.sig.wait(t, func() bool {
+				b.hub.mu.Lock()
+				defer b.hub.mu.Unlock()
+				d := b.hub.terminals[id]
 				return d.scene.title == "Answer" && strings.Contains(d.svg.source, first) && strings.Contains(d.svg.source, second)
 			})
 		})
@@ -431,16 +431,16 @@ func TestOpenCodeCancelAndReset(t *testing.T) {
 			c := testConnectWS(t, base, "unit", false)
 			c.hello(t, termID, "Cake")
 			if action != "reset" {
-				b.ws.mu.Lock()
-				b.ws.terminals[termID].busy = true
-				b.ws.mu.Unlock()
+				b.hub.mu.Lock()
+				b.hub.terminals[termID].busy = true
+				b.hub.mu.Unlock()
 			}
 			reset := make(chan error, 1)
 			switch action {
 			case "cancel":
-				b.ws.mu.Lock()
-				b.ws.cancelTurn(b.ws.terminals[termID], "stop")
-				b.ws.mu.Unlock()
+				b.hub.mu.Lock()
+				b.hub.cancelTurn(b.hub.terminals[termID], "stop")
+				b.hub.mu.Unlock()
 			case "reset":
 				go func() {
 					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/companions/"+id+"/reset", nil)
@@ -580,7 +580,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	mint := testConnectWS(t, base, "unit", false)
 	mint.hello(t, "vocat-0003", "Mint")
 	toolTest(t, base, "emit", object{"to": id, "chime": "tap"}, false)
-	c.until(t, func(f wsFrame) bool {
+	c.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
 	})
@@ -589,11 +589,11 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 		t.Fatal("local-only tap started an AI session:", created)
 	default:
 	}
-	b.ws.mu.Lock()
-	b.ws.startTurn(b.ws.terminals[termID], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
-		b.ws.runTurn(ctx, b.ws.terminals[termID], turn, "Next quiz round!", "voice", nil)
+	b.hub.mu.Lock()
+	b.hub.startTurn(b.hub.terminals[termID], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
+		b.hub.runTurn(ctx, b.hub.terminals[termID], turn, "Next quiz round!", "voice", nil)
 	})
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	expectValue(t, titles, "Lark: Cake (cake)")
 	select {
 	case text := <-prompts:
@@ -603,7 +603,7 @@ func TestOpenCodeFallbackTitlesAndChat(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("turn did not start")
 	}
-	if svg := waitSVG(t, b.ws, termID, "Done."); !strings.Contains(svg, "Answer") {
+	if svg := waitSVG(t, b.hub, termID, "Done."); !strings.Contains(svg, "Answer") {
 		t.Fatal("no-audio answer notice was missing")
 	}
 	if got, err := b.history.list(t.Context(), "mint"); err != nil || len(got) != 0 {
@@ -617,32 +617,32 @@ func TestFinishTurnWaitsForPendingTTS(t *testing.T) {
 	const id = "vocat-pending-tts"
 	c.hello(t, id, "Cake")
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
 	d.busy = true
 	d.turn = 1
 	d.ttsStarted = false
 	d.awaitAck = false
 	d.stopAudio = func() {}
 	d.replyAudio = &turnAudio{turn: 1}
-	b.ws.setCompanionStatus(d.companionID, statusThinking)
-	b.ws.mu.Unlock()
+	b.hub.setCompanionStatus(d.companionID, statusThinking)
+	b.hub.mu.Unlock()
 
-	b.ws.finishTurn(d, 1, nil, nil)
+	b.hub.finishTurn(d, 1, nil, nil)
 
-	b.ws.mu.Lock()
-	st := b.ws.companionStatuses[d.companionID]
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	st := b.hub.companionStatuses[d.companionID]
+	b.hub.mu.Unlock()
 	if st.state == statusDone {
 		t.Fatalf("finishTurn set statusDone while TTS playback was still pending")
 	}
 
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	d.stopAudio = nil
 	d.replyAudio = nil
-	b.ws.playbackDone(d, time.Now(), false)
-	st = b.ws.companionStatuses[d.companionID]
-	b.ws.mu.Unlock()
+	b.hub.playbackDone(d, time.Now(), false)
+	st = b.hub.companionStatuses[d.companionID]
+	b.hub.mu.Unlock()
 	if st.state != statusDone {
 		t.Fatalf("playbackDone status = %d, want statusDone (%d)", st.state, statusDone)
 	}
@@ -659,8 +659,8 @@ func TestSpecTurnAbortsOnEarlyTurnExit(t *testing.T) {
 		cancel:     func() { modelCanceled = true },
 		cancelFill: func() { fillCanceled = true; cancelFill() },
 	}
-	d := &wsTerminal{id: "detached", key: "detached"}
-	b.ws.runTurnChannel(t.Context(), d, 1, "hello", "voice", nil, turnChannel{spec: s})
+	d := &terminalSession{id: "detached", key: "detached"}
+	b.hub.runTurnChannel(t.Context(), d, 1, "hello", "voice", nil, turnChannel{spec: s})
 	if !s.aborted || !modelCanceled || !fillCanceled {
 		t.Fatalf("early exit orphaned the speculative turn: aborted=%v model=%v fill=%v", s.aborted, modelCanceled, fillCanceled)
 	}

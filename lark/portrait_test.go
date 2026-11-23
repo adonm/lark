@@ -298,7 +298,7 @@ func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
 	}
 
 	c := b.companionFor(id)
-	cached, _, _ := b.ws.companionAssets(&c)
+	cached, _, _ := b.hub.companionAssets(&c)
 	if cached == nil {
 		t.Fatal("portrait background was not cached")
 	}
@@ -324,15 +324,15 @@ func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
 		t.Fatal("form change did not regenerate the background file")
 	}
 	for time.Now().Before(deadline) {
-		b.ws.assetsMu.RLock()
-		_, present := b.ws.assets[pid]
-		b.ws.assetsMu.RUnlock()
+		b.hub.assetsMu.RLock()
+		_, present := b.hub.assets[pid]
+		b.hub.assetsMu.RUnlock()
 		if !present {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	refreshed, _, _ := b.ws.companionAssets(&c)
+	refreshed, _, _ := b.hub.companionAssets(&c)
 	if refreshed == nil {
 		t.Fatal("portrait background missing after form change")
 	}

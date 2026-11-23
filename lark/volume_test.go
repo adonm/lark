@@ -37,7 +37,7 @@ func TestAmbientRMSAndVolume(t *testing.T) {
 			t.Errorf("ambient %d gave rms=%g volume=%d, want %d", tc.rms, rms, ambientVolume(rms), tc.vol)
 		}
 	}
-	d := wsTerminal{autoVol: true}
+	d := terminalSession{autoVol: true}
 	d.measureAmbient(ambientSample(80))
 	d.measureAmbient(ambientSample(1800))
 	if !d.hasAmbient || d.ambientEMA != 854 {
@@ -50,21 +50,21 @@ func TestAmbientVolumePrecedesPlaybackWithoutPersisting(t *testing.T) {
 	const id = "vocat-beef"
 	web := testConnectWS(t, base, "unit", false)
 	web.hello(t, id, "")
-	volume := func(want byte) func(wsFrame) bool {
-		return func(f wsFrame) bool {
+	volume := func(want byte) func(protocolFrame) bool {
+		return func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgVolume, "")(f) && len(p) >= 3 && p[0] == want
 		}
 	}
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
 	d.measureAmbient(ambientSample(1800))
 	s := newAudioStream()
 	s.append(make([]byte, 1600))
 	s.finish(nil)
-	b.ws.play(d, s)
-	b.ws.mu.Unlock()
-	f := web.until(t, func(f wsFrame) bool {
+	b.hub.play(d, s)
+	b.hub.mu.Unlock()
+	f := web.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return volume(100)(f) || (hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart)
 	})
@@ -72,7 +72,7 @@ func TestAmbientVolumePrecedesPlaybackWithoutPersisting(t *testing.T) {
 	if !volume(100)(f) || p[1] != 0 || p[2] != 1 {
 		t.Fatalf("expected the 100%% non-persisted volume before TTS start: %x", p)
 	}
-	web.until(t, func(f wsFrame) bool {
+	web.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
 	})
@@ -88,7 +88,7 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	board.helloHardware(t, id, "", capBattery|capDrag)
 	level := func(want byte, auto, persist bool) {
 		t.Helper()
-		f := board.until(t, func(f wsFrame) bool {
+		f := board.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgVolume, "")(f) && len(p) >= 3 && p[0] == want
 		})
@@ -99,16 +99,16 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
 	board.tapMenu(t)
-	svg := waitSVG(t, b.ws, id, "menu-next")
+	svg := waitSVG(t, b.hub, id, "menu-next")
 	nx, ny, _ := hitCenter(svg, "menu-next")
 	tap(nx, ny)
-	svg = waitSVG(t, b.ws, id, "menu-more")
+	svg = waitSVG(t, b.hub, id, "menu-more")
 	mx2, my2, _ := hitCenter(svg, "menu-more")
 	tap(mx2, my2)
-	svg = waitSVG(t, b.ws, id, "menu-volume")
+	svg = waitSVG(t, b.hub, id, "menu-volume")
 	vx, vy, _ := hitCenter(svg, "menu-volume")
 	tap(vx, vy)
-	drawer := waitSVG(t, b.ws, id, "vol-mode")
+	drawer := waitSVG(t, b.hub, id, "vol-mode")
 	for _, control := range []string{"vol-down", "menu-next", "menu-back"} {
 		if !strings.Contains(drawer, control) {
 			t.Fatal("missing volume submenu control", control)
@@ -119,7 +119,7 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	level(45, false, true)
 	nx, ny, _ = hitCenter(drawer, "menu-next")
 	tap(nx, ny)
-	p1 := waitSVG(t, b.ws, id, "vol-up")
+	p1 := waitSVG(t, b.hub, id, "vol-up")
 	ux, uy, _ := hitCenter(p1, "vol-up")
 	tap(ux, uy)
 	level(55, false, true)
@@ -127,14 +127,14 @@ func TestHardwareVolumeMenuAndLegacyHeadTouch(t *testing.T) {
 	board.sendProto(t, msgTelemetry, st[:])
 	bx, by, _ := hitCenter(p1, "menu-back")
 	tap(bx, by)
-	waitSVG(t, b.ws, id, "menu-volume")
+	waitSVG(t, b.hub, id, "menu-volume")
 	entry := apiObjects(t, base+"/api/terminals", "terminals")[0].(object)
 	if auto, vol := b.volumePrefs(id); auto || vol != 55 || entry["auto_volume"] != false || entry["volume"] != json.Number("55") {
 		t.Fatalf("unintended head-touch volume change: persisted %t %d, device %v", auto, vol, entry)
 	}
-	vx, vy, _ = hitCenter(waitSVG(t, b.ws, id, "menu-volume"), "menu-volume")
+	vx, vy, _ = hitCenter(waitSVG(t, b.hub, id, "menu-volume"), "menu-volume")
 	tap(vx, vy)
-	drawer = waitSVG(t, b.ws, id, "vol-mode")
+	drawer = waitSVG(t, b.hub, id, "vol-mode")
 	mx, my, _ := hitCenter(drawer, "vol-mode")
 	tap(mx, my)
 	level(55, true, false)

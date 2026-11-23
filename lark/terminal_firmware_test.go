@@ -13,29 +13,29 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 	_, rev, _ := decodeDisplay(t, d.helloHardware(t, id, "", capPointerRev|capDrag))
 
 	d.recStart(t, "")
-	waitSVG(t, b.ws, id, "rec-send")
-	b.ws.mu.Lock()
-	rev = b.ws.terminals[id].nativeRev
-	b.ws.mu.Unlock()
+	waitSVG(t, b.hub, id, "rec-send")
+	b.hub.mu.Lock()
+	rev = b.hub.terminals[id].nativeRev
+	b.hub.mu.Unlock()
 
 	d.tap(t, 247, 290, rev-1)
 	d.barrier(t)
-	b.ws.mu.Lock()
-	stillActive := b.ws.terminals[id].recording.active()
-	rev = b.ws.terminals[id].nativeRev
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	stillActive := b.hub.terminals[id].recording.active()
+	rev = b.hub.terminals[id].nativeRev
+	b.hub.mu.Unlock()
 	if !stillActive {
 		t.Fatal("stale revision stopped recording")
 	}
 	d.tap(t, 247, 290, rev)
-	d.until(t, func(f wsFrame) bool {
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
 }
 
 func TestDestructiveNativeRevisionWrapAndBrowser(t *testing.T) {
-	d := wsTerminal{caps: terminalCaps{PointerRev: true}}
+	d := terminalSession{caps: terminalCaps{PointerRev: true}}
 	for _, action := range []string{"stop", "rec-cancel", "rec-send", "listen", "reply"} {
 		wrapped, old := uint16(0), uint16(65535)
 		if !d.acceptPointerRevision(action, &wrapped) || d.acceptPointerRevision(action, &old) {
@@ -54,12 +54,12 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	const id = "vocat-0002"
 	_, idleRev, _ := decodeDisplay(t, d.helloHardware(t, id, "", capPointerRev|capBridgeEndpoint|capDrag))
 
-	b.ws.mu.Lock()
-	dev := b.ws.terminals[id]
+	b.hub.mu.Lock()
+	dev := b.hub.terminals[id]
 	dev.busy = true
-	b.ws.render(dev, time.Now(), false)
-	b.ws.mu.Unlock()
-	d.until(t, func(f wsFrame) bool {
+	b.hub.render(dev, time.Now(), false)
+	b.hub.mu.Unlock()
+	d.until(t, func(f protocolFrame) bool {
 		if !isDisplay(f) {
 			return false
 		}
@@ -69,21 +69,21 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 
 	d.tap(t, 180, 290, idleRev)
 	d.barrier(t)
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	taps, thinkingRev := dev.stopTaps, dev.nativeRev
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if taps != 0 {
 		t.Fatal("a stale Stop tap incremented stopTaps")
 	}
 	d.tap(t, 180, 290, thinkingRev)
-	d.until(t, func(f wsFrame) bool {
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
 	})
 }
 
 func TestAcceptPointerRevisionAllowsAnimationFrames(t *testing.T) {
-	d := wsTerminal{
+	d := terminalSession{
 		caps:         terminalCaps{PointerRev: true},
 		nativeRev:    13,
 		actionRev:    10,

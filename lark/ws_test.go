@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-func (s *testWS) helloV2(t *testing.T, id, cat string) wsFrame {
+func (s *testWS) helloV2(t *testing.T, id, cat string) protocolFrame {
 	t.Helper()
 	return s.helloHardware(t, id, cat, capBattery|capDrag)
 }
@@ -189,7 +189,7 @@ func (s *testWS) barrier(t *testing.T) {
 	s.until(t, hasProto(msgPong, ""))
 }
 
-func (s *testWS) read(t *testing.T) wsFrame {
+func (s *testWS) read(t *testing.T) protocolFrame {
 	t.Helper()
 	_ = s.conn.SetReadDeadline(time.Now().Add(max(5*time.Second, s.timeout)))
 	var hdr [protoHeaderSize]byte
@@ -208,10 +208,10 @@ func (s *testWS) read(t *testing.T) wsFrame {
 	if _, err := io.ReadFull(s.in, pkt[protoHeaderSize:]); err != nil {
 		t.Fatal("cannot read terminal payload:", err)
 	}
-	return wsFrame{wsBinary, pkt}
+	return protocolFrame{wsBinary, pkt}
 }
 
-func (s *testWS) until(t *testing.T, match func(wsFrame) bool) wsFrame {
+func (s *testWS) until(t *testing.T, match func(protocolFrame) bool) protocolFrame {
 	t.Helper()
 	deadline := time.Now().Add(max(6*time.Second, s.timeout))
 	for range 256 {
@@ -228,11 +228,11 @@ func (s *testWS) until(t *testing.T, match func(wsFrame) bool) wsFrame {
 		}
 	}
 	t.Fatal("wanted operation not found in terminal frames")
-	return wsFrame{}
+	return protocolFrame{}
 }
 
-func hasProto(msgType uint8, sample string) func(wsFrame) bool {
-	return func(f wsFrame) bool {
+func hasProto(msgType uint8, sample string) func(protocolFrame) bool {
+	return func(f protocolFrame) bool {
 		if f.op != wsBinary {
 			return false
 		}
@@ -241,7 +241,7 @@ func hasProto(msgType uint8, sample string) func(wsFrame) bool {
 	}
 }
 
-func waitSVG(t *testing.T, h *wsHub, termID, sample string) string {
+func waitSVG(t *testing.T, h *terminalHub, termID, sample string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -259,7 +259,7 @@ func waitSVG(t *testing.T, h *wsHub, termID, sample string) string {
 	return ""
 }
 
-func isPlayback(f wsFrame) bool {
+func isPlayback(f protocolFrame) bool {
 	if f.op != wsBinary {
 		return false
 	}
@@ -267,7 +267,7 @@ func isPlayback(f wsFrame) bool {
 	return ok && mt == msgTTSPCM && len(payload) > 0
 }
 
-func isDisplay(f wsFrame) bool {
+func isDisplay(f protocolFrame) bool {
 	if f.op != wsBinary {
 		return false
 	}
@@ -275,12 +275,12 @@ func isDisplay(f wsFrame) bool {
 	return ok && mt == msgFrame && len(payload) > 0
 }
 
-func framePayload(f wsFrame) []byte {
+func framePayload(f protocolFrame) []byte {
 	_, _, payload, _ := unpackProtoPacket(f.data)
 	return payload
 }
 
-func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) wsFrame {
+func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) protocolFrame {
 	t.Helper()
 	s.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
 		protoVersion:   protoVersion1,
@@ -315,7 +315,7 @@ func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) wsF
 	return s.until(t, isDisplay)
 }
 
-func (s *testWS) hello(t *testing.T, id, compID string) wsFrame {
+func (s *testWS) hello(t *testing.T, id, compID string) protocolFrame {
 	t.Helper()
 	return s.helloHardware(t, id, compID, capBattery|capDrag)
 }
@@ -330,8 +330,8 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 	if setup != nil {
 		setup(b, dir)
 	}
-	b.ws = newWSHub(b, false)
-	termSrv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	b.hub = newTerminalHub(b, false)
+	termSrv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,14 +348,14 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 		delete(testUDPFeeds, srv.URL)
 		testTermMu.Unlock()
 		termSrv.shutdown()
-		b.ws.shutdown()
+		b.hub.shutdown()
 		cancel()
 		srv.Close()
 	})
 	return b, srv.URL
 }
 
-func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
+func TestTerminalHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	dev := testConnectWS(t, base, "unit", false)
 	const id = "box3-hello"
@@ -381,9 +381,9 @@ func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 		t.Fatal("unexpected initial framebuffer", frame)
 	}
 	dev.conn.Close()
-	b.ws.sig.wait(t, func() bool {
+	b.hub.sig.wait(t, func() bool {
 		list := apiObjects(t, base+"/api/terminals", "terminals")
-		return len(list) == 1 && list[0].(object)["ws_connected"] == false
+		return len(list) == 1 && list[0].(object)["connected"] == false
 	})
 	p, ok, err := terminalStore(b.db).get(id)
 	if err != nil || !ok || p.Kind != "hardware" || p.IP != "127.0.0.1" || p.Port != 80 || p.LastSeen <= 0 {
@@ -391,7 +391,7 @@ func TestWSHelloRejectsBadVersionAndPersistsHardware(t *testing.T) {
 	}
 }
 
-func TestWSRecordingLimits(t *testing.T) {
+func TestTerminalRecordingLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		pcm     []byte
@@ -425,7 +425,7 @@ func TestWSRecordingLimits(t *testing.T) {
 			dev := testConnectWS(t, base, "unit", false)
 			dev.hello(t, id, "cake")
 			dev.recStart(t, "")
-			dev.until(t, func(f wsFrame) bool {
+			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
 			})
@@ -437,15 +437,15 @@ func TestWSRecordingLimits(t *testing.T) {
 			if tc.timeout {
 				// Wait for the server to consume the PCM before aging the recording.
 				dev.barrier(t)
-				b.ws.mu.Lock()
-				b.ws.terminals[id].recording.started = time.Now().Add(-91 * time.Second)
-				b.ws.mu.Unlock()
+				b.hub.mu.Lock()
+				b.hub.terminals[id].recording.started = time.Now().Add(-91 * time.Second)
+				b.hub.mu.Unlock()
 			}
-			dev.until(t, func(f wsFrame) bool {
+			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 			})
-			dev.until(t, func(f wsFrame) bool {
+			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				if hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel {
 					t.Fatal("recording limits must not play the explicit cancel chime")
@@ -462,10 +462,10 @@ func TestWSRecordingLimits(t *testing.T) {
 					t.Fatal("captured PCM was not transcribed")
 				}
 			}
-			b.ws.mu.Lock()
-			d := b.ws.terminals[id]
+			b.hub.mu.Lock()
+			d := b.hub.terminals[id]
 			cleared := !d.recording.active() && len(d.recording.pcm) == 0 && !d.busy && d.view == nil
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 			if !cleared {
 				t.Fatal("an empty transcript must leave the device idle with no error card")
 			}
@@ -473,7 +473,7 @@ func TestWSRecordingLimits(t *testing.T) {
 	}
 }
 
-func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
+func TestTerminalHardwareSendWaitsForFinalPCM(t *testing.T) {
 	for _, recEnd := range []bool{true, false} {
 		name := "rec_end"
 		if !recEnd {
@@ -498,17 +498,17 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			dev := testConnectWS(t, base, "unit", false)
 			dev.hello(t, id, "Cake")
 			dev.recStart(t, "")
-			waitSVG(t, b.ws, id, "rec-send")
+			waitSVG(t, b.hub, id, "rec-send")
 			dev.sendRTP(t, rtpPTRecPCM, 1, 320, first)
 			dev.tap(t, 247, 290, 0)
-			dev.until(t, func(f wsFrame) bool {
+			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 			})
-			b.ws.mu.Lock()
-			d := b.ws.terminals[id]
+			b.hub.mu.Lock()
+			d := b.hub.terminals[id]
 			stopping := d.recording.phase == captureStoppingOpen && d.recording.stopTimer != nil && bytes.Equal(d.recording.pcm, first) && !d.busy
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 			if !stopping {
 				t.Fatal("Send finalized before it could receive the final DMA packet")
 			}
@@ -524,9 +524,9 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("recording was not finalized")
 			}
-			b.ws.mu.Lock()
+			b.hub.mu.Lock()
 			cleared := !d.recording.active() && d.recording.stopTimer == nil && len(d.recording.pcm) == 0
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 			if !cleared {
 				t.Fatal("recording did not clear its stop timer and PCM")
 			}
@@ -534,13 +534,13 @@ func TestWSHardwareSendWaitsForFinalPCM(t *testing.T) {
 	}
 }
 
-func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
+func TestTerminalHardwareSendFailsafeDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &larkServer{root: t.Context()}
-		c := &wsClient{ctx: t.Context()}
-		d := &wsTerminal{client: c, key: "vocat-noac", id: "vocat-noac", kind: "hardware", screen: roundScreen, companion: blankCompanion()}
+		c := &terminalClient{ctx: t.Context()}
+		d := &terminalSession{client: c, key: "vocat-noac", id: "vocat-noac", kind: "hardware", screen: roundScreen, companion: blankCompanion()}
 		d.recording.start(time.Now(), "", false)
-		h := &wsHub{b: b, terminals: map[string]*wsTerminal{d.key: d}}
+		h := &terminalHub{b: b, terminals: map[string]*terminalSession{d.key: d}}
 		h.mu.Lock()
 		h.recordingControl(d, time.Now(), false)
 		h.mu.Unlock()
@@ -563,7 +563,7 @@ func TestWSHardwareSendFailsafeDeadline(t *testing.T) {
 	})
 }
 
-func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
+func TestTerminalRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	allowSTT := make(chan struct{})
 	b, base := wsHarness(t, func(b *larkServer, dir string) {
 		b.setSTT(func(ctx context.Context, _ []byte) (string, error) {
@@ -593,11 +593,11 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	from.sendRTP(t, 99, 1, 320, []byte{1, 2}) // unknown RTP payload type is ignored
 	from.sendRTP(t, rtpPTRecPCM, 2, 640, pcm[100:])
 	from.recEnd(t, "", false)
-	to.until(t, func(f wsFrame) bool {
+	to.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})
-	to.until(t, func(f wsFrame) bool {
+	to.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
 	})
@@ -605,27 +605,27 @@ func TestWSRawIntercomDoesNotWaitForSTT(t *testing.T) {
 	if !bytes.Equal(framePayload(got), pcm) {
 		t.Fatal("raw intercom did not preserve concatenated PCM frames")
 	}
-	end := to.until(t, func(f wsFrame) bool {
+	end := to.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
 	to.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	close(allowSTT)
 	closed = true
-	capSVG := waitSVG(t, b.ws, "vocat-000b", "Voice caption.")
+	capSVG := waitSVG(t, b.hub, "vocat-000b", "Voice caption.")
 	rx, ry, ok := hitCenter(capSVG, "reply")
 	if !ok {
 		t.Fatal("missing reply hit")
 	}
 	to.tap(t, rx, ry, 0)
-	to.until(t, func(f wsFrame) bool {
+	to.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "cake")(f) && len(p) >= 1 && p[0] == recOpStart
 	})
 	to.recEnd(t, "", true)
 }
 
-func TestWSLongPlaybackWithBackpressure(t *testing.T) {
+func TestTerminalLongPlaybackWithBackpressure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const duration = 12 * time.Second
 		pcm := make([]byte, 12*sampleRate*2)
@@ -646,11 +646,11 @@ func TestWSLongPlaybackWithBackpressure(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		nc := &nativeClient{conn: server, out: make(chan nativeOutMsg, 12)}
-		c := &wsClient{native: nc, ctx: ctx, cancel: cancel}
+		c := &terminalClient{native: nc, ctx: ctx, cancel: cancel}
 		nc.client = c
 		dev := &testWS{conn: client, in: bufio.NewReader(client)}
-		d := &wsTerminal{client: c, key: "lark-slow", id: "lark-slow", screen: roundScreen, companion: blankCompanion()}
-		h := &wsHub{terminals: map[string]*wsTerminal{d.key: d}}
+		d := &terminalSession{client: c, key: "lark-slow", id: "lark-slow", screen: roundScreen, companion: blankCompanion()}
+		h := &terminalHub{terminals: map[string]*terminalSession{d.key: d}}
 		go nc.writeLoop()
 		start := time.Now()
 		h.mu.Lock()
@@ -717,15 +717,15 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	stream := newAudioStream()
 	stream.append(bytes.Repeat([]byte{12, 0}, sampleRate))
 	stream.finish(nil)
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
-	b.ws.play(d, stream)
-	b.ws.mu.Unlock()
-	phone.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
+	b.hub.play(d, stream)
+	b.hub.mu.Unlock()
+	phone.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusSpeaking
 	})
-	frame := phone.until(t, func(f wsFrame) bool {
+	frame := phone.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -735,20 +735,20 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	}
 	phone.sendProto(t, msgTTSAck, encodeTTSAck(false, audio+1))
 	phone.barrier(t)
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	awaiting := d.awaitAck
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if !awaiting {
 		t.Fatal("a stale acknowledgment changed the current playback mode")
 	}
 	phone.sendProto(t, msgTTSAck, encodeTTSAck(false, audio))
-	phone.until(t, func(f wsFrame) bool {
+	phone.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusDone || p[4] == statusIdle)
 	})
 }
 
-func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
+func TestTerminalPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	const id = "vocat-abrt"
 	dev := testConnectWS(t, base, "unit", false)
@@ -757,15 +757,15 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 		stream := newAudioStream()
 		stream.append(bytes.Repeat([]byte{12, 0}, 800))
 		stream.finish(nil)
-		b.ws.mu.Lock()
-		d := b.ws.terminals[id]
-		b.ws.play(d, stream)
+		b.hub.mu.Lock()
+		d := b.hub.terminals[id]
+		b.hub.play(d, stream)
 		audio := d.audio
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 		return audio
 	}
 	first := play()
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -773,7 +773,7 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	if first == second {
 		t.Fatal("replacement reused the aborted generation")
 	}
-	abort := dev.until(t, func(f wsFrame) bool {
+	abort := dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		if hasProto(msgChime, "")(f) || (hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && (p[0] == ttsOpEnd || p[0] == ttsOpStart)) {
 			t.Fatalf("abort did not precede replacement: %x", p)
@@ -783,7 +783,7 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	if got := binary.LittleEndian.Uint64(framePayload(abort)[1:9]); got != first {
 		t.Fatalf("abort used audio ID %d, want %d", got, first)
 	}
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -791,9 +791,9 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(true, first))
 	dev.barrier(t)
 	awaiting := func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		return b.ws.terminals[id].awaitAck
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		return b.hub.terminals[id].awaitAck
 	}
 	if !awaiting() {
 		t.Fatal("aborted stream ACK cleared replacement playback")
@@ -810,7 +810,7 @@ func TestWSPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	}
 }
 
-func TestWSVoicePlaysFirstSentenceBeforeFinal(t *testing.T) {
+func TestTerminalVoicePlaysFirstSentenceBeforeFinal(t *testing.T) {
 	t.Run("Complete", func(t *testing.T) { wsEagerVoice(t, false) })
 	t.Run("StopWhileGenerating", func(t *testing.T) { wsEagerVoice(t, true) })
 }
@@ -908,7 +908,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	dev.recStart(t, "")
 	dev.sendRTP(t, rtpPTRecPCM, 1, 320, pcm)
 	dev.recEnd(t, "", false)
-	start := dev.until(t, func(f wsFrame) bool {
+	start := dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStart
 	})
@@ -921,14 +921,14 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		return len(turns) == 1 && turns[0].TTS != nil && turns[0].E2E != nil && turns[0].Total == nil
 	})
 	if stopWhileGenerating {
-		b.ws.sig.wait(t, func() bool {
-			b.ws.mu.Lock()
-			defer b.ws.mu.Unlock()
-			d := b.ws.terminals["vocat-a000"]
+		b.hub.sig.wait(t, func() bool {
+			b.hub.mu.Lock()
+			defer b.hub.mu.Unlock()
+			d := b.hub.terminals["vocat-a000"]
 			return d != nil && strings.Contains(d.svg.source, `data-id="stop"`)
 		})
 		dev.tap(t, 180, 290, 0)
-		abort := dev.until(t, func(f wsFrame) bool {
+		abort := dev.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStop
 		})
@@ -949,16 +949,16 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	if !bytes.Equal(framePayload(got), speech) {
 		t.Fatal("did not receive tail sentence")
 	}
-	end := dev.until(t, func(f wsFrame) bool {
+	end := dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	dev.barrier(t)
-	b.ws.mu.Lock()
-	d := b.ws.terminals["vocat-a000"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["vocat-a000"]
 	settled := !d.busy && !d.awaitAck && d.scene.title == ""
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if !settled {
 		t.Fatal("device did not settle after tts_ack")
 	}
@@ -1005,7 +1005,7 @@ func TestNativeClientPrioritizesControlAndCoalescesFrames(t *testing.T) {
 		out:         make(chan nativeOutMsg, 8),
 		frameNotify: make(chan struct{}, 1),
 	}
-	c := &wsClient{native: nc, ctx: ctx, cancel: cancel}
+	c := &terminalClient{native: nc, ctx: ctx, cancel: cancel}
 	nc.client = c
 	dev := &testWS{conn: client, in: bufio.NewReader(client)}
 

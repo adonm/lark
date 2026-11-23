@@ -184,7 +184,7 @@ func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []stri
 		for _, item := range termList {
 			m, _ := item.(object)
 			fmt.Fprintf(out, "  %s\tcompanion=%s\tonline=%v\tip=%s\tfw=%s\n",
-				str(m["id"]), str(m["companion_id"]), m["ws_connected"], str(m["ip"]), str(m["firmware"]))
+				str(m["id"]), str(m["companion_id"]), m["connected"], str(m["ip"]), str(m["firmware"]))
 		}
 		return nil
 
@@ -237,7 +237,7 @@ func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []stri
 			for _, item := range list {
 				m, _ := item.(object)
 				fmt.Fprintf(out, "%s\tcompanion=%s\tonline=%v\tip=%s\tfw=%s\n",
-					str(m["id"]), str(m["companion_id"]), m["ws_connected"], str(m["ip"]), str(m["firmware"]))
+					str(m["id"]), str(m["companion_id"]), m["connected"], str(m["ip"]), str(m["firmware"]))
 			}
 			return nil
 		case len(args) == 3 && args[0] == "attach":

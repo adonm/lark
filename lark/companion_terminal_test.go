@@ -72,6 +72,6 @@ func TestCompanionIntercom(t *testing.T) {
 	if r := intercom["receipts"].([]any)[0].(object); r["companion_id"] != "mint" || r["status"] != "queued" {
 		t.Fatalf("unexpected intercom receipt: %v", intercom)
 	}
-	waitSVG(t, b.ws, "vocat-0002", "Tea time!")
+	waitSVG(t, b.hub, "vocat-0002", "Tea time!")
 	_ = cake
 }

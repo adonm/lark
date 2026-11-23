@@ -75,7 +75,7 @@ func TestTurnBench(t *testing.T) {
 			labels = append(labels, fmt.Sprintf("r%d-%s", run, u.name))
 			c.syncFrames(t)
 			c.input(t, "tap", 180, 140, c.revision)
-			c.expect(t, "rec start", func(f wsFrame) bool {
+			c.expect(t, "rec start", func(f protocolFrame) bool {
 				return e2eFields(f, "rec", "action", `"start"`)
 			})
 			c.recStart(t, "")
@@ -89,21 +89,21 @@ func TestTurnBench(t *testing.T) {
 				<-ticker.C
 			}
 			ticker.Stop()
-			c.expect(t, "rec stop", func(f wsFrame) bool {
+			c.expect(t, "rec stop", func(f protocolFrame) bool {
 				return e2eFields(f, "rec", "action", `"stop"`)
 			})
 			c.recEnd(t, "", false)
-			c.expect(t, "tts start", func(f wsFrame) bool {
+			c.expect(t, "tts start", func(f protocolFrame) bool {
 				return e2eFields(f, "tts", "state", `"start"`)
 			})
-			c.expect(t, "first tts pcm", func(f wsFrame) bool {
+			c.expect(t, "first tts pcm", func(f protocolFrame) bool {
 				if f.op != wsBinary {
 					return false
 				}
 				mt, _, _, ok := unpackProtoPacket(f.data)
 				return ok && mt == msgTTSPCM
 			})
-			end := c.expect(t, "tts end", func(f wsFrame) bool {
+			end := c.expect(t, "tts end", func(f protocolFrame) bool {
 				return e2eFields(f, "tts", "state", `"end"`)
 			})
 			c.ack(t, end)

@@ -15,16 +15,16 @@ const (
 	wsBinary = 2
 )
 
-type wsFrame struct {
+type protocolFrame struct {
 	op   byte
 	data []byte
 }
 
-type wsClient struct {
+type terminalClient struct {
 	native        *nativeClient
 	ctx           context.Context
 	cancel        context.CancelFunc
-	terminal      *wsTerminal
+	terminal      *terminalSession
 	activeCapture atomic.Pointer[endpointCapture]
 	pingMu        sync.Mutex
 	pingSentAt    time.Time
@@ -51,14 +51,14 @@ type resumeEntry struct {
 
 // The hub lock orders state changes and control frames. Socket writes,
 // playback queue waits, and backend requests never run under it.
-type wsHub struct {
+type terminalHub struct {
 	b                 *larkServer
 	mu                sync.Mutex
 	sig               condSignal
 	settingsMu        sync.Mutex
 	conns             sync.WaitGroup
-	clients           map[*wsClient]struct{}
-	terminals         map[string]*wsTerminal
+	clients           map[*terminalClient]struct{}
+	terminals         map[string]*terminalSession
 	closed            bool
 	atmosphere        bool
 	voiceOwners       map[string]string
@@ -84,12 +84,12 @@ type cachedAssets struct {
 	used  uint64
 }
 
-func newWSHub(b *larkServer, atmosphere bool) *wsHub {
-	h := &wsHub{
+func newTerminalHub(b *larkServer, atmosphere bool) *terminalHub {
+	h := &terminalHub{
 		b:                 b,
 		atmosphere:        atmosphere,
-		clients:           make(map[*wsClient]struct{}),
-		terminals:         make(map[string]*wsTerminal),
+		clients:           make(map[*terminalClient]struct{}),
+		terminals:         make(map[string]*terminalSession),
 		voiceOwners:       make(map[string]string),
 		companionStatuses: make(map[string]companionStatusState),
 		resumes:           make(map[[resumeTokenLen]byte]*resumeEntry),
@@ -98,7 +98,7 @@ func newWSHub(b *larkServer, atmosphere bool) *wsHub {
 	return h
 }
 
-func (h *wsHub) shutdown() {
+func (h *terminalHub) shutdown() {
 	h.mu.Lock()
 	if !h.closed {
 		h.closed = true
@@ -110,14 +110,14 @@ func (h *wsHub) shutdown() {
 	h.conns.Wait()
 }
 
-func (c *wsClient) remoteAddr() net.Addr {
+func (c *terminalClient) remoteAddr() net.Addr {
 	if c.native != nil {
 		return c.native.conn.RemoteAddr()
 	}
 	return nil
 }
 
-func (c *wsClient) enqueueProto(msgType uint8, payload []byte) bool {
+func (c *terminalClient) enqueueProto(msgType uint8, payload []byte) bool {
 	if c.native != nil {
 		return c.native.enqueue(msgType, payload)
 	}
@@ -153,18 +153,18 @@ func enqueueWaitChan[T any](ctx, clientCtx context.Context, mu *sync.Mutex, out 
 	}
 }
 
-func (c *wsClient) enqueueProtoWait(ctx context.Context, msgType uint8, payload []byte) bool {
+func (c *terminalClient) enqueueProtoWait(ctx context.Context, msgType uint8, payload []byte) bool {
 	if c.native != nil {
 		return c.native.enqueueWait(ctx, msgType, payload)
 	}
 	return false
 }
 
-func (h *wsHub) pushProto(d *wsTerminal, msgType uint8, payload []byte, mirror bool) {
+func (h *terminalHub) pushProto(d *terminalSession, msgType uint8, payload []byte, mirror bool) {
 	d.client.enqueueProto(msgType, payload)
 }
 
-func (h *wsHub) pushRecStart(d *wsTerminal, target string, bridgeEndpoint, listen bool) {
+func (h *terminalHub) pushRecStart(d *terminalSession, target string, bridgeEndpoint, listen bool) {
 	var flags uint8
 	if target != "" {
 		flags |= recTargetInter
@@ -178,7 +178,7 @@ func (h *wsHub) pushRecStart(d *wsTerminal, target string, bridgeEndpoint, liste
 	d.client.enqueueProto(msgRecCtrl, encodeRecCtrl(recOpStart, flags, d.recSession, target))
 }
 
-func (h *wsHub) pushRecStop(d *wsTerminal, target string, cancelled bool) {
+func (h *terminalHub) pushRecStop(d *terminalSession, target string, cancelled bool) {
 	op := recOpStop
 	if cancelled {
 		op = recOpCancel
@@ -190,35 +190,35 @@ func (h *wsHub) pushRecStop(d *wsTerminal, target string, cancelled bool) {
 	d.client.enqueueProto(msgRecCtrl, encodeRecCtrl(op, flags, d.recSession, target))
 }
 
-func (h *wsHub) pushTTSAbort(d *wsTerminal, audioID uint64) {
+func (h *terminalHub) pushTTSAbort(d *terminalSession, audioID uint64) {
 	d.client.enqueueProto(msgTTSCtrl, encodeTTSCtrl(ttsOpStop, audioID))
 }
 
-func (h *wsHub) pushChime(d *wsTerminal, kind string) {
+func (h *terminalHub) pushChime(d *terminalSession, kind string) {
 	if code, ok := encodeChimePayload(kind); ok {
 		d.client.enqueueProto(msgChime, []byte{code})
 	}
 }
 
-func (h *wsHub) pushPower(d *wsTerminal, brightness int, mirror bool) {
+func (h *terminalHub) pushPower(d *terminalSession, brightness int, mirror bool) {
 	b := byte(min(100, max(0, brightness)))
 	h.pushProto(d, msgPower, []byte{b}, mirror)
 }
 
-func (h *wsHub) pushVolume(d *wsTerminal, persist, mirror bool) {
+func (h *terminalHub) pushVolume(d *terminalSession, persist, mirror bool) {
 	h.pushProto(d, msgVolume, encodeVolumeMsg(d.vol, persist, d.autoVol, d.id, d.companionID), mirror)
 }
 
-func (h *wsHub) active(d *wsTerminal) bool {
+func (h *terminalHub) active(d *terminalSession) bool {
 	return d != nil && !h.closed && h.terminals[d.key] == d && d.client.ctx.Err() == nil
 }
 
-func (h *wsHub) terminalsFor(companionID string) []*wsTerminal {
+func (h *terminalHub) terminalsFor(companionID string) []*terminalSession {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return nil
 	}
-	var out []*wsTerminal
+	var out []*terminalSession
 	for _, t := range h.terminals {
 		if h.active(t) && t.companionID == cid {
 			out = append(out, t)
@@ -227,7 +227,7 @@ func (h *wsHub) terminalsFor(companionID string) []*wsTerminal {
 	return out
 }
 
-func (h *wsHub) voiceOwner(companionID string) *wsTerminal {
+func (h *terminalHub) voiceOwner(companionID string) *terminalSession {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return nil
@@ -237,7 +237,7 @@ func (h *wsHub) voiceOwner(companionID string) *wsTerminal {
 			return t
 		}
 	}
-	var best *wsTerminal
+	var best *terminalSession
 	for _, t := range h.terminalsFor(cid) {
 		if best == nil || t.last.After(best.last) {
 			best = t
@@ -251,7 +251,7 @@ func (h *wsHub) voiceOwner(companionID string) *wsTerminal {
 	return best
 }
 
-func (h *wsHub) broadcastVoiceOwner(companionID, terminalID string) {
+func (h *terminalHub) broadcastVoiceOwner(companionID, terminalID string) {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return
@@ -262,7 +262,7 @@ func (h *wsHub) broadcastVoiceOwner(companionID, terminalID string) {
 	}
 }
 
-func (h *wsHub) takeVoiceOwnership(d *wsTerminal) {
+func (h *terminalHub) takeVoiceOwnership(d *terminalSession) {
 	if d == nil || d.companionID == "" {
 		return
 	}
@@ -273,12 +273,12 @@ func (h *wsHub) takeVoiceOwnership(d *wsTerminal) {
 	h.broadcastVoiceOwner(d.companionID, d.id)
 }
 
-func (h *wsHub) fallbackVoiceOwnership(companionID, excludeID string) {
+func (h *terminalHub) fallbackVoiceOwnership(companionID, excludeID string) {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return
 	}
-	var best *wsTerminal
+	var best *terminalSession
 	for _, t := range h.terminalsFor(cid) {
 		if t.id == excludeID {
 			continue
@@ -295,7 +295,7 @@ func (h *wsHub) fallbackVoiceOwnership(companionID, excludeID string) {
 	}
 }
 
-func (h *wsHub) setCompanionStatus(companionID string, state uint8) {
+func (h *terminalHub) setCompanionStatus(companionID string, state uint8) {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return
@@ -307,7 +307,7 @@ func (h *wsHub) setCompanionStatus(companionID string, state uint8) {
 	}
 }
 
-func (h *wsHub) clearDoneOrErrorStatus(d *wsTerminal) {
+func (h *terminalHub) clearDoneOrErrorStatus(d *terminalSession) {
 	if d == nil || d.companionID == "" {
 		return
 	}
@@ -322,7 +322,7 @@ func newResumeToken() [resumeTokenLen]byte {
 	return tok
 }
 
-func (h *wsHub) pruneResumes(now time.Time) {
+func (h *terminalHub) pruneResumes(now time.Time) {
 	for k, e := range h.resumes {
 		if now.After(e.expiresAt) {
 			delete(h.resumes, k)
@@ -330,7 +330,7 @@ func (h *wsHub) pruneResumes(now time.Time) {
 	}
 }
 
-func (h *wsHub) teardownTerminal(d *wsTerminal) {
+func (h *terminalHub) teardownTerminal(d *terminalSession) {
 	now := time.Now()
 	wasOwner := d.companionID != "" && h.voiceOwners[d.companionID] == d.id
 	if d.hasResumeToken {
@@ -360,7 +360,7 @@ func (h *wsHub) teardownTerminal(d *wsTerminal) {
 	h.sig.notify()
 }
 
-func (h *wsHub) detach(c *wsClient) {
+func (h *terminalHub) detach(c *terminalClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.clients, c)
@@ -369,7 +369,7 @@ func (h *wsHub) detach(c *wsClient) {
 	}
 }
 
-func (h *wsHub) disconnectTerminal(id string) {
+func (h *terminalHub) disconnectTerminal(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if d := h.terminals[strings.ToLower(id)]; d != nil {
@@ -378,7 +378,7 @@ func (h *wsHub) disconnectTerminal(id string) {
 	}
 }
 
-func (h *wsHub) attachTerminal(termID, compID string) {
+func (h *terminalHub) attachTerminal(termID, compID string) {
 	termID = strings.ToLower(termID)
 	compID = strings.ToLower(compID)
 	h.mu.Lock()

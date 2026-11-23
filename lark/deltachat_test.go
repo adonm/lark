@@ -331,7 +331,7 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-33d8", cake.ID)
-	bindMenu(dev, b.ws, "vocat-33d8")
+	bindMenu(dev, b.hub, "vocat-33d8")
 
 	// Open Menu -> Next -> More -> Pair.
 	tapMenu(t, dev, "menu", "menu-next")
@@ -341,10 +341,10 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 	if !strings.Contains(pairSrc, "pair-close") {
 		t.Fatalf("expected pair drawer, got %q", pairSrc)
 	}
-	b.ws.mu.Lock()
-	d := b.ws.terminals["vocat-33d8"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["vocat-33d8"]
 	hasBlack := d != nil && slices.Contains(d.svg.fb, uint16(0x0000))
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if !hasBlack {
 		t.Fatal("Pair QR rendered without any black QR pixels")
 	}
@@ -397,11 +397,11 @@ func TestDeltaChatIntercomBetweenCompanions(t *testing.T) {
 	stub.mu.Unlock()
 
 	b.dc.handleMessage(t.Context(), mint.DCAccountID, 77)
-	mintDev.until(t, func(f wsFrame) bool {
+	mintDev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})
-	waitSVG(t, b.ws, "vocat-2cac", "Tea time!")
+	waitSVG(t, b.hub, "vocat-2cac", "Tea time!")
 }
 
 func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
@@ -492,19 +492,19 @@ func TestDeltaChatHumanMessageDeliversCardChimeAndSpeech(t *testing.T) {
 	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
 
 	for _, dev := range []*testWS{dev1, dev2} {
-		dev.until(t, func(f wsFrame) bool {
+		dev.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 		})
-		end := dev.until(t, func(f wsFrame) bool {
+		end := dev.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 		})
 		audioID := binary.LittleEndian.Uint64(framePayload(end)[1:9])
 		dev.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	}
-	waitSVG(t, b.ws, "box3-0001", "Hello Alice!")
-	waitSVG(t, b.ws, "vocat-0002", "Hello Alice!")
+	waitSVG(t, b.hub, "box3-0001", "Hello Alice!")
+	waitSVG(t, b.hub, "vocat-0002", "Hello Alice!")
 
 	spokenMu.Lock()
 	gotSpoken := slices.Clone(spoken)
@@ -561,7 +561,7 @@ func TestDeltaChatSilentReplyProducesNeitherChatNorSpeech(t *testing.T) {
 	dcStub.mu.Unlock()
 
 	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
-	waitSVG(t, b.ws, "box3-silent", "Okay")
+	waitSVG(t, b.hub, "box3-silent", "Okay")
 
 	spokenMu.Lock()
 	gotSpoken := slices.Clone(spoken)
@@ -601,10 +601,10 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-0003", "greg")
 
-	b.ws.mu.Lock()
-	term := b.ws.terminals["box3-0003"]
+	b.hub.mu.Lock()
+	term := b.hub.terminals["box3-0003"]
 	turnDone := make(chan struct{})
-	b.ws.startTurn(term, time.Now(), false, "voice", func(_ context.Context, id uint64) {
+	b.hub.startTurn(term, time.Now(), false, "voice", func(_ context.Context, id uint64) {
 		defer close(turnDone)
 		stub.mu.Lock()
 		stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
@@ -618,9 +618,9 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 			t.Fatalf("TTS started during active voice turn: %q", got)
 		default:
 		}
-		b.ws.finishTurn(term, id, nil, nil)
+		b.hub.finishTurn(term, id, nil, nil)
 	})
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	<-turnDone
 
 	select {
@@ -631,7 +631,7 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("queued DC message did not speak after voice turn ended")
 	}
-	waitSVG(t, b.ws, "box3-0003", "Bedtime soon")
+	waitSVG(t, b.hub, "box3-0003", "Bedtime soon")
 }
 
 func TestEmitSaySpeaksOnTerminal(t *testing.T) {
@@ -697,14 +697,14 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-0005", "greg")
 
-	b.ws.mu.Lock()
-	term := b.ws.terminals["box3-0005"]
+	b.hub.mu.Lock()
+	term := b.hub.terminals["box3-0005"]
 	done := make(chan struct{})
-	b.ws.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
+	b.hub.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
 		defer close(done)
-		b.ws.runTurn(ctx, term, id, "tell Mum OK", "voice", nil)
+		b.hub.runTurn(ctx, term, id, "tell Mum OK", "voice", nil)
 	})
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	<-done
 
 	stub.mu.Lock()
@@ -712,7 +712,7 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 	if len(stub.sent) != 1 || stub.sent[0].accID != greg.DCAccountID || *stub.sent[0].data.Text != "OK" {
 		t.Fatalf("tell Mum OK did not send DC message: %+v", stub.sent)
 	}
-	waitSVG(t, b.ws, "box3-0005", "Sent to Mum!")
+	waitSVG(t, b.hub, "box3-0005", "Sent to Mum!")
 }
 
 func TestStateExposesContacts(t *testing.T) {
@@ -839,9 +839,9 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 	}
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-0006", "greg")
-	b.ws.mu.Lock()
-	term := b.ws.terminals["box3-0006"]
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	term := b.hub.terminals["box3-0006"]
+	b.hub.mu.Unlock()
 
 	stub.mu.Lock()
 	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
@@ -856,13 +856,13 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 	}()
 	<-firstStarted
 
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	localDone := make(chan struct{})
-	b.ws.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
+	b.hub.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
 		defer close(localDone)
-		b.ws.runTurn(ctx, term, id, "Local question", "voice", nil)
+		b.hub.runTurn(ctx, term, id, "Local question", "voice", nil)
 	})
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 
 	// Release the serialized DC turn; local turn must run second and get its own reply.
 	close(releaseFirst)
@@ -969,12 +969,12 @@ func TestDeltaChatSlashCommands(t *testing.T) {
 
 	// 1. /say: spoken word for word, no agent turn, "Said it." reply, recorded in messages.
 	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
-	end := dev.until(t, func(f wsFrame) bool {
+	end := dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
-	waitSVG(t, b.ws, "box3-cmd", "Bedtime!")
+	waitSVG(t, b.hub, "box3-cmd", "Bedtime!")
 
 	// 2. /private: agent turn with private label, reply in chat, nothing spoken.
 	b.dc.handleMessage(t.Context(), greg.DCAccountID, 2)

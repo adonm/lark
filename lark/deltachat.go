@@ -872,8 +872,8 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			pcm, _ = decodeAudioToPCM16k(ctx, *msg.File)
 		}
 		sender := s.b.companionFor(peerID)
-		if s.b.ws != nil {
-			s.b.ws.deliverDCIntercom(ctx, sender, companionID, msg.ChatId, msg.Text, pcm)
+		if s.b.hub != nil {
+			s.b.hub.deliverDCIntercom(ctx, sender, companionID, msg.ChatId, msg.Text, pcm)
 		}
 		return
 	}
@@ -1000,38 +1000,32 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	turnCtx = s.b.traceTurn(turnCtx, companionID, who.Name, "deltachat", time.Now())
 
 	s.b.chat(companionID, newChat("user", senderName, text, "deltachat"), true)
-	if !private && s.b.ws != nil {
+	if !private && s.b.hub != nil {
 		cardSender := blankCompanion()
 		cardSender.ID = senderName
 		cardSender.Name = senderName
-		s.b.ws.deliverNotice(ctx, terminalNotice{
-			recipientIDs: []string{companionID},
-			sender:       cardSender,
-			text:         text,
-			speakText:    "Message from " + senderName + ": " + text,
-			voice:        s.b.voiceFor(companionID),
-			chime:        "intercom",
-			showCard:     true,
-			reply:        &turnReply{name: senderName, companionID: companionID, chatID: msg.ChatId},
-			cardReply:    senderName,
-			trace:        traceFrom(turnCtx),
-		})
+		n := intercomNotice(cardSender, []string{companionID}, text, nil, s.b.voiceFor(companionID))
+		n.intro = ""
+		n.speakText = "Message from " + senderName + ": " + text
+		n.reply = &turnReply{name: senderName, companionID: companionID, chatID: msg.ChatId}
+		n.trace = traceFrom(turnCtx)
+		s.b.hub.deliverNotice(ctx, n)
 	}
-
-	prompt := s.b.turnPromptWithState(turnCtx, companionID, "deltachat", text, who, turnChannel{
-		channel:    "deltachat",
-		sender:     senderName,
-		senderKind: "contact",
-		private:    private,
-	}, time.Now().In(s.b.location()))
-	raw, _, err := s.b.oc.askPrepared(turnCtx, companionID, func() (string, string) {
-		return who.Name, prompt
-	}, turnStream{}, "deltachat", nil, nil)
+	gen, err := s.b.generateReply(turnCtx, turnCtx, who, text, turnOptions{
+		source: "deltachat",
+		channel: turnChannel{
+			channel:    "deltachat",
+			sender:     senderName,
+			senderKind: "contact",
+			private:    private,
+		},
+		textOnly: true,
+	})
 	if err != nil {
 		return
 	}
-	reply := strings.TrimSpace(fenced.ReplaceAllString(raw, ""))
-	if isSilentReply(reply) {
+	reply := gen.reply
+	if reply == "" {
 		return
 	}
 	s.b.chat(companionID, newChat("companion", who.Name, reply, "deltachat"), true)
@@ -1057,8 +1051,8 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 	if _, err := rpc.SendMsg(accID, msg.ChatId, outMsg); err != nil {
 		log.Printf("Delta Chat SendMsg error: %v", err)
 	}
-	if !private && s.b.ws != nil {
-		s.b.ws.deliverNotice(ctx, terminalNotice{
+	if !private && s.b.hub != nil {
+		s.b.hub.deliverNotice(ctx, terminalNotice{
 			recipientIDs: []string{companionID},
 			sender:       who,
 			text:         reply,
@@ -1244,27 +1238,14 @@ func encodePCMToOpus(ctx context.Context, pcm []byte, rate int, outPath string) 
 	return nil
 }
 
-func (h *wsHub) deliverDCIntercom(ctx context.Context, sender companionState, recipientID string, chatID uint32, text string, pcm []byte) {
+func (h *terminalHub) deliverDCIntercom(ctx context.Context, sender companionState, recipientID string, chatID uint32, text string, pcm []byte) {
 	if h == nil || h.b == nil {
 		return
 	}
-	intro := "Message from " + sender.Name + "!"
-	if pcm != nil {
-		intro = "From " + sender.Name + "!"
-	}
-	h.deliverNotice(ctx, terminalNotice{
-		recipientIDs: []string{recipientID},
-		sender:       sender,
-		text:         text,
-		speakText:    text,
-		intro:        intro,
-		voice:        h.b.voiceFor(sender.ID),
-		pcm:          pcm,
-		chime:        "intercom",
-		showCard:     true,
-		reply:        &turnReply{name: sender.Name, companionID: recipientID, chatID: chatID},
-		trace:        traceFrom(ctx),
-	})
+	n := intercomNotice(sender, []string{recipientID}, text, pcm, h.b.voiceFor(sender.ID))
+	n.reply = &turnReply{name: sender.Name, companionID: recipientID, chatID: chatID}
+	n.trace = traceFrom(ctx)
+	h.deliverNotice(ctx, n)
 	if text != "" {
 		h.b.chat(recipientID, newChat("intercom", sender.Name, text, "intercom"), true)
 	}

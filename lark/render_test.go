@@ -12,7 +12,7 @@ import (
 )
 
 // Interpret the wire with the firmware contract, independently of the encoder.
-func decodeDisplay(t *testing.T, f wsFrame) (image.Rectangle, uint16, []uint16) {
+func decodeDisplay(t *testing.T, f protocolFrame) (image.Rectangle, uint16, []uint16) {
 	t.Helper()
 	p := f.data
 	if f.op == wsBinary && len(p) >= protoHeaderSize && p[0] == protoMagic && p[1] == msgFrame {
@@ -166,7 +166,7 @@ func TestBox3HelloAndRawAppTaps(t *testing.T) {
 	terminals := testObject(t, testRequest(t, "GET", base+"/api/terminals", "unit", nil, 200))["terminals"].([]any)
 	boxStatus := terminals[0].(object)
 	if boxStatus["id"] != boxID || boxStatus["board"] != "esp-box-3" ||
-		boxStatus["ws_connected"] != true {
+		boxStatus["connected"] != true {
 		t.Fatal(boxStatus)
 	}
 }

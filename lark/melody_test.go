@@ -33,7 +33,7 @@ func TestSynthesizeMelody(t *testing.T) {
 	}
 }
 
-func TestWSMelody(t *testing.T) {
+func TestTerminalMelody(t *testing.T) {
 	_, base := wsHarness(t, nil)
 	id := "cake"
 	c := testConnectWS(t, base, "unit", false)
@@ -42,13 +42,13 @@ func TestWSMelody(t *testing.T) {
 	pcm, _ := synthesizeMelody(notes)
 	check := func() {
 		t.Helper()
-		start := c.until(t, func(f wsFrame) bool {
+		start := c.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpStart
 		})
 		audio := binary.LittleEndian.Uint64(framePayload(start)[1:9])
 		var got []byte
-		end := c.until(t, func(f wsFrame) bool {
+		end := c.until(t, func(f protocolFrame) bool {
 			if isPlayback(f) {
 				got = append(got, framePayload(f)...)
 			}

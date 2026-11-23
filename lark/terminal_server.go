@@ -21,12 +21,12 @@ type nativeOutMsg struct {
 
 type nativeClient struct {
 	server   *terminalServer
-	hub      *wsHub
+	hub      *terminalHub
 	conn     net.Conn
 	br       *bufio.Reader
 	remoteIP netip.Addr
 	ssrc     uint32
-	client   *wsClient
+	client   *terminalClient
 
 	ctrlOut      chan nativeOutMsg
 	out          chan nativeOutMsg
@@ -43,7 +43,7 @@ type nativeClient struct {
 }
 
 type terminalServer struct {
-	hub     *wsHub
+	hub     *terminalHub
 	tcpLn   net.Listener
 	udpConn *net.UDPConn
 	udpPort uint16
@@ -56,7 +56,7 @@ type terminalServer struct {
 	wg     sync.WaitGroup
 }
 
-func newTerminalServer(h *wsHub, host, port string) (*terminalServer, error) {
+func newTerminalServer(h *terminalHub, host, port string) (*terminalServer, error) {
 	tcpLn, err := net.Listen("tcp", net.JoinHostPort(host, port))
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 		frameNotify: make(chan struct{}, 1),
 		udpAddr:     initialUDP,
 	}
-	c := &wsClient{
+	c := &terminalClient{
 		native: nc,
 		ctx:    ctx,
 		cancel: cancel,

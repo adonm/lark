@@ -30,17 +30,17 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 
 	// Second hardware terminal takes voice ownership via rec_start.
 	hw2.recStart(t, "")
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		return hasProto(msgVoiceOwner, "vocat-2cac")(f)
 	})
 	hw2.recEnd(t, "", true)
 
 	// Disconnect hw2 and resume inside the window -> keeps voice ownership and gets fresh snapshot.
 	hw2.conn.Close()
-	b.ws.sig.wait(t, func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		return b.ws.terminals["vocat-2cac"] == nil
+	b.hub.sig.wait(t, func() bool {
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		return b.hub.terminals["vocat-2cac"] == nil
 	})
 
 	hw2r := testConnectWS(t, base, "unit", false)
@@ -58,17 +58,17 @@ func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T
 	}
 	// Expired resume token gets REJECT(rejectUnknownTerminal), then fresh HELLO works.
 	hw2r.conn.Close()
-	b.ws.sig.wait(t, func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		return b.ws.terminals["vocat-2cac"] == nil
+	b.hub.sig.wait(t, func() bool {
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		return b.hub.terminals["vocat-2cac"] == nil
 	})
-	b.ws.mu.Lock()
-	for k, e := range b.ws.resumes {
+	b.hub.mu.Lock()
+	for k, e := range b.hub.resumes {
 		e.expiresAt = time.Now().Add(-time.Second)
-		b.ws.resumes[k] = e
+		b.hub.resumes[k] = e
 	}
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 
 	hw2e := testConnectWS(t, base, "unit", false)
 	var expiredTok [resumeTokenLen]byte
@@ -109,7 +109,7 @@ func TestTwoTerminalsDisplayAdaptationVoiceOwnershipFallbackAndStatus(t *testing
 	hw.until(t, hasProto(msgVoiceOwner, "vocat-2cac"))
 	hw2.until(t, hasProto(msgVoiceOwner, "vocat-2cac"))
 	// STATUS broadcast: listening.
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusListening
 	})

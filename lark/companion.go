@@ -411,10 +411,10 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 			defer b.companionMu.Unlock()
 		}
 		c, err := b.changeCompanionPrepared(ctx, id, op, args, portrait)
-		if b.ws != nil && err == nil && op != "get" {
-			b.ws.mu.Lock()
-			b.ws.companionChanged(id, c)
-			b.ws.mu.Unlock()
+		if b.hub != nil && err == nil && op != "get" {
+			b.hub.mu.Lock()
+			b.hub.companionChanged(id, c)
+			b.hub.mu.Unlock()
 		}
 		return c, err
 	}()
@@ -431,18 +431,18 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		go b.dc.syncProfile(c, c.DCAccountID)
 	}
 	if op != "get" && before.PortraitID != "" && before.PortraitID != c.PortraitID {
-		b.ws.invalidateAssets(before.PortraitID)
+		b.hub.invalidateAssets(before.PortraitID)
 		b.portraits.discard(before.PortraitID)
 	}
 	if op != "get" && c.Form != "" && c.Form != before.Form && c.PortraitID != "" && portrait == nil && b.portraits != nil && b.portraits.generate != nil {
-		b.ws.invalidateAssets(c.PortraitID)
+		b.hub.invalidateAssets(c.PortraitID)
 		go func(pid, form, vibe string) {
 			ctxBG := b.root
 			if ctxBG == nil {
 				ctxBG = context.Background()
 			}
 			_ = b.portraits.generateBackground(ctxBG, pid, form, vibe)
-			b.ws.invalidateAssets(pid)
+			b.hub.invalidateAssets(pid)
 		}(c.PortraitID, c.Form, c.Personality)
 	}
 	return object{"ok": true, "companion_id": id, "companion": c}, nil
@@ -527,10 +527,10 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 	if err := tx.Commit(); err != nil {
 		return companionState{}, problem(502, "Cannot create companion")
 	}
-	if b.ws != nil {
-		b.ws.mu.Lock()
-		b.ws.broadcastPeers()
-		b.ws.mu.Unlock()
+	if b.hub != nil {
+		b.hub.mu.Lock()
+		b.hub.broadcastPeers()
+		b.hub.mu.Unlock()
 	}
 	if b.dc != nil && b.dc.ready.Load() {
 		if accID, err := b.dc.ensureCompanion(ctx, c); err == nil && accID != 0 {
@@ -598,10 +598,10 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	if b.dc != nil {
 		b.dc.forget(id)
 	}
-	if b.ws != nil {
-		b.ws.mu.Lock()
-		b.ws.broadcastPeers()
-		b.ws.mu.Unlock()
+	if b.hub != nil {
+		b.hub.mu.Lock()
+		b.hub.broadcastPeers()
+		b.hub.mu.Unlock()
 	}
 	return nil
 }

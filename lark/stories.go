@@ -1025,7 +1025,7 @@ func (b *larkServer) loadStoryBG(storyID, passageName, bgDesc string) *image.RGB
 	return rgba
 }
 
-func (b *larkServer) ensureStoryBGAsync(d *wsTerminal, storyID, passageName, bgDesc string) {
+func (b *larkServer) ensureStoryBGAsync(d *terminalSession, storyID, passageName, bgDesc string) {
 	if b == nil || b.portraits == nil || b.portraits.generate == nil || strings.TrimSpace(bgDesc) == "" {
 		return
 	}
@@ -1073,15 +1073,15 @@ func (b *larkServer) ensureStoryBGAsync(d *wsTerminal, storyID, passageName, bgD
 		if err := writePortraitPNG(filepath.Dir(dst), filepath.Base(dst), norm); err != nil {
 			return
 		}
-		if b.ws == nil || d == nil {
+		if b.hub == nil || d == nil {
 			return
 		}
-		b.ws.mu.Lock()
-		if b.ws.active(d) && d.drawer == drawerStoryReader && d.story != nil &&
+		b.hub.mu.Lock()
+		if b.hub.active(d) && d.drawer == drawerStoryReader && d.story != nil &&
 			d.story.id == storyID && d.story.currentPassageName() == passageName {
 			d.story.bgImg = norm
-			b.ws.render(d, time.Now(), false)
+			b.hub.render(d, time.Now(), false)
 		}
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 	}()
 }

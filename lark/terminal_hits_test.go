@@ -67,13 +67,13 @@ func TestLeaveSceneResetsCompanionStatus(t *testing.T) {
 	const id = "vocat-stop-status"
 	hw.helloV2(t, id, "Cake")
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
-	b.ws.setCompanionStatus(d.companionID, statusSpeaking)
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
+	b.hub.setCompanionStatus(d.companionID, statusSpeaking)
 	d.ttsStarted = true
-	b.ws.tapStop(d, d.last)
-	st := b.ws.companionStatuses[d.companionID]
-	b.ws.mu.Unlock()
+	b.hub.tapStop(d, d.last)
+	st := b.hub.companionStatuses[d.companionID]
+	b.hub.mu.Unlock()
 	if st.state != statusIdle {
 		t.Fatalf("tapStop left companion status = %d, want statusIdle (%d)", st.state, statusIdle)
 	}

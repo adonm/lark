@@ -57,7 +57,7 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0001", "Cake")
 	patchControl(t, base, id, object{"sleep": true})
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
 	})
@@ -67,25 +67,25 @@ func TestTimerLocalFireAndCancel(t *testing.T) {
 	if got := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any); len(got) != 1 || got[0].(object)["id"] != timer["id"] {
 		t.Fatal(got)
 	}
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
 	})
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})
-	card := waitSVG(t, b.ws, "vocat-0001", "Cake break")
+	card := waitSVG(t, b.hub, "vocat-0001", "Cake break")
 	if !strings.Contains(card, "Timer") || !strings.Contains(card, "Cake break") {
 		t.Fatal(card)
 	}
-	dev.until(t, func(f wsFrame) bool { return isPlayback(f) && bytes.Equal(framePayload(f), []byte{1, 2, 3, 4}) })
+	dev.until(t, func(f protocolFrame) bool { return isPlayback(f) && bytes.Equal(framePayload(f), []byte{1, 2, 3, 4}) })
 	expectValue(t, tts, fableVoice)
 	if got := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any); len(tts) != 0 || len(got) != 0 {
 		t.Fatal("timer didn't synthesize and remove exactly once")
 	}
 	dev.tap(t, 180, 315, 0)
-	waitSVG(t, b.ws, "vocat-0001", "home")
+	waitSVG(t, b.hub, "vocat-0001", "home")
 	entries, err := b.history.list(t.Context(), id)
 	if err != nil || len(entries) != 2 || entries[0].Text != "Timer: Cake break" || entries[1].Source != "timer" {
 		t.Fatal(entries, err)
@@ -134,8 +134,8 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	root, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	b = &larkServer{db: db, root: root, terminals: terminalStore(db), history: &chatHistory{db: db}}
-	b.ws = newWSHub(b, false)
-	defer b.ws.shutdown()
+	b.hub = newTerminalHub(b, false)
+	defer b.hub.shutdown()
 	m := newTimerManager(b)
 	defer m.close()
 	fired := make(chan string, 4)
@@ -188,7 +188,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 	if _, err := b.db.Exec("ALTER TABLE paused_timers RENAME TO timers"); err != nil {
 		t.Fatal(err)
 	}
-	board.until(t, func(f wsFrame) bool {
+	board.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeIntercom
 	})

@@ -65,3 +65,67 @@ func TestREADMERoutesRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestREADMEListsEveryRoute guards the other direction: a route the server
+// registers must appear in README's API table.
+func TestREADMEListsEveryRoute(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := []string{}
+	routeRE := regexp.MustCompile("`(?:GET|POST|PATCH|PUT|DELETE) ([^`]+)`")
+	inTable := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "| Lark · port 8765 |") {
+			inTable = true
+			continue
+		}
+		if inTable && !strings.HasPrefix(line, "|") {
+			break
+		}
+		if !inTable {
+			continue
+		}
+		for _, m := range routeRE.FindAllStringSubmatch(line, -1) {
+			p := strings.SplitN(m[1], "?", 2)[0]
+			if i := strings.IndexByte(p, '{'); i >= 0 {
+				p = strings.TrimSuffix(p[:i], "/")
+			}
+			documented = append(documented, strings.TrimSuffix(p, "/"))
+		}
+	}
+	if len(documented) == 0 {
+		t.Fatal("parsed zero documented routes")
+	}
+	covered := func(route string) bool {
+		route = strings.TrimSuffix(strings.SplitN(route, "?", 2)[0], "/")
+		for _, doc := range documented {
+			if route == doc || strings.HasPrefix(route, doc+"/") || strings.HasPrefix(doc, route+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	routeCode := regexp.MustCompile(`(?:path ==|HasPrefix\(path,)\s*"(/[^"]*)"`)
+	checked := 0
+	for _, name := range []string{"handlers.go", "companion.go", "terminal.go", "remote.go"} {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range routeCode.FindAllStringSubmatch(string(src), -1) {
+			route := m[1]
+			if strings.HasPrefix(route, "/api/portraits/") || strings.HasPrefix(route, "/remote/api/") {
+				continue // Documented as one scoped-command row.
+			}
+			checked++
+			if !covered(route) {
+				t.Errorf("route %q is registered but missing from README's API table", route)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("parsed zero registered routes")
+	}
+}

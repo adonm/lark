@@ -124,11 +124,11 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
 	start := func() {
-		b.ws.mu.Lock()
-		b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-		b.ws.mu.Unlock()
+		b.hub.mu.Lock()
+		b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+		b.hub.mu.Unlock()
 		d.recStart(t, "")
-		waitSVG(t, b.ws, id, "rec-send")
+		waitSVG(t, b.hub, id, "rec-send")
 	}
 	var seq uint16
 	appendPCM := func(p []byte) {
@@ -139,7 +139,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 			p = p[n:]
 		}
 	}
-	idleOrDone := func(f wsFrame) bool {
+	idleOrDone := func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
@@ -168,16 +168,16 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	}
 	appendPCM(frame)
 	d.barrier(t)
-	b.ws.mu.Lock()
-	stillListening := b.ws.terminals[id].recording.phase == captureOpen
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	stillListening := b.hub.terminals[id].recording.phase == captureOpen
+	b.hub.mu.Unlock()
 	if !stillListening {
 		t.Fatal("bridge stopped before the continuation")
 	}
 	for range 20 { // 1600ms > cap (1200ms)
 		appendPCM(quiet)
 	}
-	d.until(t, func(f wsFrame) bool {
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
@@ -228,11 +228,11 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
 	d.recStart(t, "")
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	var seq uint16
 	appendPCM := func(p []byte) {
 		for len(p) > 0 {
@@ -248,9 +248,9 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 		appendPCM(quiet)
 	}
 	expectValue(t, first, struct{}{})
-	b.ws.mu.Lock()
-	stillListening := b.ws.terminals[id].recording.phase == captureOpen
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	stillListening := b.hub.terminals[id].recording.phase == captureOpen
+	b.hub.mu.Unlock()
 	if !stillListening {
 		t.Fatal("speculation changed the mic state")
 	}
@@ -262,7 +262,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	for range 15 { // 1200ms -> cap
 		appendPCM(quiet)
 	}
-	d.until(t, func(f wsFrame) bool {
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
@@ -293,10 +293,10 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 				caps |= capBridgeEndpoint
 			}
 			d.helloHardware(t, "vocat-ep00", "", caps)
-			b.ws.mu.Lock()
-			b.ws.startRecording(b.ws.terminals["vocat-ep00"], "", time.Now(), true)
-			b.ws.mu.Unlock()
-			f := d.until(t, func(f wsFrame) bool {
+			b.hub.mu.Lock()
+			b.hub.startRecording(b.hub.terminals["vocat-ep00"], "", time.Now(), true)
+			b.hub.mu.Unlock()
+			f := d.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
 			})
@@ -313,11 +313,11 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 	const id = "vocat-ep01"
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "", capBridgeEndpoint|capDrag)
-	b.ws.mu.Lock()
-	dev := b.ws.terminals[id]
-	b.ws.startRecording(dev, "all", time.Now(), true)
-	b.ws.mu.Unlock()
-	start := d.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	dev := b.hub.terminals[id]
+	b.hub.startRecording(dev, "all", time.Now(), true)
+	b.hub.mu.Unlock()
+	start := d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "all")(f) && len(p) >= 2 && p[0] == recOpStart
 	})
@@ -334,22 +334,22 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
 	d.recStart(t, "")
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	d.barrier(t)
 	stream := newAudioStream()
 	stream.append([]byte{8, 0, 9, 0})
 	stream.finish(nil)
-	b.ws.mu.Lock()
-	dev := b.ws.terminals[id]
-	b.ws.play(dev, stream)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	dev := b.hub.terminals[id]
+	b.hub.play(dev, stream)
+	b.hub.mu.Unlock()
 	d.recEnd(t, "", true)
 	cleared := false
-	d.until(t, func(f wsFrame) bool {
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		if hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel {
 			cleared = true
@@ -366,16 +366,16 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 	const id = "vocat-e024"
 	d := testConnectWS(t, base, "unit", false)
 	d.hello(t, id, "")
-	b.ws.mu.Lock()
-	dev := b.ws.terminals[id]
+	b.hub.mu.Lock()
+	dev := b.hub.terminals[id]
 	ctx, cancel := context.WithCancel(dev.client.ctx)
 	dev.busy = true
 	dev.queuedVoice = &endpointCapture{ctx: ctx, cancel: cancel}
 	for range 3 {
-		b.ws.tapStop(dev, time.Now())
+		b.hub.tapStop(dev, time.Now())
 	}
 	busy, queued := dev.busy, dev.queuedVoice
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if ctx.Err() == nil || busy || queued != nil {
 		t.Fatal("explicit Stop did not discard both the active and queued turns")
 	}
@@ -425,16 +425,16 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	b.ws.mu.Lock()
-	b.ws.startTurn(b.ws.terminals[id], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
-		b.ws.runTurn(ctx, b.ws.terminals[id], turn, "Draw a dragon", "voice", nil)
+	b.hub.mu.Lock()
+	b.hub.startTurn(b.hub.terminals[id], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
+		b.hub.runTurn(ctx, b.hub.terminals[id], turn, "Draw a dragon", "voice", nil)
 	})
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	expectValue(t, prompts, "Draw a dragon")
-	b.ws.mu.Lock()
-	b.ws.startRecording(b.ws.terminals[id], "", time.Now(), true)
-	b.ws.mu.Unlock()
-	d.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
+	b.hub.mu.Unlock()
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
 	})
@@ -451,14 +451,14 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	}
 	close(finishFirst)
 	expectValue(t, prompts, "and add stars")
-	d.until(t, func(f wsFrame) bool {
+	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone)
 	})
-	b.ws.sig.wait(t, func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		return !b.ws.terminals[id].busy
+	b.hub.sig.wait(t, func() bool {
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		return !b.hub.terminals[id].busy
 	})
 	if count.Load() != 2 {
 		t.Fatal("prompt was replayed")

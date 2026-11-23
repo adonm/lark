@@ -202,9 +202,9 @@ func TestMCPStateSlices(t *testing.T) {
 	st[5] = 24
 	board.sendProto(t, msgTelemetry, st[:])
 	board.barrier(t)
-	b.ws.mu.Lock()
-	wifiOK := b.ws.terminals[termID].telemetry.WiFi != nil
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	wifiOK := b.hub.terminals[termID].telemetry.WiFi != nil
+	b.hub.mu.Unlock()
 	if !wifiOK {
 		t.Fatal("missing telemetry wifi")
 	}
@@ -263,7 +263,7 @@ func TestEmitIntercom(t *testing.T) {
 		t.Fatal(out)
 	}
 	recipient.until(t, isPlayback)
-	waitSVG(t, b.ws, "vocat-0002", text)
+	waitSVG(t, b.hub, "vocat-0002", text)
 	for _, id := range []string{from, to} {
 		s := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"messages"}}, false)
 		msgs := s["messages"].([]any)
@@ -288,26 +288,26 @@ func TestMCPControl(t *testing.T) {
 	if !strings.Contains(str(missingErr["error"]), "companion_id") {
 		t.Fatalf("expected companion_id error when omitted, got %v", missingErr)
 	}
-	b.ws.mu.Lock()
-	d := b.ws.terminals[termID]
-	b.ws.startTurn(d, time.Now(), false, "typed", func(context.Context, uint64) {})
+	b.hub.mu.Lock()
+	d := b.hub.terminals[termID]
+	b.hub.startTurn(d, time.Now(), false, "typed", func(context.Context, uint64) {})
 	turn := d.turn
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	out := patchControl(t, base, id, object{"volume": 0, "sleep": true})
 	if out["terminal_id"] != termID || out["volume"] != json.Number("0") || out["sleeping"] != true {
 		t.Fatal(out)
 	}
 	for _, client := range []*testWS{c} {
-		client.until(t, func(f wsFrame) bool {
+		client.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 0
 		})
-		client.until(t, func(f wsFrame) bool {
+		client.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
 		})
 	}
-	b.ws.finishTurn(d, turn, nil, nil)
+	b.hub.finishTurn(d, turn, nil, nil)
 	checkStatus := func(mode, volume string) {
 		t.Helper()
 		me := stateMe(t, base, id)
@@ -321,14 +321,14 @@ func TestMCPControl(t *testing.T) {
 	if wake := patchControl(t, base, id, object{"sleep": false}); wake["sleeping"] != false || wake["volume"] != json.Number("0") {
 		t.Fatal(wake)
 	}
-	c.until(t, func(f wsFrame) bool {
+	c.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 85
 	})
 	if vol := patchControl(t, base, id, object{"volume": 42}); vol["sleeping"] != false || vol["volume"] != json.Number("42") {
 		t.Fatal(vol)
 	}
-	c.until(t, func(f wsFrame) bool {
+	c.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgVolume, "")(f) && len(p) >= 1 && p[0] == 42
 	})

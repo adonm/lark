@@ -109,13 +109,13 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	binary.LittleEndian.PutUint32(st[8:12], 65536)
 	binary.LittleEndian.PutUint32(st[12:16], 320)
 	board.sendProto(t, msgTelemetry, st[:])
-	b.ws.mu.Lock()
-	device := b.ws.terminals[id]
+	b.hub.mu.Lock()
+	device := b.hub.terminals[id]
 	sentAt := time.Now().Add(-12 * time.Millisecond)
 	device.client.pingMu.Lock()
 	device.client.pingSentAt = sentAt
 	device.client.pingMu.Unlock()
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	board.sendProto(t, msgPong, []byte{1, 2, 3, 4})
 	board.barrier(t)
 	if device.client.pingRTT() != nil {
@@ -143,19 +143,19 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
 	board.tapMenuSpec(t, pixelSpecBox3)
-	svg := waitSVG(t, b.ws, id, "menu-more")
+	svg := waitSVG(t, b.hub, id, "menu-more")
 	mx, my, ok := hitCenter(svg, "menu-more")
 	if !ok {
 		t.Fatal("missing menu-more")
 	}
 	tap(mx, my)
-	svg = waitSVG(t, b.ws, id, "menu-stats")
+	svg = waitSVG(t, b.hub, id, "menu-stats")
 	sx, sy, ok := hitCenter(svg, "menu-stats")
 	if !ok {
 		t.Fatal("missing menu-stats")
 	}
 	tap(sx, sy)
-	hud := waitSVG(t, b.ws, id, "Companion")
+	hud := waitSVG(t, b.hub, id, "Companion")
 	if !strings.Contains(hud, "Voice") {
 		t.Fatal("missing Voice in stats")
 	}
@@ -168,13 +168,13 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		t.Fatal("missing menu-back")
 	}
 	tap(bx, by)
-	svg = waitSVG(t, b.ws, id, "menu-stats")
+	svg = waitSVG(t, b.hub, id, "menu-stats")
 	bx, by, _ = hitCenter(svg, "menu-back")
 	tap(bx, by)
-	svg = waitSVG(t, b.ws, id, "menu-more")
+	svg = waitSVG(t, b.hub, id, "menu-more")
 	bx, by, _ = hitCenter(svg, "menu-back")
 	tap(bx, by)
-	waitSVG(t, b.ws, id, `data-id="listen"`)
+	waitSVG(t, b.hub, id, `data-id="listen"`)
 }
 
 func TestDiagnosticsFirstSpokenDeltaAndAudio(t *testing.T) {
@@ -254,22 +254,22 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	tap := func(x, y int) { dev.tap(t, x, y, 0) }
 	record := func() {
 		dev.recStart(t, "")
-		waitSVG(t, b.ws, id, "rec-send")
+		waitSVG(t, b.hub, id, "rec-send")
 		dev.sendRTP(t, rtpPTRecPCM, 1, 320, []byte{12, 0})
 	}
 	record()
 	tap(110, 290)
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 	})
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
 	})
 	dev.recEnd(t, "", false)
 	dev.barrier(t)
-	waitSVG(t, b.ws, id, `data-id="listen"`)
+	waitSVG(t, b.hub, id, `data-id="listen"`)
 	select {
 	case <-transcribed:
 		t.Fatal("cancelled PCM reached STT")
@@ -277,7 +277,7 @@ func TestAccessibleRecordingControls(t *testing.T) {
 	}
 	record()
 	tap(250, 290)
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
@@ -321,23 +321,23 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
 	cancelled := make(chan bool, 1)
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
 	now := time.Now()
-	b.ws.startTurn(d, now, false, "typed", func(ctx context.Context, _ uint64) {
+	b.hub.startTurn(d, now, false, "typed", func(ctx context.Context, _ uint64) {
 		<-ctx.Done()
 		cancelled <- true
 	})
 	// The rasterizer cannot commit the thinking frame while the hub lock is held.
-	b.ws.pointer(d, "tap", 180, 180, 0, now)
-	b.ws.mu.Unlock()
-	waitSVG(t, b.ws, id, "stop")
+	b.hub.pointer(d, "tap", 180, 180, 0, now)
+	b.hub.mu.Unlock()
+	waitSVG(t, b.hub, id, "stop")
 
 	stillThinking := func(taps int) {
 		t.Helper()
-		b.ws.mu.Lock()
+		b.hub.mu.Lock()
 		busy, count := d.busy, d.stopTaps
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 		if !busy || count != taps {
 			t.Fatalf("want ongoing turn with %d Stop taps, busy=%t taps=%d", taps, busy, count)
 		}
@@ -357,7 +357,7 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	tap := func(_ string, count int) {
 		t.Helper()
 		dev.tap(t, 180, 290, 0)
-		dev.until(t, func(f wsFrame) bool {
+		dev.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)
 			return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeTap
 		})
@@ -370,15 +370,15 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	tap("Tap 2×", 1)
 	tap("Tap 1×", 2)
 	dev.tap(t, 180, 290, 0)
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgChime, "")(f) && len(p) >= 1 && p[0] == chimeCancel
 	})
-	waitSVG(t, b.ws, id, `data-id="listen"`)
+	waitSVG(t, b.hub, id, `data-id="listen"`)
 	expectValue(t, cancelled, true)
 	expectValue(t, interrupts, "/api/session/ses-stop/interrupt")
-	b.ws.mu.Lock()
-	defer b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	defer b.hub.mu.Unlock()
 	if d.busy || d.stopTaps != 0 || !d.stopTapAt.IsZero() {
 		t.Fatal("Stop did not clear the turn and confirmation state")
 	}
@@ -392,40 +392,40 @@ func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
 
 	stream := newAudioStream()
 	stream.append([]byte{1, 0})
-	b.ws.mu.Lock()
-	d := b.ws.terminals[id]
-	b.ws.startTurn(d, time.Now(), false, "typed", func(ctx context.Context, _ uint64) { <-ctx.Done() })
+	b.hub.mu.Lock()
+	d := b.hub.terminals[id]
+	b.hub.startTurn(d, time.Now(), false, "typed", func(ctx context.Context, _ uint64) { <-ctx.Done() })
 	turn := d.turn
-	b.ws.mu.Unlock()
-	waitSVG(t, b.ws, id, "stop")
+	b.hub.mu.Unlock()
+	waitSVG(t, b.hub, id, "stop")
 	dev.tap(t, 180, 290, 0)
 	dev.barrier(t)
-	b.ws.mu.Lock()
-	playback := b.ws.play(d, stream)
-	b.ws.mu.Unlock()
-	dev.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	playback := b.hub.play(d, stream)
+	b.hub.mu.Unlock()
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
 	})
-	b.ws.finishTurn(d, turn, nil, nil)
-	waitSVG(t, b.ws, id, "stop")
+	b.hub.finishTurn(d, turn, nil, nil)
+	waitSVG(t, b.hub, id, "stop")
 	dev.tap(t, 180, 180, 0)
 	dev.barrier(t)
 	if playback.Err() != nil {
 		t.Fatal("face tap stopped playback")
 	}
 	dev.tap(t, 180, 290, 0)
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStop
 	})
-	waitSVG(t, b.ws, id, `data-id="listen"`)
+	waitSVG(t, b.hub, id, `data-id="listen"`)
 	if playback.Err() == nil {
 		t.Fatal("one Stop tap did not stop playback")
 	}
 
 	dev.recStart(t, "")
-	waitSVG(t, b.ws, id, "rec-send")
+	waitSVG(t, b.hub, id, "rec-send")
 	b.oc.mu.Lock()
 	pending := b.oc.interrupts[id]
 	b.oc.mu.Unlock()

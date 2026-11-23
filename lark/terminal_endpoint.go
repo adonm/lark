@@ -27,7 +27,7 @@ var endpointRings = sync.Pool{New: func() any { return new(endpointRing) }}
 type endpointCapture struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
-	owner       *wsClient
+	owner       *terminalClient
 	packets     chan micPacket
 	free        chan int
 	slots       *endpointRing
@@ -109,7 +109,7 @@ type smartTurnResult struct {
 	wordAt time.Duration
 }
 
-func (h *wsHub) startEndpoint(d *wsTerminal) {
+func (h *terminalHub) startEndpoint(d *terminalSession) {
 	ctx, cancel := context.WithCancel(d.client.ctx)
 	limit := endpointLimit
 	var reply *turnReply
@@ -118,9 +118,7 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 	}
 	// A read-out arms the reply for the next spoken turn, whether the child taps
 	// to talk or answers inside the listening window.
-	if d.reply != nil && time.Now().Before(d.replyUntil) {
-		reply = d.reply
-	}
+	reply = d.pendingReply(time.Now())
 	free := make(chan int, endpointRingSlots)
 	for i := range endpointRingSlots {
 		free <- i
@@ -153,7 +151,7 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 	go h.captureEndpoint(d, c)
 }
 
-func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
+func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	defer close(c.result)
 	defer func() {
 		if ring := c.slots; ring != nil {
@@ -426,7 +424,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	}
 }
 
-func (h *wsHub) finishEndpoint(d *wsTerminal, now time.Time) {
+func (h *terminalHub) finishEndpoint(d *terminalSession, now time.Time) {
 	c := d.recording.endpoint
 	d.recording.endpoint = nil
 	if d.client != nil {
@@ -451,7 +449,7 @@ func (h *wsHub) finishEndpoint(d *wsTerminal, now time.Time) {
 
 // Only one captured follow-up may wait for the current reply. It enters the
 // same regular prompt gate as any other turn, without interrupt or retry.
-func (h *wsHub) maybeStartVoice(d *wsTerminal, now time.Time) bool {
+func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 	c := d.queuedVoice
 	if c == nil || d.busy || d.stopAudio != nil || d.awaitAck || !h.active(d) {
 		return false

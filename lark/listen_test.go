@@ -98,9 +98,9 @@ func setupListenTerminal(t *testing.T, b *larkServer, base, termID, compName str
 	}
 	hw := testConnectWS(t, base, "unit", false)
 	hw.helloHardware(t, termID, cid, capDrag|capBridgeEndpoint)
-	b.ws.mu.Lock()
-	owner := b.ws.voiceOwners[cid]
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	owner := b.hub.voiceOwners[cid]
+	b.hub.mu.Unlock()
 	if owner != termID {
 		t.Fatalf("voice owner = %q, want %q", owner, termID)
 	}
@@ -129,29 +129,29 @@ func sendTestUtterance(t *testing.T, hw *testWS) {
 func sendSpeechAndWaitTTS(t *testing.T, hw *testWS, b *larkServer, termID, sttText string) uint64 {
 	t.Helper()
 	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
-	b.ws.mu.Lock()
-	d := b.ws.terminals[termID]
-	b.ws.startRecording(d, "", time.Now(), true)
-	b.ws.mu.Unlock()
-	hw.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	d := b.hub.terminals[termID]
+	b.hub.startRecording(d, "", time.Now(), true)
+	b.hub.mu.Unlock()
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
 	})
 	hw.recStart(t, "")
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
 	hw.recEnd(t, "", false)
-	end := hw.until(t, func(f wsFrame) bool {
+	end := hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
 	return binary.LittleEndian.Uint64(framePayload(end)[1:9])
 }
 
-func isListenRecStart(f wsFrame) bool {
+func isListenRecStart(f protocolFrame) bool {
 	p := framePayload(f)
 	return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetListen != 0
 }
@@ -162,10 +162,10 @@ func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-off", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	time.Sleep(80 * time.Millisecond)
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-off"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["box3-off"]
 	active := d != nil && d.recording.active()
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if active {
 		t.Fatal("listening window opened when listen_seconds=0")
 	}
@@ -176,10 +176,10 @@ func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 	hw, _ := setupListenTerminal(t, b, base, "box3-on", "Greg", 30)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-on", "Hi Greg")
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-on"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["box3-on"]
 	beforeAck := d.recording.active()
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if beforeAck {
 		t.Fatal("listening window opened before playback ack")
 	}
@@ -190,13 +190,13 @@ func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "Tell me a story", nil })
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
 	hw.recEnd(t, "", false)
 
-	end2 := hw.until(t, func(f wsFrame) bool {
+	end2 := hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -217,7 +217,7 @@ func TestListenModeSilenceTimesOut(t *testing.T) {
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 	})
@@ -235,15 +235,15 @@ func TestListenModeTapEndsWindowWithoutMenu(t *testing.T) {
 	hw.recStart(t, "")
 
 	hw.tap(t, 100, 100, 0)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 	})
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-tap"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["box3-tap"]
 	drawer := d.drawer
 	active := d.recording.active()
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if active || drawer != "" {
 		t.Fatalf("tap should end window without opening menu: active=%v drawer=%q", active, drawer)
 	}
@@ -256,7 +256,7 @@ func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 	cardSender := blankCompanion()
 	cardSender.ID = "Mum"
 	cardSender.Name = "Mum"
-	b.ws.deliverNotice(t.Context(), terminalNotice{
+	b.hub.deliverNotice(t.Context(), terminalNotice{
 		recipientIDs: []string{cid},
 		sender:       cardSender,
 		text:         "Dinner is ready",
@@ -267,7 +267,7 @@ func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 		reply:        &turnReply{name: "Mum"},
 	})
 
-	end := hw.until(t, func(f wsFrame) bool {
+	end := hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -279,13 +279,13 @@ func TestListenModeReplyToDeltaChatNotice(t *testing.T) {
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "Tell her I'm coming", nil })
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
 	hw.recEnd(t, "", false)
 
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -315,7 +315,7 @@ func TestListenModeDropsFillerAndEmptyTranscripts(t *testing.T) {
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "um", nil })
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 	})
@@ -340,7 +340,7 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "Overheard chatter", nil })
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
@@ -348,10 +348,10 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 
 	// Re-arms directly without any TTS_CTRL start/end.
 	hw.until(t, isListenRecStart)
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-silrep"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["box3-silrep"]
 	hasView := d.view != nil || d.card != nil
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if hasView {
 		t.Fatal("silent reply should not show a card")
 	}
@@ -362,21 +362,21 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 	hw1, cid := setupListenTerminal(t, b, base, "box3-owner", "Greg", 30)
 	hw2 := testConnectWS(t, base, "unit", false)
 	hw2.helloHardware(t, "vocat-other", cid, capDrag|capBridgeEndpoint)
-	b.ws.mu.Lock()
-	if owner := b.ws.voiceOwners[cid]; owner != "box3-owner" {
-		b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	if owner := b.hub.voiceOwners[cid]; owner != "box3-owner" {
+		b.hub.mu.Unlock()
 		t.Fatalf("voice owner = %q, want box3-owner", owner)
 	}
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 
 	audioID := sendSpeechAndWaitTTS(t, hw1, b, "box3-owner", "Hi Greg")
 	hw1.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 
 	hw1.until(t, isListenRecStart)
 	time.Sleep(60 * time.Millisecond)
-	b.ws.mu.Lock()
-	otherActive := b.ws.terminals["vocat-other"].recording.active()
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	otherActive := b.hub.terminals["vocat-other"].recording.active()
+	b.hub.mu.Unlock()
 	if otherActive {
 		t.Fatal("listening window opened on non-voice-owner terminal")
 	}

@@ -447,7 +447,7 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	if !ok || ctx.Err() != nil {
 		return
 	}
-	h := b.ws
+	h := b.hub
 	if h == nil {
 		return
 	}

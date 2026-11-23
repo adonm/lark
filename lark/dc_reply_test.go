@@ -76,7 +76,7 @@ func addDCMessage(stub *stubDCRPC, accID, msgID, chatID, fromID uint32, text str
 // ackNotice plays out the read-out and acknowledges it, as the device does.
 func ackNotice(t *testing.T, hw *testWS) {
 	t.Helper()
-	end := hw.until(t, func(f wsFrame) bool {
+	end := hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
@@ -95,17 +95,17 @@ func dcSent(stub *stubDCRPC) []stubDCSent {
 func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText string) {
 	t.Helper()
 	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
-	b.ws.mu.Lock()
-	d := b.ws.terminals[termID]
-	b.ws.startRecording(d, "", time.Now(), true)
-	b.ws.mu.Unlock()
-	hw.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	d := b.hub.terminals[termID]
+	b.hub.startRecording(d, "", time.Now(), true)
+	b.hub.mu.Unlock()
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
 	})
 	hw.recStart(t, "")
 	sendTestUtterance(t, hw)
-	hw.until(t, func(f wsFrame) bool {
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 	})
@@ -114,10 +114,10 @@ func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText strin
 
 func waitTurnDone(t *testing.T, b *larkServer, termID string) {
 	t.Helper()
-	b.ws.sig.wait(t, func() bool {
-		b.ws.mu.Lock()
-		defer b.ws.mu.Unlock()
-		d := b.ws.terminals[termID]
+	b.hub.sig.wait(t, func() bool {
+		b.hub.mu.Lock()
+		defer b.hub.mu.Unlock()
+		d := b.hub.terminals[termID]
 		return d != nil && d.turn == 0 && !d.busy
 	})
 }
@@ -340,23 +340,23 @@ func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
 	hw.helloHardware(t, "box3-card", "greg", capDrag|capBridgeEndpoint)
 
 	b.sayOnCompanion(t.Context(), "greg", "Mum", 200, "Dinner is ready")
-	b.ws.mu.Lock()
-	d := b.ws.terminals["box3-card"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["box3-card"]
 	target := ""
 	if d.view != nil {
 		target = d.view.actions["reply"].value
 	}
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if target != "mum" {
 		t.Fatalf("card reply target = %q, want mum", target)
 	}
 	ackNotice(t, hw)
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "See you at six", nil })
-	b.ws.mu.Lock()
-	b.ws.startRecording(d, target, time.Now(), true)
-	b.ws.mu.Unlock()
-	hw.until(t, func(f wsFrame) bool {
+	b.hub.mu.Lock()
+	b.hub.startRecording(d, target, time.Now(), true)
+	b.hub.mu.Unlock()
+	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
 	})
@@ -399,5 +399,29 @@ func TestIntercomCardReplyTargetsConversationPartner(t *testing.T) {
 	}
 	if got := (intercomCard{companion: "Cake"}).scene().actions["reply"].value; got != "cake" {
 		t.Fatalf("card without an explicit target = %q, want cake", got)
+	}
+}
+
+func TestDeviceReplyContextExpires(t *testing.T) {
+	b, _ := wsHarness(t, nil)
+	expired := &terminalSession{
+		reply:      &turnReply{name: "Mum", companionID: "greg", chatID: 200},
+		replyUntil: time.Now().Add(-time.Second),
+	}
+	if got := expired.pendingReply(time.Now()); got != nil {
+		t.Fatalf("expired reply context was reused: %+v", got)
+	}
+	if expired.reply != nil || !expired.replyUntil.IsZero() {
+		t.Fatal("expired reply context was not cleared")
+	}
+
+	live := &turnReply{name: "Mum", companionID: "greg", chatID: 200}
+	armed := &terminalSession{reply: live, replyUntil: time.Now().Add(deviceReplyTTL)}
+	if got := armed.pendingReply(time.Now()); got != live {
+		t.Fatalf("live reply context lost: %+v", got)
+	}
+	b.hub.consumeReply(armed, live)
+	if got := armed.pendingReply(time.Now()); got != nil {
+		t.Fatalf("consumed reply context was reused: %+v", got)
 	}
 }

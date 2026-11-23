@@ -15,14 +15,14 @@ import (
 var (
 	lastMenuSVG = map[*testWS]string{}
 	menuTargets = map[*testWS]struct {
-		h      *wsHub
+		h      *terminalHub
 		termID string
 	}{}
 )
 
-func bindMenu(c *testWS, h *wsHub, termID string) {
+func bindMenu(c *testWS, h *terminalHub, termID string) {
 	menuTargets[c] = struct {
-		h      *wsHub
+		h      *terminalHub
 		termID string
 	}{h, termID}
 }
@@ -77,12 +77,12 @@ func tapMenu(t *testing.T, c *testWS, id string, want ...string) string {
 	return menuFrame(t, c, want...)
 }
 
-func TestWSMainMenuPages(t *testing.T) {
+func TestTerminalMainMenuPages(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	_, _ = b.createCompanion(t.Context(), object{"id": "cake", "name": "Cake", "form": "a cat"})
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "cake")
-	bindMenu(c, b.ws, "vocat-0001")
+	bindMenu(c, b.hub, "vocat-0001")
 	page1 := tapMenu(t, c, "menu", "menu-intercom", "Talk to…", "menu-stories", "menu-memories", "menu-next")
 	page2 := tapMenu(t, c, "menu-next", "menu-voice", "menu-more", "menu-prev")
 	for _, check := range []struct {
@@ -102,7 +102,7 @@ func TestWSMainMenuPages(t *testing.T) {
 	tapMenu(t, c, "menu-back", `data-id="listen"`)
 }
 
-func TestWSMenuListDetails(t *testing.T) {
+func TestTerminalMenuListDetails(t *testing.T) {
 	const id = "cake"
 	const body = "A long note starts here and finishes with a tiny blue kite."
 	for _, tc := range []struct {
@@ -129,7 +129,7 @@ func TestWSMenuListDetails(t *testing.T) {
 			_, _ = b.createCompanion(t.Context(), object{"id": id, "name": "Cake", "form": "a cat"})
 			c := testConnectWS(t, base, "unit", false)
 			c.hello(t, "vocat-0001", id)
-			bindMenu(c, b.ws, "vocat-0001")
+			bindMenu(c, b.hub, "vocat-0001")
 			tapMenu(t, c, "menu", "menu-memories")
 			open := "menu-" + tc.drawer
 			tapMenu(t, c, open, tc.empty, "menu-back")
@@ -155,7 +155,7 @@ func TestWSMenuListDetails(t *testing.T) {
 	}
 }
 
-func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
+func TestTerminalMenuSQLLeavesHubUnlocked(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a cat"}); err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestWSMenuSQLLeavesHubUnlocked(t *testing.T) {
 	board.hello(t, "vocat-0001", "mint")
 	web := testConnectWS(t, base, "unit", false)
 	web.hello(t, "vocat-0002", "Cake")
-	bindMenu(web, b.ws, "vocat-0002")
+	bindMenu(web, b.hub, "vocat-0002")
 	tapMenu(t, web, "menu", "menu-stories")
 	if _, _, err := b.saveStory(t.Context(), "slow", ":: StoryTitle\nSlow Story\n\n:: Start {\"end\":true}\nOnce upon a time.\n", "", true); err != nil {
 		t.Fatal(err)
@@ -220,25 +220,25 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 
 			// Tap anywhere outside Menu on Home starts recording.
 			dev.tap(t, tc.tapX, tc.tapY, rev0)
-			dev.until(t, func(f wsFrame) bool {
+			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetListen == 0
 			})
 			dev.until(t, isDisplay)
-			b.ws.mu.Lock()
-			d := b.ws.terminals[tc.termID]
+			b.hub.mu.Lock()
+			d := b.hub.terminals[tc.termID]
 			rec := d.recording.active()
 			drawer := d.drawer
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 			if !rec || drawer != "" {
 				t.Fatalf("home tap: recording=%v drawer=%q, want true and empty", rec, drawer)
 			}
 
 			// Cancel recording to return to Home.
-			b.ws.mu.Lock()
-			b.ws.recordingControl(d, time.Now(), true)
-			b.ws.mu.Unlock()
-			dev.until(t, func(f wsFrame) bool {
+			b.hub.mu.Lock()
+			b.hub.recordingControl(d, time.Now(), true)
+			b.hub.mu.Unlock()
+			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 			})
@@ -251,11 +251,11 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 				t.Fatalf("menu button %v smaller than 48px physical", btn)
 			}
 			dev.tap(t, (btn.Min.X+btn.Max.X)/2, (btn.Min.Y+btn.Max.Y)/2, revIdle)
-			waitSVG(t, b.ws, tc.termID, "menu-intercom")
-			b.ws.mu.Lock()
+			waitSVG(t, b.hub, tc.termID, "menu-intercom")
+			b.hub.mu.Lock()
 			rec = d.recording.active()
 			drawer = d.drawer
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 			if rec || drawer != drawerMenu {
 				t.Fatalf("menu tap: recording=%v drawer=%q, want false and %q", rec, drawer, drawerMenu)
 			}
@@ -272,20 +272,20 @@ func TestIntercomMenuPagingRoundScreen(t *testing.T) {
 	p2 := testConnectWS(t, base, "unit", false)
 	p2.helloV2(t, "vocat-peer2", "George")
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals["vocat-intercom-page"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["vocat-intercom-page"]
 	d.drawer = drawerIntercom
 	d.menuPage = 1
-	b.ws.render(d, time.Now(), false)
-	b.ws.mu.Unlock()
+	b.hub.render(d, time.Now(), false)
+	b.hub.mu.Unlock()
 
-	svg := waitSVG(t, b.ws, "vocat-intercom-page", "peer-mint")
+	svg := waitSVG(t, b.hub, "vocat-intercom-page", "peer-mint")
 	if !strings.Contains(svg, "peer-mint") {
 		t.Fatalf("expected peer-mint on page 1 of round intercom menu, got %s", svg)
 	}
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	page := d.menuPage
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if page != 1 {
 		t.Fatalf("d.menuPage = %d, want 1", page)
 	}
@@ -297,18 +297,18 @@ func TestOpenStoryEntersStartPassage(t *testing.T) {
 	dev.helloV2(t, "vocat-story-open", "Cake")
 
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
-	b.ws.mu.Lock()
-	d := b.ws.terminals["vocat-story-open"]
-	b.ws.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, false)
+	b.hub.mu.Lock()
+	d := b.hub.terminals["vocat-story-open"]
+	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, false)
 	sess := d.story
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 
 	if sess == nil || sess.text != "Once upon a time." || len(sess.choices) != 1 {
 		t.Fatalf("openStory did not enter start passage: %+v", sess)
 	}
 }
 
-func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *wsTerminal, *larkServer) {
+func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *terminalSession, *larkServer) {
 	t.Helper()
 	b, base := wsHarness(t, nil)
 	requests := new(atomic.Int32)
@@ -316,10 +316,10 @@ func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *wsTe
 	const termID = "vocat-story-voice"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, termID, "Cake")
-	b.ws.mu.Lock()
-	d := b.ws.terminals[termID]
-	b.ws.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	d := b.hub.terminals[termID]
+	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
+	b.hub.mu.Unlock()
 	deadline := time.Now().Add(time.Second)
 	for requests.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -333,17 +333,17 @@ func TestOpenStoryFromMenuIsSilent(t *testing.T) {
 	if n := requests.Load(); n != 0 {
 		t.Fatalf("opening a story from the menu synthesized %d TTS clips, want silence", n)
 	}
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	target := d.story.choices[0].Target
-	b.ws.advanceStoryPassage(d, target, false)
-	b.ws.mu.Unlock()
+	b.hub.advanceStoryPassage(d, target, false)
+	b.hub.mu.Unlock()
 	time.Sleep(50 * time.Millisecond)
 	if n := requests.Load(); n != 0 {
 		t.Fatalf("tapping a story choice synthesized %d TTS clips, want silence", n)
 	}
-	b.ws.mu.Lock()
-	b.ws.advanceStoryPassage(d, target, true)
-	b.ws.mu.Unlock()
+	b.hub.mu.Lock()
+	b.hub.advanceStoryPassage(d, target, true)
+	b.hub.mu.Unlock()
 	deadline := time.Now().Add(time.Second)
 	for requests.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -374,30 +374,30 @@ func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, termID, "Cake")
 	dev.tapMenu(t)
-	waitSVG(t, b.ws, termID, "menu-next")
+	waitSVG(t, b.hub, termID, "menu-next")
 	dev.tap(t, 248, 294, 0)
-	p2svg := waitSVG(t, b.ws, termID, "menu-voice")
+	p2svg := waitSVG(t, b.hub, termID, "menu-voice")
 	vx, vy, ok := hitCenter(p2svg, "menu-voice")
 	if !ok {
 		t.Fatal("missing menu-voice hit")
 	}
 	dev.tap(t, vx, vy, 0)
-	waitSVG(t, b.ws, termID, "voice-bm_fable")
+	waitSVG(t, b.hub, termID, "voice-bm_fable")
 
-	b.ws.mu.Lock()
+	b.hub.mu.Lock()
 	var x, y int
-	for _, h := range b.ws.terminals[termID].svg.hits {
+	for _, h := range b.hub.terminals[termID].svg.hits {
 		if h.id == "voice-bm_fable" {
 			x, y = (h.x1+h.x2)/2, (h.y1+h.y2)/2
 		}
 	}
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	if x == 0 && y == 0 {
 		t.Fatal("voice-bm_fable hit not found")
 	}
 
 	dev.tap(t, x, y, 0)
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		if len(f.data) > 0 {
 			p := framePayload(f)
 			if hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart {
@@ -407,7 +407,7 @@ func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
 		return false
 	})
 	var gotPCM []byte
-	dev.until(t, func(f wsFrame) bool {
+	dev.until(t, func(f protocolFrame) bool {
 		if isPlayback(f) {
 			gotPCM = append(gotPCM, framePayload(f)...)
 			return len(gotPCM) >= len(samplePCM)

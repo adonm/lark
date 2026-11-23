@@ -142,17 +142,17 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 				"dormant":        entry["dormant"],
 			}
 			termList := []object{}
-			if b.ws != nil {
-				b.ws.mu.Lock()
-				compTerminals := b.ws.terminalsFor(c.ID)
-				best := b.ws.voiceOwner(c.ID)
+			if b.hub != nil {
+				b.hub.mu.Lock()
+				compTerminals := b.hub.terminalsFor(c.ID)
+				best := b.hub.voiceOwner(c.ID)
 				mode, sleeping := "offline", false
 				for _, t := range compTerminals {
 					if t == best {
 						mode, sleeping = t.pose.mood, t.asleep
 					}
 				}
-				b.ws.mu.Unlock()
+				b.hub.mu.Unlock()
 				compObj["mode"] = mode
 				compObj["sleeping"] = sleeping
 			}
@@ -292,12 +292,12 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 		if !validCompanionID(companionID) {
 			return nil, problem(400, "Invalid companion ID")
 		}
-		if b.ws != nil {
-			b.ws.mu.Lock()
-			if t := b.ws.voiceOwner(companionID); t != nil {
+		if b.hub != nil {
+			b.hub.mu.Lock()
+			if t := b.hub.voiceOwner(companionID); t != nil {
 				termID = t.id
 			}
-			b.ws.mu.Unlock()
+			b.hub.mu.Unlock()
 		}
 		if termID == "" {
 			terms, _ := b.terminalsForCompanion(companionID)
@@ -309,7 +309,7 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 			return nil, problem(409, "Companion has no attached terminal")
 		}
 	}
-	if b.ws == nil {
+	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
 	}
 	ctrl := maps.Clone(args)
@@ -317,5 +317,5 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 	if len(ctrl) == 0 {
 		return nil, problem(400, "Expected a terminal setting")
 	}
-	return b.ws.terminalVolumeControl(ctx, termID, ctrl)
+	return b.hub.terminalVolumeControl(ctx, termID, ctrl)
 }

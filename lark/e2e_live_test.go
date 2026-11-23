@@ -289,7 +289,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	return c
 }
 
-func (c *e2eCompanion) apply(t *testing.T, f wsFrame) {
+func (c *e2eCompanion) apply(t *testing.T, f protocolFrame) {
 	t.Helper()
 	if !isDisplay(f) {
 		return
@@ -308,7 +308,7 @@ func (c *e2eCompanion) apply(t *testing.T, f wsFrame) {
 	}
 }
 
-func (c *e2eCompanion) expect(t *testing.T, label string, matches func(wsFrame) bool) wsFrame {
+func (c *e2eCompanion) expect(t *testing.T, label string, matches func(protocolFrame) bool) protocolFrame {
 	t.Helper()
 	deadline := time.Now().Add(max(6*time.Second, c.timeout))
 	for time.Now().Before(deadline) {
@@ -323,7 +323,7 @@ func (c *e2eCompanion) expect(t *testing.T, label string, matches func(wsFrame) 
 		}
 	}
 	t.Fatalf("%s did not receive %s before the deadline", c.name, label)
-	return wsFrame{}
+	return protocolFrame{}
 }
 
 func e2eNumber(v any) int {
@@ -391,7 +391,7 @@ func (c *e2eCompanion) audio(t *testing.T, prefix byte, pcm []byte) {
 	}
 }
 
-func (c *e2eCompanion) ack(t *testing.T, end wsFrame) {
+func (c *e2eCompanion) ack(t *testing.T, end protocolFrame) {
 	t.Helper()
 	p := framePayload(end)
 	if len(p) < 9 {

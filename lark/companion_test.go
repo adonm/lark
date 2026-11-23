@@ -53,7 +53,7 @@ func TestCompanionLifecycleAndValidation(t *testing.T) {
 	}
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0001", id)
-	waitSVG(t, b.ws, "vocat-0001", "home")
+	waitSVG(t, b.hub, "vocat-0001", "home")
 
 	for _, fields := range []object{
 		{"face_bg": "#112233"}, {"voice": "unknown"}, {"name": strings.Repeat("x", 41)},
@@ -112,7 +112,7 @@ func TestCompanionResetArchivesAndClearsScene(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "vocat-0001", id)
 	testRequest(t, "POST", base+"/api/companions/"+id+"/reset", "unit", object{}, 200)
-	waitSVG(t, b.ws, "vocat-0001", "home")
+	waitSVG(t, b.hub, "vocat-0001", "home")
 	if sid, err := b.oc.get(id); err != nil || sid != "" {
 		t.Fatal("reset did not clear active session mapping", sid, err)
 	}

@@ -306,14 +306,14 @@ func checkMCPFields(value any, schema object, path string) error {
 	return nil
 }
 
-func (h *wsHub) terminalStatus(entry object, id string, full bool) {
+func (h *terminalHub) terminalStatus(entry object, id string, full bool) {
 	key := strings.ToLower(id)
-	entry["ws_connected"], entry["ws"], entry["mode"] = false, false, "offline"
+	entry["connected"], entry["mode"] = false, "offline"
 	entry["battery_pct"], entry["volume"], entry["scene_rev"] = nil, nil, uint64(0)
 	entry["sleeping"] = false
 	h.mu.Lock()
 	if d := h.terminals[key]; d != nil && h.active(d) {
-		entry["ws_connected"], entry["ws"], entry["online"], entry["mode"] = true, true, true, d.pose.mood
+		entry["connected"], entry["online"], entry["mode"] = true, true, d.pose.mood
 		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
 		entry["caps"] = d.caps
 		entry["auto_volume"], entry["sleeping"] = d.autoVol, d.asleep
@@ -512,7 +512,7 @@ func volumeCommand(args object, key string) (auto bool, level int, set bool, err
 	return false, 0, false, nil
 }
 
-func (h *wsHub) terminalVolumeControl(ctx context.Context, id string, args object) (object, error) {
+func (h *terminalHub) terminalVolumeControl(ctx context.Context, id string, args object) (object, error) {
 	auto, level, setVolume, err := volumeCommand(args, "auto_volume")
 	if err != nil {
 		return nil, err
@@ -569,7 +569,7 @@ func validChime(kind string) bool {
 	return slices.Contains(basicChimes, kind)
 }
 
-func (h *wsHub) chime(d *wsTerminal, kind string) bool {
+func (h *terminalHub) chime(d *terminalSession, kind string) bool {
 	if kind == "celebrate" {
 		kind = "intercom" // Existing firmware's happy tone.
 	}
@@ -587,7 +587,7 @@ func deliveryReceipt(action, id, reason string) object {
 	return r
 }
 
-func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
+func (h *terminalHub) signalTarget(companionID string) (*terminalSession, string) {
 	d := h.voiceOwner(companionID)
 	if d == nil {
 		return nil, "not_connected"
@@ -596,7 +596,7 @@ func (h *wsHub) signalTarget(companionID string) (*wsTerminal, string) {
 }
 
 func (b *larkServer) emitSay(ctx context.Context, id, text, chime string) ([]object, error) {
-	if b.ws == nil {
+	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
 	}
 	ids := []string{id}
@@ -612,13 +612,13 @@ func (b *larkServer) emitSay(ctx context.Context, id, text, chime string) ([]obj
 	}
 	receipts := make([]object, 0, len(ids))
 	for _, cid := range ids {
-		delivered := b.ws.deliverNotice(ctx, terminalNotice{
-			recipientIDs: []string{cid},
-			speakText:    text,
-			voice:        b.voiceFor(cid),
-			chime:        chime,
-			showCard:     false,
-		})
+		n := intercomNotice(blankCompanion(), []string{cid}, "", nil, b.voiceFor(cid))
+		n.showCard = false
+		n.intro = ""
+		n.speakText = text
+		n.chime = chime
+		n.trace = traceFrom(ctx)
+		delivered := b.hub.deliverNotice(ctx, n)
 		if len(delivered) == 0 {
 			receipts = append(receipts, deliveryReceipt("say", cid, "not_connected"))
 		} else {
@@ -629,7 +629,7 @@ func (b *larkServer) emitSay(ctx context.Context, id, text, chime string) ([]obj
 }
 
 func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, error) {
-	if b.ws == nil {
+	if b.hub == nil {
 		return nil, problem(503, "Terminal hub unavailable")
 	}
 	ids := []string{id}
@@ -644,7 +644,7 @@ func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, 
 		}
 	}
 	receipts := make([]object, 0, len(ids))
-	h := b.ws
+	h := b.hub
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, id := range ids {
@@ -657,7 +657,7 @@ func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, 
 	return receipts, nil
 }
 
-func (h *wsHub) playSignal(d *wsTerminal, kind string, pcm []byte) bool {
+func (h *terminalHub) playSignal(d *terminalSession, kind string, pcm []byte) bool {
 	if len(pcm) > 0 {
 		return h.playPCM(d, pcm)
 	}
@@ -704,7 +704,7 @@ func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []ob
 		reason := ""
 		if !slices.Contains(out.sent, p.ID) {
 			reason = "not_connected"
-			if h := b.ws; h != nil {
+			if h := b.hub; h != nil {
 				h.mu.Lock()
 				_, reason = h.signalTarget(p.ID)
 				h.mu.Unlock()

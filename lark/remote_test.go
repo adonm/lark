@@ -459,3 +459,39 @@ func TestRemoteManifestIsTokenFree(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteVolumeStoryOpenAndRevoke(t *testing.T) {
+	h := newRemoteHarness(t)
+	b := h.b
+	if _, _, err := b.saveStory(t.Context(), "lost_island", ":: StoryTitle\nLost Island\n\n:: Start {\"end\": true}\nShore.\n", "", true); err != nil {
+		t.Fatal(err)
+	}
+	dev := testConnectWS(t, h.base, "unit", false)
+	dev.hello(t, "vocat-r001", "greg")
+
+	res := remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/volume", object{"terminal": "vocat-r001", "volume": 73}, 200)
+	if res["ok"] != true {
+		t.Fatalf("volume failed: %+v", res)
+	}
+	if _, level := b.volumePrefs("vocat-r001"); level != 73 {
+		t.Fatalf("volume not persisted: %d", level)
+	}
+
+	res = remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/story/open", object{"story": "lost_island"}, 200)
+	if res["ok"] != true {
+		t.Fatalf("story open failed: %+v", res)
+	}
+	b.hub.mu.Lock()
+	d := b.hub.terminals["vocat-r001"]
+	opened := d != nil && d.drawer == drawerStoryReader
+	b.hub.mu.Unlock()
+	if !opened {
+		t.Fatal("story did not open on the attached terminal")
+	}
+
+	remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/revoke", object{}, 200)
+	if len(b.remote.tokens) != 0 {
+		t.Fatalf("revoke left tokens: %v", b.remote.tokens)
+	}
+	remoteHTTP(t, http.MethodGet, h.base, "", "/remote?token="+url.QueryEscape(h.token), nil, 401)
+}

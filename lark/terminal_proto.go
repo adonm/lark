@@ -374,9 +374,9 @@ func encodeReject(reason uint8, message string) []byte {
 	return appendStr8(b, message)
 }
 
-func parseTelemetry(b []byte) (wsStatus, bool) {
+func parseTelemetry(b []byte) (terminalTelemetry, bool) {
 	if len(b) < 16 {
-		return wsStatus{}, false
+		return terminalTelemetry{}, false
 	}
 	rssi := int(int16(binary.LittleEndian.Uint16(b[0:2])))
 	batt := int(int16(binary.LittleEndian.Uint16(b[2:4])))
@@ -388,7 +388,7 @@ func parseTelemetry(b []byte) (wsStatus, bool) {
 	if batt >= 0 {
 		battPtr = new(batt)
 	}
-	return wsStatus{
+	return terminalTelemetry{
 		WiFi:     new(rssi),
 		Battery:  battPtr,
 		Charge:   new(charging),

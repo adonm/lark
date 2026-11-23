@@ -181,7 +181,7 @@ func run() error {
 		library: env("LARK_LIBRARY_DIR", filepath.Join(local, "library")),
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
-	b.ws = newWSHub(b, true)
+	b.hub = newTerminalHub(b, true)
 	b.remote = newRemoteManager(b, findTunnelCLI(home))
 	b.remote.restore(root)
 	defer b.remote.close()
@@ -192,9 +192,9 @@ func run() error {
 	defer b.dc.shutdown()
 	var termSrv *terminalServer
 	if devicePort != 0 {
-		termSrv, err = newTerminalServer(b.ws, host, devicePorts)
+		termSrv, err = newTerminalServer(b.hub, host, devicePorts)
 		if err != nil {
-			b.ws.shutdown()
+			b.hub.shutdown()
 			finish()
 			_ = listener.Close()
 			<-worker.done
@@ -207,7 +207,7 @@ func run() error {
 	b.timers = newTimerManager(b)
 	if err := b.timers.restore(time.Now()); err != nil {
 		b.timers.close()
-		b.ws.shutdown()
+		b.hub.shutdown()
 		finish()
 		_ = listener.Close()
 		<-worker.done
@@ -248,7 +248,7 @@ func run() error {
 	select {
 	case <-signals.Done():
 		b.timers.close()
-		b.ws.shutdown()
+		b.hub.shutdown()
 		termSrv.shutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -260,7 +260,7 @@ func run() error {
 	}
 	finish()
 	b.timers.close()
-	b.ws.shutdown()
+	b.hub.shutdown()
 	termSrv.shutdown()
 	<-worker.done
 	oc.client.CloseIdleConnections()

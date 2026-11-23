@@ -322,7 +322,7 @@ func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatE
 	return entry, ok
 }
 
-func (h *wsHub) broadcastChat(id string, entry chatEntry) {}
+func (h *terminalHub) broadcastChat(id string, entry chatEntry) {}
 
 func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
 	out := historyPage{CompanionID: id, Messages: []chatEntry{}}
@@ -392,8 +392,8 @@ func resetCompanionSession(ctx context.Context, tx *sql.Tx, id string, archiveHi
 func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, archiveHistory bool) error {
 	id = strings.ToLower(id)
 	run := b.oc.prepareMappingChange(id)
-	if b.ws != nil {
-		b.ws.stopCompanionTurns(id)
+	if b.hub != nil {
+		b.hub.stopCompanionTurns(id)
 	}
 	return run(ctx, func() error {
 		b.companionMu.Lock()
@@ -402,19 +402,19 @@ func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, ar
 		if err != nil {
 			return err
 		}
-		if b.ws != nil {
-			b.ws.mu.Lock()
-			defer b.ws.mu.Unlock()
-			for _, t := range b.ws.terminalsFor(id) {
-				b.ws.stopCompanionTurn(t)
+		if b.hub != nil {
+			b.hub.mu.Lock()
+			defer b.hub.mu.Unlock()
+			for _, t := range b.hub.terminalsFor(id) {
+				b.hub.stopCompanionTurn(t)
 			}
-			b.ws.companionChanged(id, companion)
+			b.hub.companionChanged(id, companion)
 			if archiveHistory {
-				b.ws.historyArchived(id)
+				b.hub.historyArchived(id)
 			}
 		}
 		return nil
 	})
 }
 
-func (h *wsHub) historyArchived(id string) {}
+func (h *terminalHub) historyArchived(id string) {}

@@ -134,7 +134,7 @@ func (nc *testNativeClient) readRTP(wantPT uint8) []byte {
 
 func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 
 func TestNativeProtoControlAndMessages(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,20 +194,20 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	}
 
 	// Test TTS control + PCM + ACK, power, and volume
-	b.ws.mu.Lock()
-	dev := b.ws.terminals["lark-nat2"]
+	b.hub.mu.Lock()
+	dev := b.hub.terminals["lark-nat2"]
 	if dev == nil || dev.telemetry.Battery == nil || *dev.telemetry.Battery != 88 || *dev.telemetry.WiFi != -52 {
-		b.ws.mu.Unlock()
+		b.hub.mu.Unlock()
 		t.Fatal("MSG_TELEMETRY was not applied")
 	}
-	b.ws.setSleeping(dev, true)
-	b.ws.pushVolume(dev, true, false)
+	b.hub.setSleeping(dev, true)
+	b.hub.pushVolume(dev, true, false)
 	stream := newAudioStream()
 	pcm := bytes.Repeat([]byte{0x12, 0x34}, 320)
 	stream.append(pcm)
 	stream.finish(nil)
-	b.ws.play(dev, stream)
-	b.ws.mu.Unlock()
+	b.hub.play(dev, stream)
+	b.hub.mu.Unlock()
 
 	pwr := nc.readUntil(msgPower)
 	if len(pwr) != 1 || pwr[0] != 12 {
@@ -246,7 +246,7 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 			return "", nil
 		})
 	})
-	srv, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	srv, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,15 +290,15 @@ func TestNativeUDPRecordingAndCrossTransportCall(t *testing.T) {
 
 func TestNativeUDPEndpointCopyRace(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	ds, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	ds, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ds.shutdown()
 	_, _ = dialNativeDevice(t, ds, "lark-udprace", "unit", capBridgeEndpoint)
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals["lark-udprace"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["lark-udprace"]
 	free := make(chan int, 16)
 	for i := range 16 {
 		free <- i
@@ -315,7 +315,7 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 	d.recording.phase = captureOpen
 	d.recording.endpoint = ep
 	ssrc := d.client.native.ssrc
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
 	pkt := make([]byte, rtpPacketBytes)
@@ -344,7 +344,7 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 
 func TestNativeUDPZeroAlloc(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	ds, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	ds, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,12 +352,12 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 	nc, _ := dialNativeDevice(t, ds, "lark-udpalloc", "unit", 0)
 	nc.readUntil(msgFrame)
 
-	b.ws.mu.Lock()
-	d := b.ws.terminals["lark-udpalloc"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["lark-udpalloc"]
 	d.recording.phase = captureOpen
 	d.recording.pcm = make([]byte, 0, 128*rtpPCMBytes)
 	ssrc := d.client.native.ssrc
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
 	pkt := make([]byte, rtpPacketBytes)
@@ -373,7 +373,7 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 
 func TestEndpointCaptureZeroAlloc(t *testing.T) {
 	b, _ := wsHarness(t, nil)
-	ds, err := newTerminalServer(b.ws, "127.0.0.1", "0")
+	ds, err := newTerminalServer(b.hub, "127.0.0.1", "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,8 +385,8 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 	for i := range endpointRingSlots {
 		free <- i
 	}
-	b.ws.mu.Lock()
-	d := b.ws.terminals["lark-epalloc"]
+	b.hub.mu.Lock()
+	d := b.hub.terminals["lark-epalloc"]
 	ep := &endpointCapture{
 		cancel:    func() {},
 		owner:     d.client,
@@ -400,7 +400,7 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 	d.recording.endpoint = ep
 	d.client.activeCapture.Store(ep)
 	ssrc := d.client.native.ssrc
-	b.ws.mu.Unlock()
+	b.hub.mu.Unlock()
 	defer d.client.activeCapture.Store(nil)
 
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
@@ -418,7 +418,7 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 }
 
 func BenchmarkNativeUDPHandle(b *testing.B) {
-	h := newWSHub(&larkServer{root: b.Context()}, false)
+	h := newTerminalHub(&larkServer{root: b.Context()}, false)
 	defer h.shutdown()
 	ds := &terminalServer{hub: h, peers: make(map[uint32]*nativeClient)}
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
@@ -428,10 +428,10 @@ func BenchmarkNativeUDPHandle(b *testing.B) {
 		remoteIP: remote.Addr(),
 		udpAddr:  net.UDPAddrFromAddrPort(remote),
 	}
-	d := &wsTerminal{
+	d := &terminalSession{
 		key:       "lark-udpbench",
 		recording: deviceCapture{phase: captureOpen, started: time.Now(), pcm: make([]byte, 0, maxPCM)},
-		client:    &wsClient{native: nc, ctx: b.Context()},
+		client:    &terminalClient{native: nc, ctx: b.Context()},
 	}
 	d.client.terminal = d
 	nc.client = d.client

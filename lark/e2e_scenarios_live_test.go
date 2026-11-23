@@ -25,7 +25,7 @@ func TestVirtualE2E(t *testing.T) {
 	}
 }
 
-func e2eFields(f wsFrame, op string, pairs ...string) bool {
+func e2eFields(f protocolFrame, op string, pairs ...string) bool {
 	if f.op != wsBinary {
 		return false
 	}
@@ -106,9 +106,9 @@ func e2eFields(f wsFrame, op string, pairs ...string) bool {
 	return false
 }
 
-func (c *e2eCompanion) op(t *testing.T, op string, pairs ...string) wsFrame {
+func (c *e2eCompanion) op(t *testing.T, op string, pairs ...string) protocolFrame {
 	t.Helper()
-	return c.expect(t, op+" "+strings.Join(pairs, " "), func(f wsFrame) bool { return e2eFields(f, op, pairs...) })
+	return c.expect(t, op+" "+strings.Join(pairs, " "), func(f protocolFrame) bool { return e2eFields(f, op, pairs...) })
 }
 
 func (s *e2eSuite) idleWake(t *testing.T, c *e2eCompanion, start time.Time) {
@@ -124,7 +124,7 @@ func (s *e2eSuite) idleWake(t *testing.T, c *e2eCompanion, start time.Time) {
 	c.input(t, "tap", 180, 145, c.revision)
 	c.op(t, "power", "brightness", "85")
 	c.sendProto(t, msgPing, []byte("wake"))
-	c.expect(t, "wake without also starting Talk", func(f wsFrame) bool {
+	c.expect(t, "wake without also starting Talk", func(f protocolFrame) bool {
 		if e2eFields(f, "rec", "action", `"start"`) {
 			t.Fatal("wake tap also started recording")
 		}

@@ -17,8 +17,8 @@ func TestAtmospherePhasesAndContrast(t *testing.T) {
 			t.Errorf("%d: got %d, want %d", tc.h, g, tc.g)
 		}
 	}
-	var hub wsHub
-	if g := hub.frameGrade(&wsTerminal{}, at(23, 0)); g != gradeDay {
+	var hub terminalHub
+	if g := hub.frameGrade(&terminalSession{}, at(23, 0)); g != gradeDay {
 		t.Fatalf("unconfigured hub did not keep the identity grade: %d", g)
 	}
 	hub.atmosphere = true

@@ -25,7 +25,7 @@ type terminalCaps struct {
 	Drag           bool `json:"drag"`
 }
 
-type wsStatus struct {
+type terminalTelemetry struct {
 	Battery    *int     `json:"battery_pct"`
 	Charge     *bool    `json:"charging"`
 	WiFi       *int     `json:"wifi_rssi"`
@@ -36,8 +36,8 @@ type wsStatus struct {
 	CPU        *float64 `json:"cpu_pct"`
 }
 
-type wsTerminal struct {
-	client         *wsClient
+type terminalSession struct {
+	client         *terminalClient
 	id             string
 	key            string
 	kind           string // "hardware"
@@ -63,7 +63,7 @@ type wsTerminal struct {
 	hasAmbient     bool
 	pct            int
 	charging       bool
-	telemetry      wsStatus
+	telemetry      terminalTelemetry
 	frame          *diagFrame
 	svg            svgScreen
 	scratchFB      []uint16
@@ -116,13 +116,13 @@ type wsTerminal struct {
 	audioUntil time.Time
 }
 
-func (c *wsClient) pingRTT() *float64 {
+func (c *terminalClient) pingRTT() *float64 {
 	c.pingMu.Lock()
 	defer c.pingMu.Unlock()
 	return c.rtt
 }
 
-func (h *wsHub) peerSnapshot(sender string) ([]companionTarget, error) {
+func (h *terminalHub) peerSnapshot(sender string) ([]companionTarget, error) {
 	return h.b.companionTargets(sender)
 }
 
@@ -130,7 +130,7 @@ func (b *larkServer) peerSnapshot(sender string) ([]companionTarget, error) {
 	return b.companionTargets(sender)
 }
 
-func (h *wsHub) broadcastPeers() {
+func (h *terminalHub) broadcastPeers() {
 	for _, d := range h.terminals {
 		if d.drawer == "intercom" || d.card.hasIntercom() || d.view.hasIntercom() {
 			h.render(d, time.Now(), false)
@@ -139,11 +139,11 @@ func (h *wsHub) broadcastPeers() {
 }
 
 // Called under the hub lock, after committing the companion changes.
-func (h *wsHub) companionChanged(id string, companion companionState) {
+func (h *terminalHub) companionChanged(id string, companion companionState) {
 	h.publishCompanion(id, companion, true)
 }
 
-func (h *wsHub) publishCompanion(id string, companion companionState, clearView bool) {
+func (h *terminalHub) publishCompanion(id string, companion companionState, clearView bool) {
 	key := strings.ToLower(id)
 	now := time.Now()
 	for _, d := range h.terminalsFor(key) {
@@ -164,7 +164,7 @@ func (h *wsHub) publishCompanion(id string, companion companionState, clearView 
 	h.broadcastPeers()
 }
 
-func (h *wsHub) registerHardwareTerminal(termID, hintName, ip string, port int, now time.Time) (terminalRecord, error) {
+func (h *terminalHub) registerHardwareTerminal(termID, hintName, ip string, port int, now time.Time) (terminalRecord, error) {
 	termID = strings.ToLower(termID)
 	if t, ok := h.b.terminalByID(termID); ok {
 		t.Kind = "hardware"
@@ -236,7 +236,7 @@ func (h *wsHub) registerHardwareTerminal(termID, hintName, ip string, port int, 
 	return t, nil
 }
 
-func (h *wsHub) sendSnapshotState(d *wsTerminal) {
+func (h *terminalHub) sendSnapshotState(d *terminalSession) {
 	c := d.client
 	if d.companionID != "" {
 		if st, ok := h.companionStatuses[d.companionID]; ok {
@@ -252,7 +252,7 @@ func (h *wsHub) sendSnapshotState(d *wsTerminal) {
 	h.pushPower(d, d.brightness(), true)
 }
 
-func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
+func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.Time) bool {
 	if ev.protoVersion != protoVersion1 {
 		c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "protocol version mismatch"))
 		return false
@@ -317,7 +317,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 		return false
 	}
 
-	d := &wsTerminal{
+	d := &terminalSession{
 		client:         c,
 		id:             rec.ID,
 		key:            rec.ID,
@@ -383,7 +383,7 @@ func (h *wsHub) handleHello(c *wsClient, ev terminalHello, now time.Time) bool {
 	return true
 }
 
-func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool {
+func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time.Time) bool {
 	if r.protoVersion != protoVersion1 {
 		c.enqueueProto(msgReject, encodeReject(rejectBadVersion, "protocol version mismatch"))
 		return false
@@ -405,7 +405,7 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 	if exists {
 		compID = rec.CompanionID
 	}
-	d := &wsTerminal{
+	d := &terminalSession{
 		client:         c,
 		id:             entry.terminalID,
 		key:            entry.terminalID,
@@ -470,13 +470,26 @@ func (h *wsHub) handleResume(c *wsClient, r terminalResume, now time.Time) bool 
 	return true
 }
 
-func (h *wsHub) announce(d *wsTerminal) {
+// pendingReply returns the armed read-out context, dropping it once its TTL
+// expires so a later in-person turn cannot answer an old Delta Chat message.
+func (d *terminalSession) pendingReply(now time.Time) *turnReply {
+	if d.reply == nil {
+		return nil
+	}
+	if now.Before(d.replyUntil) {
+		return d.reply
+	}
+	d.reply, d.replyUntil = nil, time.Time{}
+	return nil
+}
+
+func (h *terminalHub) announce(d *terminalSession) {
 	d.announcing = false
 	h.sendSnapshotState(d)
 	h.broadcastPeers()
 }
 
-func (d *wsTerminal) status(s wsStatus) {
+func (d *terminalSession) status(s terminalTelemetry) {
 	t := &d.telemetry
 	if d.caps.Battery {
 		if s.Battery != nil {
@@ -509,7 +522,7 @@ func (d *wsTerminal) status(s wsStatus) {
 	}
 }
 
-func (d *wsTerminal) voiceTheme() string {
+func (d *terminalSession) voiceTheme() string {
 	return companionTheme(d.companion.Name)
 }
 
@@ -537,21 +550,21 @@ type renderRequest struct {
 	trace        *turnTrace
 }
 
-func (h *wsHub) companionPose(d *wsTerminal, now time.Time, mood string) companionPose {
+func (h *terminalHub) companionPose(d *terminalSession, now time.Time, mood string) companionPose {
 	p := poseFrame(now, d.moodAt, d.last, mood, d.pct, d.vol, d.charging, now.Before(d.meter))
 	p.stopTaps = d.stopTaps
 	p.canContinue = mood == "thinking" && h.bridgeEndpoint(d) && d.queuedVoice == nil
 	return p
 }
 
-func (h *wsHub) frameGrade(d *wsTerminal, now time.Time) gradeKey {
+func (h *terminalHub) frameGrade(d *terminalSession, now time.Time) gradeKey {
 	if !h.atmosphere {
 		return gradeDay
 	}
 	return gradeAt(now, nil)
 }
 
-func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
+func (h *terminalHub) renderCompanion(companionID string, now time.Time, full bool) {
 	for _, d := range h.terminalsFor(companionID) {
 		h.render(d, now, full)
 	}
@@ -559,7 +572,7 @@ func (h *wsHub) renderCompanion(companionID string, now time.Time, full bool) {
 
 // openStory opens the reader at saved progress. Menu and panel entry points
 // are silent; narration belongs to conversational story turns.
-func (h *wsHub) openStory(d *wsTerminal, st savedStory, narrate bool) {
+func (h *terminalHub) openStory(d *terminalSession, st savedStory, narrate bool) {
 	cs, err := parseTwee(st.Twee)
 	if err != nil {
 		return
@@ -604,7 +617,7 @@ func (h *wsHub) openStory(d *wsTerminal, st savedStory, narrate bool) {
 	h.render(d, now, false)
 }
 
-func (h *wsHub) advanceStoryPassage(d *wsTerminal, targetIdx int, narrate bool) {
+func (h *terminalHub) advanceStoryPassage(d *terminalSession, targetIdx int, narrate bool) {
 	if d.story == nil || d.story.compiled == nil {
 		return
 	}
@@ -637,7 +650,7 @@ func (h *wsHub) advanceStoryPassage(d *wsTerminal, targetIdx int, narrate bool) 
 	h.render(d, time.Now(), false)
 }
 
-func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
+func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 	switch d.drawer {
 	case drawerStories, drawerMemories, drawerPair, drawerUnpair:
 	default:
@@ -741,7 +754,7 @@ func (h *wsHub) render(d *wsTerminal, now time.Time, full bool) {
 
 // A terminal has one frame builder and one replaceable pending request. A dirty
 // rectangle is always based on the last frame committed to that terminal's queue.
-func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
+func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
 	if c != nil && c.PortraitID != "" && h != nil && h.b != nil && h.b.portraits != nil {
 		h.assetsMu.Lock()
 		h.assetsClock++
@@ -785,7 +798,7 @@ func (h *wsHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA,
 
 // invalidateAssets drops the decoded background and poses for a portrait so
 // the next render reloads them from disk.
-func (h *wsHub) invalidateAssets(portraitID string) {
+func (h *terminalHub) invalidateAssets(portraitID string) {
 	if h == nil || portraitID == "" {
 		return
 	}
@@ -794,7 +807,7 @@ func (h *wsHub) invalidateAssets(portraitID string) {
 	h.assetsMu.Unlock()
 }
 
-func (h *wsHub) evictAssetsLocked() {
+func (h *terminalHub) evictAssetsLocked() {
 	for len(h.assets) > assetsCacheLimit {
 		var oldest string
 		var oldestUsed uint64
@@ -820,7 +833,7 @@ func poseIndexForMood(pose companionPose) int {
 	}
 }
 
-func (h *wsHub) renderFrames(d *wsTerminal) {
+func (h *terminalHub) renderFrames(d *terminalSession) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for d.renderNext != nil && h.active(d) {
@@ -975,7 +988,7 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 			}
 		}
 
-		var native wsFrame
+		var native protocolFrame
 		var rawBytes int
 		fbChanged := !slices.Equal(prev.fb, screen.fb)
 		interactionChanged := pointerRev && wantRGB &&
@@ -1042,19 +1055,19 @@ func (h *wsHub) renderFrames(d *wsTerminal) {
 	d.rendering, d.renderNext = false, nil
 }
 
-func (h *wsHub) wake(d *wsTerminal, now time.Time) {
+func (h *terminalHub) wake(d *terminalSession, now time.Time) {
 	d.last = now
 	h.setSleeping(d, false)
 }
 
-func (h *wsHub) setSleeping(d *wsTerminal, asleep bool) {
+func (h *terminalHub) setSleeping(d *terminalSession, asleep bool) {
 	if d.asleep != asleep {
 		d.asleep = asleep
 		h.pushPower(d, d.brightness(), true)
 	}
 }
 
-func (d *wsTerminal) brightness() int {
+func (d *terminalSession) brightness() int {
 	if d.drawer == drawerPair {
 		return 100
 	}
@@ -1064,7 +1077,7 @@ func (d *wsTerminal) brightness() int {
 	return 85
 }
 
-func (h *wsHub) animate(ctx context.Context) {
+func (h *terminalHub) animate(ctx context.Context) {
 	tick := time.NewTicker(40 * time.Millisecond)
 	defer tick.Stop()
 	sincePeers := time.Now()
@@ -1118,11 +1131,11 @@ func (h *wsHub) animate(ctx context.Context) {
 	}
 }
 
-func (d *wsTerminal) volumeFrame(persist bool) object {
+func (d *terminalSession) volumeFrame(persist bool) object {
 	return object{"op": "volume", "terminal_id": d.id, "companion_id": d.companionID, "level": d.vol, "auto_volume": d.autoVol, "persist": persist}
 }
 
-func (h *wsHub) companionTerminals(companionID string) []object {
+func (h *terminalHub) companionTerminals(companionID string) []object {
 	if h == nil {
 		return nil
 	}
@@ -1146,10 +1159,10 @@ func (h *wsHub) companionTerminals(companionID string) []object {
 }
 
 func (b *larkServer) setCompanionTerminalVolume(ctx context.Context, companionID, terminalID string, level int) error {
-	if b.ws == nil {
+	if b.hub == nil {
 		return problem(503, "Terminal hub unavailable")
 	}
-	h := b.ws
+	h := b.hub
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	d := h.terminals[strings.ToLower(terminalID)]
@@ -1159,7 +1172,7 @@ func (b *larkServer) setCompanionTerminalVolume(ctx context.Context, companionID
 	return h.setVolume(ctx, d, false, level, "")
 }
 
-func (h *wsHub) saveVoice(id, voice string) error {
+func (h *terminalHub) saveVoice(id, voice string) error {
 	h.b.companionMu.Lock()
 	defer h.b.companionMu.Unlock()
 	if err := h.b.voices.save(id, voice); err != nil {
@@ -1179,7 +1192,7 @@ func (h *wsHub) saveVoice(id, voice string) error {
 }
 
 // Takes and returns with h.mu held. Serialize writes without blocking the hub.
-func (h *wsHub) setVolume(ctx context.Context, d *wsTerminal, auto bool, level int, action string) error {
+func (h *terminalHub) setVolume(ctx context.Context, d *terminalSession, auto bool, level int, action string) error {
 	h.mu.Unlock()
 	h.settingsMu.Lock()
 	defer h.settingsMu.Unlock()

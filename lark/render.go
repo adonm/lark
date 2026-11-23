@@ -141,11 +141,11 @@ func (e *frameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *im
 	return e.jpegImg
 }
 
-func (e *frameEncoder) encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) wsFrame {
+func (e *frameEncoder) encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) protocolFrame {
 	return e.encodeWithCodecs(fb, rgba, r, rev, width, codecBitAll)
 }
 
-func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int, allowed uint8) wsFrame {
+func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int, allowed uint8) protocolFrame {
 	if allowed == 0 {
 		allowed = codecBitAll
 	}
@@ -212,10 +212,10 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 	out[9] = bestCodec
 	binary.LittleEndian.PutUint16(out[10:], uint16(rev))
 	copy(out[12:], bestPayload)
-	return wsFrame{wsBinary, out}
+	return protocolFrame{wsBinary, out}
 }
 
-func displayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) wsFrame {
+func displayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) protocolFrame {
 	var enc frameEncoder
 	return enc.encode(fb, nil, r, rev, width)
 }

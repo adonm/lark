@@ -454,3 +454,12 @@ func TestOpenCodeExplicitEndpointAndDiscovery(t *testing.T) {
 		t.Fatal("accepted a nonlocal OpenCode endpoint")
 	}
 }
+
+func newCompanion(t *testing.T, b *larkServer, id string) companionState {
+	t.Helper()
+	c, err := b.createCompanion(t.Context(), object{"id": id, "name": strings.ToUpper(id[:1]) + id[1:], "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}

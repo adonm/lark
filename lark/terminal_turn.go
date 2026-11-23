@@ -22,15 +22,15 @@ func recordTarget(s string) (string, bool) {
 	return s, s == "" || targetRE.MatchString(s)
 }
 
-func (d *wsTerminal) noticeBusy() bool {
+func (d *terminalSession) noticeBusy() bool {
 	return d.busy || d.recording.active() || d.queuedVoice != nil || d.stopAudio != nil || d.awaitAck
 }
 
-func (h *wsHub) bridgeEndpoint(d *wsTerminal) bool {
+func (h *terminalHub) bridgeEndpoint(d *terminalSession) bool {
 	return h.b.endpoint != nil && d.caps.BridgeEndpoint
 }
 
-func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, request bool) {
+func (h *terminalHub) startRecording(d *terminalSession, target string, now time.Time, request bool) {
 	bridgeEndpoint := request && target == "" && h.bridgeEndpoint(d)
 	if bridgeEndpoint && d.queuedVoice != nil {
 		// Recording remains explicitly initiated; no automatic reopening.
@@ -69,7 +69,7 @@ func (h *wsHub) startRecording(d *wsTerminal, target string, now time.Time, requ
 	h.render(d, now, false)
 }
 
-func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
+func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bool {
 	if !h.active(d) || d.companion.ListenSeconds <= 0 || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
 		return false
 	}
@@ -91,7 +91,7 @@ func (h *wsHub) startListeningWindow(d *wsTerminal, now time.Time) bool {
 	return true
 }
 
-func (h *wsHub) startStoryChoiceListen(d *wsTerminal, now time.Time) bool {
+func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) bool {
 	if !h.active(d) || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 ||
 		h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
 		return false
@@ -117,7 +117,7 @@ func (h *wsHub) startStoryChoiceListen(d *wsTerminal, now time.Time) bool {
 	return true
 }
 
-func (h *wsHub) tryStoryVoiceChoice(d *wsTerminal, turnID uint64, text string) bool {
+func (h *terminalHub) tryStoryVoiceChoice(d *terminalSession, turnID uint64, text string) bool {
 	h.mu.Lock()
 	if !h.active(d) || d.turn != turnID || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
 		h.mu.Unlock()
@@ -137,13 +137,13 @@ func (h *wsHub) tryStoryVoiceChoice(d *wsTerminal, turnID uint64, text string) b
 	return true
 }
 
-func (h *wsHub) stopListeningWindow(d *wsTerminal, now time.Time) {
+func (h *terminalHub) stopListeningWindow(d *terminalSession, now time.Time) {
 	if d.recording.active() && d.recording.listen {
 		h.recordingControl(d, now, true)
 	}
 }
 
-func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
+func (h *terminalHub) recordingControl(d *terminalSession, now time.Time, cancelled bool) {
 	c := &d.recording
 	if !c.active() {
 		return
@@ -175,13 +175,13 @@ func (h *wsHub) recordingControl(d *wsTerminal, now time.Time, cancelled bool) {
 	c.stopTimer = timer
 }
 
-func (h *wsHub) dispatchRTPPCM(c *wsClient, pt uint8, pcm []byte) {
+func (h *terminalHub) dispatchRTPPCM(c *terminalClient, pt uint8, pcm []byte) {
 	if pt == rtpPTRecPCM {
 		h.micChunkPCM(c, micPrefix, pcm)
 	}
 }
 
-func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
+func (h *terminalHub) micChunkPCM(c *terminalClient, prefix byte, pcm []byte) {
 	if len(pcm) < 2 || len(pcm)%2 != 0 || prefix != micPrefix {
 		return
 	}
@@ -221,12 +221,12 @@ func (h *wsHub) micChunkPCM(c *wsClient, prefix byte, pcm []byte) {
 	}
 }
 
-func (h *wsHub) stopRecordingAtLimit(d *wsTerminal, now time.Time) {
+func (h *terminalHub) stopRecordingAtLimit(d *terminalSession, now time.Time) {
 	h.pushRecStop(d, "", false)
 	h.endRecording(d, "", false, now)
 }
 
-func (h *wsHub) endRecording(d *wsTerminal, reqTarget string, cancelled bool, now time.Time) {
+func (h *terminalHub) endRecording(d *terminalSession, reqTarget string, cancelled bool, now time.Time) {
 	if d.recording.endpoint != nil && !cancelled {
 		h.finishEndpoint(d, now)
 		return
@@ -253,19 +253,19 @@ func (h *wsHub) endRecording(d *wsTerminal, reqTarget string, cancelled bool, no
 	})
 }
 
-func (h *wsHub) interruptTurn(d *wsTerminal, reason string) {
+func (h *terminalHub) interruptTurn(d *terminalSession, reason string) {
 	if d.busy && h.b.oc != nil && d.companionID != "" {
 		log.Printf("ws interrupt companion=%s reason=%s", d.companionID, reason)
 		h.b.oc.interruptDevice(d.companionID)
 	}
 }
 
-func (h *wsHub) cancelTurn(d *wsTerminal, reason string) {
+func (h *terminalHub) cancelTurn(d *terminalSession, reason string) {
 	h.interruptTurn(d, reason)
 	h.cancelLocalTurn(d)
 }
 
-func (h *wsHub) cancelLocalTurn(d *wsTerminal) {
+func (h *terminalHub) cancelLocalTurn(d *terminalSession) {
 	if c := d.queuedVoice; c != nil {
 		d.queuedVoice = nil
 		c.cancel()
@@ -282,7 +282,7 @@ func (h *wsHub) cancelLocalTurn(d *wsTerminal) {
 	h.sig.notify()
 }
 
-func (h *wsHub) startTurn(d *wsTerminal, now time.Time, keepView bool, source string, run func(context.Context, uint64)) bool {
+func (h *terminalHub) startTurn(d *terminalSession, now time.Time, keepView bool, source string, run func(context.Context, uint64)) bool {
 	if d.companionID == "" {
 		return false
 	}
@@ -291,7 +291,7 @@ func (h *wsHub) startTurn(d *wsTerminal, now time.Time, keepView bool, source st
 	return true
 }
 
-func (h *wsHub) beginTurn(d *wsTerminal, now time.Time, keepView bool, source string, run func(context.Context, uint64)) {
+func (h *terminalHub) beginTurn(d *terminalSession, now time.Time, keepView bool, source string, run func(context.Context, uint64)) {
 	h.wake(d, now)
 	h.stopPlayback(d, true)
 	if d.recording.active() {
@@ -324,7 +324,7 @@ type turnAudio struct {
 	failed bool
 }
 
-func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *AudioStream) {
+func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView, audio *AudioStream) {
 	h.mu.Lock()
 	defer func() {
 		h.mu.Unlock()
@@ -386,7 +386,7 @@ func (h *wsHub) finishTurn(d *wsTerminal, id uint64, view *sceneView, audio *Aud
 	d.trace = nil
 }
 
-func (h *wsHub) turnError(d *wsTerminal, id uint64, message string) {
+func (h *terminalHub) turnError(d *terminalSession, id uint64, message string) {
 	h.mu.Lock()
 	if h.active(d) && d.turn == id {
 		h.setCompanionStatus(d.companionID, statusError)
@@ -396,7 +396,7 @@ func (h *wsHub) turnError(d *wsTerminal, id uint64, message string) {
 	h.finishTurn(d, id, &view, nil)
 }
 
-func (h *wsHub) stopCompanionTurn(d *wsTerminal) {
+func (h *terminalHub) stopCompanionTurn(d *terminalSession) {
 	h.cancelLocalTurn(d)
 	h.stopPlayback(d, true)
 	if d.recording.active() {
@@ -405,7 +405,7 @@ func (h *wsHub) stopCompanionTurn(d *wsTerminal) {
 	}
 }
 
-func (h *wsHub) stopCompanionTurns(ids ...string) {
+func (h *terminalHub) stopCompanionTurns(ids ...string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := time.Now()
@@ -417,7 +417,7 @@ func (h *wsHub) stopCompanionTurns(ids ...string) {
 	}
 }
 
-func (h *wsHub) runVoice(ctx context.Context, d *wsTerminal, id uint64, target string, pcm []byte) {
+func (h *terminalHub) runVoice(ctx context.Context, d *terminalSession, id uint64, target string, pcm []byte) {
 	if target != "" {
 		sender := h.b.companionFor(d.companionID)
 		others, err := h.peerSnapshot(sender.ID)
@@ -466,11 +466,11 @@ func (h *wsHub) runVoice(ctx context.Context, d *wsTerminal, id uint64, target s
 	h.runTurn(ctx, d, id, text, "voice", pcm)
 }
 
-func (h *wsHub) runTurn(ctx context.Context, d *wsTerminal, id uint64, text, source string, pcm []byte) {
+func (h *terminalHub) runTurn(ctx context.Context, d *terminalSession, id uint64, text, source string, pcm []byte) {
 	h.runTurnChannel(ctx, d, id, text, source, pcm, turnChannel{})
 }
 
-func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, text, source string, pcm []byte, ch turnChannel) {
+func (h *terminalHub) runTurnChannel(ctx context.Context, d *terminalSession, id uint64, text, source string, pcm []byte, ch turnChannel) {
 	if ch.spec != nil {
 		defer func() {
 			if !ch.spec.isPromoted() {
@@ -526,7 +526,7 @@ func (h *wsHub) runTurnChannel(ctx context.Context, d *wsTerminal, id uint64, te
 // deliverDeviceReply sends a spoken reply back to the Delta Chat chat whose
 // message the device read out. It is skipped when the agent routed the turn
 // with emit, so an explicit target always wins.
-func (h *wsHub) deliverDeviceReply(ctx context.Context, reply *turnReply, gen generatedReply) {
+func (h *terminalHub) deliverDeviceReply(ctx context.Context, reply *turnReply, gen generatedReply) {
 	if reply == nil || gen.reply == "" || gen.routed || ctx.Err() != nil {
 		return
 	}
@@ -538,7 +538,7 @@ func (h *wsHub) deliverDeviceReply(ctx context.Context, reply *turnReply, gen ge
 	}
 }
 
-func (h *wsHub) consumeReply(d *wsTerminal, reply *turnReply) {
+func (h *terminalHub) consumeReply(d *terminalSession, reply *turnReply) {
 	if reply == nil {
 		return
 	}
@@ -549,7 +549,7 @@ func (h *wsHub) consumeReply(d *wsTerminal, reply *turnReply) {
 	h.mu.Unlock()
 }
 
-func (h *wsHub) sendIntercom(ctx context.Context, d *wsTerminal, id uint64, others []companionTarget, target, text string, pcm []byte) {
+func (h *terminalHub) sendIntercom(ctx context.Context, d *terminalSession, id uint64, others []companionTarget, target, text string, pcm []byte) {
 	sender := h.b.companionFor(d.companionID)
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, sender.ID, sender.Name, "intercom", time.Now())
@@ -571,13 +571,13 @@ func (h *wsHub) sendIntercom(ctx context.Context, d *wsTerminal, id uint64, othe
 	h.confirm(ctx, d, id, target, recipients, len(res.sent) != 0, len(res.failed) != 0)
 }
 
-func (h *wsHub) confirm(ctx context.Context, d *wsTerminal, id uint64, target string, recipients []companionTarget, sent, partial bool) {
+func (h *terminalHub) confirm(ctx context.Context, d *terminalSession, id uint64, target string, recipients []companionTarget, sent, partial bool) {
 	title, reply := intercomConfirmation(target, recipients, sent, partial)
 	view := noticeScene(title, reply)
 	h.sayTurn(ctx, d, id, reply, &view)
 }
 
-func (h *wsHub) sayTurn(ctx context.Context, d *wsTerminal, id uint64, text string, view *sceneView) {
+func (h *terminalHub) sayTurn(ctx context.Context, d *terminalSession, id uint64, text string, view *sceneView) {
 	start := time.Now()
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, d.companionID, d.companion.Name, "tap", start)
@@ -603,7 +603,7 @@ func (h *wsHub) sayTurn(ctx context.Context, d *wsTerminal, id uint64, text stri
 	h.finishTurn(d, id, view, nil)
 }
 
-func (h *wsHub) publish(d *wsTerminal, id uint64, ctx context.Context, stream *AudioStream, start time.Time) {
+func (h *terminalHub) publish(d *terminalSession, id uint64, ctx context.Context, stream *AudioStream, start time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.active(d) || d.turn != id || ctx.Err() != nil {
@@ -620,11 +620,11 @@ func (h *wsHub) publish(d *wsTerminal, id uint64, ctx context.Context, stream *A
 	d.replyAudio = &turnAudio{stream: stream, turn: id}
 }
 
-func (h *wsHub) play(d *wsTerminal, stream *AudioStream) context.Context {
+func (h *terminalHub) play(d *terminalSession, stream *AudioStream) context.Context {
 	return h.playTraced(d, stream, nil, time.Time{})
 }
 
-func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace, ttsStart time.Time) context.Context {
+func (h *terminalHub) playTraced(d *terminalSession, stream *AudioStream, trace *turnTrace, ttsStart time.Time) context.Context {
 	ctx, cancel := context.WithCancel(d.client.ctx)
 	h.stopPlayback(d, true)
 	d.stopAudio = cancel
@@ -666,7 +666,7 @@ func (h *wsHub) playTraced(d *wsTerminal, stream *AudioStream, trace *turnTrace,
 	return ctx
 }
 
-func (h *wsHub) streamPlayback(ctx context.Context, d *wsTerminal, id uint64, stream *AudioStream, trace *turnTrace, ttsStart time.Time) error {
+func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id uint64, stream *AudioStream, trace *turnTrace, ttsStart time.Time) error {
 	control := func(state string) bool {
 		op := ttsOpStop
 		switch state {
@@ -763,13 +763,13 @@ func (h *wsHub) streamPlayback(ctx context.Context, d *wsTerminal, id uint64, st
 	return nil
 }
 
-func (d *wsTerminal) measureAmbient(pcm []byte) {
+func (d *terminalSession) measureAmbient(pcm []byte) {
 	if rms, ok := ambientRMS(pcm); ok {
 		d.updateAmbient(rms)
 	}
 }
 
-func (d *wsTerminal) updateAmbient(rms float64) {
+func (d *terminalSession) updateAmbient(rms float64) {
 	if d.hasAmbient {
 		d.ambientEMA += 0.45 * (rms - d.ambientEMA)
 	} else {
@@ -777,7 +777,7 @@ func (d *wsTerminal) updateAmbient(rms float64) {
 	}
 }
 
-func (h *wsHub) applyAmbientVolume(d *wsTerminal) {
+func (h *terminalHub) applyAmbientVolume(d *terminalSession) {
 	if !d.autoVol || !d.hasAmbient {
 		return
 	}
@@ -788,7 +788,7 @@ func (h *wsHub) applyAmbientVolume(d *wsTerminal) {
 	}
 }
 
-func (h *wsHub) stopPlayback(d *wsTerminal, notify bool) {
+func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 	if d.stopAudio != nil {
 		d.stopAudio()
 		d.stopAudio = nil
@@ -801,7 +801,7 @@ func (h *wsHub) stopPlayback(d *wsTerminal, notify bool) {
 	d.audio++
 }
 
-func (h *wsHub) playbackDone(d *wsTerminal, now time.Time, aborted bool) {
+func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bool) {
 	d.awaitAck = false
 	if d.pending != nil {
 		d.view, d.pending = d.pending, nil
@@ -824,19 +824,19 @@ func (h *wsHub) playbackDone(d *wsTerminal, now time.Time, aborted bool) {
 	h.render(d, now, false)
 }
 
-type wsReceipt struct {
-	terminal *wsTerminal
-	view   *sceneView
+type noticeReceipt struct {
+	terminal *terminalSession
+	view     *sceneView
 }
 
 func (b *larkServer) intercomTargets(others []companionTarget, target string) []companionTarget {
 	if !broadcast(target) {
 		return targets(others, target)
 	}
-	if b.ws == nil {
+	if b.hub == nil {
 		return nil
 	}
-	h := b.ws
+	h := b.hub
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var connected []companionTarget
@@ -874,17 +874,15 @@ type terminalNotice struct {
 	trace        *turnTrace
 }
 
-func (h *wsHub) deliverOnline(ctx context.Context, sender companionState, recipients []companionTarget, voice, text string, pcm []byte) []wsReceipt {
-	ids := make([]string, 0, len(recipients))
-	for _, p := range recipients {
-		ids = append(ids, p.ID)
-	}
+// intercomNotice is the one message-card shape shared by online intercom,
+// Delta Chat deliveries, /say and emit: the reply button targets the sender.
+func intercomNotice(sender companionState, recipients []string, text string, pcm []byte, voice string) terminalNotice {
 	intro := "Message from " + sender.Name + "!"
 	if pcm != nil {
 		intro = "From " + sender.Name + "!"
 	}
-	return h.deliverNotice(ctx, terminalNotice{
-		recipientIDs: ids,
+	return terminalNotice{
+		recipientIDs: recipients,
 		sender:       sender,
 		text:         text,
 		speakText:    text,
@@ -893,11 +891,21 @@ func (h *wsHub) deliverOnline(ctx context.Context, sender companionState, recipi
 		pcm:          pcm,
 		chime:        "intercom",
 		showCard:     true,
-		trace:        traceFrom(ctx),
-	})
+		cardReply:    sender.Name,
+	}
 }
 
-func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt {
+func (h *terminalHub) deliverOnline(ctx context.Context, sender companionState, recipients []companionTarget, voice, text string, pcm []byte) []noticeReceipt {
+	ids := make([]string, 0, len(recipients))
+	for _, p := range recipients {
+		ids = append(ids, p.ID)
+	}
+	n := intercomNotice(sender, ids, text, pcm, voice)
+	n.trace = traceFrom(ctx)
+	return h.deliverNotice(ctx, n)
+}
+
+func (h *terminalHub) deliverNotice(ctx context.Context, n terminalNotice) []noticeReceipt {
 	if h == nil || h.b == nil || len(n.recipientIDs) == 0 || len(n.pcm) > maxPeerPCM {
 		return nil
 	}
@@ -926,8 +934,8 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 		return nil
 	}
 	now := time.Now()
-	var targets []*wsTerminal
-	seen := make(map[*wsTerminal]bool)
+	var targets []*terminalSession
+	seen := make(map[*terminalSession]bool)
 	for _, id := range n.recipientIDs {
 		for _, d := range h.terminalsFor(id) {
 			if h.active(d) && !seen[d] {
@@ -944,7 +952,7 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 	if pcmStream == nil && (speakText != "" || n.intro != "") {
 		immediateStream = newAudioStream()
 	}
-	receipts := make([]wsReceipt, 0, len(targets))
+	receipts := make([]noticeReceipt, 0, len(targets))
 	startedImmediate := false
 	for _, d := range targets {
 		stream := pcmStream
@@ -973,7 +981,7 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 				startedImmediate = true
 			}
 		}
-		receipts = append(receipts, wsReceipt{d, view})
+		receipts = append(receipts, noticeReceipt{d, view})
 	}
 	h.mu.Unlock()
 	if startedImmediate {
@@ -982,7 +990,7 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 	return receipts
 }
 
-func (h *wsHub) deliverNoticeNowLocked(d *wsTerminal, now time.Time, q queuedNotice) {
+func (h *terminalHub) deliverNoticeNowLocked(d *terminalSession, now time.Time, q queuedNotice) {
 	d.drawer, d.pending = "", nil
 	d.reply = q.reply
 	if q.reply != nil {
@@ -1005,7 +1013,7 @@ func (h *wsHub) deliverNoticeNowLocked(d *wsTerminal, now time.Time, q queuedNot
 	}
 }
 
-func (h *wsHub) maybeStartNoticeLocked(d *wsTerminal, now time.Time) bool {
+func (h *terminalHub) maybeStartNoticeLocked(d *terminalSession, now time.Time) bool {
 	if len(d.queuedNotices) == 0 || d.noticeBusy() || !h.active(d) {
 		return false
 	}
@@ -1021,7 +1029,7 @@ func (h *wsHub) maybeStartNoticeLocked(d *wsTerminal, now time.Time) bool {
 	return true
 }
 
-func (h *wsHub) speakNotice(stream *AudioStream, voice, introText, text string) {
+func (h *terminalHub) speakNotice(stream *AudioStream, voice, introText, text string) {
 	w := h.b.worker
 	if w == nil || !w.ready.Load() {
 		stream.finish(nil) // The card is still delivered when TTS is unavailable.
@@ -1044,7 +1052,7 @@ func (h *wsHub) speakNotice(stream *AudioStream, voice, introText, text string) 
 	stream.finish(nil)
 }
 
-func (h *wsHub) caption(receipts []wsReceipt, sender companionState, text string) {
+func (h *terminalHub) caption(receipts []noticeReceipt, sender companionState, text string) {
 	if len(receipts) == 0 || text == "" {
 		return
 	}
@@ -1068,8 +1076,8 @@ func (h *wsHub) caption(receipts []wsReceipt, sender companionState, text string
 
 func (b *larkServer) deliver(ctx context.Context, sender companionState, recipients []companionTarget, text string, raw []byte) delivery {
 	sent := make(map[string]bool, len(recipients))
-	if b.ws != nil {
-		for _, r := range b.ws.deliverOnline(ctx, sender, recipients, b.voiceFor(sender.ID), text, raw) {
+	if b.hub != nil {
+		for _, r := range b.hub.deliverOnline(ctx, sender, recipients, b.voiceFor(sender.ID), text, raw) {
 			sent[r.terminal.companionID] = true
 		}
 	}
@@ -1100,11 +1108,11 @@ func (b *larkServer) recordIntercom(sender companionState, ids []string, text st
 	}
 }
 
-func (h *wsHub) speakLocal(d *wsTerminal, text string) {
+func (h *terminalHub) speakLocal(d *terminalSession, text string) {
 	h.speakLocalAfter(d, text, nil)
 }
 
-func (h *wsHub) speakLocalAfter(d *wsTerminal, text string, prefix []byte) {
+func (h *terminalHub) speakLocalAfter(d *terminalSession, text string, prefix []byte) {
 	worker := h.b.worker
 	if worker == nil || !worker.ready.Load() {
 		if len(prefix) != 0 {
