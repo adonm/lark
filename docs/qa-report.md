@@ -19,10 +19,10 @@ The library tool phase is **50× faster end-to-end** and **300× faster in-proce
 
 | Turn | Tool trace | First TTS PCM |
 | --- | --- | --- |
-| Baseline: "Say hello" | no library, no websearch | 3,649 ms |
-| "Why is the sky blue?" | `library.search`/`read`; no websearch | 3,326 ms (−323 ms vs baseline) |
-| "Tell me the story of the three little pigs" | `library` import + silent reader open; no websearch | 4,470 ms |
-| "What is the current price of Bitcoin?" | `library.search` miss, then `websearch` | 3,990 ms |
+| Baseline: "Say hello" | no library, no websearch | 4,687 ms |
+| "Why is the sky blue?" | `library.search`/`read`; no websearch | 2,885 ms (−1,802 ms vs baseline) |
+| "Tell me the story of the three little pigs" | `library` import + silent reader open; no websearch | 3,395 ms (−1,292 ms) |
+| "What is the current price of Bitcoin?" | `library.search` miss, then `websearch` | 4,136 ms (−551 ms) |
 
 - Reference and story turns chose the library *because it is the fast path*; neither used web search.
 - The current-events turn tried the library once, missed, and fell back to websearch with a normal spoken answer. No dead end.
