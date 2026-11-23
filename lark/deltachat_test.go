@@ -1056,7 +1056,10 @@ func TestDeltaChatDeleteForgetsAccountAndWelcome(t *testing.T) {
 	if err := b.deleteCompanion(t.Context(), "greg"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := b.dc.addrs["greg"]; ok {
+	b.dc.mu.Lock()
+	_, mapped := b.dc.addrs["greg"]
+	b.dc.mu.Unlock()
+	if mapped {
 		t.Fatal("delete left the companion address mapping")
 	}
 	b.dc.mu.Lock()

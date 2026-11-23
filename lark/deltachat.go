@@ -330,8 +330,12 @@ func (s *dcService) autoPairAll(ctx context.Context) {
 		}
 		addr := strings.ToLower(*addrPtr)
 		s.mu.Lock()
-		s.byAcc[c.DCAccountID] = c.ID
-		s.addrs[c.ID] = addr
+		// A create can race a delete; re-check under the mapping lock so a
+		// deleted companion is never resurrected after forget.
+		if _, exists := s.b.companionByID(c.ID); exists {
+			s.byAcc[c.DCAccountID] = c.ID
+			s.addrs[c.ID] = addr
+		}
 		s.mu.Unlock()
 		list = append(list, pairAcc{c.ID, c.DCAccountID, addr})
 	}
