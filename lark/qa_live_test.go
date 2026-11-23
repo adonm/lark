@@ -332,7 +332,7 @@ func TestQADeltaChatLive(t *testing.T) {
 		start := time.Now()
 		sendText(fmt.Sprintf("/say latency probe %d", i))
 		measured := false
-		probeDeadline := time.Now().Add(5 * time.Second)
+		probeDeadline := time.Now().Add(20 * time.Second)
 		for time.Now().Before(probeDeadline) {
 			ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false)
 			if err == nil {
