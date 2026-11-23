@@ -531,17 +531,17 @@ func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
 	var p endpointPolicy
 	p.observeEnergy(20*time.Millisecond, true, 2000)
 	p.observeProgress(250*time.Millisecond, "Set a timer for two minutes.", false)
-	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.96, false); got != endpointCommit {
+	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.96, true, false); got != endpointCommit {
 		t.Fatalf("punctuated turn with strong Smart Turn, got %v, want commit", got)
 	}
-	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.94, false); got != endpointWait {
+	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.94, false, false); got != endpointWait {
 		t.Fatalf("Smart Turn below the early threshold, got %v, want wait", got)
 	}
 	p.observeProgress(500*time.Millisecond, "Tell me everything about all the dinosaurs", false)
-	if got := p.decide(500*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.99, false); got != endpointWait {
+	if got := p.decide(500*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.99, false, false); got != endpointWait {
 		t.Fatalf("unpunctuated transcript, got %v, want wait", got)
 	}
-	if got := p.decide(500*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, 0.90, false); got != endpointCommit {
+	if got := p.decide(500*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, 0.90, false, false); got != endpointCommit {
 		t.Fatalf("quiet window without punctuation, got %v, want commit", got)
 	}
 	for _, text := range []string{"done.", "really?", `he said "stop."`, "wow!"} {

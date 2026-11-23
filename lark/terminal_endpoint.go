@@ -339,7 +339,12 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		at := pcmDuration(len(u.pcm))
 		decision := endpointWait
 		if vad != nil {
-			decision = u.policy.decide(at, endpointCap, c.limitSpan, lastSmartTurnProb, c.listen)
+			// Early commit needs a confident end and a punctuated transcript
+			// that already covers all speech; a newer probe may still be running.
+			early := lastSmartTurnProb >= smartTurnEarlyThreshold && !u.policy.incomplete &&
+				cached.err == nil && cached.text != "" && lastGateOpenLen <= cached.audioLen &&
+				terminalPunctuation(cached.text)
+			decision = u.policy.decide(at, endpointCap, c.limitSpan, lastSmartTurnProb, early, c.listen)
 		}
 		if decision != endpointWait {
 			if probeCancel != nil {

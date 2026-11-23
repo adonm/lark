@@ -254,10 +254,10 @@ func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnRe
 	if smartTurnReady {
 		prob = smartTurnThreshold
 	}
-	return p.decide(at, capDur, limitDur, prob, listen)
+	return p.decide(at, capDur, limitDur, prob, false, listen)
 }
 
-func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, listen bool) endpointDecision {
+func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, early bool, listen bool) endpointDecision {
 	if at >= limitDur {
 		if p.hasWords || p.voiced {
 			return endpointCommit
@@ -277,8 +277,7 @@ func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn flo
 	if sinceWord >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {
 		return endpointCommit
 	}
-	if sinceWord >= endpointEarlyQuiet && smartTurn >= smartTurnEarlyThreshold &&
-		!p.incomplete && terminalPunctuation(p.lastText) {
+	if sinceWord >= endpointEarlyQuiet && early && !p.incomplete {
 		return endpointCommit
 	}
 	return endpointWait
