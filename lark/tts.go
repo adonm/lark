@@ -188,6 +188,14 @@ var thinkingFillers = []string{
 	"Let me see.",
 }
 
+// Short, cheap lines for a segment that contained speech but no usable
+// transcript. They are pinned like fillers so the feedback is instant.
+var notCaughtLines = []string{
+	"I didn't catch that.",
+	"Sorry, what was that?",
+	"Say that again?",
+}
+
 var commonOpeners = []string{
 	"Sure!",
 	"Okay!",
@@ -266,6 +274,12 @@ func (c *speechClips) warmFillers(ctx context.Context, w *synthWorker, voice str
 		}
 		_, _ = c.getWith(ctx, w.warm, voice, phrase)
 	}
+	for _, phrase := range notCaughtLines {
+		if ctx.Err() != nil {
+			return
+		}
+		_, _ = c.getWith(ctx, w.warm, voice, phrase)
+	}
 }
 
 func (c *speechClips) get(ctx context.Context, w *synthWorker, voice, text string) ([]byte, error) {
@@ -306,7 +320,8 @@ func (c *speechClips) reserve(voice, text string) (item *clip, owner bool) {
 }
 
 func pinnedClip(text string) bool {
-	return slices.Contains(thinkingFillers, text) || slices.Contains(commonOpeners, text)
+	return slices.Contains(thinkingFillers, text) || slices.Contains(commonOpeners, text) ||
+		slices.Contains(notCaughtLines, text)
 }
 
 // evictLocked drops least-recently reserved finished clips until the byte

@@ -33,6 +33,32 @@ func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsListeningCountersAndSegments(t *testing.T) {
+	b := &larkServer{}
+	b.diag.listen.windows.Add(3)
+	b.diag.listen.speech.Add(2)
+	b.diag.listen.droppedGate.Add(1)
+	b.diag.listen.emptyTranscript.Add(1)
+	b.diag.listen.fillerOnly.Add(1)
+	b.diag.listen.committed.Add(2)
+	b.diag.listen.silentReplies.Add(1)
+	b.diag.listen.didntCatch.Add(1)
+	b.diag.listen.nameRequired.Add(1)
+	b.diag.listen.closeSilence.Add(1)
+	b.diag.listen.closeTap.Add(1)
+	b.diag.listen.closeCap.Add(1)
+	b.diag.addSegment(diagSegment{TS: 1, Terminal: "box3", DurationMS: 2000, SpeechMS: 1200, TextLen: 21, Words: 4})
+	got := b.diagnosticReport().Listening
+	if got.Windows != 3 || got.Speech != 2 || got.DroppedGate != 1 || got.EmptyTranscript != 1 ||
+		got.FillerOnly != 1 || got.Committed != 2 || got.SilentReplies != 1 || got.DidntCatch != 1 ||
+		got.NameRequired != 1 || got.CloseSilence != 1 || got.CloseTap != 1 || got.CloseCap != 1 {
+		t.Fatalf("listening counters: %+v", got)
+	}
+	if len(got.RecentSegments) != 1 || got.RecentSegments[0].TextLen != 21 || got.RecentSegments[0].SpeechMS != 1200 {
+		t.Fatalf("recent listening segments: %+v", got.RecentSegments)
+	}
+}
+
 func TestDiagnosticsMetricWindowAndTurns(t *testing.T) {
 	b := &larkServer{}
 	t0 := time.Now()

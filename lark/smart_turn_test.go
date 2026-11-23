@@ -100,7 +100,7 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 		}
 		b.endpoint = ep
 		b.setSTT(func(_ context.Context, pcm []byte) (string, error) {
-			if bytes.Count(pcm, bytes.Repeat([]byte{17, 0}, endpointBytes/2)) >= 15 {
+			if bytes.Count(pcm, bytes.Repeat([]byte{17, 0}, endpointBytes/2)) >= 8 {
 				return "what is two plus two?", nil
 			}
 			return "what is", nil

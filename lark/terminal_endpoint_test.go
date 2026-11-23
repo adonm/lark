@@ -55,7 +55,11 @@ func TestEndpointWaitsForContinuation(t *testing.T) {
 		t.Fatalf("at cap without smartTurnReady, got %v, want commit", got)
 	}
 	// Trailing comma or conjunction/filler blocks early smartTurn commit until cap.
-	for _, incomplete := range []string{"Hello,", "apples and", "I want to, but", "Wait or", "It was so", "I ran because", "Well um", "Wait uh"} {
+	for _, incomplete := range []string{
+		"Hello,", "apples and", "I want to, but", "Wait or", "It was so", "I ran because",
+		"Well um", "Wait uh", "Can you put his", "Where is the", "It is a", "A story about an",
+		"Tell me of", "Put it in", "Give it to", "The door is", "We were", "Please could",
+	} {
 		if !p.observeProgress(time.Second, incomplete, false) {
 			// Ensure word count is > previous for test or reset
 		}

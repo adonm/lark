@@ -25,6 +25,7 @@ type deviceCapture struct {
 	listen      bool
 	listenUntil time.Time
 	listenSpan  time.Duration
+	debug       bool // Capture raw PCM for the microphone audit, never a turn.
 }
 
 func (c *deviceCapture) active() bool { return c.phase != captureIdle }
@@ -88,5 +89,5 @@ func (c *deviceCapture) clear() {
 		c.stopTimer = nil
 	}
 	c.phase, c.started, c.target, c.pcm = captureIdle, time.Time{}, "", nil
-	c.listen, c.listenUntil, c.listenSpan = false, time.Time{}, 0
+	c.listen, c.listenUntil, c.listenSpan, c.debug = false, time.Time{}, 0, false
 }

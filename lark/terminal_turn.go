@@ -89,6 +89,32 @@ func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bo
 	d.recording.listenSpan = span
 	d.recording.listenUntil = now.Add(span)
 	d.recSession++
+	h.b.diag.listen.windows.Add(1)
+	h.startEndpoint(d)
+	h.pushRecStart(d, "", true, true)
+	h.setCompanionStatus(d.companionID, statusListening)
+	h.render(d, now, false)
+	return true
+}
+
+// startCaptureWindow opens a debug-only raw capture on the companion's voice
+// owner. It uses the normal listening REC_CTRL path, records for the full
+// span regardless of VAD, and never sends a turn.
+func (h *terminalHub) startCaptureWindow(d *terminalSession, now time.Time, span time.Duration) bool {
+	if !h.active(d) || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+		return false
+	}
+	if d.busy || d.recording.active() || d.queuedVoice != nil || d.ttsStarted || d.awaitAck {
+		return false
+	}
+	h.wake(d, now)
+	d.drawer, d.card, d.pending, d.view = "", nil, nil, nil
+	d.recording.start(now, "", true)
+	d.recording.listen = true
+	d.recording.listenSpan = span
+	d.recording.listenUntil = now.Add(span)
+	d.recording.debug = true
+	d.recSession++
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
 	h.setCompanionStatus(d.companionID, statusListening)
@@ -111,6 +137,7 @@ func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) 
 	d.recording.listenSpan = span
 	d.recording.listenUntil = now.Add(span)
 	d.recSession++
+	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
 	h.setCompanionStatus(d.companionID, statusListening)
@@ -140,6 +167,7 @@ func (h *terminalHub) tryStoryVoiceChoice(d *terminalSession, turnID uint64, tex
 
 func (h *terminalHub) stopListeningWindow(d *terminalSession, now time.Time) {
 	if d.recording.active() && d.recording.listen {
+		h.b.diag.listen.closeTap.Add(1)
 		h.recordingControl(d, now, true)
 	}
 }
@@ -338,6 +366,9 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 	d.finished++
 	now := time.Now()
 	d.last = now
+	if d.nameFreeUntil.IsZero() {
+		d.nameFreeUntil = now.Add(followUpGrace)
+	}
 	if audio != nil {
 		switch a := d.replyAudio; {
 		case a == nil || a.stream != audio:
@@ -594,6 +625,45 @@ func (h *terminalHub) confirm(ctx context.Context, d *terminalSession, id uint64
 	h.sayTurn(ctx, d, id, reply, &view)
 }
 
+// replyNotCaught speaks a pre-cached line for speech that produced no usable
+// transcript. It never reaches the agent session, and its playback completion
+// re-arms the listening window through the normal path.
+// nameRequired reports whether a new listening turn must contain the
+// companion's name. The 10 s grace starts when the previous reply finished.
+func (h *terminalHub) nameRequired(d *terminalSession, now time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !d.nameFreeUntil.IsZero() && now.After(d.nameFreeUntil)
+}
+
+func (h *terminalHub) replyNotCaught(ctx context.Context, d *terminalSession, id uint64) {
+	h.b.diag.listen.didntCatch.Add(1)
+	h.freeFollowUps(d, time.Now())
+	w := h.b.worker
+	if w == nil || !w.ready.Load() {
+		h.finishTurn(d, id, nil, nil)
+		return
+	}
+	text := notCaughtLines[int(d.finished)%len(notCaughtLines)]
+	start := time.Now()
+	if traceFrom(ctx) == nil {
+		ctx = h.b.traceTurn(ctx, d.companionID, d.companion.Name, "voice", start)
+	}
+	voice := h.b.voiceFor(d.companionID)
+	stream := newAudioStream()
+	h.publish(d, id, ctx, stream, start)
+	pcm := h.b.clips.peek(voice, text)
+	if pcm == nil {
+		pcm, _ = w.synthesize(ctx, voice, text)
+	}
+	if !stream.append(pcm) {
+		stream.finish(errTTS)
+	} else {
+		stream.finish(nil)
+	}
+	h.finishTurn(d, id, nil, nil)
+}
+
 func (h *terminalHub) sayTurn(ctx context.Context, d *terminalSession, id uint64, text string, view *sceneView) {
 	start := time.Now()
 	if traceFrom(ctx) == nil {
@@ -819,6 +889,9 @@ func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 }
 
 func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bool) {
+	if !aborted {
+		h.freeFollowUps(d, now)
+	}
 	d.awaitAck = false
 	if d.pending != nil {
 		d.view, d.pending = d.pending, nil
@@ -839,6 +912,11 @@ func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bo
 		return
 	}
 	h.render(d, now, false)
+}
+
+// A spoken reply buys free follow-ups without the companion's name.
+func (h *terminalHub) freeFollowUps(d *terminalSession, now time.Time) {
+	d.nameFreeUntil = now.Add(followUpGrace)
 }
 
 type noticeReceipt struct {
@@ -1168,4 +1246,70 @@ func (h *terminalHub) speakLocalAfter(d *terminalSession, text string, prefix []
 			stream.finish(nil)
 		}
 	}()
+}
+
+// Follow-up policy after a reply. Inside the grace period the child can keep
+// talking without saying the companion's name; after it, speech is treated as
+// background chatter unless the name (or a near miss) appears early.
+const (
+	followUpGrace   = 10 * time.Second
+	nameMaxDistance = 2
+	namePrefixWords = 5
+)
+
+var nameLeadWords = map[string]bool{
+	"hey": true, "hi": true, "hello": true, "okay": true, "ok": true,
+	"so": true, "um": true, "uh": true, "oh": true, "and": true,
+}
+
+// splitName returns the words after a leading near-match of name. ok is false
+// when the name is absent from the first few words.
+func splitName(text, name string) (rest string, ok bool) {
+	fields := strings.Fields(text)
+	limit := min(len(fields), namePrefixWords)
+	for i := range limit {
+		candidate := strings.ToLower(strings.Trim(fields[i], ".,!?;:'\""))
+		if len(candidate) < max(3, len(name)-nameMaxDistance) {
+			continue
+		}
+		if editDistance(candidate, strings.ToLower(name)) > nameMaxDistance {
+			continue
+		}
+		rest = strings.Join(fields[i+1:], " ")
+		for {
+			word, after, _ := strings.Cut(rest, " ")
+			if !nameLeadWords[strings.ToLower(strings.Trim(word, ".,!?;:'\""))] {
+				break
+			}
+			rest = after
+		}
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+// editDistance is the Levenshtein distance over runes, used only for short
+// names and transcripts.
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	if len(ar) == 0 || len(br) == 0 {
+		return max(len(ar), len(br))
+	}
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		curr[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 1
+			if ar[i-1] == br[j-1] {
+				cost = 0
+			}
+			curr[j] = min(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(br)]
 }

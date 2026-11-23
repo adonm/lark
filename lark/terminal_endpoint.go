@@ -38,7 +38,8 @@ type endpointCapture struct {
 	deadline    *time.Timer // Hub owns and stops the wall-clock watchdog.
 	commitAt    time.Time   // Hub writes before closing stop.
 	listen      bool
-	limitBytes  int // PCM cap for this capture's full window
+	debug       bool // Raw capture for lark capture; no VAD decisions or turn.
+	limitBytes  int  // PCM cap for this capture's full window
 	limitSpan   time.Duration
 	started     time.Time // Capture start; a read-out after this is not its answer.
 	reply       *turnReply
@@ -96,6 +97,7 @@ type captureResult struct {
 	listen           bool
 	reply            *turnReply
 	spec             *specTurn
+	speech, audio    time.Duration
 }
 
 type pauseTranscript struct {
@@ -139,6 +141,7 @@ func (h *terminalHub) startEndpoint(d *terminalSession) {
 		result:      make(chan captureResult, 1),
 		listening:   make(chan struct{}),
 		listen:      d.recording.listen,
+		debug:       d.recording.debug,
 		limitSpan:   limit,
 		limitBytes:  utteranceBytes(limit),
 		started:     time.Now(),
@@ -151,6 +154,13 @@ func (h *terminalHub) startEndpoint(d *terminalSession) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if h.active(d) && d.recording.endpoint == c {
+			if c.listen {
+				h.b.diag.listen.closeCap.Add(1)
+			}
+			if c.debug {
+				h.finishEndpoint(d, time.Now())
+				return
+			}
 			h.recordingControl(d, time.Now(), c.listen)
 		}
 	})
@@ -171,6 +181,9 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	vad := h.b.endpoint.newVAD()
 	if vad != nil {
 		defer vad.close()
+	}
+	if c.debug {
+		vad = nil
 	}
 	var u utterance
 	u.pcm = make([]byte, 0, sampleRate*2*15)
@@ -246,7 +259,11 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		if wait := time.Since(packet.at); wait > maxVADQueue {
 			maxVADQueue = wait
 		}
-		u.addFor(packet.pcm, vad, c.listen)
+		if c.debug {
+			u.add(packet.pcm, nil)
+		} else {
+			u.addFor(packet.pcm, vad, c.listen)
+		}
 		if c.free != nil && packet.slot >= 0 {
 			c.free <- packet.slot
 		}
@@ -283,7 +300,12 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				if probeCancel != nil {
 					probeCancel()
 				}
-				result := captureResult{pcm: u.clip(), vadQueue: maxVADQueue, hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt), listen: c.listen, reply: c.reply}
+				result := captureResult{
+					pcm: u.clip(), vadQueue: maxVADQueue,
+					hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt),
+					listen: c.listen, reply: c.reply,
+					speech: u.policy.speechSpan(), audio: pcmDuration(len(u.pcm)),
+				}
 				if len(result.pcm) != 0 && (!c.listen || u.policy.voiced) && c.ctx.Err() == nil {
 					switch {
 					case cached.err == nil && cached.text != "" && !cached.windowed && lastGateOpenLen <= cached.audioLen:
@@ -336,8 +358,8 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			accept(result)
 		case turn := <-smartTurnCh:
 			smartTurnCh = nil
-			if turn.wordAt != u.policy.lastWordAt {
-				continue // The transcript advanced while this check ran.
+			if turn.wordAt != u.policy.lastVoicedAt {
+				continue // New speech arrived while this check ran.
 			}
 			lastSmartTurnProb = turn.prob
 			if debugEndpoint {
@@ -370,10 +392,19 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				terminalPunctuation(cached.text)
 			decision = u.policy.decide(at, endpointCap, c.limitSpan, lastSmartTurnProb, early, c.listen)
 		}
+		if c.debug {
+			continue // Record the whole window; no endpoint decisions.
+		}
 		if decision != endpointWait {
 			if probeCancel != nil {
 				probeCancel()
 				probe, probeCancel = nil, nil
+			}
+			if decision == endpointDiscard && u.policy.vadFrames > 0 && u.policy.speechFrames == 0 {
+				h.b.diag.listen.droppedGate.Add(1)
+			}
+			if c.listen && at < c.limitSpan {
+				h.b.diag.listen.closeSilence.Add(1)
 			}
 			if debugEndpoint {
 				silence := at - u.policy.lastVoicedAt
@@ -434,14 +465,14 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			}
 			if h.b.endpoint.smartTurn != nil && vad != nil && u.policy.hasWords &&
 				!u.policy.incomplete && smartTurnCh == nil &&
-				(smartTurnCheckedAt != u.policy.lastWordAt && at-u.policy.lastWordAt >= endpointSpecQuiet ||
+				(smartTurnCheckedAt != u.policy.lastVoicedAt && at-u.policy.lastVoicedAt >= endpointSpecQuiet ||
 					smartTurnCheckedQuiet < endpointQuiet && lastSmartTurnProb < smartTurnThreshold &&
-						at-u.policy.lastWordAt >= endpointQuiet) {
-				smartTurnCheckedQuiet = at - u.policy.lastWordAt
-				smartTurnCheckedAt = u.policy.lastWordAt
+						at-u.policy.lastVoicedAt >= endpointQuiet) {
+				smartTurnCheckedQuiet = at - u.policy.lastVoicedAt
+				smartTurnCheckedAt = u.policy.lastVoicedAt
 				ch := make(chan smartTurnResult, 1)
 				smartTurnCh = ch
-				wordAt := u.policy.lastWordAt
+				wordAt := u.policy.lastVoicedAt
 				startOff := max(0, len(u.pcm)-endpointProbeWindow)
 				pcm := u.pcm[startOff:len(u.pcm):len(u.pcm)]
 				fn := h.b.endpoint.smartTurn
@@ -455,17 +486,17 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 			}
 			if spec == nil && !c.listen && c.companionID != "" && h.b != nil && h.b.oc != nil &&
 				h.b.endpoint.smartTurn != nil && vad != nil && u.policy.hasWords && !u.policy.incomplete &&
-				at-u.policy.lastWordAt >= endpointSpecQuiet &&
+				at-u.policy.lastVoicedAt >= endpointSpecQuiet &&
 				cached.err == nil && cached.text != "" && !cached.windowed &&
 				lastGateOpenLen <= cached.audioLen && cached.text != specTriedText &&
-				smartTurnCheckedAt == u.policy.lastWordAt && smartTurnCh == nil && lastSmartTurnProb >= smartTurnSpeculateThreshold {
+				smartTurnCheckedAt == u.policy.lastVoicedAt && smartTurnCh == nil && lastSmartTurnProb >= smartTurnSpeculateThreshold {
 				specTriedText = cached.text
 				spec = h.b.startSpeculate(c.companionID, cached.text, len(u.pcm), "voice", turnChannel{reply: c.reply})
 				if spec != nil {
 					h.b.diag.spec.started.Add(1)
 				}
 				if debugEndpoint && spec != nil {
-					log.Printf("endpoint speculate start term=%s prob=%.3f quiet=%v text=%q", d.id, lastSmartTurnProb, at-u.policy.lastWordAt, cached.text)
+					log.Printf("endpoint speculate start term=%s prob=%.3f quiet=%v text=%q", d.id, lastSmartTurnProb, at-u.policy.lastVoicedAt, cached.text)
 				}
 			}
 		}
@@ -489,6 +520,10 @@ func (h *terminalHub) finishEndpoint(d *terminalSession, now time.Time) {
 	}
 	close(c.listening)
 	d.recording.clear()
+	if c.debug {
+		h.render(d, now, false)
+		return
+	}
 	d.queuedVoice = c
 	if !h.maybeStartVoice(d, now) {
 		h.render(d, now, false)
@@ -539,13 +574,46 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 			h.turnError(d, id, "Could not hear that. Try again.")
 			return
 		}
-		if result.text == "" || (result.listen && isFillerTranscript(result.text)) {
+		if result.speech > 0 {
+			words, _, _ := inspectTranscript(result.text)
+			h.b.diag.listen.speech.Add(1)
+			h.b.diag.addSegment(diagSegment{
+				TS: time.Now().UnixMilli(), Terminal: d.id, Companion: d.companionID,
+				DurationMS: result.audio.Milliseconds(), SpeechMS: result.speech.Milliseconds(),
+				TextLen: len(result.text), Words: words,
+			})
+		}
+		if result.listen && h.nameRequired(d, time.Now()) {
+			rest, named := splitName(result.text, d.companion.Name)
+			if !named {
+				// Background chatter after the follow-up grace period is
+				// ignored without a spoken reply.
+				h.b.diag.listen.nameRequired.Add(1)
+				h.finishTurn(d, id, nil, nil)
+				return
+			}
+			result.text = rest
+		}
+		if result.text == "" || isFillerTranscript(result.text) {
+			if result.text == "" {
+				h.b.diag.listen.emptyTranscript.Add(1)
+			} else {
+				h.b.diag.listen.fillerOnly.Add(1)
+			}
+			// A cough or a door does not deserve a spoken apology; a segment
+			// with real speech and no usable words does.
+			if result.speech >= time.Second {
+				h.replyNotCaught(ctx, d, id)
+				return
+			}
 			h.finishTurn(d, id, nil, nil)
 			return
 		}
+		h.b.diag.listen.committed.Add(1)
 		if result.reply == nil {
 			h.dropStaleReply(d, c.started)
 		}
+		h.freeFollowUps(d, time.Now())
 		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{reply: result.reply, spec: result.spec})
 	})
 	return true

@@ -86,6 +86,7 @@ type terminalSession struct {
 	pose          companionPose
 	moodAt        time.Time
 	last          time.Time
+	nameFreeUntil time.Time // Follow-ups before this do not need the companion name.
 	meter         time.Time
 	asleep        bool
 	reply         *turnReply // Delta Chat read-out awaiting an in-person reply

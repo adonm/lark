@@ -138,13 +138,65 @@ type diagFrame struct {
 }
 
 type diagnostics struct {
-	mu      sync.Mutex
-	sig     condSignal
-	metrics [diagMetricCount]diagRing[float64]
-	turns   diagRing[*diagTurn]
-	system  diagSystem
-	refresh diagSchemaRefresh
-	spec    diagSpec
+	mu       sync.Mutex
+	sig      condSignal
+	metrics  [diagMetricCount]diagRing[float64]
+	turns    diagRing[*diagTurn]
+	segments diagRing[diagSegment]
+	system   diagSystem
+	refresh  diagSchemaRefresh
+	spec     diagSpec
+	listen   diagListen
+}
+
+// Listening-mode counters. They are cumulative for the process so the live
+// endpoint can show whether speech is being gated, transcribed, and sent.
+type diagListen struct {
+	windows         atomic.Int64
+	speech          atomic.Int64
+	droppedGate     atomic.Int64
+	emptyTranscript atomic.Int64
+	fillerOnly      atomic.Int64
+	committed       atomic.Int64
+	silentReplies   atomic.Int64
+	didntCatch      atomic.Int64
+	nameRequired    atomic.Int64
+	closeSilence    atomic.Int64
+	closeTap        atomic.Int64
+	closeCap        atomic.Int64
+}
+
+type diagSegment struct {
+	TS         int64  `json:"ts_ms"`
+	Terminal   string `json:"terminal,omitempty"`
+	Companion  string `json:"companion,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	SpeechMS   int64  `json:"speech_ms"`
+	TextLen    int    `json:"text_len"`
+	Words      int    `json:"words"`
+}
+
+func (d *diagnostics) addSegment(t diagSegment) {
+	d.mu.Lock()
+	d.segments.add(t, 20)
+	d.mu.Unlock()
+	d.sig.notify()
+}
+
+type diagListenReport struct {
+	Windows         int64         `json:"windows"`
+	Speech          int64         `json:"segments_with_speech"`
+	DroppedGate     int64         `json:"dropped_by_gate"`
+	EmptyTranscript int64         `json:"empty_transcript"`
+	FillerOnly      int64         `json:"filler_only"`
+	Committed       int64         `json:"committed"`
+	SilentReplies   int64         `json:"silent_replies"`
+	DidntCatch      int64         `json:"didnt_catch"`
+	NameRequired    int64         `json:"name_required"`
+	CloseSilence    int64         `json:"closed_silence"`
+	CloseTap        int64         `json:"closed_tap"`
+	CloseCap        int64         `json:"closed_cap"`
+	RecentSegments  []diagSegment `json:"recent_segments"`
 }
 
 // Speculation counters are cumulative because the bench and QA suites need an
@@ -257,6 +309,7 @@ func (t *turnTrace) silent() {
 	t.d.mu.Lock()
 	t.record.Silent = true
 	t.d.mu.Unlock()
+	t.d.listen.silentReplies.Add(1)
 }
 
 // toolError attaches a failed MCP call to the turn that issued it. The HTTP
@@ -364,6 +417,7 @@ type diagReport struct {
 	SVGCache    diagCache              `json:"svg_cache"`
 	Refresh     diagSchemaRefresh      `json:"mcp_contract_refresh"`
 	Speculation diagSpecReport         `json:"speculation"`
+	Listening   diagListenReport       `json:"listening"`
 	Library     object                 `json:"library"`
 	diagSystem
 }
@@ -396,6 +450,22 @@ func (b *larkServer) diagnosticReport() diagReport {
 		out.Latency[name] = summarize(b.diag.metrics[i])
 	}
 	b.diag.turns.each(func(t *diagTurn) { out.Turns = append(out.Turns, *t) })
+	out.Listening = diagListenReport{
+		Windows:         b.diag.listen.windows.Load(),
+		Speech:          b.diag.listen.speech.Load(),
+		DroppedGate:     b.diag.listen.droppedGate.Load(),
+		EmptyTranscript: b.diag.listen.emptyTranscript.Load(),
+		FillerOnly:      b.diag.listen.fillerOnly.Load(),
+		Committed:       b.diag.listen.committed.Load(),
+		SilentReplies:   b.diag.listen.silentReplies.Load(),
+		DidntCatch:      b.diag.listen.didntCatch.Load(),
+		NameRequired:    b.diag.listen.nameRequired.Load(),
+		CloseSilence:    b.diag.listen.closeSilence.Load(),
+		CloseTap:        b.diag.listen.closeTap.Load(),
+		CloseCap:        b.diag.listen.closeCap.Load(),
+		RecentSegments:  []diagSegment{},
+	}
+	b.diag.segments.each(func(s diagSegment) { out.Listening.RecentSegments = append(out.Listening.RecentSegments, s) })
 	b.diag.mu.Unlock()
 	if b.db != nil {
 		if at := b.db.lastBackup.Load(); at != 0 {

@@ -137,16 +137,20 @@ type energyGate struct {
 }
 
 func (g *energyGate) observe(rms float64, vad bool) {
-	g.buf[g.next] = rms
-	g.next = (g.next + 1) % len(g.buf)
-	if g.n < len(g.buf) {
-		g.n++
-	}
-	if !g.ready && g.n == len(g.buf) {
-		ordered := g.buf[:]
-		slices.Sort(ordered)
-		g.floor = ordered[len(ordered)/10]
-		g.ready = true
+	if !vad {
+		// Only non-speech frames may teach the floor; a window that opens
+		// mid-sentence must not calibrate itself to the speech level.
+		g.buf[g.next] = rms
+		g.next = (g.next + 1) % len(g.buf)
+		if g.n < len(g.buf) {
+			g.n++
+		}
+		if !g.ready && g.n == len(g.buf) {
+			ordered := slices.Clone(g.buf[:])
+			slices.Sort(ordered)
+			g.floor = ordered[len(ordered)/10]
+			g.ready = true
+		}
 	}
 	if !vad {
 		// Fast downward tracking keeps a new quiet room from being mistaken
@@ -220,9 +224,25 @@ func (p *endpointPolicy) observeEnergy(at time.Duration, vadSpeech bool, rms flo
 	}
 }
 
+// A transcript ending in one of these is still mid-thought. Committing the
+// 400 ms quiet path there is how "can you put his..." reached the model.
 func isIncompleteWord(w string) bool {
 	switch w {
-	case "and", "but", "or", "so", "because", "um", "uh", "umm", "uhh", "er", "erm":
+	case // conjunctions and subordinators
+		"and", "but", "or", "nor", "so", "because", "if", "when", "while", "until",
+		"although", "though", "unless", "than", "that", "then",
+		// articles, possessives, determiners
+		"a", "an", "the", "this", "these", "those", "my", "your", "his", "her",
+		"its", "our", "their", "some", "any", "every", "each", "no",
+		// prepositions
+		"to", "of", "in", "on", "at", "for", "from", "with", "by", "as", "into",
+		"about", "over", "under", "after", "before", "between", "through",
+		// auxiliaries and copulas
+		"is", "am", "are", "was", "were", "be", "been", "being", "do", "does",
+		"did", "have", "has", "had", "will", "would", "can", "could", "should",
+		"shall", "may", "might", "must",
+		// fillers
+		"um", "umm", "uh", "uhh", "er", "erm", "ah", "eh":
 		return true
 	}
 	return false
