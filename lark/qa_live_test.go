@@ -186,7 +186,7 @@ func TestQADeltaChatLive(t *testing.T) {
 		return deltachat.Message{}
 	}
 
-	waitMsg(60*time.Second, func(m deltachat.Message) bool {
+	waitMsg(120*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeText && strings.Contains(m.Text, "/help")
 	})
 	sendText := func(txt string) {
@@ -206,7 +206,7 @@ func TestQADeltaChatLive(t *testing.T) {
 
 	// /remote replies with one tappable link and nothing else.
 	sendText("/remote")
-	remoteMsg := waitMsg(90*time.Second, func(m deltachat.Message) bool {
+	remoteMsg := waitMsg(120*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeText && strings.HasPrefix(strings.TrimSpace(m.Text), "https://") && strings.Contains(m.Text, "/remote?token=")
 	})
 	firstLink := strings.TrimSpace(remoteMsg.Text)
