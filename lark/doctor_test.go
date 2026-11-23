@@ -70,11 +70,17 @@ func doctorTestEnv(t *testing.T) doctor {
 	}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The clock check compares the host zone with the prompt zone, so use the
+	// runner's zone instead of a developer workstation's.
+	zone := systemTimeZone()
+	if zone == "" {
+		zone = "UTC"
+	}
 	return doctor{
 		repo:         repo,
 		configPath:   config,
 		relay:        "relay.test",
-		zone:         "Australia/Perth",
+		zone:         zone,
 		relayProbe:   func(string) error { return nil },
 		deviceStatus: func(string) (object, error) { return object{"min_free_heap": 100 << 10}, nil },
 	}
