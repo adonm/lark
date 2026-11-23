@@ -18,6 +18,8 @@ func TestFirstTurnWaitsForMCPCatalogRefresh(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/session":
 			sendJSON(w, 200, object{"data": object{"id": sid}})
+		case "/api/experimental/session/" + sid + "/instructions/entries/lark.companion":
+			w.WriteHeader(204)
 		default:
 			http.NotFound(w, r)
 		}
