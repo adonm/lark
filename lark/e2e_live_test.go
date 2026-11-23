@@ -276,7 +276,7 @@ func (s *e2eSuite) board(t *testing.T, variant, label string) *e2eCompanion {
 	ws.sendProto(t, msgHello, encodeTerminalHello(terminalHello{
 		protoVersion: protoVersion1, kind: termKindHardware, capsMask: caps,
 		displayFormats: dispRGB565, frameCodecs: codecBitAll,
-		width: uint16(width), height: uint16(height), shape: wireShape,
+		width: uint16(width), height: uint16(height), shape: uint8(wireShape),
 		terminalID: id, companionID: name, board: variant, firmware: "0.12.0", token: s.token,
 	}))
 	c := &e2eCompanion{testWS: ws, id: id, name: name, width: width, high: height, pixels: make([]uint16, width*height)}
@@ -357,7 +357,7 @@ func (c *e2eCompanion) input(t *testing.T, ev string, x, y int, revision uint16)
 	case "up":
 		kind = ptrUp
 	}
-	c.sendProto(t, msgPointer, encodePointer(kind, uint16(x), uint16(y), revision))
+	c.sendProto(t, msgPointer, encodePointer(uint8(kind), uint16(x), uint16(y), revision))
 }
 
 func (c *e2eCompanion) tap(t *testing.T, id string) {
@@ -387,7 +387,7 @@ func (c *e2eCompanion) audio(t *testing.T, prefix byte, pcm []byte) {
 	for offset := 0; offset < len(pcm); offset += rtpPCMBytes {
 		part := pcm[offset:min(offset+rtpPCMBytes, len(pcm))]
 		seq++
-		c.sendRTP(t, pt, seq, uint32(seq)*320, part)
+		c.sendRTP(t, uint8(pt), seq, uint32(seq)*320, part)
 	}
 }
 
