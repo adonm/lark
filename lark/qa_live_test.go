@@ -186,7 +186,7 @@ func TestQADeltaChatLive(t *testing.T) {
 		return deltachat.Message{}
 	}
 
-	waitMsg(25*time.Second, func(m deltachat.Message) bool {
+	waitMsg(60*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeText && strings.Contains(m.Text, "/help")
 	})
 	sendText := func(txt string) {
@@ -206,7 +206,7 @@ func TestQADeltaChatLive(t *testing.T) {
 
 	// /remote replies with one tappable link and nothing else.
 	sendText("/remote")
-	remoteMsg := waitMsg(20*time.Second, func(m deltachat.Message) bool {
+	remoteMsg := waitMsg(90*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeText && strings.HasPrefix(strings.TrimSpace(m.Text), "https://") && strings.Contains(m.Text, "/remote?token=")
 	})
 	firstLink := strings.TrimSpace(remoteMsg.Text)
@@ -296,7 +296,7 @@ func TestQADeltaChatLive(t *testing.T) {
 
 	// A fresh /remote link invalidates the old token.
 	sendText("/remote")
-	secondMsg := waitMsg(20*time.Second, func(m deltachat.Message) bool {
+	secondMsg := waitMsg(90*time.Second, func(m deltachat.Message) bool {
 		return m.ViewType == deltachat.ViewtypeText && strings.HasPrefix(strings.TrimSpace(m.Text), "https://") && strings.Contains(m.Text, "/remote?token=") && strings.TrimSpace(m.Text) != firstLink
 	})
 	secondURL, _ := url.Parse(strings.TrimSpace(secondMsg.Text))

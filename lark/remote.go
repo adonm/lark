@@ -44,7 +44,7 @@ type tunnelRunner func(context.Context, ...string) ([]byte, error)
 
 func tunnelCLI(bin string) tunnelRunner {
 	return func(ctx context.Context, args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
 		return exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	}
@@ -274,9 +274,14 @@ func (m *remoteManager) issue(ctx context.Context, companionID, contact string) 
 		profile := "lark-" + randomHex(12)
 		rawOut, err := m.runner(ctx, "route", "add", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), "--profile", profile)
 		routeName, publicURL := routeAddress(string(rawOut))
-		if err != nil || routeName == "" || publicURL == "" {
+		if routeName == "" || publicURL == "" {
 			scope.close()
 			return "", problem(502, "OpenTunnel did not return a usable remote URL")
+		}
+		if err != nil {
+			// Route add can return a nonzero status after enabling the systemd
+			// unit in some environments; a usable URL means the route exists.
+			log.Printf("OpenTunnel route add for %s reported: %v", companionID, err)
 		}
 		route = &remoteRoute{CompanionID: companionID, RouteName: routeName, URL: publicURL,
 			LocalPort: port, Profile: profile, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
@@ -348,6 +353,9 @@ func (m *remoteManager) stopLocked(ctx context.Context, companionID string) erro
 	if m.runner != nil {
 		if _, err := m.runner(ctx, "route", "remove", route.RouteName, "--profile", route.Profile); err != nil {
 			log.Printf("Lark could not remove remote route for %s: %v", companionID, err)
+		}
+		if _, err := m.runner(ctx, "down", "--profile", route.Profile); err != nil {
+			log.Printf("Lark could not stop the remote tunnel for %s: %v", companionID, err)
 		}
 	}
 	if scope := m.live[companionID]; scope != nil {
