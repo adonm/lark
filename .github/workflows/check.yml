@@ -66,9 +66,9 @@ jobs:
           go-version-file: lark/go.mod
           cache-dependency-path: lark/go.sum
       - name: Install ffmpeg (voice-note decode in the DC tests)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+        # The image ships apt lists; skipping `apt-get update` avoids the
+        # slow, flaky mirror refresh that dominated the shard wall time.
+        run: sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Run race shard
         env:
           TTS_MODEL_DIR: ${{ runner.temp }}/no-kokoro-model-pack
