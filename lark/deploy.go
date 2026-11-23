@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -63,33 +66,166 @@ func runDeploy(ctx context.Context, args []string, out, errOut io.Writer) error 
 	buildTime := time.Since(built)
 
 	install := time.Now()
-	if err := os.Rename(build, binary); err != nil {
-		return fmt.Errorf("install: %w", err)
+	previous, err := installBinary(build, binary)
+	if err != nil {
+		return err
+	}
+	installed := true
+	rollback := func(cause error) error {
+		if !installed {
+			return cause
+		}
+		installed = false
+		if previous == "" {
+			return cause
+		}
+		if err := restoreBinary(previous, binary); err != nil {
+			return fmt.Errorf("%w (restoring the previous binary failed: %v)", cause, err)
+		}
+		fmt.Fprintln(errOut, "Deploy: keeping the running install; restored the previous binary")
+		if err := restartService(ctx); err != nil {
+			return fmt.Errorf("%w (previous binary restored, but lark.service did not restart: %v)", cause, err)
+		}
+		return cause
 	}
 	installTime := time.Since(install)
 
 	restart := time.Now()
 	if err := restartService(ctx); err != nil {
-		return err
+		return rollback(err)
 	}
 	restartTime := time.Since(restart)
 
 	serving, modelsReady, err := waitDeployHealth(ctx, c, out, errOut)
 	if err != nil {
-		return err
+		return rollback(err)
 	}
+
+	config := time.Now()
+	changed, err := installOpenCodeConfig(ctx, repo, binary, out)
+	if err != nil {
+		return rollback(err)
+	}
+	configTime := time.Since(config)
+	if changed {
+		if err := restartOpenCode(ctx); err != nil {
+			return rollback(err)
+		}
+	}
+
 	if err := waitServices(ctx, c, out); err != nil {
-		return err
+		return rollback(err)
 	}
 	boards, err := waitTerminals(ctx, c, before, out)
 	if err != nil {
-		return err
+		return rollback(err)
 	}
+	installed = false
+	os.Remove(previous)
 	total := time.Since(started)
-	fmt.Fprintf(out, "Deploy: build %s, install %s, restart %s, serving %s, models %s, terminals %s, total %s\n",
+	fmt.Fprintf(out, "Deploy: build %s, install %s, restart %s, serving %s, models %s, config %s, terminals %s, total %s\n",
 		roundMS(buildTime), roundMS(installTime), roundMS(restartTime),
-		roundMS(serving), roundMS(modelsReady), roundMS(boards), roundMS(total))
+		roundMS(serving), roundMS(modelsReady), roundMS(configTime), roundMS(boards), roundMS(total))
 	return nil
+}
+
+// installBinary moves the current binary aside and puts build in its place.
+// previous is empty when this is a first install (nothing to restore).
+func installBinary(build, binary string) (previous string, err error) {
+	if _, statErr := os.Stat(binary); statErr == nil {
+		previous = binary + ".previous"
+		os.Remove(previous)
+		if err := os.Rename(binary, previous); err != nil {
+			return "", fmt.Errorf("install: keep previous binary: %w", err)
+		}
+	}
+	if err := os.Rename(build, binary); err != nil {
+		if previous != "" {
+			_ = os.Rename(previous, binary)
+		}
+		return "", fmt.Errorf("install: %w", err)
+	}
+	return previous, nil
+}
+
+func restoreBinary(previous, binary string) error {
+	if previous == "" {
+		return nil
+	}
+	return os.Rename(previous, binary)
+}
+
+// installOpenCodeConfig runs the same installer setup-host.sh uses, so a
+// deploy picks up plugin and MCP command changes without a rerun. It reports
+// whether the config tree changed and therefore needs lark-opencode restarted.
+func installOpenCodeConfig(ctx context.Context, repo, binary string, out io.Writer) (bool, error) {
+	script := filepath.Join(repo, "scripts", "setup-opencode-config.py")
+	if _, err := os.Stat(script); err != nil {
+		return false, fmt.Errorf("opencode config installer: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, err
+	}
+	directory := filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")),
+		"lark", "opencode", "config", "opencode")
+	before, err := dirDigest(directory)
+	if err != nil {
+		return false, err
+	}
+	deployStep(out, "opencode config")
+	cmd := exec.CommandContext(ctx, "python3", script, directory, binary)
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("opencode config: %w", err)
+	}
+	after, err := dirDigest(directory)
+	if err != nil {
+		return false, err
+	}
+	return before != after, nil
+}
+
+func restartOpenCode(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "restart", "lark-opencode.service")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("systemctl --user restart lark-opencode.service: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// dirDigest hashes file names and contents below root; a missing root hashes
+// as empty so the first install counts as a change.
+func dirDigest(root string) (string, error) {
+	sum := sha256.New()
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(sum, "%s\n%d\n", rel, len(data))
+		sum.Write(data)
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("hash %s: %w", root, err)
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 func roundMS(d time.Duration) time.Duration {
@@ -163,9 +299,7 @@ func waitDeployHealth(ctx context.Context, c *cliClient, out, errOut io.Writer) 
 func deployModels(health object) (states string, ready bool, failure string) {
 	models, _ := health["models"].(object)
 	if models == nil {
-		// Older server: fall back to the aggregate flags.
-		stt, tts := boolOf(health["stt"]), boolOf(health["tts"])
-		return fmt.Sprintf("stt=%v tts=%v", stt, tts), stt && tts, ""
+		return "models=missing", false, ""
 	}
 	var parts []string
 	ready = true
