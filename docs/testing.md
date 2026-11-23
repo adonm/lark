@@ -1,8 +1,10 @@
 # Testing
 
-`./scripts/check.sh` is the gate: shell checks, Node tests, Go vet, the Go race
-suite, the live-tag compile, host C tests under ASan/UBSan, and tracked-file
-hygiene. Run it before every push. CI runs the same phases in one job.
+`./scripts/check.sh` is the gate: shell checks, Node tests, Python setup tests,
+Go vet, the Go race suite, the live-tag compile, host C tests under ASan/UBSan,
+and tracked-file hygiene. Run it before every push. CI runs the same offline
+phases in one job, plus a remote-page job, the stub matrix, and firmware
+builds.
 
 ## To change X, run Y
 
@@ -10,16 +12,17 @@ hygiene. Run it before every push. CI runs the same phases in one job.
 | --- | --- |
 | one Go area (`lark/*.go`) | `./scripts/check.sh --fast` (~10 s) |
 | one Go test | `cd lark && go test -race -tags sqlite_fts5 -run '^TestName$' .` |
-| shell scripts | `bash -n scripts/*.sh && shellcheck -x scripts/*.sh` |
+| shell scripts | `bash -n scripts/*.sh scripts/lib/*.sh && shellcheck -x scripts/*.sh scripts/lib/*.sh` |
+| setup Python (`scripts/setup/*.py`) | `python3 -m unittest discover -s scripts/tests` |
 | OpenCode config (`config/opencode/`) | `node --test config/opencode/*.test.mjs` |
 | firmware host logic (`firmware/main/*.c`) | `./scripts/check.sh --fast` (all host C tests, ~1 s) |
-| firmware image | `./scripts/build.sh vocat` or `./scripts/build.sh box3` (incremental; `--force`, `--watch`) |
+| firmware image | `./scripts/build.sh vocat` or `./scripts/build.sh box3` (incremental; `--force` rebuilds) |
 | remote page (`lark/web/remote/`) | `./scripts/check.sh --remote-ui` (whole gate, then a 3 s DOM suite) |
 | QA sim scenarios (`lark/qa/*.sim`) | `./scripts/check.sh --qa` (~12 s) |
 | QA stub matrix (no models) | `./scripts/check.sh --e2e-stub` (~9 s) |
 | board QA | `./scripts/check.sh --qa-hw` (~19 s) |
 | whole product, virtual boards | `./scripts/check.sh --live` (≥2 min, real STT/TTS) |
-| server deploy | `~/.local/share/lark/lark deploy` (builds, restarts, waits for models and terminals) |
+| server deploy | `~/.local/share/lark/lark deploy` (builds, installs, refreshes the OpenCode config, restarts, waits for models and terminals) |
 | deployed service and OTA | `./scripts/check.sh --deployed` (read-only) |
 | before push | `./scripts/check.sh` (full gate) |
 
@@ -44,11 +47,23 @@ plausibly cover the diff against `ref`. It prints every test and the reason:
   are ignored as common words (`start`, `status`), and the number skipped is
   printed.
 - Node tests run only when `config/opencode/` changed, host C tests only when
-  `firmware/` changed, shell checks only when `scripts/*.sh` changed.
+  `firmware/` changed, Python setup tests and shell checks only when
+  `scripts/` changed. Build and vet always run.
 
 No diff since the base means no build or tests. Typical single-file loop is
 ~10 s (28 tests for `endpoint.go`); a five-commit diff was ~10 s / 23 tests.
 CI never uses `--fast`.
+
+`--fast` limits:
+
+- It does not run the `live` tag, `--e2e-stub`, `--qa`, `--qa-hw`,
+  `--remote-ui`, `--deployed`, or a firmware image build.
+- The file-stem rule runs only tests whose names contain the stem. The symbol
+  rule sees declarations in the diff, not runtime references through
+  interfaces, reflection, or string keys.
+- A production Go change with no mapped test prints a warning and runs the
+  whole package suite.
+- A `go.mod`/`go.sum` or subpackage change runs every Go test.
 
 ## Flags and environment
 
@@ -82,7 +97,9 @@ CI never uses `--fast`.
   sends input to, or reads the screen of, a real board.
 - `lark capture <companion> [seconds]` records the voice-owner microphone
   through the listening path into a 16 kHz mono WAV under
-  `~/.local/share/lark/debug/` (directory `0700`, file `0600`, local only).
+  `~/.local/share/lark/debug/` (directory `0700`, file `0600`). Captures are
+  never uploaded to a third party; only the holder of a scoped link can play,
+  transcribe, or delete them, and they are never used as fixtures.
 
 ## Measured timings
 
@@ -112,7 +129,7 @@ earlier 114.5 s observation measured: the gate, not the DOM suite.
 
 ### Parallel suite
 
-`lark/parallel_test.go` documents the split: 256 top-level tests call
+`lark/parallel_test.go` documents the split: 259 top-level tests call
 `t.Parallel`, and 19 stay in the sequential phase with `serial(t)`:
 
 - 6 allocation tests: `testing.AllocsPerRun` panics in a parallel test.
@@ -137,13 +154,10 @@ Determinism checks after the change: `go test -race -tags sqlite_fts5
 parallelism (116 s) both finished with 0 failures, as did one run
 concurrent with a `--remote-ui` gate.
 
-CI keeps one offline job (187 s measured before this work). A three-way race
-split was tried and rejected: its best case saved ~87 s (187 s → ~100 s),
-under the 90 s bar, and every shard must reinstall ffmpeg for tests that
-depend on it. That install took 45 s to over 5 minutes on the package mirror;
-one shard ran 402 s, slower than the unsplit job. The suite now parallelises
-inside the one job instead, and Kokoro is skipped there when
-`TTS_MODEL_DIR` has no model pack.
+CI keeps one offline job and a separate remote-page job. Splitting the offline
+job into race shards was tried and rejected; the measurements are in
+[docs/qa-report.md](qa-report.md#ci-sharding-2026-11-23-historical).
+Kokoro is skipped there when `TTS_MODEL_DIR` has no model pack.
 
 ## Fast stub QA loop and voice fixtures
 

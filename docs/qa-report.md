@@ -1,436 +1,338 @@
-## 2026-11-23 — Listening reliability (silence, cut-offs, deafness)
+# Lark QA Report
 
-Three failures drove this change: turns that never sent after speech, turns cut
-mid-sentence, and speech silently dropped. All three reproduced in the live
-`LARK_DEBUG_ENDPOINT=1` logs and in synthetic RTP tests.
+## Current state
 
-### Root causes and evidence
+As of 2026-11-24 on `main`:
 
-1. **Silence never ended the turn.** Commit was measured from `lastWordAt`, the
-   probe that last changed the transcript. Parakeet probes on room noise kept
-   "growing" the text, so `lastWordAt` advanced and the quiet/cap timers never
-   expired. Live log: probe at 760 ms `"This thing might just"`, replacement at
-   880 ms `"Listening mode is too"`, then commit at 1.96 s while speech was
-   still arriving. The replacement had the same word count, so
-   `observeProgress` rejected it and speech-ended timers were unrelated to the
-   VAD.
-2. **Cut-offs came from the cap ignoring ongoing speech.** The 1.2 s cap fired
-   on `lastWordAt` even when VAD still reported speech. Function words were
-   only partly covered (`and`, `but`, `or`, …), so `"can you put his"` and
-   `"what to worry is"` passed the early gate.
-3. **Deafness was a commit race.** `finishEndpoint` closed `stop` and then
-   `clear()` cancelled the capture context. If the worker scheduled late, it
-   selected `ctx.Done()` instead of `stop`, exited without sending a result,
-   and the turn saw an empty capture. `lark capture` reproduced it: `POST
-   /api/capture` returned `No microphone audio arrived` in 31 ms while the
-   worker had just started. The same race silently dropped real listening
-   speech.
-4. **The gate was VAD-only plus a fixed 20 % relative energy floor.** It missed
-   quiet distant speech after a loud word and admitted steady noise that Silero
-   flickered on.
+- `./scripts/check.sh` passes: shell checks, Node tests, Go vet, the race suite,
+  the live-tag compile, strict host C tests for both boards, and tracked-file
+  hygiene. The race suite has 259 parallel tests and 19 sequential tests.
+- `--e2e-stub` passes the 11 non-hardware QA scenarios against one isolated
+  stub server in about 9 s.
+- `--remote-ui` passes the headless-Chromium page suite in about 3 s.
+- `--qa` passes the sim suite; `--qa-hw` adds the hardware subtests and skips
+  them when no board is attached.
+- Static prompt: 4,155 bytes (agent 3,786 + MCP instructions 369) against the
+  4,250-byte budget. A worst-case state line (3 terminals, 5 timers, 5 stories,
+  60-byte labels) measures 1,176 bytes against its 1,280-byte bound.
+- Companion models: primary `opencode/deepseek-v4.1-flash#low`, deep
+  `opencode/glm-5.3#high`, fallback `opencode/glm-5.3-flash#low`.
+- Firmware source is 0.21.0.
 
-### Fixes
+Open gaps:
 
-- Silence is measured from the last frame that was both VAD-positive and above
-  an adaptive floor. Quiet commit 400 ms, cap 1.2 s, continuous monologue 20 s;
-  transcript text cannot extend any of them. Probe text only advances when the
-  decoded audio contained gated speech; hallucinated words on silence are
-  ignored. Equal-word-count replacements now update completeness.
-- The floor is learned from one second of non-speech after the window opens (or
-  after a full second of quiet) and tracks downward instantly / upward slowly.
-  Windows that open mid-speech keep the conservative zero floor until the room
-  is quiet.
-- The closing-pause guard now covers articles, possessives, prepositions,
-  auxiliaries and copulas in addition to conjunctions and fillers.
-- A committed endpoint is marked before `stop` closes, so `clear()` no longer
-  cancels its result; a late `rec_end` from the previous capture is ignored
-  while the new one is still requested.
-- A segment with >=1 s of gated speech and no usable transcript speaks one
-  pinned "I didn't catch that." line and re-arms. After 10 s without a reply,
-  a listening turn must contain the companion's name (edit distance <=2 in the
-  first five words); nameless speech re-arms silently.
-- Listening is one boolean (`listening`), one 30 s window, one `/remote`
-  toggle. The duration column was backfilled and dropped.
+- Every STT accuracy and latency number below uses synthetic Kokoro speech.
+  Real child speech at room distance is still unmeasured; collect 2–3 minutes
+  with `lark capture <companion> 60`, keep the WAVs local, and compare
+  `lark stt-bench` output with what was said.
+- Hardware QA, live Delta Chat, and tunnel checks need a board, a paired
+  account, and `opentunnel`; they are not part of the offline gate.
 
-### Measurements
+## Historical runs
 
-Turn bench, real model (`deepseek-v4.1-flash#low`), 7 runs x 3 utterances;
-one first-turn row was lost during startup, leaving 20 diagnostic turns:
+Commands, flags, model ids, firmware versions, and measurements below are
+reported as run on their dates. Several are retired; treat them as evidence,
+not instructions.
 
-| Metric | Before (live diagnostics, 8 turns, old build) | After |
+### Listening reliability, 2026-11-23 (historical)
+
+Three failures drove the change: turns that never sent after speech, turns cut
+mid-sentence, and speech silently dropped. All reproduced in live
+`LARK_DEBUG_ENDPOINT=1` logs and synthetic RTP tests.
+
+Root causes:
+
+1. Commit was measured from the probe that last changed the transcript, so
+   Parakeet probe churn on room noise held the quiet and cap timers open.
+2. The cap ignored VAD and fired on transcript age; the function-word guard
+   covered only conjunctions and fillers.
+3. `finishEndpoint` closed `stop` then cancelled the capture context; a late
+   worker exited without a result, so the turn saw an empty capture.
+4. The gate was VAD-only plus a fixed 20 % relative energy floor, which missed
+   quiet distant speech and admitted steady noise.
+
+Fixes:
+
+- Silence is measured from the last frame that was VAD-positive and above an
+  adaptive floor. Quiet commit 400 ms, cap 1.2 s, monologue 20 s. Transcript
+  text cannot extend any of them. Probe text only advances when the decoded
+  audio contained gated speech.
+- The floor is learned from one second of non-speech and tracks downward
+  instantly, upward slowly.
+- The closing-pause guard covers articles, possessives, prepositions,
+  auxiliaries, and copulas as well as conjunctions and fillers.
+- A committed endpoint is recorded before `stop` closes, and a late `rec_end`
+  from the previous capture is ignored.
+- A segment with at least 1 s of gated speech and no usable transcript speaks
+  one cached "I didn't catch that." line and re-arms. After 10 s without a
+  reply, a listening turn needs the companion's name (edit distance ≤2 in the
+  first five words).
+- Listening is one boolean, one 30 s window, one `/remote` toggle.
+
+Turn bench, real model, 7 runs × 3 utterances (20 diagnostic turns; one
+first-turn row was lost during startup):
+
+| Metric | Before | After |
 | --- | ---: | ---: |
-| End-of-speech → commit p50 / p95 | 241–1,080 ms spread | **400.3 / 407.5 ms** |
-| E2E p50 / p95 | 1.35–2.36 s spread (p50 ≈ 1.83 s) | **1,192 / 1,895 ms** |
-| Speculation | not counted (debug off) | started 21, hit 21, abort 0, avg overlap 638 ms |
+| End-of-speech → commit p50 / p95 | 241–1,080 ms spread | 400.3 / 407.5 ms |
+| E2E p50 / p95 | 1.35–2.36 s spread (p50 ≈ 1.83 s) | 1,192 / 1,895 ms |
+| Speculation | not counted | 21 started, 21 hit, 0 abort, 638 ms average overlap |
 | Commits while speech still voiced | observed | 0 in 20 |
 
-STT bench on synthetic Kokoro fixtures (adult and +20 % pitch-shifted kid
-voices, pink-noise bed):
+STT bench on synthetic fixtures (adult and +20 % pitch-shifted kid voices,
+pink-noise bed): Parakeet 55–77 ms; exact transcripts except one dropped final
+period; the noise-only clip returned empty.
 
-| Fixture | Parakeet | Audio | Transcript |
-| --- | ---: | ---: | --- |
-| adult1 | 57.5 ms | 2.2 s | exact |
-| adult1 + pink noise | 66.3 ms | 2.2 s | exact |
-| kid1 (+20 %) | 57.6 ms | 2.2 s | exact |
-| kid2 (+20 %) | 55.9 ms | 2.3 s | exact, dropped final period |
-| kid3 (+20 %) | 55.4 ms | 2.0 s | exact |
-| pink noise only | 77.0 ms | 12 s | empty |
+Verification: the full gate passed with new quiet-speech, noise-only,
+transcript-churn, monologue, window-close, name-path, feedback, commit-vs-cancel,
+capture-permission, diagnostics, and listening-migration tests. The sim suite
+passed in 10.9 s and the hardware suite in 22.5 s, including
+`box3-b324/AutoCommitNoisyMic` (speech plus ~350 RMS noise, no Send). Live
+captures wrote `0700` directories and `0600` files, transcribed both injected
+clips, ignored 5 s of noise between them, and a window on `vocat-33d8`
+committed at 400 ms of silence.
 
-The pitch shift is not a real child at a distance; these numbers must not be
-quoted as kid WER.
+### Server cleanup, 2026-11-23 (historical)
 
-### Verification
+Firmware 0.20.0 shipped in the same rollout.
 
-- `./scripts/check.sh`: PASS (Go race suite, Node, host C for both boards,
-  tracked-file hygiene). New regressions: quiet speech over a floor, noise-only
-  windows, transcript churn, monologue cap, window close, name matching and all
-  three name paths, feedback playback/re-arm, commit-vs-cancel race, capture
-  WAV permissions, diagnostics counters, listening boolean migration.
-- `./scripts/check.sh --qa`: PASS 10.9 s (4 sim scenarios); `--qa-hw`: PASS
-  22.5 s, including `box3-b324/AutoCommitNoisyMic` (speech + ~350 RMS noise,
-  no Send).
-- `lark doctor`: server, models, firmware, disk, library, Delta Chat, tunnels
-  and all three terminals green after clearing QA turn failures.
-- Live: `lark capture cake 15` and `lark capture mint 15` while injecting
-  Kokoro speech and pink noise through `lark device … mic` wrote private WAVs
-  (`0700` dir, `0600` file). The mint capture transcribed both injected clips
-  ("What to worry is the loud noise outside", "Tell me a story about a purple
-  frog") and ignored the 5 s noise between them. A real listening window on
-  `vocat-33d8` opened after the reply, heard a 2.2 s injected follow-up plus
-  noise, committed at 400 ms of silence, and started the next turn; diagnostics
-  showed `windows:1`, `closed_silence:2`, no gate drops.
+- CI used the deleted module path; it now uses `lark/go.mod` and `lark/go.sum`.
+- Companion deletion now clears welcome and story message meta plus the Delta
+  Chat address/account maps, and calls `dcService.forget`.
+- History queues stop through a `quit` channel instead of closing channels
+  under writers.
+- Portrait/form changes invalidate the cached background; replaced portrait
+  directories are deleted and the cache is LRU-bounded.
+- Speculative turns abort unless promoted; pre-synthesis uses a cancellable
+  context.
+- Listen captures no longer drop speech after 60 s of a longer window.
+- `/remote` patches keyed rows in place instead of rebuilding the panel on each
+  SSE push; the manifest uses token-free URLs.
+- Deleted unrouted API types and dead WebSocket-era paths: tier 2 was +240/−752
+  source lines, and `/remote` dropped the bundled Oat files in favour of eight
+  theme variables.
 
-### Still needed: real kid speech
-
-Every STT number above is synthetic. To measure real WER at distance, collect
-2–3 minutes from the actual room: `lark capture cake 60` (and `mint`) while a
-child talks naturally, then `lark stt-bench ~/.local/share/lark/debug/`. Compare
-the printed transcript with what was said; keep the files local.
-
----
-
-## 2026-11-23 — Server Cleanup (bug fixes, deletions, performance, cohesion)
-
-Four approved cleanup tiers landed in review order; firmware `0.20.0` shipped in the same rollout and the server was rebased on it before deploy.
-
-### Bugs fixed
-- CI workflow pointed at the deleted `bridge/` module; it now uses `lark/go.mod` and `lark/go.sum`.
-- Deleting a companion removed local rows but left `dc_welcome:*`/`dc_story_msgs:*` meta and the Delta Chat address/account maps, so recreating a slug did not greet contacts and could answer on the old account. Deletion now clears both and calls `dcService.forget`.
-- `chatHistory.close` closed data channels under concurrent writers (send-on-closed panic). Queues stop through a `quit` channel and drain.
-- Portrait/form changes served a stale background from the asset cache; replaced portraits leaked their directory. The cache is invalidated on form change and after regeneration, replaced directories are deleted, and entries are LRU-bounded.
-- Speculative turns were orphaned on early exits and their TTS fills kept the server context. Turns defer `abort` unless promoted and fills use a per-spec cancellable context.
-- Listen captures silently dropped speech after 60 s of a longer window; the PCM cap now covers the full listen span (still bounded by the window).
-- `/remote` rebuilt whole panels on every SSE push, wiping typed text and pending buttons; it now patches keyed rows in place. The PWA manifest uses token-free URLs and the cookie, and `hidden="until-found"` is no longer forced to `display:none`.
-- The session store's dead upsert branches and unused mutex were removed.
-
-### Deletions
-- Unrouted `memoryAPI`, `timerAPI`, `messages`, `compactAPI`/`compactResult`/`compactActiveSessions`/`CompactSession`/`companionIDArg`: **−305 source lines** (net −312 with the session-store rewrite).
-- WebSocket-era terminal state and dead protocol paths (client queues, hub peer/refresh caches, `onlineTerminals`/`peerDisplay`, empty-kind hello/resume, `msgMedia`/RTP-over-frame, `msgSetVolume`, web branches, `virtual()`, `icon.svg`, app labels, `timers.app_name`, setup strips): **−349 lines** in one commit (net −261 after the UDP test harness moved off `msgMedia`).
-- State sequence and status detail: status/voice-owner payloads keep their 0.20.0 sizes with zeroed fields; the server stops tracking or sending them and drops unpopulated telemetry (`battery_mv`, `min_free_heap`, `free_psram`, `running_partition`, flush/drop counters, `ws_connected`, `reported_volume`). **−167 lines**.
-- Legacy parsing: channel backfill replaces the `channel=''` query fallbacks; dead prompt-header prefixes removed. **−27 lines**.
-- Tier 2 net source change: **+240 / −752 lines**; `/remote` also lost `oat.min.css` (32,147 B) and `oat.min.js` (11,267 B) in favour of the eight theme variables it uses.
-
-### Performance
-Measured on the same host (`-benchmem`, 3 runs, median):
+Performance on the reference host (`-benchmem`, median of 3):
 
 | Benchmark | Before | After |
 | --- | --- | --- |
-| `RenderPixelHome/vocat` (server recycle path) | 352,217–359,354 ns, 590,202 B, 7 allocs | 290,180–290,610 ns, 370 B, 2 allocs |
-| `RenderPixelHome/box3` (server recycle path) | 307,912–312,405 ns, 393,592 B, 7 allocs | 259,200–261,066 ns, 225–310 B, 2 allocs |
+| `RenderPixelHome/vocat` | 352,217–359,354 ns, 590,202 B, 7 allocs | 290,180–290,610 ns, 370 B, 2 allocs |
+| `RenderPixelHome/box3` | 307,912–312,405 ns, 393,592 B, 7 allocs | 259,200–261,066 ns, 225–310 B, 2 allocs |
 | `RenderPixelMenu/vocat` | 320,542 ns, 591,549 B, 11 allocs | 317,431 ns, 591,554 B, 10 allocs |
 | `FrameEncoderRLE` | 207,916 ns, 1,152 B, 1 alloc | 204,922 ns, 1,152 B, 1 alloc |
 
-- Endpoint capture rings drop from `256 × 8 KiB` (2 MiB) to `256 × 640 B` (160 KiB, 12.5× smaller) and are pooled; slot push asserts 0 allocs/op.
-- Probes stop after the quiet window or near the cap, commit cancels pending probes, and the STT window is 4 s instead of 8 s.
-- Render screens/canvases are pooled once converted to RGB565; placeholder poses/theme build once.
-- TTS inserts one shared zero-filled silence chunk between sentences instead of copying every sentence; the clip cache is 24 MiB with pinned fillers/openers.
-- TCP reads are buffered per connection and writes use `net.Buffers` writev for header+payload.
+Endpoint rings shrank from 256 × 8 KiB to 256 × 640 B and are pooled. Probes
+stop after the quiet window or near the cap, commit cancels pending probes, and
+the STT window is 4 s. Screens and canvases are pooled after RGB565 conversion.
+TTS inserts one silence chunk between sentences; the clip cache is 24 MiB. TCP
+writes use `net.Buffers`.
 
-### Cohesion
-- Delta Chat human turns use `generateReply` (`textOnly`) instead of a duplicate prompt/TTS/silence pipeline.
-- Intercom, Delta Chat, `/say` and `emit` share `intercomNotice`; the card reply target now defaults to the sender.
-- `handlers.go` → `prompt.go` + `reply.go`, `terminal_hub.go` → `terminal_render.go`, `deltachat.go` → `dc_commands.go` + `dc_media.go` (moves only).
-- `wsHub`/`wsTerminal`/`wsStatus`/`wsReceipt`/`wsFrame`/`wsClient` renamed; the JSON field is `connected` (no `ws_connected` alias).
+The gate, live-tag compile, sim suite, remote-page suite (2.5 s), and README
+route guards passed. Setup ran after rebasing on firmware 0.20.0; `lark status`
+was healthy with all three boards online. One `lark sim` turn on `greg`
+completed listening → thinking → speaking → done with first TTS 2.25 s after
+speech.
 
-### Tests added
-- Companion delete/recreate welcome + account mapping; history close under concurrent add (`-race`); form change refreshes the cached background; early-exit speculative turn leaves no live spec; listen cap beyond 60 s; `/remote` input/pending preservation and `until-found` panel test; token-free manifest; retired timer column drop; ring and frame allocation assertions; shared TTS silence chunk; reply-context TTL; remote volume/story-open/revoke; README route guard in both directions.
+### Sleeping-terminal ping backoff, 2026-11-23 (historical)
 
-### Gates and deploy
-- `./scripts/check.sh`, live-tag vet/compile, `--qa` (4/4 sim scenarios), `--remote-ui` (9/9, 2.5 s), README guards: pass.
-- `./scripts/setup-host.sh --gpu-index 0` after rebasing on firmware `0.20.0`; `lark status` healthy (`ok=true`, opencode/stt/tts/deltachat true, library installed) with all three boards online on `0.20.0`.
-- One scripted `lark sim` turn on `greg`: listening → thinking → speaking → done, first TTS 2.25 s after speech.
-- `/remote` page behaviour was verified by the headless UI suite and the Go page/manifest tests; the live tunnel for `greg` answers `401` without a token as designed. The household contact was not messaged to mint a fresh link.
-- The accidental 20 MB `lark/lark` build output was removed from the unpushed commit; `.gitignore` now covers it and no unpushed commit adds a binary.
+The server pinged every 12 s and woke a sleeping radio. The interval is now
+30 s while the terminal reports sleeping and returns to 12 s when awake; the
+75 s TCP read deadline is unchanged. `TestPingIntervalFollowsSleep` asserts
+12 s → 30 s → 12 s.
 
-# Lark QA Report
+### Device replies to Delta Chat read-outs, 2026-11-23 (historical)
 
-## 2026-11-23 — Sleeping-terminal ping backoff
+Symptom: answering a read-out by voice produced a "couldn't reach" reply
+instead of delivering to the sender. Three causes: the card Reply button
+addressed the card title and never used Delta Chat; tap-to-talk dropped the
+reply context; `emit.intercom` matching was narrower than `me.contacts`.
 
-The server pinged every 12 s, waking the radio and CPU of a device whose panel was asleep.
+The fix arms a `turnReply` for 2 minutes, consumed by one tap-to-talk or
+listening turn; the final reply goes back to the chat unless `emit` ran.
+`[silent]` and empty replies send nothing. The card Reply target is the
+conversation partner, and a clip for an offline peer goes by voice note.
+`emit.intercom` matches display name, address-book name, address fallback, or
+peer id exactly.
 
-- The interval is now 30 s while the terminal reports sleeping and returns to 12 s once awake. The 75 s TCP read deadline is unchanged, so a dead connection is still detected.
-- `TestPingIntervalFollowsSleep` drives a fake native terminal through `setSleeping` and asserts 12 s → 30 s → 12 s.
+Tests: `TestDeviceReplyToDeltaChatHuman`, `TestDeviceReplyToDeltaChatCompanion`,
+`TestDeviceReplyExplicitEmitWins`, `TestDeviceReplySilentSendsNothing`,
+`TestDeviceTurnWithoutReadoutNotForwarded`,
+`TestSayReadoutCardRepliesToHumanSender`,
+`TestIntercomCardReplyTargetsConversationPartner`,
+`TestEmitIntercomMatchesContactAddress`. Live `TestQADeltaChatDeviceReplyLive`
+passed in 25.1 s; one earlier attempt timed out on the relay welcome.
 
-## 2026-11-23 — Device replies to Delta Chat read-outs
+### Remote controls, REST and SSE, 2026-11-23 (historical)
 
-**Symptom:** after a Delta Chat message was read out, answering by voice on the device produced "I couldn't reach greg/cake right now" instead of delivering to the sender.
+- A verified contact sent `/remote` and got one bare tunnel link. REST commands
+  set listening, changed voice, and returned history. A second `/remote`
+  invalidated the first token (401) and issued a replacement. `/remote off`
+  made the token 401 on the main port and stopped the scoped listener.
+- Through the real tunnel, `POST /remote/api/listen` measured p50 106 ms;
+  the older chatmail `/say` round trip measured p50 2.63 s.
+- `TestQADeltaChatLive` passed in 102.1 s; the throwaway companion and account
+  were removed.
+- The gate passed in 48.5 s. The remote-page suite passed 7/7 in 8.8 s.
+- `TestRemotePagePWAAndScopedAuth`, `TestRemoteRESTCommandsAndHistoryCursor`,
+  `TestRemoteEventsStreamsInitialStateAndChanges`,
+  `TestRemoteTunnelCommandIssueRotateAndRevoke`,
+  `TestRemoteTunnelRestoresSavedRouteAndToken`, and
+  `TestRemoteMissingOpentunnelAndCompanionDelete` cover scoping, assets, SSE,
+  rotation, restore, the missing `opentunnel` error, and teardown.
+- The webxdc panel, its status-update handler, versioning, story player, and
+  the old `/panel` command were deleted. Old panel messages are inert. `/story`
+  sends a plain `.twee` attachment.
 
-### Root causes
+### Local library fast path, 2026-11-23 (historical)
 
-1. **The card Reply button addressed the card title, and voice notes never used Delta Chat.** `/say` and "I told <name>: …" cards are sent by the companion itself, so tapping Reply recorded a clip addressed to that companion. The card path (`runVoice`, `target != ""`) also delivered only to online LAN peers; `dc.sendIntercom` was never called. With no peer online, `intercomConfirmation` spoke exactly "I couldn't reach greg right now." The same happened on an incoming human card: the target was the human, but there was still no Delta Chat delivery.
-2. **Tap-to-talk dropped the read-out context.** The "replying to <Name> (Delta Chat)" label was kept only for a listening window; `playbackDone` and `startRecording` cleared it. With `listen: off` (the default) the model saw a plain in-person turn and never knew a Delta Chat sender was waiting. Even with the label, delivery depended on the model choosing `emit.intercom`.
-3. **The explicit emit path was narrower than `me.contacts`.** A contact with no display/book name (shown by its address) did not match, and the substring fallback could address the wrong contact.
-
-### Fix
-
-- Read-outs arm a `turnReply{name, companionID, chatID}` on the terminal for 2 minutes. Both tap-to-talk and listening windows capture it, and one turn consumes it. On completion the server sends the final reply text into the originating chat unless that turn called `emit` (per-companion emit counter, including speculative turns). `[silent]`/empty sends nothing, and explicit routing wins.
-- The card Reply target is the conversation partner, not the card sender. When no peer terminal is online, the clip is sent with `dc.sendIntercom` (voice note), and the confirmation uses the Delta Chat contact name ("Sent to Mum!").
-- `emit.intercom` matches exactly what `me.contacts` shows: display name, address-book name, address fallback, and a peer's current ID/name. Substring matching is gone.
-- `agents/lark.md`: a reply to a read-out goes back automatically; `emit` is only for deliberately messaging elsewhere; never claim a Delta Chat sender is unreachable.
-
-### Tests
-
-- `TestDeviceReplyToDeltaChatHuman`, `TestDeviceReplyToDeltaChatCompanion` — a read-out then a spoken reply delivers exactly one DC message to the original sender with the reply text and the `replying to …` label; a follow-up turn is not forwarded.
-- `TestDeviceReplyExplicitEmitWins`, `TestDeviceReplySilentSendsNothing`, `TestDeviceTurnWithoutReadoutNotForwarded`.
-- `TestSayReadoutCardRepliesToHumanSender` — the `/say` card's reply target is the human, its voice note reaches that contact, and the confirmation is "Sent to Mum!" rather than a reach failure.
-- `TestIntercomCardReplyTargetsConversationPartner`, `TestEmitIntercomMatchesContactAddress` (address-only contact matches; partial names are rejected).
-- Reproduction before the fix: a scratch test showed `d.reply == nil` after the read-out finished playing and the card's reply action targeted the companion itself, so the turn had no sender and the voice note hit no contact.
-
-### Verification (2026-11-23)
-
-- `./scripts/check.sh`: pass (one pre-existing `TestEndpointWebSendCancelAndAuto` i/o timeout under load; passes alone 3/3).
-- `./scripts/check.sh --qa`: `TestQASimSuite` pass (9.3 s).
-- Live-tag compile (`go vet -tags=live`, `go test -tags=live -run '^$'`): pass.
-- `TestQADeltaChatDeviceReplyLive` (throwaway `qa-dc-reply` companion + temporary Delta Chat account): 25.1 s, pass — DC text read out on the sim device, its card Reply tapped, spoken answer arrived back in the sender's chat with no "couldn't reach" text. One earlier attempt timed out on the pairing welcome (relay) and passed on retry.
-- `lark status`: `ok=true`, `deltachat=true`.
-
-## 2026-11-23 — Remote Controls (REST + SSE)
-
-- `/remote` from a verified Delta Chat contact returned one bare `https://…opentunnel.xyz/remote?token=…` link. The page loaded through the real tunnel; `/help` advertised `/remote` and no longer mentioned `/panel`.
-- REST commands over the tunnel set listening mode, changed voice, and returned history. A second `/remote` invalidated the first token (401) and issued a working replacement. `/remote off` replied and made the token 401 on the main port; the scoped listener was stopped.
-- **Latency** through the real tunnel, measured in the same live run: REST `POST /remote/api/listen` p50 **106 ms**; old chatmail `/say` round trip p50 **2.63 s** (5 vs 1 samples, including relay delivery).
-- `TestQADeltaChatLive`: **102.1 s, pass**. The throwaway QA companion/account was removed afterwards; no household contact was messaged.
-- `./scripts/check.sh`: **48.5 s, pass** (shell, Node, Go race + `sqlite_fts5`, host VAD/audio/intercom/touch/frame tests).
-- `./scripts/check.sh --remote-ui`: **8.8 s, 7/7 pass**. Headless Chromium drives the real page against a fake REST/SSE server: header/portrait/live state, Say with pending/ack, listen pills, volume, stories, history paging/filters/search/cursor, state-push and stale-response regressions, voice selection without a state push, and tab keyboard/a11y labels. Screenshots: `/tmp/opencode/remote/`.
-- Go: `TestRemotePagePWAAndScopedAuth`, `TestRemoteRESTCommandsAndHistoryCursor`, `TestRemoteEventsStreamsInitialStateAndChanges`, `TestRemoteTunnelCommandIssueRotateAndRevoke`, `TestRemoteTunnelRestoresSavedRouteAndToken`, and `TestRemoteMissingOpentunnelAndCompanionDelete` cover scoping, PWA assets, SSE, token rotation, restore, the missing-`opentunnel` error, and companion teardown.
-- Webxdc is gone: panel app, status-update handler, versioning/delete machinery, story player, and `/panel`. Old panel messages remain in chats but are inert. `/story` still sends a plain `.twee` attachment.
-
-## 2026-11-23 — Local Library: Fast Path for Text Questions
-
-The library is a latency feature, not an offline fallback: it answers reference, book, and story questions in milliseconds so the agent does not fetch and summarise a web page for every turn. The host stays online; `websearch` remains the path for current information and for misses.
-
-### Tool latency (same question, "why is the sky blue")
+The library is a latency feature: it answers reference, book, and story
+questions in milliseconds so the agent does not fetch and summarise a web page.
+`websearch` remains the path for current information and misses.
 
 | Path | p50 | p95 | Notes |
 | --- | --- | --- | --- |
-| `library.search` in-process | 2.7 ms | 3.8 ms | 60 warm runs, Simple English index (285,974 pages) |
+| `library.search` in-process | 2.7 ms | 3.8 ms | 60 warm runs, 285,974-page Simple English index |
 | `library.read` in-process | 0.02 ms | 0.02 ms | 10 runs, bounded 3.2 k characters |
-| `library.search` over MCP/JSON | 17.2 ms | 18.1 ms | 20 runs, includes HTTP, JSON, and server scheduling |
-| `websearch` fetch | 786–962 ms | — | 3 live questions; median 851 ms, excludes model summarisation |
+| `library.search` over MCP/JSON | 17.2 ms | 18.1 ms | 20 runs, includes HTTP, JSON, and scheduling |
+| `websearch` fetch | 786–962 ms | — | 3 live questions; median 851 ms, excludes summarisation |
 
-The library tool phase is **50× faster end-to-end** and **300× faster in-process** than a web-search round trip. Under simultaneous Wikipedia/Gutenberg downloading, the in-process search p50 rose to 7.9 ms and p95 to 14.6 ms; still far below a page fetch.
+With Wikipedia and Gutenberg downloading at the same time, in-process search
+rose to p50 7.9 ms / p95 14.6 ms.
 
-### Behaviour (`TestQALocalLibraryBehaviour`, real OpenCode, fresh companions)
+`TestQALocalLibraryBehaviour` (real OpenCode, fresh companions): baseline "Say
+hello" first TTS 4,687 ms; "Why is the sky blue?" 2,885 ms; the three little
+pigs story 3,395 ms; a Bitcoin price question tried the library, missed, and
+fell back to web search at 4,136 ms.
 
-| Turn | Tool trace | First TTS PCM |
-| --- | --- | --- |
-| Baseline: "Say hello" | no library, no websearch | 4,687 ms |
-| "Why is the sky blue?" | `library.search`/`read`; no websearch | 2,885 ms (−1,802 ms vs baseline) |
-| "Tell me the story of the three little pigs" | `library` import + silent reader open; no websearch | 3,395 ms (−1,292 ms) |
-| "What is the current price of Bitcoin?" | `library.search` miss, then `websearch` | 4,136 ms (−551 ms) |
+Content at the time: Simple English Wikipedia 285,974 pages / 538 MB FTS5;
+Project Gutenberg 2,994 of 3,000 pinned titles / 1.07 GB text; full English
+Wikipedia downloaded at ~21 MB/s and indexed in the background, appearing
+atomically.
 
-- Reference and story turns chose the library *because it is the fast path*; neither used web search.
-- The current-events turn tried the library once, missed, and fell back to websearch with a normal spoken answer. No dead end.
-- A requested story is imported as a validated Twee story and opened on the reader silently; the spoken retell happens because the user asked for it.
-- The static prompt grew from 3,928 to 4,230 bytes (about +75 tokens) and stays under the 4,250-byte regression budget. A short per-turn `[library: search before facts]` hint was added because the prompt alone did not reliably trigger the tool on a small fast model; story turns get `[library: import the requested story with companion_id]` so the reader actually opens.
+### Silent story opens, 2026-11-23 (historical)
 
-### Content
+Menu, Memories → Reading, and remote story opens render the passage without
+TTS; tapped choices stay silent. `TestOpenStoryFromMenuIsSilent` and
+`TestConversationalStoryOpenStillNarrates` cover the silent and narrated paths;
+voice choices still narrate the next passage.
 
-- Simple English Wikipedia: 285,974 pages, 538 MB SQLite FTS5 index.
-- Project Gutenberg: 2,994 of the 3,000 pinned titles (children's, fairy, myth, poetry, and classics), 1.07 GB of UTF-8 text, 1.4 MB title/author FTS5 index.
-- Full English Wikipedia: the 24.1 GB dump downloaded at ~21 MB/s and passed SHA-1 verification. The FTS5 build runs in the background after the final Gutenberg retry (~240 pages/s in the probe; several hours). `enwiki.db` appears atomically when it finishes, so search starts using it without a restart.
+### OpenCode Zen gateway, 2026-11-23 (historical)
 
-### Tests
+- Models: `lark` = `opencode/deepseek-v4.1-flash#low`, `deep` =
+  `opencode/glm-5.3#high`, fallback = `opencode/glm-5.3-flash#low`. The
+  `opencode` provider auth was already imported in the dedicated workspace.
+- Benchmark, 20 interleaved warm chat turns: `opencode-go/…` step p50/p95
+  1,087/1,448 ms; `opencode/…` 1,058/1,523 ms. Gateway latency varies by
+  ±300 ms between runs; the switch keeps one provider for all three models.
+- Five hard prompts passed a fresh-session rubric: timer, story, intercom to
+  Mint, a Rayleigh-style reasoning answer, and deep delegation.
+- `TestTurnBench` confirmed the primary model on all 9 prompts.
 
-- `TestLibrarySearchReadImport` (ranking, read bounds, Twee import, attribution), `TestLibraryTweePassageBounds`, `TestDownloadResumeAndChecksum`, `TestLibraryPromptBudget`, and `TestLibraryLatencyInstalled`.
-- `TestQALocalLibraryBehaviour` (baseline, reference, story, current-event fallback) with `LARK_QA_LIBRARY=1`.
-- `go test -tags sqlite_fts5 -race ./...` and `go vet -tags 'sqlite_fts5'` pass.
+### Webxdc panel v4, 2026-11-23 (historical)
 
-## 2026-11-23 — Silent Story Opens
+The panel was later deleted. It kept the header design but was branded "Lark
+Control" and two bugs made it unusable: history vanished and voice selection
+never updated.
 
-- Menu, Memories → Reading, and panel story opens render the passage without TTS or queued narration; tapped choices stay silent too. `TestOpenStoryFromMenuIsSilent` covers open plus tapped choices with a fake TTS worker; `TestConversationalStoryOpenStillNarrates` covers the narrated path, and voice choices keep narrating the next passage.
+Root causes: the panel re-applied its own status updates as commands, so a
+history response became a new request; one live message had accumulated
+708,630 history updates. The flood buried the post-voice state.
 
-## 2026-11-23 — OpenCode Zen Gateway
+Fixes: skip outgoing payloads and allow only known command ops; tag each
+history request with a per-instance `sid` and monotonic `seq`; carry the voice
+in `ack` and apply it immediately. `manifest.toml` and `icon.png` are generated
+per companion, so a rename re-sends the panel.
 
-- **Models**: `lark` = `opencode/deepseek-v4.1-flash#low`, `deep` = `opencode/glm-5.3#high`, fallback = `opencode/glm-5.3-flash#low`. The `opencode` provider auth was already imported in `~/.local/share/lark/opencode` (`state/imported-provider-opencode`); a direct generation on every id succeeded.
-- **Benchmark** (20 interleaved warm chat turns on `127.0.0.1:49375`, same session per provider, `lark` agent + MCP):
+The retired panel DOM suite passed 8/8; the gate passed in 53.3 s, the sim
+suite in 10.9 s, and the live Delta Chat suite in 55.2 s. The deployed `greg`
+chat had the old 708k-update message deleted for everyone.
 
-  | Provider | `session.step.started` p50 / p95 | First text delta p50 / p95 | Uncached input | Cache read | Reasoning |
-  | --- | --- | --- | --- | --- | --- |
-  | `opencode-go/deepseek-v4.1-flash#low` (before) | 1,087 / 1,448 ms | 1,087 / 1,448 ms | 13–130 | 3,456–3,712 | 0–2 |
-  | `opencode/deepseek-v4.1-flash#low` (after) | 1,058 / 1,523 ms | 1,066 / 1,523 ms | 18–139 | 3,456–3,712 | 0–3 |
+### Latency measurement, 2026-11-23 (historical)
 
-  Gateway latency on this host varies by ±300 ms between runs; a standalone 20-turn run measured 987 ms p50 on `opencode` and 978 ms on `opencode-go`. Zen is not slower, and the switch keeps one provider for primary, deep, and fallback.
-- **Tool accuracy**: 5/5 hard prompts passed a fresh-session rubric — timer (`lark.patch` `timer` set to 120 s), story (short story read), intercom (`lark.emit` to Mint), reasoning (correct Rayleigh-style answer), deep delegation (`subagent` to `deep` for a plan + story).
-- **Live turn bench**: `TestTurnBench` confirmed `opencode/deepseek-v4.1-flash (low)` for all 9 prompts (e2e chat 724–890 ms, timer 435–572 ms, reasoning 854–1,278 ms; speculative TTFT p50 1,228 ms).
+`lark sim` reported `speech_end_to_first_tts_ms` ~2.5–3.1 s while the bench
+reported ~1.0–1.3 s because they measure different intervals: the sim starts at
+end of speech audio before the Silero tail and includes cold-session
+`llm_first_ms`; the bench starts at commit on a warm session.
 
----
+- Sim: `stt_ms` 54–74 ms, `speech_end_to_commit_ms` 1,257–1,299 ms,
+  `llm_first_ms` 905–2,113 ms, `e2e_ms` p50 1,293 / p95 1,864 ms.
+- Hardware: `rec_start_us` 14.5–28.7 ms, `tts_first_us` 16–84 µs, `e2e_ms`
+  p50 1,342 ms (`vocat-33d8`) / 1,124 ms (`box3-b324`), no audio drops.
 
-Date: 2026-11-23  
-Target: `main` (`e75a20a`..`34830e0`), firmware `0.19.0` (`vocat-33d8`, `vocat-2cac`, `box3-b324`)
+### Scenario matrix, 2026-11-23 (historical)
 
-## Panel v4: naming, history, and voice selection (historical)
+Thirteen scenarios covered voice turns, interruptions, listening, menus,
+stories, memories/voice/volume, timers, Delta Chat, intercom, multi-terminal,
+look changes, recovery, and admin operations, on sim and hardware where
+available. Pass rate was 100 % on the run recorded then; e2e p50/p95 was
+1,293/1,864 ms on sim and 1,250/1,982 ms on hardware. The suite found ten bugs
+in one pass, listed below.
 
-> Historical: the webxdc panel was deleted when `/remote` replaced it. This section is kept for the regression record; there is no panel to retest.
+### Bugs found, 2026-11-23 (historical)
 
-The panel keeps the header design, but the app was still branded "Lark Control" and two bugs made it unusable: History vanished and changing voice never updated the selected button.
+1. `statusDone` emitted while TTS was still pending; now waits for pending TTS.
+2. `leaveScene` left a stale companion status and `sim tap-label` raced the
+   frame; status now resets and `/hits` carries a revision.
+3. An omitted `companion_id` returned "Invalid companion ID"; the error now
+   says to pass the ID from the turn header.
+4. Intercom menu paging clamped to six tiles instead of the geometry page size.
+5. List screens registered nav hits without drawing the nav bar.
+6. `openStory` skipped the Start passage when no progress existed.
+7. A Stop tap could be dropped during a speaking animation; `actionRev` spans
+   unchanged hit layouts.
+8. `dc.sendIntercom` ignored a renamed companion; it now matches
+   `companion.Name`.
+9. Timer companion fallback and resume frame order were restored and the test
+   made order-independent.
+10. The repeatable `lark/qa/*.sim` suite and `--qa`/`--qa-hw` were added.
 
-### Root causes
+### 30-minute soak, 2026-11-23 (historical)
 
-1. **History disappeared — server re-applied its own status updates.** `handleWebxdcUpdate` reads `GetWebxdcStatusUpdates`, which also returns updates this bot pushed. Those payloads were re-parsed as commands. A `history` *response* is `{"op":"history",...}` with no `limit`, so the old `cmd.Limit == -1` guard never matched: every response became a new request, which pushed another response, which triggered another status-update event. `greg`'s live panel message (`msgs_status_updates` id 267) had accumulated **708,630 history updates** (vs 8 `state` and 4 `set_voice`). Opening or interacting with the panel replayed that flood; each history callback rebuilt the DOM and replaced `hist.items` with page 1 of an arbitrary stale filter, often an empty one ("No matching messages").
-   - Fix: skip outgoing payloads (`dir:"out"` marker plus response-shaped `items`) and apply an explicit command-op allowlist. The panel also tags each history request with a per-instance `sid` and a monotonic `seq`, and ignores responses that do not match its latest request (replayed updates, superseded filters, or crossed responses). Delta Chat delivers a panel's own updates back to its listener, so the panel additionally requires `dir:"out"`: otherwise the panel's own `history` command cleared the list to "No matching messages" on every request and on open replay.
-2. **Voice selection did not update — the new state was buried in the flood.** Post-`set_voice` state did contain the new voice (verified in the live DB: `set_voice` → `ack` → `state` with `bm_fable`), but the panel had to process hundreds of thousands of history callbacks before/while rendering, so the fresh state never reached a visible render. Any later stale history response could also re-render over it.
-   - Fix: the echo loop above, plus `ack` now carries the current `voice`; the panel applies it and re-renders the settings grid immediately, without waiting for a state push.
+29 voice turns across `vocat-33d8`, `box3-b324`, and `vocat-2cac` over
+30.01 min, with 0 errors and 0 disconnects. Free heap moved by at most
+−5,584 B per board, PSRAM did not move, and `audio_drops` stayed 0. Server RSS
+grew +179.2 MB over the run (fixed below).
 
-### Naming and icon
+The RSS growth was glibc arena fragmentation across the ONNX Runtime threads,
+Parakeet, and Silero, not a Go leak. `MALLOC_ARENA_MAX=2` plus
+`mallopt(M_ARENA_MAX, 2)` plateaued RSS at 737 MB after 10 turns and 745 MB
+after 100 in a 100-turn sim soak, down from 922 MB at turn 30 and 968 MB at
+turn 60.
 
-- `manifest.toml` is generated per panel: `name` is the companion display name (`greg`, `cake`, `mint`) and `description` is neutral. `icon.png` is the companion's rasterised avatar (`companionAvatarPNG`), so the panel icon and header portrait are the same image. The panel `dc_panel` version key now includes the name, so a rename re-sends the panel and deletes the previous message.
-- The header shows only portrait, name, form, and live-state pill; the placeholder logo and "Lark Control" branding are gone. `/help` now says "/panel — open my panel".
+### Model and endpoint tuning, 2026-11-23 (historical)
 
-### Tests
+- Static prompt and MCP instructions were trimmed from 5,039 to 4,444 cached
+  tokens. Speculation started at 400 ms quiet, then moved to 180 ms quiet as
+  the commit threshold and Smart Turn checks were tuned.
+- Chat `e2e_ms` after tuning: p50 1,228 / p95 1,804 ms; timer 931/1,201 ms;
+  reasoning 1,208/1,728 ms. Abort rate was 0 across 27 bench turns and the QA
+  runs.
+- DeepSeek TTFT on the dedicated server measured step p50 1,467 / p95
+  1,900 ms, first text delta p50 1,485 / p95 1,892 ms, 38–160 uncached input
+  tokens per warm turn, and 0–26 reasoning tokens.
 
-- `./scripts/check.sh --panel-ui`: headless-Chromium DOM suite (8 tests, ~6.5 s suite / 8.4 s wall) that serves `lark/webxdc/panel/` and drives a fake `webxdc` update stream. Covers header/portrait/state, Say + feedback + ack, listen pills, volume sliders, story progress/Continue/Start over, history rows/paging/filters/search, voice pressed state, keyboard tab navigation, labels, and both regressions above. Screenshots: `/tmp/opencode/panel/`.
-- Go: `TestWebxdcPanelDoesNotEchoOwnUpdates` (fails before the guard), `TestWebxdcPanelVoiceInAckAndState`, `TestWebxdcPanelHistoryPaginationAcrossLiveState`, and the panel XDC packaging test now asserts manifest name and portrait icon. The Playwright shim delivers a panel's own updates back to its listener, as Delta Chat does.
-- Playwright tests are dev-only; plain `./scripts/check.sh` still runs only `codec.test.mjs` and the other fast Node tests.
+### Companion visibility and reply routing, 2026-11-23 (historical)
 
-### Verification (2026-11-23)
+- `turnPromptWithState` filtered on the wrong terminal key, so every prompt
+  said `terminals: none`. It now lists only attached online hardware rows with
+  id, board, battery, sleeping, and volume when present.
+- A read-out context could hijack a later turn. The notice-spoken time is
+  recorded, only a capture started after it can answer, the context clears on
+  an earlier capture, and the TTL is 60 s.
+- `patch` now defaults `companion_id` to the companion with a turn in flight
+  and `terminal_id` to its voice owner or single online terminal.
+- Story and listening prompts were corrected; the state line gained `form:`
+  and `listen: on`/`off`.
+- After the visibility fix, a live cake turn reported
+  `vocat-33d8(esp-vocat,online,battery:96,vol:90)` and answered "Ninety-six
+  percent", matching the board.
 
-- `./scripts/check.sh`: 53.3 s, pass (one `TestEndpointWebSendCancelAndAuto` i/o timeout when the Go race suite and the browser suite were run concurrently; passes alone and in the sequential suite).
-- `./scripts/check.sh --qa`: 10.9 s, `TestQASimSuite` pass.
-- `./scripts/check.sh --panel-ui`: 8.4 s, 8/8 pass.
-- `go vet -tags=live` + `go test -tags=live -run '^$'`: compile pass.
-- `TestQADeltaChatLive` (live QA companion + temporary Delta Chat account): 55.2 s, pass. v4.1 panel arrived named `qa-dc`; `/panel` resent it and deleted the previous message for everyone; `set_voice` ack/state carried the new voice; one history request produced one response across a later `sync`; say/private/help/stories/story/voice-note/unknown-command and sim unpair all passed. QA companion and account removed afterwards.
-- Deployed greg's chat: old 708k-update panel and the interim v4 message were deleted for everyone; the v4.1 panel has a single portrait state update. The account DB keeps the freed pages (11 GB file, ~5 GB freelist) until a future VACUUM/compaction.
+### CI sharding, 2026-11-23 (historical)
 
-## Latency Investigation (`sim` vs bench)
-
-`lark sim` reported `speech_end_to_first_tts_ms` ~2.5–3.1 s while `e2e_bench_live_test.go` reported ~1.0–1.3 s because they measure different intervals:
-- `sim` starts at **end of speech audio** (before the 1.26–1.30 s Silero endpoint silence tail) and includes cold-session `llm_first_ms` (~1.5 s).
-- `e2e_bench_live_test` (`e2e_ms`) starts at **turn commit** (after endpointing) on a warm session (`1.0–1.3 s`).
-- Breakdown on `sim`: `tap_to_rec_ctrl_ms` 0 ms; `stt_ms` 54–74 ms; `speech_end_to_commit_ms` 1,257–1,299 ms; `llm_first_ms` 905–2,113 ms; `tts_first_ms` 0.04–585 ms; `e2e_ms` p50 1,293 ms / p95 1,864 ms.
-- Breakdown on hardware (`/status` + `/api/diagnostics`): `rec_start_us` 14.5–28.7 ms; `tts_first_us` 16–84 µs; `e2e_ms` p50 1,342 ms (`vocat-33d8`) / 1,124 ms (`box3-b324`); `tts_rms` 3,516–3,881; `audio_drops` 0.
-
-## Scenario Matrix
-
-| Scenario | Scope | Pass Rate | p50 / p95 | Notes |
-| --- | --- | --- | --- | --- |
-| 1. Voice turn | Sim (7×) + HW (5× VoCat, 5× BOX-3) | 17/17 (100%) | Sim e2e 1,293 / 1,864 ms; HW e2e 1,250 / 1,982 ms | Chat, timer, volume, tool state, long answer; fixed premature `statusDone` (`0cbb22f`). |
-| 2. Interruptions | Sim + HW | 100% | Stop→idle <400 ms | Stop during speaking, 3× Stop during thinking, tap after reply; fixed `leaveScene` status (`631113c`) & `actionRev` (`82b360e`). |
-| 3. Listening mode | Sim + HW | 100% | Re-arm <1.5 s | Voice on/off, follow-up re-arm, filler dropped, `[silent]` silent, tap ends; fixed missing `companion_id` error (`c8a9a60`). |
-| 4. Menus & screens | Sim (VoCat + BOX-3) + HW | 100% | 0–8 ms | Every page/item, Back everywhere, safe area verified visually; fixed missing nav bar (`824ab8f`) & intercom paging (`f41e8ea`). |
-| 5. Stories | Sim + HW | 100% | — | Open, page, tap/voice choices, Memories→Reading, voice-created branching story; fixed `openStory` start passage (`326424d`). |
-| 6. Memories, voice, volume | Sim | 100% | — | Menu + voice changes persisted; memory notes rendered in Memories. |
-| 7. Timers | Sim | 100% | — | Set, list, cancel, fire with chime + speech; survived `lark.service` restart. |
-| 8. Delta Chat | Live (`TestQADeltaChatLive`) | 100% | 44.37 s full suite | QR pair, welcome once, plain, `/say`, `/private`, `/help`, `/stories`, `/story`, opus voice note, `.twee` valid/invalid, unknown cmd, non-contact ignored, `/remote` link over the real tunnel (REST + SSE), `/remote off`, Unpair. |
-| 9. Intercom | Sim (`qa1`→`qa2`) | 100% | ~10 s (DC relay) | Card + speech delivered; fixed renamed peer lookup in `dc.sendIntercom` (`a55cdc6`). |
-| 10. Multi-terminal | Sim + Sim; integration test | 100% | — | Frames & `STATUS` to both, tap ownership transfer, disconnect fallback, resume window. |
-| 11. Look changes | Sim (2 Nano Banana calls) | 100% | 16.9–39.4 s | Transparency rule rejected bad outline (#1), succeeded (#2), recolor kept cached style. |
-| 12. Robustness & recovery | Sim + HW | 100% | — | `lark.service` stop/start (20 s offline screen), `lark-opencode.service` restart, `deltachat-rpc-server` `SIGKILL` supervisor restart, OTA reboot. |
-| 13. Admin & ops | CLI + scripts | 100% | — | `lark status`, `companions`, `terminals`, `lark ota --no-build` idempotence on `vocat-33d8`, `setup-host.sh` idempotence, `./scripts/check.sh --deployed`. |
-
-## Bugs Found & Fixed
-
-1. **`0cbb22f` — Premature `statusDone` in `finishTurn`:** `finishTurn` emitted `statusDone` while async TTS synthesis was still pending (`d.stopAudio != nil`), causing `sim wait idle` to exit before audio played. Added `d.stopAudio == nil && d.replyAudio == nil` guard + `TestFinishTurnWaitsForPendingTTS`.
-2. **`631113c` — `leaveScene` left stale companion status & `sim tap-label` race:** `leaveScene` (Stop/Home) did not reset `companionStatuses` to `statusIdle`; `sim tap-label` could send a tap before the rendered frame arrived. Reset status in `leaveScene`, added `rev` to `/api/terminals/{id}/hits`, and synced `sim tap-label` + `TestLeaveSceneResetsCompanionStatus`.
-3. **`c8a9a60` — Opaque error when `companion_id` omitted in `mcpPatch`:** Returning `"Invalid companion ID"` caused the model to think the companion had no valid ID. Clarified error to `"companion_id: required; pass the companion ID from the turn header"` + `TestMCPControl`.
-4. **`f41e8ea` — Intercom menu paging clamped to `tilesPerPage` (6):** `drawerIntercom` clamped `d.menuPage` with `tilesPerPage=6` instead of geometry `perPage` (2 round / 3 rect), trapping `Next` on page 0. Clamped by geometry + `TestIntercomMenuPagingRoundScreen`.
-5. **`824ab8f` — Missing nav bar in `renderPixelListWithHits`:** `Talk to…`, `Memories`, and `Stats` registered `navBarHits` without calling `drawNavBar`, leaving `Back`/`Next` invisible. Added `drawNavBar` + `TestRenderPixelListDrawsNavBar`.
-6. **`326424d` — `openStory` skipped `enterPassage(Start)` when no progress existed:** `storySession.passageIdx` defaulted to `0`, making `currentPassageName() != ""` and rendering an empty story box. Initialized `passageIdx: -1` + `TestOpenStoryEntersStartPassage`.
-7. **`82b360e` — `Stop` tap dropped during speaking animation:** `acceptPointerRevision` required `*rev == d.nativeRev`, rejecting hardware `Stop` taps when an animation frame was in flight. Tracked `actionRev` across unchanged hit layouts + `TestAcceptPointerRevisionAllowsAnimationFrames`.
-8. **`a55cdc6` — `dc.sendIntercom` ignored renamed companion names:** Matched only stale Delta Chat contact names, not `companion.Name`. Added `companionByID` name match + `TestDCIntercomMatchesRenamedPeer`.
-9. **`cf9bf12` — `mcpPatch` `timer.companion_id` fallback & resume frame order:** Restored `timer.companion_id` fallback in `mcpPatch` and made `TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots` order-independent across `msgFrame` and `msgVoiceOwner`.
-10. **`35ec120` — Repeatable QA suite:** Added `lark/qa/*.sim`, `lark/qa_live_test.go`, and `./scripts/check.sh --qa` / `--qa-hw`.
-
-## 30-Minute Soak Results
-
-29 voice turns across `vocat-33d8`, `box3-b324`, and `vocat-2cac` over 30.01 min (0 errors, 0 disconnects):
-
-| Metric | Start (0.1 min) | End (30.0 min) | Delta |
-| --- | --- | --- | --- |
-| `vocat-33d8` `free_heap` / `min_free_heap` / `free_psram` | 121,699 / 54,812 / 14,843,132 | 121,711 / 53,156 / 14,843,132 | +12 / -1,656 / 0 B |
-| `box3-b324` `free_heap` / `min_free_heap` / `free_psram` | 130,047 / 41,396 / 15,379,380 | 130,055 / 41,396 / 15,379,380 | +8 / 0 / 0 B |
-| `vocat-2cac` `free_heap` / `min_free_heap` / `free_psram` | 121,643 / 56,320 / 14,843,132 | 121,635 / 50,736 / 14,843,132 | -8 / -5,584 / 0 B |
-| Server RSS / FDs | 755.7 MB / 26 | 934.9 MB / 26 | +179.2 MB / 0 FDs |
-| Device `audio_drops` | 0 / 0 / 0 | 0 / 0 / 0 | 0 |
-
-## Open Issues & Keep/Cut Recommendations
-
-- **Server RSS growth (+179 MB over 29 turns) — FIXED:** Profiling (`runtime.MemStats`, `/debug/pprof/heap`, and isolated native loops) showed Go `heap_inuse` stayed flat (10–21 MB) with 0 goroutine leaks; the growth was glibc per-thread malloc arena fragmentation across Kokoro's 8 ONNX Runtime threads, Parakeet, and Silero VAD. Capping arenas (`MALLOC_ARENA_MAX=2` in `lark.service` and `mallopt(M_ARENA_MAX, 2)` in `lark/malloc_linux.go`) plateaued RSS at **737.12 MB (turn 10) → 745.11 MB (turn 100)** in a 100-turn sim soak (down from 922 MB at turn 30 and 968 MB at turn 60).
-- **Unwired HTTP routes vs README — FIXED:** Removed stale `/ws`, `/app`, `/api/companions/{id}/messages`, `/api/timers`, and other retired routes from `README.md`, and added `TestREADMERoutesRegistered` to fail if the README route table drifts from `larkServer`.
-- **Phase C semantic end-of-turn (Smart Turn v3.2) — SHIPPED:** Integrated `smart-turn-v3.2-cpu.onnx` (8.68 MB int8, BSD-2-Clause) via `onnxruntime_go` against the bundled `libonnxruntime.so` (1.28.2) with a zero-alloc Go Whisper log-mel extractor (`~25 ms` warm inference, threshold `0.90` at 200 ms silence, fallback to tuned hangover). Also fixed `lark sim` to send `msgRecStart` ack on `recOpStart` so bridge endpointing runs in sim. `speech_end_to_commit_ms` dropped from **1,257–1,299 ms** to **368.0 ms p50 / 368.4 ms p95** in sim and **370.54 ms** on `greg` (`box3-b324` via `/debug/mic`).
-- **Spoken turns never auto-ending in noisy rooms & speaker misidentification (`greg`) — FIXED:**
-  - *Root cause 1 (endpointing):* Live room turns on `box3-b324` recorded `speech_end_to_commit_ms: null` because Silero VAD stayed `IsSpeech() == true` on room/mic noise (preventing `paused()` from firing and resetting Smart Turn / `patient` 4.5 s hangover on every flicker, leaving only the 60 s `endpointLimit`). Replaced the hangover table with **transcript-progress endpointing**: Silero VAD + relative speech energy (`20%` of utterance RMS) only gate 250 ms Parakeet probes; `lastWordAt` advances only when normalized non-filler words grow, committing at `400 ms` (`quiet`) when Smart Turn ≥ 0.90 (unless trailing comma/conjunction/filler) or unconditionally at `1.2 s` (`cap`), with a `6 s` no-speech discard. Measured `speech_end_to_commit_ms`: **344.23 ms** on `box3-b324` (`greg` via `/debug/mic` + noise), **354.92 ms** in `sim` (`p50 344.23 ms / p95 354.92 ms`), ~4 probes/s during active speech and 0 decodes during quiet listen windows.
-  - *Root cause 2 (turn header):* `[In person at greg's device · greg (greg) · voice]` placed `greg (greg)` in the middle of the header, so the LLM addressed the in-person user as `"Greg"`. Updated `turnHeader` and `recentDialogue` seeding to `[You are <name> (<id>). Speaker: someone in person at your device (name unknown) · ...]` (keeping `[state: ...]` at the end for prompt caching), updated `agents/lark.md`, cleared stale `sessions` rows so companions rebind cleanly, and verified `greg` no longer calls the speaker `"Greg"`.
-  - *Voice preview:* Pre-cached one sample per curated voice at startup (`b.clips`) and played it immediately on `voice-set`/`voice-select` without recording to `messages` or the agent session.
-- **Keep:** `lark sim`, `lark device`, `/api/terminals/{id}/hits`, and `./scripts/check.sh --qa` — they caught 8 real bugs in one pass and run in ~11 s.
-- **Model tiers & Perf round 2 — SHIPPED (`1f14eeff`):**
-  - *Model benchmark (5 hard prompts on `127.0.0.1:49375` with `lark` MCP):* `opencode/gemini-4-hydrogen#low` ($0.0454 total, 1.7–2.3 s text / 6.2–11.3 s tool turns, 5/5 rubric), `opencode/claude-sonnet-5-5#low` ($0.0448, 1.8–2.2 s text / 3.4–6.2 s tool turns, over-cautious on password recall), `opencode/claude-fable-5-2#low` ($0.1458, 2.7–3.1 s text / 5.6–7.8 s tool turns, 5/5 rubric). Primary voice agent configured as `opencode-go/deepseek-v4.1-flash#low` with `opencode-go/glm-5.3#high` as `deep` subagent (`task`) and `glm-5.3-flash#low` fallback.
-  - *Speculative LLM start + OpenCode overhead + TTS first chunk:* Trimmed `agents/lark.md` + `mcp.go` static prompt from **5,039 → 4,444 cached tokens** (-11.8%). Added speculative LLM start at 400 ms quiet (aborting on new speech/transcript change without recording to `messages`), 3–6 word first-chunk splitting, and pre-cached common openers (`Sure!`, `Okay!`, `Hmm,`, `Good question!`, `Got it!`, `Of course!`). In `TestTurnBench`, timer turns dropped from **827–1,264 ms** (`tts_1st` 190–265 ms) to **143–338 ms** (`tts_1st` 0.1 ms), and `TestQASimSuite` + `TestQAHardwareSuite` (`vocat-33d8`, `box3-b324`) pass.
-- **Chat latency under `deepseek-v4.1-flash#low` — FIXED:**
-  - *Diagnosis:* Endpointing committed at ~320 ms after speech end (unchanged), but speculation required `endpointQuiet` (400 ms) plus a Smart Turn result, so on plain chat turns it either raced the commit or never started. Warm chat `e2e_ms` was **1,352–1,876 ms** (p50 1,381 ms) versus the Haiku baseline 1.1–1.6 s.
-  - *Fix:* Speculation now starts at `endpointSpecQuiet` = **250 ms** quiet with Smart Turn ≥0.40, while the commit still requires 400 ms quiet with Smart Turn ≥0.90. The early Smart Turn check runs at 250 ms and is re-run at 400 ms when its probability missed the commit threshold; stale Smart Turn results (from before a transcript update) are discarded. Speculative lead time on `TestTurnBench` is **533–545 ms** (measured commit − spec start). Counters are exposed at `GET /api/diagnostics` (`speculation.started/hit/abort_*/overlap_avg_ms`) and TTFT as `latency.spec_first_ms`.
-  - *TTS overlap:* A speculative turn pre-synthesizes its first sentence into `b.clips` (reserved before the stream callback yields so a promoted turn `await`s it instead of queueing a duplicate). The first-chunk policy (`5` words) and cached openers therefore apply to chat replies, not just tool turns; the pre-synthesis fill uses the server context so a finished speculation does not cancel the audio it just produced.
-  - *DeepSeek TTFT (`opencode-go/deepseek-v4.1-flash#low`, 10 warm turns on `127.0.0.1:49375`):* `session.step.started` **p50 1,467 ms / p95 1,900 ms**; first text delta **p50 1,485 ms / p95 1,892 ms**; first cold turn 1,495 ms. Uncached input is **38–160 tokens** per warm turn (`cache.read` 1,792–2,048), reasoning **0–26 tokens**, and `#low` is already the fastest variant (`#none`/`#off` does not exist for DeepSeek; `opencode/…` instead of `opencode-go/…` measured slightly faster, `step p50 1,282 / p95 1,473`, but needs matching provider credentials/fallback and was not adopted). Lark-side overhead is negligible: `prompt_prep_ms` 0.1–5.5, `prompt_submit_ms` 2–3.
-  - *Before/after `TestTurnBench` (3 runs each, source `voice`, e2e from commit):*
-
-    | Turn | Before p50 / p95 | After p50 / p95 | Notes |
-    | --- | --- | --- | --- |
-    | chat | 1,381 / 1,877 ms | **1,228 / 1,804 ms** | Warm p50 1,224 ms; first (cold) turn p50 1,680 ms; abort rate 0/27. |
-    | timer | 99 / 254 ms | **931 / 1,201 ms** | Real speech-end→first-PCM includes the ~200 ms commit; no cached opener matched these tool-failure replies. |
-    | reasoning | — | **1,208 / 1,728 ms** | New bench utterance (`Why is the sky blue?`), 0/9 aborts. |
-
-  - *Abort rate:* 0 aborts across 27 bench turns, 4 QA turns (`TestQASimSuite` + `TestQAHardwareSuite` including `AutoCommitNoisyMic`), and a 300 ms mid-sentence pause injected into `box3-b324`; well under the 20% rollback threshold. Speculation is silently promoted or aborted before any history/TTS is published, so waste is limited to one model call.
-
-## 2026-11-23 — Companion Visibility, Reply Routing and Patch Defaults
-
-### Root Causes and Fixes
-
-1. **Every prompt said `terminals: none`.** `turnPromptWithState` filtered on `t["companion"]` (`lark/prompt.go:105`) while `terminalEntry` writes `companion_id` (`lark/terminal.go:56`), so no terminal ever matched after the identity split. Companions denied having a device and invented success after rejected commands. The prompt now lists only attached, online hardware rows with `id`, board, battery, sleeping and volume when present (e.g. `vocat-33d8(esp-vocat,online,battery:96,vol:90)`), and every terminal report carries the companion's display name as `character` instead of the firmware's generic `Lark`.
-2. **A queued read-out hijacked the next spoken turn.** The device reply TTL was two minutes (`lark/terminal_turn.go:17`) and armed as soon as a notice drained (`:997`), so a turn that began before the read-out could answer it, or an unrelated turn up to two minutes later could. The session now records the notice-spoken time, accepts a reply only from a capture that started after it, clears the context when an earlier capture turns over, and the TTL is 60 s.
-3. **`patch` failed with a bare `rejected`.** Examples omitted `companion_id`/`terminal_id`; `mcpPatch` required them even though the speaking companion was unambiguous. It now defaults `companion_id` to the only companion with a turn in flight, `terminal_id` to its voice owner or its single online hardware terminal, and returns `terminal_id required: no online terminal for companion <id>` otherwise. The agent prompt shows the full shape within the 4,250-byte budget.
-4. **Story and listening prompts were wrong.** Story requests now tell the agent to `story get` a listed story and read its passages aloud, import only when absent, and admit when a book cannot be opened. Listening is described as persisted spans re-armed after each reply, not a one-shot timer or a "listening light"; `[state: ...]` gained `form:` and prints `listen: on (300s spans)`.
-5. **Names.** The prompt now says a near miss of the companion's name means the companion.
-6. **Diagnostics.** Recent turns carry `silent:true` for `[silent]`/empty replies and up to four `tool_errors` with the real message. `LARK_DEBUG_ENDPOINT=1` is set on the live host.
-7. **Cleanup.** Companion deletion removed mappings but left the Delta Chat account running; it now calls `RemoveAccount` through the normal rpc.
-
-### Speculative Overlap Restored
-
-`f14fcd8` cut `endpointEarlyQuiet` to 300 ms. On the real-model bench that committed before the 400 ms Smart Turn check could start speculation. Two interleaved 24-utterance runs per setting:
-
-| Setting | Speculation | Overlap | chat e2e p50/p95 | timer e2e p50/p95 | reasoning e2e p50/p95 |
-| --- | --- | --- | --- | --- | --- |
-| 300 ms | 0/20, 0/20 | 0 ms | 2,078/2,340; 1,784/2,500 | 2,265/2,605; 1,552/1,900 | 2,114/2,441; 1,896/2,237 |
-| **400 ms** | **24/24, 24/24** | **534 ms** | **1,197/1,734; 1,549/2,713** | **1,119/2,108; 1,323/1,970** | **1,788/2,159; 1,506/2,189** |
-
-0 aborts at 400 ms. The complete-transcript guard and 1.2 s cap are unchanged.
-
-### Live Cleanup (before → after)
-
-- Companions 14 → **4** (`cake`, `mint`, `greg`, `george`); the seven `*-classic`/`New Companion` rows and all nine QA accounts from earlier runs removed through `lark companions rm` and `remove_account`.
-- Delta Chat accounts 13 → **4** (one per companion).
-- Terminals 9 → **3** (`vocat-33d8`, `vocat-2cac`, `box3-b324`); sim, offline and duplicate rows removed through `DELETE /api/terminals/{id}`.
-- Stories 9 → **5** (`qa-import-2/3/4`, `moon_hop` deleted); `compass_of_smoke` kept with author `Cake`.
-- Memory 10 → **9**; duplicate `companion:greg/treehouse_flag_colour` deleted, `mum_treehouse_flag_colour` kept.
-- Intercom relay rows stay in `messages` for history but are already excluded from prompt seeding; a regression test now guards that.
-
-### Personalities
-
-- `cake`: form `a playful young fox`; 152-char personality (playful, stories/jokes/burgers, honest, simple).
-- `mint`: form unchanged; 153-char personality (gentle mint-green fox, books and Warriors, patient, honest, simple).
-
-### Verification
-
-- `./scripts/check.sh` and `./scripts/check.sh --qa` pass; live build compiles.
-- `lark doctor`: all checks `ok`, firmware source/build `0.20.0`, 4/4 Delta Chat accounts, three terminals online, zero failed recent turns.
-- Live cake turn with a temporary sim: the prompt listed `vocat-33d8(esp-vocat,online,battery:96,vol:90)` and the answer said "Ninety-six percent", matching the real battery.
-- `TestQADeltaChatQueuedSayStaysLocal` (temporary companion + throwaway Delta Chat account): a `/say` queued behind an in-flight capture did not send that turn's answer back to the sender.
+CI kept one offline job measured at 187 s before the parallel suite. A
+three-way race split was tried and rejected: its best case saved ~87 s
+(187 s → ~100 s), under the 90 s bar, and every shard had to reinstall ffmpeg
+for tests that depend on it. That install took 45 s to over 5 minutes on the
+package mirror; one shard ran 402 s, slower than the unsplit job. The suite
+parallelises inside one job instead, and Kokoro is skipped there when
+`TTS_MODEL_DIR` has no model pack.
