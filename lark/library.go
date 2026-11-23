@@ -1488,7 +1488,7 @@ func downloadGutenberg(ctx context.Context, dir string, limit, jobs int, out io.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			client := &http.Client{Timeout: 120 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 2,
+			client := &http.Client{Timeout: 0, Transport: &http.Transport{MaxIdleConnsPerHost: 2,
 				ResponseHeaderTimeout: 30 * time.Second}}
 			for id := range jobsCh {
 				rec, ok := records[id]
@@ -1538,17 +1538,36 @@ func downloadGutenberg(ctx context.Context, dir string, limit, jobs int, out io.
 
 func downloadSmall(ctx context.Context, client *http.Client, url, dest string) error {
 	var last error
-	for attempt := 1; attempt <= 4; attempt++ {
+	for attempt := 1; attempt <= 6; attempt++ {
+		var offset int64
+		if info, err := os.Stat(dest); err == nil {
+			offset = info.Size()
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return err
 		}
 		req.Header.Set("User-Agent", libraryUserAgent)
+		if offset > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
 		res, err := client.Do(req)
 		if err != nil {
 			last = err
-		} else if res.StatusCode == http.StatusOK {
-			file, err := os.Create(dest)
+		} else if res.StatusCode == http.StatusNotFound {
+			res.Body.Close()
+			return fmt.Errorf("not available")
+		} else if res.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			res.Body.Close()
+			_ = os.Remove(dest)
+			last = fmt.Errorf("range rejected")
+		} else if res.StatusCode == http.StatusOK || res.StatusCode == http.StatusPartialContent {
+			flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+			if res.StatusCode == http.StatusOK {
+				offset = 0
+				flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+			}
+			file, err := os.OpenFile(dest, flags, 0o600)
 			if err != nil {
 				res.Body.Close()
 				return err
@@ -1560,9 +1579,6 @@ func downloadSmall(ctx context.Context, client *http.Client, url, dest string) e
 				return nil
 			}
 			last = errors.Join(copyErr, closeErr)
-		} else if res.StatusCode == http.StatusNotFound {
-			res.Body.Close()
-			return fmt.Errorf("not available")
 		} else {
 			res.Body.Close()
 			last = fmt.Errorf("HTTP %d", res.StatusCode)
