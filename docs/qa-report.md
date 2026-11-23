@@ -1,5 +1,16 @@
 # Lark QA Report
 
+## 2026-11-23 — Remote Controls (REST + SSE)
+
+- `/remote` from a verified Delta Chat contact returned one bare `https://…opentunnel.xyz/remote?token=…` link. The page loaded through the real tunnel; `/help` advertised `/remote` and no longer mentioned `/panel`.
+- REST commands over the tunnel set listening mode, changed voice, and returned history. A second `/remote` invalidated the first token (401) and issued a working replacement. `/remote off` replied and made the token 401 on the main port; the scoped listener was stopped.
+- **Latency** through the real tunnel, measured in the same live run: REST `POST /remote/api/listen` p50 **106 ms**; old chatmail `/say` round trip p50 **2.63 s** (5 vs 1 samples, including relay delivery).
+- `TestQADeltaChatLive`: **102.1 s, pass**. The throwaway QA companion/account was removed afterwards; no household contact was messaged.
+- `./scripts/check.sh`: **48.5 s, pass** (shell, Node, Go race + `sqlite_fts5`, host VAD/audio/intercom/touch/frame tests).
+- `./scripts/check.sh --remote-ui`: **8.8 s, 7/7 pass**. Headless Chromium drives the real page against a fake REST/SSE server: header/portrait/live state, Say with pending/ack, listen pills, volume, stories, history paging/filters/search/cursor, state-push and stale-response regressions, voice selection without a state push, and tab keyboard/a11y labels. Screenshots: `/tmp/opencode/remote/`.
+- Go: `TestRemotePagePWAAndScopedAuth`, `TestRemoteRESTCommandsAndHistoryCursor`, `TestRemoteEventsStreamsInitialStateAndChanges`, `TestRemoteTunnelCommandIssueRotateAndRevoke`, `TestRemoteTunnelRestoresSavedRouteAndToken`, and `TestRemoteMissingOpentunnelAndCompanionDelete` cover scoping, PWA assets, SSE, token rotation, restore, the missing-`opentunnel` error, and companion teardown.
+- Webxdc is gone: panel app, status-update handler, versioning/delete machinery, story player, and `/panel`. Old panel messages remain in chats but are inert. `/story` still sends a plain `.twee` attachment.
+
 ## 2026-11-23 — Local Library: Fast Path for Text Questions
 
 The library is a latency feature, not an offline fallback: it answers reference, book, and story questions in milliseconds so the agent does not fetch and summarise a web page for every turn. The host stays online; `websearch` remains the path for current information and for misses.
