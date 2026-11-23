@@ -262,12 +262,17 @@ func TestRemoteEventsStreamsInitialStateAndChanges(t *testing.T) {
 	readState := func() object {
 		t.Helper()
 		deadline := time.Now().Add(testWait(t))
+		event := ""
 		for time.Now().Before(deadline) {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.HasPrefix(line, "data: ") {
+			if strings.HasPrefix(line, "event: ") {
+				event = strings.TrimSpace(strings.TrimPrefix(line, "event: "))
+				continue
+			}
+			if event == "state" && strings.HasPrefix(line, "data: ") {
 				var snap object
 				if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data: "))), &snap); err != nil {
 					t.Fatal(err)

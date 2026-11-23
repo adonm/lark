@@ -569,7 +569,7 @@ func (b *larkServer) serveRemotePage(w http.ResponseWriter, r *http.Request, tok
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(page))
 }
@@ -699,11 +699,28 @@ func (b *larkServer) serveRemoteEvents(w http.ResponseWriter, r *http.Request, c
 		return true
 	}
 
+	sendCapture := func(status object) bool {
+		data, err := json.Marshal(status)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "event: capture\ndata: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
 	initial := b.remoteSnapshot(r.Context(), companionID, true)
 	if !send(initial) {
 		return
 	}
 	last := remoteSnapshotKey(initial)
+	captureStatus := b.captures.status(companionID)
+	if !sendCapture(captureStatus) {
+		return
+	}
+	lastCapture := remoteSnapshotKey(captureStatus)
 	ticker := time.NewTicker(remotePoll)
 	defer ticker.Stop()
 	keep := time.NewTicker(remoteKeepAlive)
@@ -715,11 +732,19 @@ func (b *larkServer) serveRemoteEvents(w http.ResponseWriter, r *http.Request, c
 		case <-ticker.C:
 			snapshot := b.remoteSnapshot(r.Context(), companionID, false)
 			key := remoteSnapshotKey(snapshot)
-			if key == last {
+			if key != last {
+				last = key
+				if !send(snapshot) {
+					return
+				}
+			}
+			status := b.captures.status(companionID)
+			captureKey := remoteSnapshotKey(status)
+			if captureKey == lastCapture {
 				continue
 			}
-			last = key
-			if !send(snapshot) {
+			lastCapture = captureKey
+			if !sendCapture(status) {
 				return
 			}
 		case <-keep.C:
@@ -836,6 +861,25 @@ func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, por
 
 func (b *larkServer) serveRemoteAPI(w http.ResponseWriter, r *http.Request, path string, tok remoteToken, raw string) {
 	switch {
+	case path == remotePath+"/api/capture" && r.Method == http.MethodPost:
+		value, err := b.remoteCaptureStart(r, tok.CompanionID)
+		sendResult(w, value, err)
+	case path == remotePath+"/api/captures" && r.Method == http.MethodGet:
+		value, err := b.remoteCaptureList(tok.CompanionID)
+		sendResult(w, value, err)
+	case strings.HasPrefix(path, remotePath+"/api/captures/"):
+		name := strings.TrimPrefix(path, remotePath+"/api/captures/")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(name, "/transcribe"):
+			value, err := b.remoteCaptureTranscribe(r, tok.CompanionID, strings.TrimSuffix(name, "/transcribe"))
+			sendResult(w, value, err)
+		case r.Method == http.MethodGet && strings.HasSuffix(name, ".wav"):
+			b.remoteCaptureWAV(w, r, tok.CompanionID, strings.TrimSuffix(name, ".wav"))
+		case r.Method == http.MethodDelete:
+			b.remoteCaptureDelete(w, tok.CompanionID, name)
+		default:
+			sendError(w, problem(404, "Not found"))
+		}
 	case path == remotePath+"/api/history" && r.Method == http.MethodGet:
 		page, err := b.remoteHistory(r.Context(), tok.CompanionID, r.URL.Query())
 		sendResult(w, page, err)

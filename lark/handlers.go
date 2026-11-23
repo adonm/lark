@@ -45,6 +45,7 @@ type larkServer struct {
 	libraryMu       sync.Mutex
 	libraryDBs      map[string]*sql.DB
 	remote          *remoteManager
+	captures        captureState
 	diag            diagnostics
 	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
