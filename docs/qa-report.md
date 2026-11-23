@@ -279,3 +279,47 @@ The panel keeps the header design, but the app was still branded "Lark Control" 
     | reasoning | — | **1,208 / 1,728 ms** | New bench utterance (`Why is the sky blue?`), 0/9 aborts. |
 
   - *Abort rate:* 0 aborts across 27 bench turns, 4 QA turns (`TestQASimSuite` + `TestQAHardwareSuite` including `AutoCommitNoisyMic`), and a 300 ms mid-sentence pause injected into `box3-b324`; well under the 20% rollback threshold. Speculation is silently promoted or aborted before any history/TTS is published, so waste is limited to one model call.
+
+## 2026-11-23 — Companion Visibility, Reply Routing and Patch Defaults
+
+### Root Causes and Fixes
+
+1. **Every prompt said `terminals: none`.** `turnPromptWithState` filtered on `t["companion"]` (`lark/prompt.go:105`) while `terminalEntry` writes `companion_id` (`lark/terminal.go:56`), so no terminal ever matched after the identity split. Companions denied having a device and invented success after rejected commands. The prompt now lists only attached, online hardware rows with `id`, board, battery, sleeping and volume when present (e.g. `vocat-33d8(esp-vocat,online,battery:96,vol:90)`), and every terminal report carries the companion's display name as `character` instead of the firmware's generic `Lark`.
+2. **A queued read-out hijacked the next spoken turn.** The device reply TTL was two minutes (`lark/terminal_turn.go:17`) and armed as soon as a notice drained (`:997`), so a turn that began before the read-out could answer it, or an unrelated turn up to two minutes later could. The session now records the notice-spoken time, accepts a reply only from a capture that started after it, clears the context when an earlier capture turns over, and the TTL is 60 s.
+3. **`patch` failed with a bare `rejected`.** Examples omitted `companion_id`/`terminal_id`; `mcpPatch` required them even though the speaking companion was unambiguous. It now defaults `companion_id` to the only companion with a turn in flight, `terminal_id` to its voice owner or its single online hardware terminal, and returns `terminal_id required: no online terminal for companion <id>` otherwise. The agent prompt shows the full shape within the 4,250-byte budget.
+4. **Story and listening prompts were wrong.** Story requests now tell the agent to `story get` a listed story and read its passages aloud, import only when absent, and admit when a book cannot be opened. Listening is described as persisted spans re-armed after each reply, not a one-shot timer or a "listening light"; `[state: ...]` gained `form:` and prints `listen: on (300s spans)`.
+5. **Names.** The prompt now says a near miss of the companion's name means the companion.
+6. **Diagnostics.** Recent turns carry `silent:true` for `[silent]`/empty replies and up to four `tool_errors` with the real message. `LARK_DEBUG_ENDPOINT=1` is set on the live host.
+7. **Cleanup.** Companion deletion removed mappings but left the Delta Chat account running; it now calls `RemoveAccount` through the normal rpc.
+
+### Speculative Overlap Restored
+
+`f14fcd8` cut `endpointEarlyQuiet` to 300 ms. On the real-model bench that committed before the 400 ms Smart Turn check could start speculation. Two interleaved 24-utterance runs per setting:
+
+| Setting | Speculation | Overlap | chat e2e p50/p95 | timer e2e p50/p95 | reasoning e2e p50/p95 |
+| --- | --- | --- | --- | --- | --- |
+| 300 ms | 0/20, 0/20 | 0 ms | 2,078/2,340; 1,784/2,500 | 2,265/2,605; 1,552/1,900 | 2,114/2,441; 1,896/2,237 |
+| **400 ms** | **24/24, 24/24** | **534 ms** | **1,197/1,734; 1,549/2,713** | **1,119/2,108; 1,323/1,970** | **1,788/2,159; 1,506/2,189** |
+
+0 aborts at 400 ms. The complete-transcript guard and 1.2 s cap are unchanged.
+
+### Live Cleanup (before → after)
+
+- Companions 14 → **4** (`cake`, `mint`, `greg`, `george`); the seven `*-classic`/`New Companion` rows and all nine QA accounts from earlier runs removed through `lark companions rm` and `remove_account`.
+- Delta Chat accounts 13 → **4** (one per companion).
+- Terminals 9 → **3** (`vocat-33d8`, `vocat-2cac`, `box3-b324`); sim, offline and duplicate rows removed through `DELETE /api/terminals/{id}`.
+- Stories 9 → **5** (`qa-import-2/3/4`, `moon_hop` deleted); `compass_of_smoke` kept with author `Cake`.
+- Memory 10 → **9**; duplicate `companion:greg/treehouse_flag_colour` deleted, `mum_treehouse_flag_colour` kept.
+- Intercom relay rows stay in `messages` for history but are already excluded from prompt seeding; a regression test now guards that.
+
+### Personalities
+
+- `cake`: form `a playful young fox`; 152-char personality (playful, stories/jokes/burgers, honest, simple).
+- `mint`: form unchanged; 153-char personality (gentle mint-green fox, books and Warriors, patient, honest, simple).
+
+### Verification
+
+- `./scripts/check.sh` and `./scripts/check.sh --qa` pass; live build compiles.
+- `lark doctor`: all checks `ok`, firmware source/build `0.20.0`, 4/4 Delta Chat accounts, three terminals online, zero failed recent turns.
+- Live cake turn with a temporary sim: the prompt listed `vocat-33d8(esp-vocat,online,battery:96,vol:90)` and the answer said "Ninety-six percent", matching the real battery.
+- `TestQADeltaChatQueuedSayStaysLocal` (temporary companion + throwaway Delta Chat account): a `/say` queued behind an in-flight capture did not send that turn's answer back to the sender.

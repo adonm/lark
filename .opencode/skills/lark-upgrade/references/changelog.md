@@ -4,6 +4,27 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-23 — Companion Visibility, Reply Routing and Patch Defaults
+
+### Affects
+- Server, agent prompt, Delta Chat accounts, diagnostics
+
+### Breaking Changes
+- None. No schema or wire change; companion IDs, forms, voices and accounts are preserved.
+
+### Upgrade Steps
+1. Back up `lark.db` and `lark.env`, then install the new `lark` binary and restart `lark.service` and `lark-opencode.service`.
+2. Optional live cleanup: delete unconfigured `New Companion` rows, `*-classic` companions and `sim-*` terminal rows, and remove their Delta Chat accounts. Companion deletion now removes the account through the rpc.
+3. Set `LARK_DEBUG_ENDPOINT=1` in `lark.env` only if end-of-turn decisions should be logged.
+
+### Verification
+- A turn's prompt lists an attached online terminal (id, board, battery, sleeping, volume) instead of `terminals: none`.
+- A `/say` queued behind an in-flight capture does not text the sender; a later capture that answers it does.
+- `patch({terminal:{volume:40}})` defaults to the speaking companion and its voice terminal.
+- `GET /api/diagnostics` shows `silent:true` and `tool_errors` on affected recent turns.
+
+---
+
 ## 2026-11-23 — Server Cleanup: Retired Wire Status, Telemetry Fields, Timer Column
 
 ### Affects
