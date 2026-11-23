@@ -402,30 +402,6 @@ func (s *sessionStore) getContext(ctx context.Context, id string) (string, bool,
 	return sid, true, nil
 }
 
-func (s *sessionStore) allContext(ctx context.Context) (map[string]string, error) {
-	rdb := s.readDB
-	if rdb == nil {
-		rdb = s.db
-	}
-	rows, err := rdb.QueryContext(ctx, `SELECT companion_id,session_id FROM sessions`)
-	if err != nil {
-		return nil, problem(502, "Cannot read sessions")
-	}
-	defer rows.Close()
-	out := make(map[string]string)
-	for rows.Next() {
-		var id, sid string
-		if err := rows.Scan(&id, &sid); err != nil {
-			return nil, problem(502, "Cannot read sessions")
-		}
-		out[id] = sid
-	}
-	if rows.Err() != nil {
-		return nil, problem(502, "Cannot read sessions")
-	}
-	return out, nil
-}
-
 func (s *sessionStore) delete(id string) error {
 	if _, err := s.db.Exec(`DELETE FROM sessions WHERE companion_id=?`, id); err != nil {
 		return problem(502, "Cannot delete session")

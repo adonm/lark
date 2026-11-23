@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -230,44 +229,4 @@ func deleteRow(ctx context.Context, d *larkDB, query string, args ...any) (bool,
 	}
 	n, err := result.RowsAffected()
 	return n != 0, err
-}
-
-func (b *larkServer) memoryAPI(w http.ResponseWriter, r *http.Request, path string) (any, error) {
-	if b.db == nil {
-		return nil, problem(503, "Memory unavailable")
-	}
-	q := r.URL.Query()
-	scope, key := q.Get("scope"), q.Get("key")
-	switch {
-	case r.Method == http.MethodGet && path == "/api/memory":
-		entries, err := b.memoryEntries(r.Context(), scope)
-		return object{"scope": scope, "entries": entries}, err
-	case r.Method == http.MethodDelete && path == "/api/memory":
-		_, err := b.patchMemory(r.Context(), object{"op": "delete", "scope": scope, "key": key})
-		if err == nil {
-			w.WriteHeader(204)
-		}
-		return nil, err
-	case r.Method == http.MethodGet && path == "/api/memory/scopes":
-		dbError := problem(502, "Cannot list memory scopes")
-		rows, err := b.db.readDB().QueryContext(r.Context(), "SELECT scope,count(*) FROM memory GROUP BY scope ORDER BY scope")
-		if err != nil {
-			return nil, dbError
-		}
-		defer rows.Close()
-		scopes := []object{}
-		for rows.Next() {
-			var scope string
-			var count int
-			if err := rows.Scan(&scope, &count); err != nil {
-				return nil, dbError
-			}
-			scopes = append(scopes, object{"scope": scope, "count": count})
-		}
-		if rows.Err() != nil {
-			return nil, dbError
-		}
-		return object{"scopes": scopes}, nil
-	}
-	return nil, problem(404, "Not found")
 }

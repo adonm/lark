@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -339,32 +338,6 @@ func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatE
 }
 
 func (h *wsHub) broadcastChat(id string, entry chatEntry) {}
-
-func (b *larkServer) messages(r *http.Request, id string) (any, error) {
-	id = strings.ToLower(id)
-	if !validCompanionID(id) {
-		return nil, problem(400, "Invalid companion ID")
-	}
-	query := r.URL.Query()
-	limit := 100
-	if query.Has("limit") {
-		n, err := strconv.Atoi(query.Get("limit"))
-		if err != nil || n < 1 {
-			return nil, problem(400, "Expected a positive history limit")
-		}
-		limit = min(n, 500)
-	}
-	var before *historyCursor
-	if query.Has("before_ts") || query.Has("before_id") {
-		ts, err := strconv.ParseInt(query.Get("before_ts"), 10, 64)
-		key := query.Get("before_id")
-		if err != nil || key == "" || len(key) > 512 {
-			return nil, problem(400, "Expected before_ts (Unix milliseconds) and before_id")
-		}
-		before = &historyCursor{TS: ts, ID: key}
-	}
-	return b.readHistoryPage(r.Context(), id, limit, before)
-}
 
 func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
 	out := historyPage{CompanionID: id, Messages: []chatEntry{}}

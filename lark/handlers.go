@@ -190,24 +190,6 @@ func jsonBody(r *http.Request) (object, error) {
 	return decodeObject(buf)
 }
 
-func companionIDArg(r *http.Request, obj object, required bool) (string, error) {
-	v, provided := obj["companion_id"]
-	if !provided && !required {
-		v = ""
-		if values := r.Header.Values("X-Companion-Id"); len(values) > 0 {
-			v = values[0]
-		}
-	}
-	id := strings.ToLower(strings.TrimSpace(str(v)))
-	if id == "" && !required {
-		return "", nil
-	}
-	if !validCompanionID(id) {
-		return "", problem(400, "Invalid companion ID")
-	}
-	return id, nil
-}
-
 func (b *larkServer) voiceFor(companionID string) string {
 	c := b.companionFor(companionID)
 	return b.voices.resolve(c.Voice, companionTheme(c.Name))

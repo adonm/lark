@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,13 +23,13 @@ var timerIDRE = regexp.MustCompile(`^[a-f0-9]{24}$`)
 type savedTimer struct {
 	ID          string    `json:"id"`
 	CompanionID string    `json:"companion_id"`
-	Label     string    `json:"label"`
-	Say       string    `json:"say"`
-	Chime     string    `json:"chime"`
-	WakeAgent bool      `json:"wake_agent"`
-	Notes     []string  `json:"notes,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	FireAt    time.Time `json:"fire_at"`
+	Label       string    `json:"label"`
+	Say         string    `json:"say"`
+	Chime       string    `json:"chime"`
+	WakeAgent   bool      `json:"wake_agent"`
+	Notes       []string  `json:"notes,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	FireAt      time.Time `json:"fire_at"`
 }
 
 type timerManager struct {
@@ -580,37 +579,4 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 		return t.state(now), nil
 	}
 	return nil, problem(400, "Unknown timer operation")
-}
-
-func (b *larkServer) timerAPI(w http.ResponseWriter, r *http.Request, path, scope string) (any, error) {
-	m := b.timers
-	if m == nil {
-		return nil, problem(503, "Timers unavailable")
-	}
-	id := strings.ToLower(r.URL.Query().Get("companion_id"))
-	if scope != "" {
-		if id != "" && id != scope {
-			return nil, problem(403, "Companion out of scope")
-		}
-		id = scope
-	}
-	if path == "/api/timers" && r.Method == http.MethodGet {
-		if id != "" && !validCompanionID(id) {
-			return nil, problem(400, "Invalid timer companion_id")
-		}
-		timers, err := m.list(r.Context(), id)
-		return object{"timers": timers}, err
-	}
-	if timerID, ok := strings.CutPrefix(path, "/api/timers/"); ok && r.Method == http.MethodDelete && timerIDRE.MatchString(timerID) {
-		ids, err := m.cancelTimers(r.Context(), scope, timerID)
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range ids {
-			b.timerUpdate(id)
-		}
-		w.WriteHeader(204)
-		return nil, nil
-	}
-	return nil, problem(404, "Not found")
 }

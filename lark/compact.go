@@ -8,10 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"maps"
-	"net/http"
 	"os"
-	"slices"
 	"time"
 )
 
@@ -26,47 +23,6 @@ func hashMCPSchema(tools []object, instructions, runtime, prompt string) string 
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
-}
-
-type compactResult struct {
-	OK        bool     `json:"ok"`
-	Compacted []string `json:"compacted"`
-	Skipped   []string `json:"skipped"`
-}
-
-func (o *openCode) compactActiveSessions(ctx context.Context, companionID string) (compactResult, error) {
-	result := compactResult{Compacted: []string{}, Skipped: []string{}}
-	var sessions map[string]string
-	if companionID == "" {
-		all, err := o.store.allContext(ctx)
-		if err != nil {
-			return result, err
-		}
-		sessions = all
-	} else {
-		sid, _, err := o.store.getContext(ctx, companionID)
-		if err != nil {
-			return result, err
-		}
-		sessions = map[string]string{companionID: sid}
-	}
-	var failures []error
-	for _, id := range slices.Sorted(maps.Keys(sessions)) {
-		if ctx.Err() != nil {
-			return result, errors.Join(append(failures, o.unavailable(ctx.Err()))...)
-		}
-		ok, err := o.CompactSession(ctx, id, sessions[id])
-		switch {
-		case err != nil:
-			failures = append(failures, fmt.Errorf("%s: %w", id, err))
-		case ok:
-			result.Compacted = append(result.Compacted, id)
-		default:
-			result.Skipped = append(result.Skipped, id)
-		}
-	}
-	result.OK = len(failures) == 0
-	return result, errors.Join(failures...)
 }
 
 type diagSchemaRefresh struct {
@@ -161,48 +117,4 @@ func (o *openCode) waitForStartup(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (b *larkServer) compactAPI(w http.ResponseWriter, r *http.Request) (any, error) {
-	var device string
-	var reconnect bool
-	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
-		input, err := jsonBody(r)
-		if err != nil {
-			return nil, err
-		}
-		if _, present := input["companion_id"]; present {
-			device, err = companionIDArg(r, input, true)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if value, present := input["reconnect_mcp"]; present {
-			var ok bool
-			if reconnect, ok = value.(bool); !ok {
-				return nil, problem(400, "reconnect_mcp must be a boolean")
-			}
-		}
-	}
-	if b.oc == nil {
-		return nil, problem(503, "OpenCode unavailable")
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
-	defer cancel()
-	var reconnectErr error
-	if reconnect {
-		refresh, stop := context.WithTimeout(ctx, 15*time.Second)
-		reconnectErr = b.oc.ReconnectMCP(refresh, "lark")
-		stop()
-	}
-	result, err := b.oc.compactActiveSessions(ctx, device)
-	if err := errors.Join(reconnectErr, err); err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			status = http.StatusGatewayTimeout
-		}
-		sendJSON(w, status, object{"ok": false, "compacted": result.Compacted, "skipped": result.Skipped, "error": err.Error()})
-		return nil, nil
-	}
-	return result, nil
 }
