@@ -32,6 +32,7 @@ func qaLiveClient(t *testing.T) *cliClient {
 
 func qaTempCompanion(t *testing.T, c *cliClient, name, form string) string {
 	t.Helper()
+	beforeComps, beforeTerms := qaIDs(t, c, "/api/companions", "companions"), qaIDs(t, c, "/api/terminals", "terminals")
 	res, err := c.do(t.Context(), http.MethodPost, "/api/companions", object{"name": name, "form": form})
 	if err != nil {
 		t.Fatalf("create temp companion %s: %v", name, err)
@@ -40,20 +41,50 @@ func qaTempCompanion(t *testing.T, c *cliClient, name, form string) string {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		terms, err := c.do(ctx, http.MethodGet, "/api/terminals", nil)
-		if err == nil {
-			if list, ok := terms["terminals"].([]any); ok {
-				for _, item := range list {
+		// Unknown sims create a blank companion and terminal before the script
+		// attaches them. Remove everything the test added, not just the QA one.
+		if list, err := c.do(ctx, http.MethodGet, "/api/terminals", nil); err == nil {
+			if items, ok := list["terminals"].([]any); ok {
+				for _, item := range items {
 					m, _ := item.(object)
-					if str(m["companion_id"]) == id {
-						_, _ = c.do(ctx, http.MethodPost, "/api/terminals/"+str(m["id"])+"/detach", object{})
+					term := str(m["id"])
+					if !beforeTerms[term] {
+						_, _ = c.do(ctx, http.MethodDelete, "/api/terminals/"+term, nil)
 					}
 				}
 			}
 		}
-		_, _ = c.do(ctx, http.MethodDelete, "/api/companions/"+id, nil)
+		if list, err := c.do(ctx, http.MethodGet, "/api/companions", nil); err == nil {
+			if items, ok := list["companions"].([]any); ok {
+				for _, item := range items {
+					m, _ := item.(object)
+					cid := str(m["id"])
+					if cid == id || (!beforeComps[cid] && m["configured"] != true) {
+						_, _ = c.do(ctx, http.MethodDelete, "/api/companions/"+cid, nil)
+					}
+				}
+			}
+		}
 	})
 	return id
+}
+
+func qaIDs(t *testing.T, c *cliClient, path, key string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	res, err := c.do(t.Context(), http.MethodGet, path, nil)
+	if err != nil {
+		return out
+	}
+	if items, ok := res[key].([]any); ok {
+		for _, item := range items {
+			m, _ := item.(object)
+			if id := str(m["id"]); id != "" {
+				out[id] = true
+			}
+		}
+	}
+	return out
 }
 
 func qaSimRun(t *testing.T, board, id, script string) []object {

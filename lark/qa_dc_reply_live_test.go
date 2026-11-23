@@ -194,3 +194,103 @@ func TestQADeltaChatDeviceReplyLive(t *testing.T) {
 		t.Fatalf("device reply claimed it could not reach the sender: %q", spoke)
 	}
 }
+
+// TestQADeltaChatQueuedSayStaysLocal covers the reported leak: a /say read-out
+// queued behind an in-flight device turn must not carry that turn's answer back
+// to the sender. Everything runs against a temporary companion and a throwaway
+// Delta Chat account.
+func TestQADeltaChatQueuedSayStaysLocal(t *testing.T) {
+	if os.Getenv("LARK_QA_DC") == "" {
+		t.Skip("set LARK_QA_DC=1 to run live Delta Chat QA")
+	}
+	c := qaLiveClient(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+	defer cancel()
+	compID := qaTempCompanion(t, c, "qa-dc-queued", "cat")
+
+	pairPNG := filepath.Join(t.TempDir(), "pair.png")
+	qaSimRun(t, "vocat", "sim-qa-queued-pair", fmt.Sprintf("attach %s\ntap-label Menu\ntap-label Next\ntap-label More\ntap-label Pair\nscreen %s\ntap-label pair-close\ntap-label Back\ntap-label Back\n", compID, pairPNG))
+	qadc, err := startQADCClient(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(qadc.close)
+	chatID, err := qadc.pairFromScreenPNG(pairPNG)
+	if err != nil {
+		t.Fatalf("pairFromScreenPNG: %v", err)
+	}
+	incoming := func() []deltachat.Message {
+		ids, err := qadc.rpc.GetMessageIds(qadc.accID, chatID, false, false)
+		if err != nil {
+			return nil
+		}
+		var out []deltachat.Message
+		for _, id := range ids {
+			if m, err := qadc.rpc.GetMessage(qadc.accID, id); err == nil && m.FromId != deltachat.ContactSelf {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for !slices.ContainsFunc(incoming(), func(m deltachat.Message) bool { return strings.Contains(m.Text, "/say") }) {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the welcome")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	settled := len(incoming())
+
+	bin := filepath.Join(env("XDG_DATA_HOME", filepath.Join(os.Getenv("HOME"), ".local/share")), "lark", "lark")
+	sim := exec.CommandContext(ctx, bin, "sim", "--board", "vocat", "--id", "sim-qa-queued")
+	stdin, err := sim.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := sim.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sim.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = sim.Process.Kill()
+		_ = sim.Wait()
+	})
+	lines := bufio.NewScanner(stdout)
+	run := func(line string) {
+		t.Helper()
+		if _, err := fmt.Fprintln(stdin, line); err != nil {
+			t.Fatalf("sim %q: %v", line, err)
+		}
+		if !lines.Scan() {
+			t.Fatalf("sim %q produced no result", line)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(lines.Bytes(), &m); err != nil || m["ok"] != true {
+			t.Fatalf("sim %q failed: %v (%s)", line, m, lines.Text())
+		}
+	}
+	run("attach " + compID)
+	run("tap 180 180")
+
+	// Send /say while the capture is open: the notice queues behind this turn.
+	text := "/say Dinner is at six."
+	if _, err := qadc.rpc.SendMsg(qadc.accID, chatID, deltachat.MessageData{Text: &text}); err != nil {
+		t.Fatalf("SendMsg: %v", err)
+	}
+	run(`say "I like dinosaurs"`)
+	run("wait idle 90s")
+
+	// The in-flight capture began before the read-out, so its answer stays local.
+	// Only the /say acknowledgement may arrive; wait past the old two-minute TTL.
+	time.Sleep(20 * time.Second)
+	for _, m := range incoming()[settled:] {
+		if strings.TrimSpace(m.Text) == "Said it." {
+			continue
+		}
+		t.Fatalf("in-flight turn leaked to the Delta Chat sender: %q", m.Text)
+	}
+}
