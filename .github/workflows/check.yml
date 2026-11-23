@@ -12,6 +12,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Race-suite shards. "rest" runs every test these two patterns skip, so a new
+# test lands in a shard without editing this file. Anchored to top-level names
+# so subtest names do not leak across shards.
+env:
+  SHARD_ENDPOINT: '^Test.*(Endpoint|Turn|Listen|Speculative|Stop|Silence|Noise|Speech|Sentence|TTS|STT|Whisper|Mel|VAD)'
+  SHARD_REMOTE: '^Test.*(DC|DeltaChat|Remote|Library|Terminal|Companion|Device|Menu|OTA|Timer|Backup|Credential|Pair|Diag)'
+
 jobs:
   check:
     name: Offline checks
@@ -31,15 +38,50 @@ jobs:
       - name: Install host check tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg gcc shellcheck
+          sudo apt-get install -y --no-install-recommends gcc shellcheck
       - name: Run offline checks
-        # Mirrors ./scripts/check.sh: shell, Node, Go vet and race tests, and
-        # the host C tests with ASan/UBSan. sherpa-onnx-go-linux supplies the
-        # CGO libraries and their RUNPATH; no Vulkan toolchain or GPU is needed.
+        # Mirrors ./scripts/check.sh: shell, Node, Go vet and the live-tag
+        # compile, and the host C tests with ASan/UBSan. The race suite runs in
+        # the go-race shards below. sherpa-onnx-go-linux supplies the CGO
+        # libraries and their RUNPATH; no Vulkan toolchain or GPU is needed.
         env:
           TTS_MODEL_DIR: ${{ runner.temp }}/no-kokoro-model-pack
           GOFLAGS: ''
-        run: ./scripts/check.sh
+        run: ./scripts/check.sh --no-race
+
+  go-race:
+    name: Go race (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [endpoint-turn-listen, dc-remote-library, rest]
+    env:
+      TTS_MODEL_DIR: ${{ runner.temp }}/no-kokoro-model-pack
+      GOFLAGS: ''
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: lark/go.mod
+          cache-dependency-path: lark/go.sum
+      - name: Install ffmpeg (Delta Chat voice notes)
+        if: matrix.shard == 'dc-remote-library'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Run race shard
+        run: |
+          case '${{ matrix.shard }}' in
+            endpoint-turn-listen) args=(-run "$SHARD_ENDPOINT") ;;
+            dc-remote-library) args=(-run "$SHARD_REMOTE" -skip "$SHARD_ENDPOINT") ;;
+            rest) args=(-run '^Test' -skip "$SHARD_ENDPOINT|$SHARD_REMOTE") ;;
+          esac
+          cd lark
+          go test -race -tags sqlite_fts5 -count=1 "${args[@]}" ./...
 
   remote-ui:
     name: Remote UI (Playwright)
