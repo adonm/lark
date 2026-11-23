@@ -114,11 +114,18 @@ func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText strin
 	hw.recEnd(t, "", false)
 }
 
-func waitTurnDone(t *testing.T, b *larkServer, termID string) {
+// turnMark snapshots the completed-turn counter before a test triggers a
+// turn. A silent reply can finish before the test starts waiting, so the
+// baseline must be taken before the trigger, not inside the wait.
+func turnMark(t *testing.T, b *larkServer, termID string) uint64 {
 	t.Helper()
 	b.hub.mu.Lock()
-	before := b.hub.terminals[termID].finished
-	b.hub.mu.Unlock()
+	defer b.hub.mu.Unlock()
+	return b.hub.terminals[termID].finished
+}
+
+func waitTurnDone(t *testing.T, b *larkServer, termID string, before uint64) {
+	t.Helper()
 	b.hub.sig.wait(t, func() bool {
 		b.hub.mu.Lock()
 		defer b.hub.mu.Unlock()
@@ -266,8 +273,9 @@ func TestDeviceReplySilentSendsNothing(t *testing.T) {
 	b.dc.handleMessage(t.Context(), greg.DCAccountID, 1)
 	ackNotice(t, hw)
 
+	mark := turnMark(t, b, "box3-dc4")
 	tapUtterance(t, hw, b, "box3-dc4", "Nothing to say")
-	waitTurnDone(t, b, "box3-dc4")
+	waitTurnDone(t, b, "box3-dc4", mark)
 	if sent := dcSent(stub); len(sent) != 0 {
 		t.Fatalf("silent reply sent %+v", sent)
 	}

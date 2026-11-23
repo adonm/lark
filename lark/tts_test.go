@@ -180,13 +180,22 @@ func TestSpeculativeTurnHitAndAbort(t *testing.T) {
 		})
 	})
 	comp := b.companionFor("cake")
+	b.oc.feed.sig.wait(t, func() bool {
+		b.oc.feed.mu.Lock()
+		defer b.oc.feed.mu.Unlock()
+		return b.oc.feed.connected
+	})
 
 	// 1. Promoted speculative turn delivers reply, audio, and records history once.
 	hit := b.startSpeculate("cake", "What is two plus two?", 200, "voice", turnChannel{})
 	deadline := time.Now().Add(testWait(t))
 	for len(b.clips.peek(b.voiceFor("cake"), "Speculative answer!")) == 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("speculative turn did not pre-synthesize its first sentence")
+			hit.mu.Lock()
+			state := fmt.Sprintf("aborted=%v promoted=%v warming=%v firstAt=%v sentences=%q result=%d",
+				hit.aborted, hit.promoted, hit.warming, hit.firstAt, hit.sentences, len(hit.done))
+			hit.mu.Unlock()
+			t.Fatalf("speculative turn did not pre-synthesize its first sentence: %s", state)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

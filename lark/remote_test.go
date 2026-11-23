@@ -366,7 +366,7 @@ func TestRemoteTunnelCommandIssueRotateAndRevoke(t *testing.T) {
 }
 
 func TestRemoteTunnelRestoresSavedRouteAndToken(t *testing.T) {
-	t.Parallel()
+	serial(t)
 	b, _ := wsHarness(t, nil)
 	b.voices = companionVoiceStore(b.db, heartVoice)
 	if _, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "an old chameleon"}); err != nil {
@@ -385,6 +385,7 @@ func TestRemoteTunnelRestoresSavedRouteAndToken(t *testing.T) {
 
 	b.remote = newRemoteManager(b, "fake-opentunnel")
 	b.remote.runner = fakeTunnelRunner(&calls)
+	t.Cleanup(b.remote.close)
 	b.remote.restore(t.Context())
 	if len(b.remote.routes) != 1 || len(b.remote.tokens) != 1 {
 		t.Fatalf("restore lost state: routes=%d tokens=%d", len(b.remote.routes), len(b.remote.tokens))
