@@ -1,5 +1,12 @@
 # Lark QA Report
 
+## 2026-11-23 — Sleeping-terminal ping backoff
+
+The server pinged every 12 s, waking the radio and CPU of a device whose panel was asleep.
+
+- The interval is now 30 s while the terminal reports sleeping and returns to 12 s once awake. The 75 s TCP read deadline is unchanged, so a dead connection is still detected.
+- `TestPingIntervalFollowsSleep` drives a fake native terminal through `setSleeping` and asserts 12 s → 30 s → 12 s.
+
 ## 2026-11-23 — Device replies to Delta Chat read-outs
 
 **Symptom:** after a Delta Chat message was read out, answering by voice on the device produced "I couldn't reach greg/cake right now" instead of delivering to the sender.
