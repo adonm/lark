@@ -114,7 +114,6 @@ static int reconnect_ms = 1000;
 static bool has_resume_token;
 static uint8_t resume_token[LARK_RESUME_TOKEN_LEN];
 static int64_t resume_deadline_us;
-static uint32_t last_state_seq;
 
 uint32_t net_client_session(void)
 {
@@ -373,7 +372,6 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
         if (sizeof(lark_resume_t) + id_len <= sizeof(rbuf)) {
             lark_resume_t r = {
                 .proto_version = LARK_PROTO_VERSION,
-                .last_seq = last_state_seq,
                 .id_len = (uint8_t)id_len,
             };
             memcpy(r.resume_token, resume_token, LARK_RESUME_TOKEN_LEN);
@@ -432,7 +430,7 @@ static void send_status(uint32_t session)
         .battery_pct = (int16_t)(BOARD_HAS_BATTERY ? battery.pct : -1),
         .charging = (uint8_t)(BOARD_HAS_BATTERY && battery.charging ? 1 : 0),
         .cpu_pct = (uint8_t)(hw.cpu_pct > 100 ? 100 : hw.cpu_pct),
-        .flags = (uint8_t)(display_is_sleeping() ? LARK_TELEMETRY_SLEEPING : 0),
+        .flags = 0,
         .pad = 0,
         .free_heap = (uint32_t)hw.free_heap,
         .uptime_s = (uint32_t)hw.uptime_s,
@@ -473,7 +471,6 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         memcpy(resume_token, w.resume_token, LARK_RESUME_TOKEN_LEN);
         has_resume_token = true;
         resume_deadline_us = esp_timer_get_time() + (int64_t)w.resume_window_ms * 1000LL;
-        last_state_seq = w.seq;
         portENTER_CRITICAL(&udp_lock);
         bridge_udp_addr.sin_port = htons(w.udp_port);
         active_ssrc = w.ssrc;
@@ -483,8 +480,8 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         atomic_store(&ready_session, session);
         if (hello_sem) xSemaphoreGive(hello_sem);
         display_set_link(true);
-        ESP_LOGI(TAG, "Bridge welcome (id=%s comp=%s udp=%u ssrc=0x%08" PRIx32 " seq=%" PRIu32 ")",
-                 tid, cid, w.udp_port, w.ssrc, w.seq);
+        ESP_LOGI(TAG, "Bridge welcome (id=%s comp=%s udp=%u ssrc=0x%08" PRIx32 ")",
+                 tid, cid, w.udp_port, w.ssrc);
         break;
     }
     case LARK_MSG_REJECT: {
@@ -580,21 +577,10 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         }
         break;
     case LARK_MSG_STATUS: {
+        // Only the state byte is meaningful; text, progress and kind are gone
+        // from the protocol, and older servers may still append them.
         if (len < sizeof(lark_status_t)) break;
-        lark_status_t st;
-        memcpy(&st, payload, sizeof(st));
-        if (st.seq >= last_state_seq) {
-            last_state_seq = st.seq;
-            ESP_LOGD(TAG, "Status seq=%" PRIu32 " state=%u progress=%u kind=%u", st.seq, st.state, st.progress, st.kind);
-        }
-        break;
-    }
-    case LARK_MSG_VOICE_OWNER: {
-        if (len >= 4) {
-            uint32_t seq = (uint32_t)payload[0] | ((uint32_t)payload[1] << 8) |
-                           ((uint32_t)payload[2] << 16) | ((uint32_t)payload[3] << 24);
-            if (seq >= last_state_seq) last_state_seq = seq;
-        }
+        ESP_LOGD(TAG, "Status state=%u", payload[0]);
         break;
     }
     case LARK_MSG_PING:

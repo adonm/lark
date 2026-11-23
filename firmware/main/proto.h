@@ -26,8 +26,6 @@ enum {
     LARK_MSG_REC_START = 0x06,
     LARK_MSG_REC_END = 0x07,
     LARK_MSG_TTS_ACK = 0x08,
-    LARK_MSG_MEDIA = 0x0A,
-    LARK_MSG_SET_VOLUME = 0x0E,
     LARK_MSG_PING = 0x0F,
     LARK_MSG_PONG = 0x10,
 };
@@ -44,7 +42,6 @@ enum {
     LARK_MSG_POWER = 0x8B,
     LARK_MSG_VOLUME = 0x8C,
     LARK_MSG_STATUS = 0x8D,
-    LARK_MSG_VOICE_OWNER = 0x8E,
 };
 
 // Terminal kind
@@ -71,11 +68,6 @@ enum {
     LARK_SHAPE_RECT = 1,
 };
 
-// Hello flags
-enum {
-    LARK_HELLO_FLAG_IF_FREE = 1u << 0,
-};
-
 // Capability bits in HELLO.caps_mask
 enum {
     LARK_CAP_BATTERY = 1u << 0,
@@ -91,7 +83,6 @@ enum {
     LARK_REJECT_BAD_VERSION = 2,
     LARK_REJECT_UNKNOWN_TERMINAL = 3,
     LARK_REJECT_FULL = 4,
-    LARK_REJECT_OCCUPIED = 5,
     LARK_REJECT_BAD_CAPS = 6,
 };
 
@@ -101,7 +92,6 @@ enum {
     LARK_STATE_LISTENING = 1,
     LARK_STATE_THINKING = 2,
     LARK_STATE_SPEAKING = 3,
-    LARK_STATE_BLOCKED = 4,
     LARK_STATE_DONE = 5,
     LARK_STATE_ERROR = 6,
 };
@@ -144,11 +134,6 @@ enum {
     LARK_WELCOME_FLAG_BRIDGE_EP = 1u << 0,
 };
 
-// Telemetry flags
-enum {
-    LARK_TELEMETRY_SLEEPING = 1u << 0,
-};
-
 // RTP (RFC 3550) constants for 20 ms 16 kHz mono 16-bit PCM
 enum {
     LARK_RTP_VERSION_BYTE = 0x80,
@@ -184,6 +169,7 @@ typedef struct __attribute__((packed)) {
     uint8_t tok_len;
 } lark_hello_t;
 
+// last_seq stays in the layout (0.19.0 servers parse it) but is no longer used.
 typedef struct __attribute__((packed)) {
     uint8_t proto_version;
     uint8_t resume_token[LARK_RESUME_TOKEN_LEN];
@@ -246,11 +232,7 @@ typedef struct __attribute__((packed)) {
 } lark_tts_ack_t;
 
 typedef struct __attribute__((packed)) {
-    uint32_t seq;
     uint8_t state;
-    uint8_t progress;
-    uint8_t kind;
-    uint16_t text_len;
 } lark_status_t;
 
 _Static_assert(sizeof(lark_hdr_t) == 8, "lark_hdr_t must be 8 bytes");
@@ -263,7 +245,7 @@ _Static_assert(sizeof(lark_pointer_t) == 8, "lark_pointer_t must be 8 bytes");
 _Static_assert(sizeof(lark_rec_ctrl_t) == 5, "lark_rec_ctrl_t must be 5 bytes");
 _Static_assert(sizeof(lark_tts_ctrl_t) == 9, "lark_tts_ctrl_t must be 9 bytes");
 _Static_assert(sizeof(lark_tts_ack_t) == 9, "lark_tts_ack_t must be 9 bytes");
-_Static_assert(sizeof(lark_status_t) == 9, "lark_status_t must be 9 bytes");
+_Static_assert(sizeof(lark_status_t) == 1, "lark_status_t must be 1 byte");
 
 static inline void lark_pack_hdr(uint8_t *dst, uint8_t type, uint16_t seq, uint32_t length)
 {
