@@ -226,18 +226,23 @@ primary. Stalls, interruptions and permission failures do not switch models.
 
 ## Local library
 
-`./scripts/setup-host.sh --library` downloads and indexes the local text
-library in the background: full English Wikipedia, Simple English Wikipedia,
-and a pinned Project Gutenberg set weighted toward children's and classic
-literature. It needs about 140 GB under `~/.local/share/lark/library/` and
-writes progress to `~/.local/share/lark/library/setup.log`. Check status with
-`~/.local/share/lark/lark library --status` after the build finishes.
+`lark serve` provisions the local text library itself, in the background, one
+pack at a time: Project Gutenberg, Simple English Wikipedia, then full English
+Wikipedia only when the volume can hold it. The planner keeps 20% of the data
+volume free and leaves a further 10% margin, so a full Wikipedia index appears
+only on disks with room for roughly 65 GiB more. Progress goes to
+`~/.local/share/lark/library/setup.log`; the downloaded dumps are deleted after
+indexing. Installed packs and runs already in progress are never restarted.
 
-`tools.lark.library` searches it in milliseconds, so the agent checks it before
-web search for stories, books, and reference facts. Web search remains the path
-for current information and anything the library misses. `lark library
---download --build` resumes interrupted downloads and rebuilds missing indexes;
-use `--source enwiki|simple|gutenberg` to limit a run.
+`lark status` shows `installed`, `building (pct)`, `pending`, or
+`skipped (space)` per pack plus the volume line and budget. `lark library
+--plan` prints the same decision as JSON. `tools.lark.library` searches it in
+milliseconds, so the agent checks it before web search for stories, books, and
+reference facts; web search remains the path for current information and
+anything the library misses.
+
+`lark library --download --build` remains the manual override and resumes
+interrupted downloads; use `--source enwiki|simple|gutenberg` to limit a run.
 
 ## Upgrading
 

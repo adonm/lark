@@ -4,6 +4,25 @@ Apply entries chronologically from the installation's starting state to latest. 
 
 ---
 
+## 2026-11-23 — Library Auto-Provisioning by Disk Budget
+
+### Affects
+- Host / `~/.local/share/lark/library/`, `lark.service`, `setup-host.sh`
+
+### Changes
+- `lark serve` now provisions the content library itself in the background: Project Gutenberg, Simple English Wikipedia, then full English Wikipedia only when it fits. Setup no longer takes `--library`; `setup-host.sh` only installs the service and models.
+- Provisioning always leaves 20% of the data volume free (plus a 10% margin), counts peak download-plus-index space, and keeps one pack in flight at a time, smallest first. Installed packs, partial downloads, and builds that already hold their lock are never restarted.
+- Downloads and index builds write to `library/setup.log`; the planner logs `planned` versus `actual` bytes after each pack lands.
+- Successful indexing now deletes the temporary dump (about 24 GB for enwiki) automatically; a server launch also reclaims dumps left by older runs once their index exists.
+- `lark status` prints a `Library` section with `installed`, `building (pct)`, `pending`, or `skipped (space)` per pack, plus free/total/budget. `lark library --plan` prints the same decision as JSON. `lark library --download --build --force` remains the manual override.
+
+### Upgrade Steps
+1. Run `./scripts/setup-host.sh --gpu-index 0` (no `--library`). It restarts `lark.service`, which plans against the current disk.
+2. Check `~/.local/share/lark/lark status`; packs already installed stay installed and an in-progress build is reported as `building`.
+3. Expect the existing enwiki dump to disappear after its index is present (`df` gains about 24 GB).
+
+---
+
 ## 2026-11-23 — Remote Controls Replace the Webxdc Panel
 
 ### Affects
