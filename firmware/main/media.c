@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "display.h"
-#include "echo_suppress.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"

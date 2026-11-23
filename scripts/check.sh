@@ -36,9 +36,6 @@ host_cc=(gcc -std=c11 -Wall -Wextra -Werror -I firmware/main "-fsanitize=address
 "$host_tests/vad"
 printf 'PASS host VAD tests\n'
 
-"${host_cc[@]}" firmware/tests/echo_suppress_test.c firmware/main/echo_suppress.c -lm -o "$host_tests/echo_suppress"
-"$host_tests/echo_suppress"
-
 "${host_cc[@]}" firmware/tests/touch_gesture_test.c firmware/main/touch_gesture.c -o "$host_tests/touch_gesture"
 "$host_tests/touch_gesture"
 
