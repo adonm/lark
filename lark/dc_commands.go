@@ -133,7 +133,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
 				return
 			}
-			link, err := s.b.remote.issue(ctx, companionID, contactKey)
+			link, err := s.b.remote.issue(ctx, companionID, contactKey, contact.Name)
 			if err != nil {
 				errText := err.Error()
 				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &errText})

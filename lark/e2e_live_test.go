@@ -54,8 +54,8 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	client := pooledClient()
 	client.Timeout = 100 * time.Second
 	t.Cleanup(client.CloseIdleConnections)
-	s := &e2eSuite{liveClient: liveClient{client: client, token: randomHex(32)},
-		workspace: filepath.Join(root, "workspace"), prefix: "E2E-" + randomHex(5), real: real}
+	s := &e2eSuite{liveClient: liveClient{client: client, token: testHex(t, 32)},
+		workspace: filepath.Join(root, "workspace"), prefix: "E2E-" + testHex(t, 5), real: real}
 	config := filepath.Join(root, "config")
 	_ = config
 	if err := os.MkdirAll(local, 0o700); err != nil {

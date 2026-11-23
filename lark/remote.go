@@ -73,7 +73,13 @@ type remoteRoute struct {
 
 type remoteToken struct {
 	CompanionID string
-	Contact     string
+	Contact     string // Lowercased Delta Chat address (or numeric contact key).
+	ContactName string // Display name at issue time, used to scope history.
+}
+
+func (t remoteToken) matchesSender(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return name != "" && (name == t.Contact || (t.ContactName != "" && name == strings.ToLower(t.ContactName)))
 }
 
 type remoteScope struct {
@@ -99,6 +105,7 @@ type remoteManager struct {
 	tokens map[string]remoteToken // sha256(token) -> scope
 	routes map[string]*remoteRoute
 	live   map[string]*remoteScope
+	locks  map[string]*sync.Mutex // per-companion tunnel operations
 	closed bool
 }
 
@@ -185,8 +192,8 @@ func (m *remoteManager) restore(ctx context.Context) {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var key, hash string
-		if err := rows.Scan(&key, &hash); err != nil {
+		var key, raw string
+		if err := rows.Scan(&key, &raw); err != nil {
 			continue
 		}
 		rest, ok := strings.CutPrefix(key, "remote_token:")
@@ -194,12 +201,21 @@ func (m *remoteManager) restore(ctx context.Context) {
 			continue
 		}
 		companionID, contact, ok := strings.Cut(rest, ":")
-		if !ok || hash == "" {
+		if !ok || raw == "" {
+			continue
+		}
+		var meta remoteTokenMeta
+		if json.Unmarshal([]byte(raw), &meta) != nil {
+			// Pre-scope rows stored the hash as a bare string; they carry no
+			// contact name, so Delta Chat history stays hidden until reissued.
+			meta = remoteTokenMeta{Hash: raw}
+		}
+		if meta.Hash == "" {
 			continue
 		}
 		m.mu.Lock()
 		if _, exists := m.routes[companionID]; exists {
-			m.tokens[hash] = remoteToken{CompanionID: companionID, Contact: contact}
+			m.tokens[meta.Hash] = remoteToken{CompanionID: companionID, Contact: contact, ContactName: meta.Name}
 		}
 		m.mu.Unlock()
 	}
@@ -238,7 +254,30 @@ func (m *remoteManager) ensureScopeLocked(companionID string) (*remoteRoute, err
 	return route, nil
 }
 
-func (m *remoteManager) issue(ctx context.Context, companionID, contact string) (string, error) {
+// lockCompanion serializes route/token operations for one companion without
+// holding m.mu across the opentunnel CLI (which can block for 90 seconds).
+func (m *remoteManager) lockCompanion(companionID string) func() {
+	m.mu.Lock()
+	if m.locks == nil {
+		m.locks = make(map[string]*sync.Mutex)
+	}
+	lock := m.locks[companionID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.locks[companionID] = lock
+	}
+	m.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (m *remoteManager) shuttingDown() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closed
+}
+
+func (m *remoteManager) issue(ctx context.Context, companionID, contact, contactName string) (string, error) {
 	if m == nil || m.b == nil {
 		return "", problem(503, "Remote controls unavailable")
 	}
@@ -250,28 +289,33 @@ func (m *remoteManager) issue(ctx context.Context, companionID, contact string) 
 		return "", problem(503, "Remote controls need opentunnel; install it from opentunnel.xyz")
 	}
 	contact = strings.ToLower(strings.TrimSpace(contact))
-	raw := randomHex(remoteTokenBytes)
+	raw, err := randomHex(remoteTokenBytes)
+	if err != nil {
+		return "", problem(500, "Cannot create a remote token")
+	}
 	hash := tokenHash(raw)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
+	unlock := m.lockCompanion(companionID)
+	defer unlock()
+	if m.shuttingDown() {
 		return "", problem(503, "Remote controls shutting down")
 	}
-	for oldHash, tok := range m.tokens {
-		if tok.CompanionID == companionID && tok.Contact == contact {
-			delete(m.tokens, oldHash)
-			m.deleteMeta(ctx, remoteTokenKey(companionID, contact))
-		}
-	}
 
+	m.mu.Lock()
 	route := m.routes[companionID]
+	live := m.live[companionID] != nil
+	m.mu.Unlock()
 	if route == nil {
 		scope, port, err := m.listen(companionID, 0)
 		if err != nil {
 			return "", problem(502, "Cannot start remote listener")
 		}
-		profile := "lark-" + randomHex(12)
+		profileID, err := randomHex(12)
+		if err != nil {
+			scope.close()
+			return "", problem(500, "Cannot create a tunnel profile")
+		}
+		profile := "lark-" + profileID
 		rawOut, err := m.runner(ctx, "route", "add", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), "--profile", profile)
 		routeName, publicURL := routeAddress(string(rawOut))
 		if routeName == "" || publicURL == "" {
@@ -289,17 +333,36 @@ func (m *remoteManager) issue(ctx context.Context, companionID, contact string) 
 			scope.close()
 			return "", err
 		}
+		m.mu.Lock()
 		m.routes[companionID] = route
-		m.live[companionID] = scope
-	} else if _, err := m.ensureScopeLocked(companionID); err != nil {
-		return "", err
+		if m.live[companionID] == nil {
+			m.live[companionID] = scope
+		} else {
+			scope.close()
+		}
+		m.mu.Unlock()
+	} else if !live {
+		m.mu.Lock()
+		_, err := m.ensureScopeLocked(companionID)
+		m.mu.Unlock()
+		if err != nil {
+			return "", err
+		}
 	}
 
-	m.tokens[hash] = remoteToken{CompanionID: companionID, Contact: contact}
-	if err := m.saveToken(ctx, companionID, contact, hash); err != nil {
-		delete(m.tokens, hash)
+	// Persist the replacement token before retiring the old one, so a failed
+	// route add or save leaves the existing link working.
+	if err := m.saveToken(ctx, companionID, contact, hash, contactName); err != nil {
 		return "", err
 	}
+	m.mu.Lock()
+	for oldHash, tok := range m.tokens {
+		if tok.CompanionID == companionID && tok.Contact == contact {
+			delete(m.tokens, oldHash)
+		}
+	}
+	m.tokens[hash] = remoteToken{CompanionID: companionID, Contact: contact, ContactName: contactName}
+	m.mu.Unlock()
 	return strings.TrimRight(route.URL, "/") + "/remote?token=" + url.QueryEscape(raw), nil
 }
 
@@ -309,22 +372,28 @@ func (m *remoteManager) revokeContact(ctx context.Context, companionID, contact 
 	}
 	companionID = strings.ToLower(strings.TrimSpace(companionID))
 	contact = strings.ToLower(strings.TrimSpace(contact))
+	unlock := m.lockCompanion(companionID)
+	defer unlock()
+	// Delete the durable token first: if that fails the link stays valid and
+	// the caller can retry instead of resurrecting it after a restart.
+	if err := m.deleteMeta(ctx, remoteTokenKey(companionID, contact)); err != nil {
+		return 0, problem(502, "Cannot revoke the remote token")
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for hash, tok := range m.tokens {
 		if tok.CompanionID == companionID && tok.Contact == contact {
 			delete(m.tokens, hash)
 		}
 	}
-	m.deleteMeta(ctx, remoteTokenKey(companionID, contact))
 	left := 0
 	for _, tok := range m.tokens {
 		if tok.CompanionID == companionID {
 			left++
 		}
 	}
+	m.mu.Unlock()
 	if left == 0 {
-		if err := m.stopLocked(ctx, companionID); err != nil {
+		if err := m.stop(ctx, companionID); err != nil {
 			return 0, err
 		}
 	}
@@ -335,18 +404,26 @@ func (m *remoteManager) stopCompanion(ctx context.Context, companionID string) e
 	if m == nil {
 		return nil
 	}
+	companionID = strings.ToLower(strings.TrimSpace(companionID))
+	unlock := m.lockCompanion(companionID)
+	defer unlock()
+	return m.stop(ctx, companionID)
+}
+
+// stop removes a companion's route and tokens. The caller holds its
+// per-companion operation lock; m.mu is released across the CLI calls.
+func (m *remoteManager) stop(ctx context.Context, companionID string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	route := m.routes[companionID]
+	scope := m.live[companionID]
 	for hash, tok := range m.tokens {
 		if tok.CompanionID == companionID {
 			delete(m.tokens, hash)
 		}
 	}
-	return m.stopLocked(ctx, companionID)
-}
-
-func (m *remoteManager) stopLocked(ctx context.Context, companionID string) error {
-	route := m.routes[companionID]
+	delete(m.live, companionID)
+	delete(m.routes, companionID)
+	m.mu.Unlock()
 	if route == nil {
 		return nil
 	}
@@ -358,28 +435,15 @@ func (m *remoteManager) stopLocked(ctx context.Context, companionID string) erro
 			log.Printf("Lark could not stop the remote tunnel for %s: %v", companionID, err)
 		}
 	}
-	if scope := m.live[companionID]; scope != nil {
+	if scope != nil {
 		scope.close()
 	}
-	delete(m.live, companionID)
-	delete(m.routes, companionID)
-	m.deleteMeta(ctx, remoteRouteKey(companionID))
 	if m.b == nil || m.b.db == nil {
 		return nil
 	}
-	rows, err := m.b.db.readDB().QueryContext(ctx, `SELECT key FROM meta WHERE key LIKE ?`, "remote_token:"+companionID+":%")
-	if err == nil {
-		var keys []string
-		for rows.Next() {
-			var key string
-			if rows.Scan(&key) == nil {
-				keys = append(keys, key)
-			}
-		}
-		rows.Close()
-		for _, key := range keys {
-			m.deleteMeta(ctx, key)
-		}
+	if _, err := m.b.db.ExecContext(ctx, `DELETE FROM meta WHERE key=? OR key LIKE ?`,
+		remoteRouteKey(companionID), "remote_token:"+companionID+":%"); err != nil {
+		return problem(502, "Cannot delete saved remote route")
 	}
 	return nil
 }
@@ -418,21 +482,33 @@ func (m *remoteManager) saveRoute(ctx context.Context, route *remoteRoute) error
 	return nil
 }
 
-func (m *remoteManager) saveToken(ctx context.Context, companionID, contact, hash string) error {
+type remoteTokenMeta struct {
+	Hash string `json:"hash"`
+	Name string `json:"name,omitempty"`
+}
+
+func (m *remoteManager) saveToken(ctx context.Context, companionID, contact, hash, name string) error {
 	if m.b == nil || m.b.db == nil {
 		return nil
 	}
-	if err := m.b.db.setMeta(ctx, remoteTokenKey(companionID, contact), hash); err != nil {
+	raw, err := json.Marshal(remoteTokenMeta{Hash: hash, Name: name})
+	if err != nil {
+		return problem(502, "Cannot save remote token")
+	}
+	if err := m.b.db.setMeta(ctx, remoteTokenKey(companionID, contact), string(raw)); err != nil {
 		return problem(502, "Cannot save remote token")
 	}
 	return nil
 }
 
-func (m *remoteManager) deleteMeta(ctx context.Context, key string) {
+// deleteMeta returns the delete error so a revocation that could not be made
+// durable fails loudly instead of letting the token reappear after restart.
+func (m *remoteManager) deleteMeta(ctx context.Context, key string) error {
 	if m == nil || m.b == nil || m.b.db == nil {
-		return
+		return nil
 	}
-	_, _ = m.b.db.ExecContext(ctx, `DELETE FROM meta WHERE key=?`, key)
+	_, err := m.b.db.ExecContext(ctx, `DELETE FROM meta WHERE key=?`, key)
+	return err
 }
 
 func (m *remoteManager) authorize(r *http.Request) (remoteToken, string, bool) {
@@ -560,13 +636,11 @@ func (b *larkServer) serveRemotePage(w http.ResponseWriter, r *http.Request, tok
 	page := strings.ReplaceAll(string(index), "{{TOKEN}}", query)
 	page = strings.ReplaceAll(page, "{{TOKEN_HTML}}", htmlEscape(raw))
 	page = strings.ReplaceAll(page, "{{NAME}}", htmlEscape(remoteDisplayName(b.companionFor(tok.CompanionID))))
-	if secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"); secure {
-		http.SetCookie(w, &http.Cookie{Name: remoteCookieName, Value: raw, Path: remotePath,
-			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
-	} else {
-		http.SetCookie(w, &http.Cookie{Name: remoteCookieName, Value: raw, Path: remotePath,
-			HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	}
+	// The scoped page is normally reached through the opentunnel HTTPS route;
+	// always mark the cookie Secure so it is never sent over cleartext from a
+	// LAN client. Loopback HTTP is local to this host.
+	http.SetCookie(w, &http.Cookie{Name: remoteCookieName, Value: raw, Path: remotePath,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
@@ -878,7 +952,7 @@ func (b *larkServer) serveRemoteAPI(w http.ResponseWriter, r *http.Request, path
 			sendError(w, problem(404, "Not found"))
 		}
 	case path == remotePath+"/api/history" && r.Method == http.MethodGet:
-		page, err := b.remoteHistory(r.Context(), tok.CompanionID, r.URL.Query())
+		page, err := b.remoteHistory(r.Context(), tok, r.URL.Query())
 		sendResult(w, page, err)
 	case path == remotePath+"/api/say" && r.Method == http.MethodPost:
 		value, err := b.remoteSay(r, tok.CompanionID)
@@ -901,7 +975,7 @@ func (b *larkServer) serveRemoteAPI(w http.ResponseWriter, r *http.Request, path
 	case path == remotePath+"/api/revoke" && r.Method == http.MethodPost:
 		_, err := b.remote.revokeContact(r.Context(), tok.CompanionID, tok.Contact)
 		if err == nil {
-			http.SetCookie(w, &http.Cookie{Name: remoteCookieName, Value: "", Path: remotePath, MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+			http.SetCookie(w, &http.Cookie{Name: remoteCookieName, Value: "", Path: remotePath, MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 			sendJSON(w, 200, object{"ok": true, "message": "Remote controls off."})
 			return
 		}
@@ -1050,10 +1124,11 @@ func decodeHistoryCursor(raw string) (*historyCursor, error) {
 	return &historyCursor{TS: ts, ID: id}, nil
 }
 
-func (b *larkServer) remoteHistory(ctx context.Context, companionID string, query url.Values) (object, error) {
+func (b *larkServer) remoteHistory(ctx context.Context, tok remoteToken, query url.Values) (object, error) {
 	if b.db == nil {
 		return nil, problem(503, "History unavailable")
 	}
+	companionID := tok.CompanionID
 	if b.history != nil {
 		b.history.flush(companionID)
 	}
@@ -1067,7 +1142,7 @@ func (b *larkServer) remoteHistory(ctx context.Context, companionID string, quer
 	}
 	channel := strings.TrimSpace(query.Get("channel"))
 	switch channel {
-	case "", "all", "in_person", "deltachat", "intercom":
+	case "", "all", "in_person", "deltachat":
 	default:
 		return nil, problem(400, "Unknown history filter.")
 	}
@@ -1091,15 +1166,19 @@ func (b *larkServer) remoteHistory(ctx context.Context, companionID string, quer
 		cursor = &historyCursor{TS: ts, ID: query.Get("before_id")}
 	}
 
+	// A scoped link shows in-person notes and only the Delta Chat messages
+	// this contact sent. Companion replies and intercom traffic stay private.
 	querySQL := `SELECT id,role,sender,text,channel,ts_ms FROM messages WHERE companion_id=?`
 	args := []any{strings.ToLower(companionID)}
 	switch channel {
 	case "in_person":
 		querySQL += ` AND channel='in_person'`
 	case "deltachat":
-		querySQL += ` AND channel='deltachat'`
-	case "intercom":
-		querySQL += ` AND channel='intercom'`
+		querySQL += ` AND channel='deltachat' AND role='user' AND LOWER(sender) IN (?,?)`
+		args = append(args, tok.Contact, strings.ToLower(strings.TrimSpace(tok.ContactName)))
+	default:
+		querySQL += ` AND (channel='in_person' OR (channel='deltachat' AND role='user' AND LOWER(sender) IN (?,?)))`
+		args = append(args, tok.Contact, strings.ToLower(strings.TrimSpace(tok.ContactName)))
 	}
 	if q != "" {
 		pat := "%" + escapeLike(strings.ToLower(q)) + "%"

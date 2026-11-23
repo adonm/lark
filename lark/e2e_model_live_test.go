@@ -94,7 +94,7 @@ func startE2EModel(t *testing.T, s *e2eSuite, home string) *e2eModel {
 		if err != nil {
 			t.Fatal("cannot configure the dedicated OpenCode upstream")
 		}
-		m.alias = "lark_e2e_" + randomHex(5)
+		m.alias = "lark_e2e_" + testHex(t, 5)
 		m.permission = []ocPermission{{"*", "*", "deny"}, {"execute", "*", "allow"},
 			{m.alias + "_*", "*", "allow"}}
 		q := e2eLocation(s.workspace)
@@ -496,7 +496,7 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		}
 		id := str(in["id"])
 		if id == "" {
-			id = "ses-e2e-" + randomHex(6)
+			id = "ses-e2e-" + mustHex(6)
 		}
 		in["id"] = id
 		m.mu.Lock()

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"image/png"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -46,7 +47,7 @@ func newRemoteHarness(t *testing.T) *remoteHarness {
 		t.Fatal(err)
 	}
 	h := &remoteHarness{b: b, base: base, comp: c}
-	link, err := b.remote.issue(t.Context(), c.ID, "mum@example.org")
+	link, err := b.remote.issue(t.Context(), c.ID, "mum@example.org", "Mum")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +173,7 @@ func TestRemoteRESTCommandsAndHistoryCursor(t *testing.T) {
 		{"m2", "companion", "Greg", "Clear skies today.", "voice"},
 		{"m3", "user", "Mum", "Dinner at seven.", "deltachat"},
 		{"m4", "intercom", "Milo", "Tea is ready.", "intercom"},
+		{"m5", "user", "Dad", "Borrow the car?", "deltachat"},
 	} {
 		if _, err := b.db.ExecContext(t.Context(),
 			`INSERT INTO messages (id,companion_id,role,sender,text,source,channel,card_title,ts_ms) VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -232,6 +234,17 @@ func TestRemoteRESTCommandsAndHistoryCursor(t *testing.T) {
 	if items2, _ := page2["items"].([]any); len(items2) == 0 {
 		t.Fatalf("cursor returned no second page: %+v", page2)
 	}
+	// The scoped link shows only its own contact's Delta Chat traffic and
+	// never intercom or another contact's messages.
+	own := remoteJSON(t, http.MethodGet, h.base, h.token, "/remote/api/history?channel=deltachat&limit=20", nil, 200)
+	ownItems, _ := own["items"].([]any)
+	if len(ownItems) != 1 {
+		t.Fatalf("own-contact Delta Chat history = %+v; want only Mum", own)
+	}
+	if row, _ := ownItems[0].(object); row["text"] != "Dinner at seven." {
+		t.Fatalf("wrong Delta Chat row exposed: %+v", row)
+	}
+	remoteJSON(t, http.MethodGet, h.base, h.token, "/remote/api/history?channel=intercom", nil, 400)
 	search := remoteJSON(t, http.MethodGet, h.base, h.token, "/remote/api/history?channel=in_person&q=weather", nil, 200)
 	searchItems, _ := search["items"].([]any)
 	if len(searchItems) != 1 {
@@ -365,6 +378,41 @@ func TestRemoteTunnelCommandIssueRotateAndRevoke(t *testing.T) {
 	}
 }
 
+// A failed route add must leave the previously issued link working and must
+// not leave a half-installed route behind.
+func TestRemoteFailedRouteAddKeepsOldToken(t *testing.T) {
+	t.Parallel()
+	h := newRemoteHarness(t)
+	b := h.b
+	m := b.remote
+	m.mu.Lock()
+	route := m.routes[h.comp.ID]
+	scope := m.live[h.comp.ID]
+	delete(m.live, h.comp.ID)
+	m.mu.Unlock()
+	scope.close()
+
+	// Occupy the saved port so restoring the listener fails.
+	block, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(route.LocalPort))
+	if err != nil {
+		t.Skipf("cannot occupy saved port: %v", err)
+	}
+	defer block.Close()
+
+	oldMeta, err := b.db.getMeta(t.Context(), remoteTokenKey(h.comp.ID, "mum@example.org"))
+	if err != nil || oldMeta == "" {
+		t.Fatalf("token meta missing: %q %v", oldMeta, err)
+	}
+	if _, err := m.issue(t.Context(), h.comp.ID, "mum@example.org", "Mum"); err == nil {
+		t.Fatal("issue succeeded with the saved port occupied")
+	}
+	remoteJSON(t, http.MethodGet, h.base, h.token, "/remote/api/history", nil, 200)
+	after, err := b.db.getMeta(t.Context(), remoteTokenKey(h.comp.ID, "mum@example.org"))
+	if err != nil || after != oldMeta {
+		t.Fatalf("failed issue rewrote token meta: %q -> %q (%v)", oldMeta, after, err)
+	}
+}
+
 func TestRemoteTunnelRestoresSavedRouteAndToken(t *testing.T) {
 	serial(t)
 	b, _ := wsHarness(t, nil)
@@ -375,7 +423,7 @@ func TestRemoteTunnelRestoresSavedRouteAndToken(t *testing.T) {
 	b.remote = newRemoteManager(b, "fake-opentunnel")
 	var calls []string
 	b.remote.runner = fakeTunnelRunner(&calls)
-	link, err := b.remote.issue(t.Context(), "greg", "mum@example.org")
+	link, err := b.remote.issue(t.Context(), "greg", "mum@example.org", "Mum")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +469,7 @@ func TestRemoteMissingOpentunnelAndCompanionDelete(t *testing.T) {
 	b.remote = newRemoteManager(b, "fake-opentunnel")
 	var calls []string
 	b.remote.runner = fakeTunnelRunner(&calls)
-	if _, err := b.remote.issue(t.Context(), "greg", "mum@example.org"); err != nil {
+	if _, err := b.remote.issue(t.Context(), "greg", "mum@example.org", "Mum"); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.remote.routes) != 1 {

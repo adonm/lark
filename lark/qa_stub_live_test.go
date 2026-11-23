@@ -98,9 +98,9 @@ func startStubE2E(t *testing.T) *stubSuite {
 	client.Timeout = 60 * time.Second
 	t.Cleanup(client.CloseIdleConnections)
 	s := &stubSuite{e2eSuite: &e2eSuite{
-		liveClient: liveClient{client: client, token: randomHex(32)},
+		liveClient: liveClient{client: client, token: testHex(t, 32)},
 		workspace:  filepath.Join(root, "workspace"),
-		prefix:     "STUB-" + randomHex(4),
+		prefix:     "STUB-" + testHex(t, 4),
 	}, bin: bin}
 	s.model = startE2EModel(t, s.e2eSuite, root)
 

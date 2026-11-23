@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"log"
@@ -100,7 +101,9 @@ func channelForSource(source string) string {
 }
 
 func newChat(role, sender, text, source string) chatEntry {
-	return chatEntry{ID: "bridge-" + randomHex(12), Role: role, Sender: sender, Text: text,
+	// Message IDs only need to be unique and unguessable; rand.Text panics
+	// instead of degrading if the system entropy source fails.
+	return chatEntry{ID: "bridge-" + rand.Text(), Role: role, Sender: sender, Text: text,
 		Source: source, Channel: channelForSource(source), Timestamp: time.Now().In(time.Local)}
 }
 

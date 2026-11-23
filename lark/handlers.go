@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -65,10 +66,27 @@ func (b *larkServer) location() *time.Location {
 	return time.Local
 }
 
-func randomHex(n int) string {
+// randomHex mints an opaque identifier. Callers must fail the operation when
+// the system entropy source fails; there is no predictable fallback.
+func randomHex(n int) (string, error) {
+	return randomHexFrom(rand.Reader, n)
+}
+
+func randomHexFrom(r io.Reader, n int) (string, error) {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", fmt.Errorf("secure random: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// loopbackRequest reports whether the connection came from this host. The
+// HTTP listener is LAN-reachable for firmware OTA, so admin routes must check
+// the peer address as well as the token.
+func loopbackRequest(r *http.Request) bool {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func sendBytes(w http.ResponseWriter, status int, kind string, data []byte) {
@@ -103,13 +121,15 @@ func (b *larkServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 	w.Header().Set("Cache-Control", "no-store")
 	if path == "/mcp" {
+		if !loopbackRequest(r) {
+			sendError(w, problem(404, "Not found"))
+			return
+		}
 		b.serveMCP(w, r)
 		return
 	}
 	if strings.HasPrefix(path, "/debug/pprof") {
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
+		if !loopbackRequest(r) {
 			sendError(w, problem(404, "Not found"))
 			return
 		}

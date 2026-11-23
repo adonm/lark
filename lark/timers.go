@@ -157,7 +157,11 @@ func (m *timerManager) restore(now time.Time) error {
 }
 
 func parseTimer(args object, now time.Time) (savedTimer, error) {
-	t := savedTimer{ID: randomHex(12), CompanionID: strings.ToLower(str(args["companion_id"])), CreatedAt: now.In(now.Location()), Label: "Timer", Chime: "celebrate"}
+	id, err := randomHex(12)
+	if err != nil {
+		return savedTimer{}, problem(500, "Cannot create a timer identifier")
+	}
+	t := savedTimer{ID: id, CompanionID: strings.ToLower(str(args["companion_id"])), CreatedAt: now.In(now.Location()), Label: "Timer", Chime: "celebrate"}
 	return editTimer(t, args, now, false)
 }
 

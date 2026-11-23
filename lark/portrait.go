@@ -424,7 +424,10 @@ func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID
 	if err := os.MkdirAll(p.dir, 0o700); err != nil {
 		return "", problem(502, "Cannot create portrait storage")
 	}
-	id := randomHex(16)
+	id, err := randomHex(16)
+	if err != nil {
+		return "", problem(500, "Cannot create a portrait identifier")
+	}
 	dir := filepath.Join(p.dir, id)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", problem(502, "Cannot create portrait")

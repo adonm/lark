@@ -116,7 +116,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := newTimerManager(b)
-	ids := [3]string{randomHex(12), randomHex(12), randomHex(12)}
+	ids := [3]string{testHex(t, 12), testHex(t, 12), testHex(t, 12)}
 	for i, delay := range []time.Duration{time.Minute, time.Hour, 2 * time.Hour} {
 		if err := first.set(t.Context(), savedTimer{ID: ids[i], CompanionID: device, Label: fmt.Sprint(i), Chime: "tap",
 			CreatedAt: now.Add(-time.Hour), FireAt: now.Add(delay)}); err != nil {
@@ -180,7 +180,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 	board := testConnectWS(t, base, "unit", false)
 	board.helloV2(t, "vocat-0003", "Cake")
 	now := time.Now()
-	timer := savedTimer{ID: randomHex(12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour), Label: "Retry", Chime: "celebrate"}
+	timer := savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour), Label: "Retry", Chime: "celebrate"}
 	if err := b.timers.set(t.Context(), timer); err != nil {
 		t.Fatal(err)
 	}
@@ -290,17 +290,17 @@ func TestScopedTimerIsolationAndCaps(t *testing.T) {
 	for i := range 31 {
 		id := fmt.Sprintf("companion-%d", i/8)
 		now := time.Now()
-		if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err != nil {
+		if err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err != nil {
 			t.Fatal(i, err)
 		}
 		if i == 7 {
-			if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
+			if err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
 				t.Fatal("allowed ninth timer")
 			}
 		}
 	}
 	now := time.Now()
-	if err := b.timers.set(ctx, savedTimer{ID: randomHex(12), CompanionID: owner, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
+	if err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: owner, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
 		t.Fatal("allowed 33rd timer")
 	}
 }
