@@ -206,8 +206,11 @@ func TestVoiceFixturesEndpointPolicy(t *testing.T) {
 						t.Fatalf("monologue committed after %v of continuous speech", run.commitAt-run.firstVoiced)
 					}
 					if want := time.Duration(f.Expected.CommitAfterLastVoicedMS) * time.Millisecond; want > 0 {
-						if run.commitAfter != want {
-							t.Fatalf("commit %v after last voiced, want %v", run.commitAfter, want)
+						// The policy is checked on 20 ms frame boundaries, so the
+						// measured commit sits in a small range rather than on an
+						// exact constant.
+						if run.commitAfter < want || run.commitAfter > want+endpointFrame {
+							t.Fatalf("commit %v after last voiced, want %v..%v", run.commitAfter, want, want+endpointFrame)
 						}
 					}
 				})
