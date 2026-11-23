@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "audio_logic.h"
 #include "vad.h"
 
 #include <math.h>
@@ -15,9 +16,8 @@
 #include "nvs.h"
 
 enum {
-    CHANNELS = 1, FRAMES = AUDIO_10MS, MAX_FRAMES = AUDIO_RATE * AUDIO_MAX_SECONDS,
-    LISTEN_MAX_FRAMES = AUDIO_RATE * AUDIO_LISTEN_MAX_SECONDS,
-    FADE = AUDIO_RATE / 200, DMA_TAIL = 6 * 240, CHIME_FRAMES = AUDIO_RATE / 10,
+    CHANNELS = 1, FRAMES = AUDIO_10MS,
+    FADE = AUDIO_FADE_SAMPLES, DMA_TAIL = AUDIO_DMA_TAIL_FRAMES, CHIME_FRAMES = AUDIO_RATE / 10,
 };
 
 static const char *TAG = "audio";
@@ -191,10 +191,10 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
     // Drain only already-buffered stale RX DMA frames (< 3 ms); keep the first fresh frame.
     bool have_first = false;
     if (!media_debug_mic_active()) {
-        for (int i = 0; i < 12; ++i) {
+        for (int i = 0; i < AUDIO_STALE_READ_TRIES; ++i) {
             int64_t t0 = esp_timer_get_time();
             ESP_RETURN_ON_ERROR(audio_read_10ms(chunk_buf), TAG, "Prepare recording");
-            if (esp_timer_get_time() - t0 >= 3000) {
+            if (audio_stale_read_is_fresh(esp_timer_get_time() - t0)) {
                 have_first = true;
                 break;
             }
@@ -202,7 +202,7 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
     }
 
     size_t samples = 0, pending = 0;
-    size_t max_frames = listen ? LISTEN_MAX_FRAMES : MAX_FRAMES;
+    size_t max_frames = audio_record_frame_limit(listen);
     vad_t vad = { 0 };
     while (samples < max_frames && !stop_requested()) {
         int16_t *dst = chunk_buf + pending;
@@ -281,15 +281,9 @@ esp_err_t audio_stream_write(const int16_t *pcm, size_t num_samples)
             continue;
         }
         for (size_t i = 0; i < count; ++i, ++pos, ++played_samples) {
-            int32_t sample = pcm[pos];
-            if (played_samples < FADE) {
-                sample = sample * (int32_t)played_samples / FADE;
-            }
-            if (chime_pos < CHIME_FRAMES) {
-                sample += chirp(chime_pos++);
-                sample = sample > INT16_MAX ? INT16_MAX : sample < INT16_MIN ? INT16_MIN : sample;
-            }
-            last_sample = mono[i] = (int16_t)sample;
+            bool chime = chime_pos < CHIME_FRAMES;
+            int16_t overlay = chime ? chirp(chime_pos++) : 0;
+            last_sample = mono[i] = audio_mix_sample(pcm[pos], played_samples, chime, overlay);
         }
         ESP_RETURN_ON_ERROR(write_speaker(mono, count), TAG, "Write speech PCM");
     }
@@ -299,8 +293,9 @@ esp_err_t audio_stream_write(const int16_t *pcm, size_t num_samples)
 esp_err_t audio_fade_out(int16_t last, bool (*stop_requested)(void))
 {
     bool stopped = stop_requested && stop_requested();
+    audio_fade_plan_t plan = audio_fade_plan(stopped, last);
     int16_t mono[FRAMES] = { 0 };
-    if (last && !stopped) {
+    if (plan.fade) {
         for (int i = 0; i < FADE; ++i) {
             mono[i] = last * (FADE - 1 - i) / FADE;
         }
@@ -310,7 +305,7 @@ esp_err_t audio_fade_out(int16_t last, bool (*stop_requested)(void))
     // The BSP queues up to 90 ms of TX. An abort skips the fade but must still
     // write over that queue, otherwise the next tone or reply starts behind
     // stale speech; this bounded tail is what makes stop prompt.
-    for (int i = 0; i < DMA_TAIL; i += FRAMES) {
+    for (size_t i = 0; i < plan.tail_frames; i += FRAMES) {
         ESP_RETURN_ON_ERROR(audio_write_10ms(mono), TAG, "Drain playback");
     }
     return ESP_OK;

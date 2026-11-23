@@ -1,4 +1,5 @@
 #include "display.h"
+#include "display_logic.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -22,7 +23,7 @@
 #include "net_client.h"
 #include "proto.h"
 
-enum { STRIP_ROWS = 24, STRIP_BYTES = STRIP_ROWS * FRAME_WIDTH * sizeof(uint16_t), BRIGHT = 85, DIM = 12 };
+enum { STRIP_ROWS = DISPLAY_STRIP_ROWS, STRIP_BYTES = STRIP_ROWS * FRAME_WIDTH * sizeof(uint16_t), BRIGHT = 85, DIM = 12 };
 _Static_assert(BSP_LCD_H_RES == FRAME_WIDTH && BSP_LCD_V_RES == FRAME_HEIGHT && BSP_LCD_BIGENDIAN,
                "Framebuffer must match the LCD geometry and byte order");
 static const char *TAG = "display";
@@ -68,8 +69,9 @@ static esp_err_t blit(frame_bounds_t area)
     int cur = 0;
     bool in_flight = false;
     esp_err_t err = ESP_OK;
-    for (int y = area.y0; y < area.y1; y += STRIP_ROWS) {
-        int rows = area.y1 - y < STRIP_ROWS ? area.y1 - y : STRIP_ROWS;
+    for (int y = area.y0; y < area.y1; ) {
+        int rows = display_strip_rows(area, y, STRIP_ROWS);
+        if (!rows) break;
         // Copy the next strip into strip[cur] while strip[cur ^ 1] transfers over SPI DMA.
         if ((err = copy_strip(strip[cur], area, y, rows)) != ESP_OK) break;
         if (in_flight) {
@@ -83,6 +85,7 @@ static esp_err_t blit(frame_bounds_t area)
         }
         in_flight = true;
         cur ^= 1;
+        y += rows;
     }
     if (in_flight) {
         xSemaphoreTake(drawn, portMAX_DELAY);

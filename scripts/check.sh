@@ -45,6 +45,12 @@ printf 'PASS host VAD tests\n'
 "${host_cc[@]}" firmware/tests/wake_gate_test.c -o "$host_tests/wake_gate"
 "$host_tests/wake_gate"
 
+"${host_cc[@]}" firmware/tests/net_logic_test.c firmware/main/net_logic.c -o "$host_tests/net_logic"
+"$host_tests/net_logic"
+
+"${host_cc[@]}" firmware/tests/audio_logic_test.c firmware/main/audio_logic.c -o "$host_tests/audio_logic"
+"$host_tests/audio_logic"
+
 "${host_cc[@]}" firmware/tests/debug_parse_test.c -o "$host_tests/debug_parse"
 "$host_tests/debug_parse"
 
@@ -56,6 +62,8 @@ for board in vocat box3; do
     "$host_tests/frame"
     "${host_cc[@]}" "${flags[@]}" firmware/tests/gfx_test.c firmware/main/gfx.c -o "$host_tests/gfx"
     "$host_tests/gfx"
+    "${host_cc[@]}" "${flags[@]}" firmware/tests/display_logic_test.c firmware/main/display_logic.c -o "$host_tests/display_logic"
+    "$host_tests/display_logic"
 done
 
 if [[ -n $(git ls-files -- ':(glob)**/sdkconfig.local' ':(glob)**/lark.env') ]]; then
