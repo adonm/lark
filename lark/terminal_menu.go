@@ -64,8 +64,11 @@ func (h *terminalHub) handleProto(c *terminalClient, msgType uint8, payload []by
 		if !ok {
 			return
 		}
-		d.recording.receivedEnd()
-		if d.recording.active() {
+		// A late rec_end from the previous recording can arrive right after a
+		// new rec_start. Only an open/stopping capture owns this end; dropping
+		// it here prevents a one-second capture from committing empty.
+		if d.recording.active() && d.recording.phase != captureRequested {
+			d.recording.receivedEnd()
 			h.endRecording(d, target, cancelled, now)
 		}
 	case msgTTSAck:

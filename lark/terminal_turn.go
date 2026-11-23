@@ -88,6 +88,7 @@ func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bo
 	d.recording.listen = true
 	d.recording.listenSpan = span
 	d.recording.listenUntil = now.Add(span)
+	d.recording.nameGate = true
 	d.recSession++
 	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)
@@ -136,6 +137,7 @@ func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) 
 	d.recording.listen = true
 	d.recording.listenSpan = span
 	d.recording.listenUntil = now.Add(span)
+	d.recording.nameGate = true
 	d.recSession++
 	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)

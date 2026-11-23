@@ -136,26 +136,30 @@ type energyGate struct {
 	ready bool
 }
 
-func (g *energyGate) observe(rms float64, vad bool) {
+func (g *energyGate) observe(rms float64, vad, calibrate bool) {
 	if !vad {
-		// Only non-speech frames may teach the floor; a window that opens
-		// mid-sentence must not calibrate itself to the speech level.
-		g.buf[g.next] = rms
-		g.next = (g.next + 1) % len(g.buf)
-		if g.n < len(g.buf) {
-			g.n++
+		if calibrate {
+			// Only a stretch of non-speech may teach the floor. A window that
+			// opens mid-sentence keeps the conservative zero floor until the
+			// room is actually quiet.
+			g.buf[g.next] = rms
+			g.next = (g.next + 1) % len(g.buf)
+			if g.n < len(g.buf) {
+				g.n++
+			}
+			if !g.ready && g.n == len(g.buf) {
+				ordered := slices.Clone(g.buf[:])
+				slices.Sort(ordered)
+				g.floor = ordered[len(ordered)/10]
+				g.ready = true
+			}
 		}
-		if !g.ready && g.n == len(g.buf) {
-			ordered := slices.Clone(g.buf[:])
-			slices.Sort(ordered)
-			g.floor = ordered[len(ordered)/10]
-			g.ready = true
+		if !g.ready {
+			return
 		}
-	}
-	if !vad {
 		// Fast downward tracking keeps a new quiet room from being mistaken
 		// for speech; slow upward tracking follows drifting noise.
-		if !g.ready || rms < g.floor {
+		if rms < g.floor {
 			g.floor = rms
 		} else {
 			g.floor += (rms - g.floor) * 0.002
@@ -186,7 +190,9 @@ func frameRMS(pcm []byte) float64 {
 
 func (p *endpointPolicy) observeEnergy(at time.Duration, vadSpeech bool, rms float64) {
 	if !vadSpeech {
-		p.gate.observe(rms, false)
+		// Learn the floor only before the first word or after a full second of
+		// quiet, so a VAD miss on loud speech cannot teach it speech level.
+		p.gate.observe(rms, false, !p.voiced || at-p.lastVoicedAt >= time.Second)
 		p.inVoice = false
 		return
 	}
@@ -194,11 +200,11 @@ func (p *endpointPolicy) observeEnergy(at time.Duration, vadSpeech bool, rms flo
 	if p.voiced && rms < p.speechRMS*speechEnergyRatio {
 		// Let the floor learn noise that the VAD keeps calling speech; the
 		// ratio also closes the gate on a loud room after a loud word.
-		p.gate.observe(rms, false)
+		p.gate.observe(rms, false, false)
 		p.inVoice = false
 		return
 	}
-	p.gate.observe(rms, true)
+	p.gate.observe(rms, true, false)
 	// Enter above floor+margin, then keep a lower sustain threshold so brief
 	// dips inside a word or a quiet breath do not end the segment.
 	limit := p.gate.stay()

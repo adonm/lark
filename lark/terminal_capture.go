@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"log"
+	"time"
+)
 
 type capturePhase uint8
 
@@ -26,6 +29,7 @@ type deviceCapture struct {
 	listenUntil time.Time
 	listenSpan  time.Duration
 	debug       bool // Capture raw PCM for the microphone audit, never a turn.
+	nameGate    bool // Auto-opened listening window: require the name after 10 s.
 }
 
 func (c *deviceCapture) active() bool { return c.phase != captureIdle }
@@ -39,6 +43,7 @@ func (c *deviceCapture) start(now time.Time, target string, request bool) {
 		c.phase = captureRequested
 	}
 	c.started, c.target, c.pcm, c.ignoreStart = now, target, nil, false
+	c.nameGate = false
 }
 
 func (c *deviceCapture) acceptsStart() bool { return !c.open() && !c.ignoreStart }
@@ -77,7 +82,10 @@ func (c *deviceCapture) clear() {
 		if e.deadline != nil {
 			e.deadline.Stop()
 		}
-		if e.cancel != nil {
+		if e.cancel != nil && !e.committing {
+			if debugEndpoint {
+				log.Printf("capture cleared/cancelled companion=%s phase=%d", e.companionID, c.phase)
+			}
 			e.cancel()
 		}
 		if e.listening != nil {
@@ -89,5 +97,5 @@ func (c *deviceCapture) clear() {
 		c.stopTimer = nil
 	}
 	c.phase, c.started, c.target, c.pcm = captureIdle, time.Time{}, "", nil
-	c.listen, c.listenUntil, c.listenSpan, c.debug = false, time.Time{}, 0, false
+	c.listen, c.listenUntil, c.listenSpan, c.debug, c.nameGate = false, time.Time{}, 0, false, false
 }

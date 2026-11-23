@@ -39,6 +39,8 @@ type endpointCapture struct {
 	commitAt    time.Time   // Hub writes before closing stop.
 	listen      bool
 	debug       bool // Raw capture for lark capture; no VAD decisions or turn.
+	nameGate    bool // Auto-opened listening window: require the name after 10 s.
+	committing  bool // finishEndpoint closed stop; let the worker deliver its result.
 	limitBytes  int  // PCM cap for this capture's full window
 	limitSpan   time.Duration
 	started     time.Time // Capture start; a read-out after this is not its answer.
@@ -98,6 +100,7 @@ type captureResult struct {
 	reply            *turnReply
 	spec             *specTurn
 	speech, audio    time.Duration
+	nameGate         bool
 }
 
 type pauseTranscript struct {
@@ -142,6 +145,7 @@ func (h *terminalHub) startEndpoint(d *terminalSession) {
 		listening:   make(chan struct{}),
 		listen:      d.recording.listen,
 		debug:       d.recording.debug,
+		nameGate:    d.recording.nameGate,
 		limitSpan:   limit,
 		limitBytes:  utteranceBytes(limit),
 		started:     time.Now(),
@@ -179,6 +183,9 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		}
 	}()
 	vad := h.b.endpoint.newVAD()
+	if debugEndpoint {
+		log.Printf("capture worker start term=%s ctxErr=%v vad=%v", d.id, c.ctx.Err(), vad != nil)
+	}
 	if vad != nil {
 		defer vad.close()
 	}
@@ -305,6 +312,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt),
 					listen: c.listen, reply: c.reply,
 					speech: u.policy.speechSpan(), audio: pcmDuration(len(u.pcm)),
+					nameGate: c.nameGate,
 				}
 				if len(result.pcm) != 0 && (!c.listen || u.policy.voiced) && c.ctx.Err() == nil {
 					switch {
@@ -342,6 +350,9 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 						spec = nil
 					}
 				}
+				if debugEndpoint {
+					log.Printf("capture worker commit term=%s bytes=%d ctxErr=%v", d.id, len(result.pcm), c.ctx.Err())
+				}
 				c.result <- result
 				return
 			}
@@ -350,6 +361,9 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	for c.ctx.Err() == nil {
 		select {
 		case <-c.ctx.Done():
+			if debugEndpoint {
+				log.Printf("capture worker ctx_cancelled term=%s", d.id)
+			}
 			return
 		case result := <-probe:
 			if debugEndpoint {
@@ -513,6 +527,9 @@ func (h *terminalHub) finishEndpoint(d *terminalSession, now time.Time) {
 	if c.commitAt.IsZero() {
 		c.commitAt = now
 	}
+	// The worker owns the final decode. Mark the commit before closing stop so
+	// clear() does not cancel the context and race it out of sending a result.
+	c.committing = true
 	if c.stop != nil {
 		close(c.stop)
 	} else {
@@ -583,7 +600,7 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 				TextLen: len(result.text), Words: words,
 			})
 		}
-		if result.listen && h.nameRequired(d, time.Now()) {
+		if result.nameGate && h.nameRequired(d, time.Now()) {
 			rest, named := splitName(result.text, d.companion.Name)
 			if !named {
 				// Background chatter after the follow-up grace period is

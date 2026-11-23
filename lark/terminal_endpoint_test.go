@@ -567,3 +567,21 @@ func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
 		}
 	}
 }
+
+func TestCommittedEndpointKeepsItsResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &endpointCapture{ctx: ctx, cancel: cancel, committing: true}
+	d := &deviceCapture{endpoint: c}
+	d.clear()
+	if ctx.Err() != nil {
+		t.Fatal("clear cancelled a capture that was already committing its result")
+	}
+	// A cancelled capture must still stop its worker.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	c2 := &endpointCapture{ctx: ctx2, cancel: cancel2}
+	d2 := &deviceCapture{endpoint: c2}
+	d2.clear()
+	if ctx2.Err() == nil {
+		t.Fatal("cancelled capture left its worker running")
+	}
+}
