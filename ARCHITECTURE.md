@@ -12,6 +12,13 @@ Kokoro TTS, Delta Chat bridge, timers, library planner, and remote-control
 tunnels. `lark serve` needs a Vulkan GPU for STT; Kokoro and Silero run in
 process through sherpa-onnx and the libraries in `$ORIGIN/lib`.
 
+Startup binds HTTP `:8765` and the device listener `:8766` first, then loads
+Parakeet, Silero, Smart Turn and Kokoro in the background. `/health` reports
+each model as `loading`, `ready` or `error`, and `lark status` prints the same
+states. A turn that needs a model still loading waits for it (bounded by the
+turn deadline) instead of failing, so the first turn after a restart is safe.
+`lark deploy` builds, installs atomically, restarts and waits for readiness.
+
 **Terminal protocol — TCP and UDP `:8766`.** Boards connect to the native
 protocol (not HTTP): binary frames in RGB565/RLE565/LZ4/JPEG, touch events,
 control messages, and 16 kHz mono s16le PCM. The TCP client carries control and

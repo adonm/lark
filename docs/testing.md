@@ -14,12 +14,13 @@ split into three shards.
 | shell scripts | `bash -n scripts/*.sh && shellcheck -x scripts/*.sh` |
 | OpenCode config (`config/opencode/`) | `node --test config/opencode/*.test.mjs` |
 | firmware host logic (`firmware/main/*.c`) | `./scripts/check.sh --fast` (all host C tests, ~1 s) |
-| firmware image | `./scripts/build.sh vocat` or `./scripts/build.sh box3` |
+| firmware image | `./scripts/build.sh vocat` or `./scripts/build.sh box3` (incremental; `--force`, `--watch`) |
 | remote page (`lark/web/remote/`) | `./scripts/check.sh --remote-ui` (DOM suite, ~3 s) |
 | QA sim scenarios (`lark/qa/*.sim`) | `./scripts/check.sh --qa` (~12 s) |
 | QA stub matrix (no models) | `./scripts/check.sh --e2e-stub` (~9 s) |
 | board QA | `./scripts/check.sh --qa-hw` (~19 s) |
 | whole product, virtual boards | `./scripts/check.sh --live` (≥2 min, real STT/TTS) |
+| server deploy | `~/.local/share/lark/lark deploy` (builds, restarts, waits for models and terminals) |
 | deployed service and OTA | `./scripts/check.sh --deployed` (read-only) |
 | before push | `./scripts/check.sh` (full gate) |
 

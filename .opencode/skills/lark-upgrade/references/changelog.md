@@ -4,6 +4,36 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-23 — Background model loading, `lark deploy`, fast firmware builds
+
+### Affects
+- Server / scripts / firmware build workflow
+
+### Breaking Changes
+- None. `/health` gains `models` (per-model `loading|ready|error`) and
+  `models_ready`; the existing `stt`, `tts` and `smart_turn` booleans are
+  unchanged and become true once their model is ready.
+- `scripts/build.sh` skips a board whose sources and `sdkconfig*` are unchanged
+  since its last successful build; use `--force` to rebuild.
+
+### Upgrade Steps
+1. Back up `lark.db` and `lark.env`.
+2. Install the new server with `./scripts/setup-host.sh --gpu-index 0` once.
+   Later server updates can use `~/.local/share/lark/lark deploy` from the
+   checkout.
+3. No firmware or database step is needed.
+
+### Verification
+- Immediately after a restart, `lark status` prints `Models:` with each model
+  `loading` and then `ready`; `/health` has `models` and `models_ready`.
+- A turn sent while models are still loading waits for them instead of failing.
+- `lark deploy` prints build, install, restart, serving, models and terminals
+  timings and exits 0 with every previously connected terminal back online.
+- `./scripts/build.sh vocat` twice: the second prints `up to date` in under a
+  second. `--force` rebuilds; `--watch` rebuilds when sources change.
+
+---
+
 ## 2026-11-23 — Remote microphone capture
 
 ### Affects

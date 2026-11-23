@@ -48,6 +48,11 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    agent prompt and OTA files (the systemd unit sets it). Choose the models in
     the [dedicated OpenCode config](#companion-models).
 
+   Rebuild and restart just the server from the checkout with
+   `~/.local/share/lark/lark deploy`. It reuses the cached Parakeet bridge,
+   installs the binary atomically, waits for each model and the terminals, and
+   prints the timings. Setup remains the first-install path.
+
     STT needs a Vulkan GPU, not Hex or an X display. Lark recognizes
     English without custom vocabulary. On firmware 0.9.5+,
     Lark listens through thinking pauses and ends the turn on gated silence,
@@ -89,6 +94,11 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    BOX-3 builds into `firmware/build-box3/` instead of `firmware/build/`.
    It starts with a blank cat at `box3-xxxx.local` (last four MAC digits)
    and has no battery gauge.
+
+   Builds are incremental: `ccache` lives in `~/.cache/lark-ccache` and the
+   ESP-IDF build tree stays in the repo, so a rebuild after a source edit takes
+   seconds. Unchanged sources print `up to date` and exit immediately;
+   `--force` rebuilds, and `--watch` rebuilds whenever firmware sources change.
 
 4. Update via `~/.local/share/lark/lark ota <ip|host>`; add `--no-build` to reuse the
    image, and prefix with `BOARD=box3` for BOX-3. The script refuses a board
