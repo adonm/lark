@@ -756,3 +756,97 @@ func TestEndpointLogsRedactTranscripts(t *testing.T) {
 		t.Fatal("endpoint logging lost transcript redaction")
 	}
 }
+
+// The name rule judges when the child started speaking, not when the endpoint
+// committed: a follow-up that began inside the grace period stays free even if
+// the vad tail and STT push the commit past it.
+func TestNameRuleUsesFirstVoicedPacket(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &larkServer{root: ctx}
+	b.endpoint = testEndpointSettings()
+	b.setSTT(func(context.Context, []byte) (string, error) { return "hello", nil })
+	h := &terminalHub{b: b}
+	client := &terminalClient{ctx: ctx}
+	d := &terminalSession{id: "t", key: "t", client: client}
+	base := time.Now().Truncate(time.Second)
+	c := &endpointCapture{
+		ctx: ctx, cancel: cancel, owner: client,
+		packets: make(chan micPacket, 8), stop: make(chan struct{}), result: make(chan captureResult, 1),
+		listen: true, nameGate: true, limitSpan: endpointLimit, limitBytes: utteranceBytes(endpointLimit),
+	}
+	go h.captureEndpoint(d, c)
+	quiet := make([]byte, endpointBytes)
+	for i := range 3 {
+		c.packets <- micPacket{pcm: quiet, at: base.Add(time.Duration(i) * endpointFrame)}
+	}
+	voiced := make([]byte, endpointBytes)
+	voiced[0], voiced[1] = 0xE8, 0x03
+	firstVoiced := base.Add(9 * time.Second)
+	for i := range 2 {
+		c.packets <- micPacket{pcm: voiced, at: firstVoiced.Add(time.Duration(i) * endpointFrame)}
+	}
+	close(c.stop)
+	result := <-c.result
+	if !result.speechAt.Equal(firstVoiced) {
+		t.Fatalf("speechAt = %v, want the first voiced packet %v", result.speechAt, firstVoiced)
+	}
+
+	// Grace ends 10 s after the previous reply.
+	d.nameFreeUntil = base.Add(10 * time.Second)
+	if h.nameRequired(d, result.speechAt) {
+		t.Fatal("speech at 9 s inside the grace was rejected because the commit happened at 11 s")
+	}
+	if !h.nameRequired(d, base.Add(11*time.Second)) {
+		t.Fatal("speech at 11 s after the grace still did not require the name")
+	}
+}
+
+// A finished capture must stop accepting PCM, and a new capture's ring must
+// carry only its own audio.
+func TestEndpointRingDoesNotLeakBetweenCaptures(t *testing.T) {
+	t.Parallel()
+	capture := func(ring *endpointRing) *endpointCapture {
+		c := &endpointCapture{
+			packets: make(chan micPacket, endpointRingSlots),
+			free:    make(chan int, endpointRingSlots),
+			slots:   ring,
+		}
+		for i := range endpointRingSlots {
+			c.free <- i
+		}
+		return c
+	}
+	first := capture(endpointRings.Get().(*endpointRing))
+	original := bytes.Repeat([]byte{1, 0}, endpointSlotBytes/2)
+	if !first.push(original, time.Now()) {
+		t.Fatal("first capture rejected PCM")
+	}
+	packet := <-first.packets
+	first.free <- packet.slot
+	// finishEndpoint hands the ring back after the worker has copied the audio.
+	first.slotsMu.Lock()
+	ring := first.slots
+	first.slots = nil
+	first.slotsMu.Unlock()
+	endpointRings.Put(ring)
+	if first.push(original, time.Now()) {
+		t.Fatal("a finished capture accepted PCM")
+	}
+
+	second := capture(endpointRings.Get().(*endpointRing))
+	fresh := bytes.Repeat([]byte{2, 0}, endpointSlotBytes/2)
+	if !second.push(fresh, time.Now()) {
+		t.Fatal("second capture rejected PCM")
+	}
+	got := <-second.packets
+	if !bytes.Equal(got.pcm, fresh) {
+		t.Fatalf("second capture packet aliases stale audio (%d bytes)", len(got.pcm))
+	}
+	second.slotsMu.Lock()
+	ring = second.slots
+	second.slots = nil
+	second.slotsMu.Unlock()
+	endpointRings.Put(ring)
+}

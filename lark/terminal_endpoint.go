@@ -118,6 +118,7 @@ type captureResult struct {
 	reply            *turnReply
 	spec             *specTurn
 	speech, audio    time.Duration
+	speechAt         time.Time // wall time of the first voiced packet
 	nameGate         bool
 }
 
@@ -214,6 +215,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	u.pcm = make([]byte, 0, sampleRate*2*15)
 	u.limit = c.limitBytes
 	var end time.Time
+	var speechAt time.Time
 	var maxVADQueue time.Duration
 	var cached pauseTranscript
 	var probe <-chan pauseTranscript
@@ -296,6 +298,9 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				d.id, wasInVoice, frameRMS(packet.pcm), u.policy.gate.floor, u.policy.gate.enter(), u.at(len(u.pcm)))
 		}
 		if u.policy.inVoice {
+			if speechAt.IsZero() {
+				speechAt = packet.at
+			}
 			lastGateOpenLen = len(u.pcm)
 			end = packet.at
 			if spec != nil && len(u.pcm) > spec.audioLen {
@@ -328,7 +333,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 					hasEnd: !end.IsZero() && !u.policy.inVoice && !end.After(c.commitAt),
 					listen: c.listen, reply: c.reply,
 					speech: u.policy.speechSpan(), audio: pcmDuration(len(u.pcm)),
-					nameGate: c.nameGate,
+					speechAt: speechAt, nameGate: c.nameGate,
 				}
 				if len(result.pcm) != 0 && (!c.listen || u.policy.voiced) && c.ctx.Err() == nil {
 					switch {
@@ -601,7 +606,7 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 				TextLen: len(result.text), Words: words,
 			})
 		}
-		if result.nameGate && h.nameRequired(d, time.Now()) {
+		if result.nameGate && h.nameRequired(d, result.speechAt) {
 			rest, named := splitName(result.text, d.companion.Name)
 			if !named {
 				// Background chatter after the follow-up grace period is
