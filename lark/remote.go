@@ -1059,15 +1059,15 @@ func (b *larkServer) remoteHistory(ctx context.Context, companionID string, quer
 		cursor = &historyCursor{TS: ts, ID: query.Get("before_id")}
 	}
 
-	querySQL := `SELECT id,role,sender,text,source,channel,ts_ms FROM messages WHERE companion_id=?`
+	querySQL := `SELECT id,role,sender,text,channel,ts_ms FROM messages WHERE companion_id=?`
 	args := []any{strings.ToLower(companionID)}
 	switch channel {
 	case "in_person":
-		querySQL += ` AND (channel='in_person' OR (channel='' AND source IN ('voice','typed','tap','text')))`
+		querySQL += ` AND channel='in_person'`
 	case "deltachat":
-		querySQL += ` AND (channel='deltachat' OR (channel='' AND source='deltachat'))`
+		querySQL += ` AND channel='deltachat'`
 	case "intercom":
-		querySQL += ` AND (channel='intercom' OR (channel='' AND source='intercom'))`
+		querySQL += ` AND channel='intercom'`
 	}
 	if q != "" {
 		pat := "%" + escapeLike(strings.ToLower(q)) + "%"
@@ -1089,13 +1089,10 @@ func (b *larkServer) remoteHistory(ctx context.Context, companionID string, quer
 	c := b.companionFor(companionID)
 	items := []object{}
 	for rows.Next() {
-		var id, role, sender, text, source, rowChannel string
+		var id, role, sender, text, rowChannel string
 		var ts int64
-		if err := rows.Scan(&id, &role, &sender, &text, &source, &rowChannel, &ts); err != nil {
+		if err := rows.Scan(&id, &role, &sender, &text, &rowChannel, &ts); err != nil {
 			return nil, problem(502, "Cannot read history.")
-		}
-		if rowChannel == "" {
-			rowChannel = channelForSource(source)
 		}
 		items = append(items, object{
 			"id":      id,

@@ -15,14 +15,7 @@ import (
 func stripLarkHeader(text string) string {
 	first, rest, ok := strings.Cut(text, "\n")
 	if ok && strings.HasPrefix(first, "[") && strings.HasSuffix(strings.TrimSuffix(first, "\r"), "]") {
-		if strings.HasPrefix(first, "[Lark: ") ||
-			strings.HasPrefix(first, "[You are ") ||
-			strings.HasPrefix(first, "[In person at ") ||
-			strings.HasPrefix(first, "[Delta Chat from ") ||
-			strings.HasPrefix(first, "[Timer · ") ||
-			strings.Contains(first, ") · hardware · ") ||
-			strings.Contains(first, ") · web · ") ||
-			strings.Contains(first, " · now: ") {
+		if strings.HasPrefix(first, "[You are ") {
 			text = rest
 		}
 	}
