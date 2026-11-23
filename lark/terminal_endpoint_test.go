@@ -526,3 +526,32 @@ func TestEndpointRingPushDoesNotAllocate(t *testing.T) {
 		t.Fatalf("ring push allocated %v times/op, want 0", allocs)
 	}
 }
+
+func TestEndpointEarlyCommitNeedsStrongSmartTurnAndPunctuation(t *testing.T) {
+	var p endpointPolicy
+	p.observeEnergy(20*time.Millisecond, true, 2000)
+	p.observeProgress(250*time.Millisecond, "Set a timer for two minutes.", false)
+	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.96, false); got != endpointCommit {
+		t.Fatalf("punctuated turn with strong Smart Turn, got %v, want commit", got)
+	}
+	if got := p.decide(250*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.94, false); got != endpointWait {
+		t.Fatalf("Smart Turn below the early threshold, got %v, want wait", got)
+	}
+	p.observeProgress(500*time.Millisecond, "Tell me everything about all the dinosaurs", false)
+	if got := p.decide(500*time.Millisecond+endpointEarlyQuiet, endpointCap, endpointLimit, 0.99, false); got != endpointWait {
+		t.Fatalf("unpunctuated transcript, got %v, want wait", got)
+	}
+	if got := p.decide(500*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, 0.90, false); got != endpointCommit {
+		t.Fatalf("quiet window without punctuation, got %v, want commit", got)
+	}
+	for _, text := range []string{"done.", "really?", `he said "stop."`, "wow!"} {
+		if !terminalPunctuation(text) {
+			t.Fatalf("%q should close a sentence", text)
+		}
+	}
+	for _, text := range []string{"", "and then", "wait,", "1.5"} {
+		if terminalPunctuation(text) {
+			t.Fatalf("%q should not close a sentence", text)
+		}
+	}
+}

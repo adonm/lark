@@ -339,7 +339,7 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 		at := pcmDuration(len(u.pcm))
 		decision := endpointWait
 		if vad != nil {
-			decision = u.policy.decision(at, endpointCap, c.limitSpan, smartTurnCommit, c.listen)
+			decision = u.policy.decide(at, endpointCap, c.limitSpan, lastSmartTurnProb, c.listen)
 		}
 		if decision != endpointWait {
 			if probeCancel != nil {
@@ -350,6 +350,8 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 				mode := "cap"
 				if smartTurnCommit {
 					mode = "smart_turn"
+				} else if decision == endpointCommit && at-u.policy.lastWordAt >= endpointEarlyQuiet {
+					mode = "early"
 				} else if decision == endpointDiscard {
 					mode = "discard"
 				}

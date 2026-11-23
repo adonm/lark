@@ -15,7 +15,9 @@ func TestTurnBench(t *testing.T) {
 	if os.Getenv("LARK_TURN_BENCH") == "" {
 		t.Skip("set LARK_TURN_BENCH=1 to run the live turn benchmark")
 	}
-	s := startE2E(t, true)
+	// Default to the dedicated real model; set LARK_TURN_BENCH_MODE=stub to
+	// isolate the server pipeline from model latency.
+	s := startE2E(t, env("LARK_TURN_BENCH_MODE", "real") != "stub")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)

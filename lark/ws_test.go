@@ -297,7 +297,15 @@ func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) pro
 		firmware:       "0.12.0",
 		token:          "unit",
 	}))
-	welcome := framePayload(s.until(t, hasProto(msgWelcome, "")))
+	s.acceptWelcome(t, s.until(t, hasProto(msgWelcome, "")))
+	return s.until(t, isDisplay)
+}
+
+// acceptWelcome records the server's UDP port and SSRC so the client can send
+// microphone audio. Callers that read welcome themselves must use this too.
+func (s *testWS) acceptWelcome(t *testing.T, frame protocolFrame) {
+	t.Helper()
+	welcome := framePayload(frame)
 	if len(welcome) < 12 {
 		t.Fatal("short welcome frame")
 	}
@@ -312,7 +320,6 @@ func (s *testWS) helloHardware(t *testing.T, id, compID string, caps uint32) pro
 		s.udp = udp
 		t.Cleanup(func() { udp.Close() })
 	}
-	return s.until(t, isDisplay)
 }
 
 func (s *testWS) hello(t *testing.T, id, compID string) protocolFrame {

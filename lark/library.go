@@ -83,7 +83,9 @@ func (b *larkServer) libraryDir() string {
 
 func libraryDBSN(reader bool) string {
 	if reader {
-		return "?_query_only=1&_busy_timeout=5000&_cache_size=-64000"
+		// bm25 scans the whole posting list for every hit; a larger page cache
+		// keeps the enwiki index hot across agent calls.
+		return "?_query_only=1&_busy_timeout=5000&_cache_size=-262144"
 	}
 	return "?_busy_timeout=5000&_cache_size=-64000"
 }
@@ -120,6 +122,11 @@ func openLibraryDB(path string, reader bool) (*sql.DB, error) {
 	}
 	if !reader {
 		db.SetMaxOpenConns(1)
+	} else {
+		// Each connection owns its page cache; bound the reader pool so three
+		// packs cannot multiply the 256 MiB cache without limit.
+		db.SetMaxOpenConns(2)
+		db.SetMaxIdleConns(2)
 	}
 	if err := db.Ping(); err != nil {
 		db.Close()
@@ -274,48 +281,157 @@ func searchLibrarySource(ctx context.Context, b *larkServer, dir, name, query st
 	return hits, true, err
 }
 
+// wikiCandidate is an FTS row before display snippets are loaded.
+type wikiCandidate struct {
+	id    int64
+	title string
+	rank  float64
+}
+
 func searchWiki(ctx context.Context, db *sql.DB, query string, limit int, weight float64) ([]libraryHit, error) {
 	run := func(match string) ([]libraryHit, error) {
-		rows, err := db.QueryContext(ctx, `SELECT p.title, snippet(pages_fts, 1, '', '', '…', 28),
-				bm25(pages_fts, 8.0, 1.0) - CASE WHEN lower(p.title) = lower(?) THEN 10.0 ELSE 0 END
-			FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid
-			WHERE pages_fts MATCH ? ORDER BY 3 LIMIT ?`, query, match, limit*4+10)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		out := []libraryHit{}
-		for rows.Next() {
-			var title, snip string
-			var rank float64
-			if err := rows.Scan(&title, &snip, &rank); err != nil {
-				return nil, err
-			}
-			if normalizeTitle(title) == normalizeTitle(query) {
-				rank -= 10
-			}
-			if words := len(strings.Fields(title)); words > 0 {
-				rank -= 4 / float64(words)
-			}
-			out = append(out, libraryHit{Source: "wiki", Title: title, Ref: title,
-				Snippet: strings.Join(strings.Fields(snip), " "), Rank: rank * weight})
-		}
-		slices.SortStableFunc(out, func(a, b libraryHit) int {
-			if a.Rank < b.Rank {
-				return -1
-			}
-			if a.Rank > b.Rank {
-				return 1
-			}
-			return 0
-		})
-		return out, rows.Err()
+		return searchWikiMatch(ctx, db, query, match, limit, weight)
 	}
 	hits, err := run(ftsQuery(query))
 	if err == nil && len(hits) == 0 {
 		hits, err = run(ftsQueryOr(query))
 	}
 	return hits, err
+}
+
+func searchWikiMatch(ctx context.Context, db *sql.DB, query, match string, limit int, weight float64) ([]libraryHit, error) {
+	terms := strings.Split(strings.ReplaceAll(match, " OR ", " AND "), " AND ")
+	words := make([]string, len(terms))
+	for i, term := range terms {
+		words[i] = strings.ToLower(strings.Trim(term, `"`))
+	}
+	seen := map[int64]int{}
+	var candidates []wikiCandidate
+	add := func(c wikiCandidate) {
+		if i, ok := seen[c.id]; ok {
+			// A later pass can only improve a candidate's rank.
+			if c.rank < candidates[i].rank {
+				candidates[i].rank = c.rank
+			}
+			return
+		}
+		seen[c.id] = len(candidates)
+		candidates = append(candidates, c)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT p.id, p.title, rank FROM pages_fts
+		JOIN pages p ON p.id = pages_fts.rowid
+		WHERE pages_fts MATCH ? ORDER BY rank LIMIT ?`, match, limit*4+10)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var c wikiCandidate
+		if err := rows.Scan(&c.id, &c.title, &c.rank); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		add(c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// FTS5 ranking lets a long list article outrank the exact title. Look it
+	// up through the case-insensitive title index instead of widening the scan.
+	for _, title := range []string{query, strings.TrimSpace(strings.TrimPrefix(strings.ToLower(query), "the "))} {
+		rows, err := db.QueryContext(ctx, `SELECT id, title FROM pages WHERE title = ? COLLATE NOCASE LIMIT 2`, title)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var c wikiCandidate
+			if err := rows.Scan(&c.id, &c.title); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			c.rank = -20
+			add(c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	// Prefer titles made of the query terms over body matches.
+	var titleMatch []string
+	for _, term := range terms {
+		titleMatch = append(titleMatch, "title:"+term)
+	}
+	rows, err = db.QueryContext(ctx, `SELECT p.id, p.title, rank FROM pages_fts
+		JOIN pages p ON p.id = pages_fts.rowid
+		WHERE pages_fts MATCH ? ORDER BY rank LIMIT 8`, strings.Join(titleMatch, " AND "))
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var c wikiCandidate
+		if err := rows.Scan(&c.id, &c.title, &c.rank); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		c.rank -= 6
+		add(c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortStableFunc(candidates, func(a, b wikiCandidate) int {
+		switch {
+		case a.rank < b.rank:
+			return -1
+		case a.rank > b.rank:
+			return 1
+		}
+		return 0
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]libraryHit, 0, len(candidates))
+	for _, c := range candidates {
+		var text string
+		if err := db.QueryRowContext(ctx, `SELECT text FROM pages WHERE id = ?`, c.id).Scan(&text); err != nil {
+			return nil, err
+		}
+		out = append(out, libraryHit{Source: "wiki", Title: c.title, Ref: c.title,
+			Snippet: libraryPreview(text, words), Rank: c.rank * weight})
+	}
+	return out, nil
+}
+
+// libraryPreview returns a short window around the first query term. FTS5's
+// snippet() reloads the full article for every ranked candidate; one window
+// from the final rows is enough for the agent's preview.
+func libraryPreview(text string, words []string) string {
+	lower := strings.ToLower(text)
+	best := -1
+	for _, word := range words {
+		if i := strings.Index(lower, word); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+	}
+	if best < 0 {
+		best = 0
+	}
+	start := max(0, best-80)
+	end := min(len(text), start+librarySnippet)
+	for start > 0 && text[start-1] != ' ' {
+		start--
+	}
+	for end < len(text) && text[end] != ' ' {
+		end++
+	}
+	out := strings.Join(strings.Fields(text[start:end]), " ")
+	if end < len(text) {
+		out += "…"
+	}
+	return out
 }
 
 func searchGutenberg(ctx context.Context, db *sql.DB, query string, limit int, weight float64) ([]libraryHit, error) {

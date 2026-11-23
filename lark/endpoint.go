@@ -22,13 +22,15 @@ const (
 	endpointQuiet = 400 * time.Millisecond
 	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
 	// call overlaps the remaining quiet window instead of racing the commit.
-	endpointSpecQuiet           = 250 * time.Millisecond
+	endpointSpecQuiet           = 180 * time.Millisecond
+	endpointEarlyQuiet          = 300 * time.Millisecond
 	endpointCap                 = 1200 * time.Millisecond
 	endpointProbeEvery          = 250 * time.Millisecond
 	endpointProbeWindow         = 4 * sampleRate * 2 // last <= 4 s
 	vadTail                     = 320 * time.Millisecond
 	speechEnergyRatio           = 0.20
 	smartTurnThreshold          = float32(0.90)
+	smartTurnEarlyThreshold     = float32(0.95)
 	smartTurnSpeculateThreshold = float32(0.40)
 	sileroModel                 = "silero_vad_v5.onnx"
 	sileroSHA256                = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
@@ -231,7 +233,31 @@ func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, win
 	return false
 }
 
+// terminalPunctuation reports whether the transcript closes a sentence. Smart
+// Turn alone can fire on a plausible clause break, so the early commit also
+// requires Parakeet to have heard the end of one.
+func terminalPunctuation(text string) bool {
+	text = strings.TrimSpace(text)
+	text = strings.TrimRight(text, `\"'”’`)
+	if text == "" {
+		return false
+	}
+	switch text[len(text)-1] {
+	case '.', '?', '!':
+		return true
+	}
+	return false
+}
+
 func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnReady, listen bool) endpointDecision {
+	var prob float32
+	if smartTurnReady {
+		prob = smartTurnThreshold
+	}
+	return p.decide(at, capDur, limitDur, prob, listen)
+}
+
+func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, listen bool) endpointDecision {
 	if at >= limitDur {
 		if p.hasWords || p.voiced {
 			return endpointCommit
@@ -248,7 +274,11 @@ func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnRe
 	if sinceWord >= capDur {
 		return endpointCommit
 	}
-	if sinceWord >= endpointQuiet && smartTurnReady && !p.incomplete {
+	if sinceWord >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {
+		return endpointCommit
+	}
+	if sinceWord >= endpointEarlyQuiet && smartTurn >= smartTurnEarlyThreshold &&
+		!p.incomplete && terminalPunctuation(p.lastText) {
 		return endpointCommit
 	}
 	return endpointWait
