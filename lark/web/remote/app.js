@@ -2,7 +2,7 @@
   "use strict";
 
   const token = document.body.dataset.token || new URLSearchParams(location.search).get("token") || "";
-  const tabs = ["status", "stories", "history", "settings"];
+  const tabs = ["status", "stories", "history", "diagnostics", "settings"];
   const stateLabels = { idle: "Idle", listening: "Listening", thinking: "Thinking", speaking: "Speaking", sleeping: "Sleeping", offline: "Offline" };
   const chanLabels = { in_person: "In person", deltachat: "Delta Chat", intercom: "Intercom", timer: "Timer" };
   const HISTORY_CHANNELS = [
@@ -12,6 +12,7 @@
 
   let state = { companion: {}, terminals: [], stories: [], voices: [] };
   let hist = { loaded: false, loading: false, channel: "all", q: "", items: [], has_more: false, next_cursor: null, seq: 0 };
+  let cap = { loaded: false, loading: false, items: [], seq: 0, duration: 60, active: null, event: null };
   let bannerTimer = null, pendingBtn = null, reconnecting = false;
 
   function el(tag, attrs, children) {
@@ -64,8 +65,13 @@
     return url.pathname + url.search;
   }
 
-  async function call(path, body) {
-    const init = { method: body === undefined ? "GET" : "POST", headers: { "X-Lark-Remote-Token": token } };
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
+  }
+
+  async function call(path, body, method) {
+    const init = { method: method || (body === undefined ? "GET" : "POST"), headers: { "X-Lark-Remote-Token": token } };
     if (body !== undefined) {
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
@@ -331,6 +337,190 @@
     }
   }
 
+  async function loadCaptures() {
+    cap.loading = true;
+    cap.seq += 1;
+    const seq = cap.seq;
+    renderDiagnostics();
+    try {
+      const data = await call("captures");
+      if (seq !== cap.seq) return;
+      cap.loaded = true;
+      cap.loading = false;
+      cap.items = Array.isArray(data.captures) ? data.captures : [];
+      renderDiagnostics();
+    } catch (err) {
+      if (seq !== cap.seq) return;
+      cap.loading = false;
+      renderDiagnostics();
+      showBanner(err.message || "Could not load captures.", "error");
+    }
+  }
+
+  function captureReason() {
+    if (cap.active) return "A capture is in progress.";
+    const live = state.companion.live_state;
+    if (live === "listening" || live === "thinking" || live === "speaking") {
+      const name = state.companion.name || "The companion";
+      return `${name} is ${(stateLabels[live] || live).toLowerCase()}; wait for the turn to finish.`;
+    }
+    if (live === "offline" || !state.terminals.some((t) => t.online)) return "No online device to record from.";
+    return "";
+  }
+
+  async function startCapture(btn) {
+    clearPending();
+    pendingBtn = btn;
+    btn.classList.add("is-pending");
+    btn.setAttribute("aria-busy", "true");
+    btn.disabled = true;
+    showBanner("Starting capture…", "info");
+    try {
+      const data = await call("capture", { seconds: cap.duration });
+      cap.active = { name: data.name, seconds: data.seconds, started_at: data.started_at };
+      cap.event = { state: "recording", name: data.name, seconds: data.seconds, remaining: data.seconds, started_at: data.started_at };
+      showBanner(`Recording ${data.seconds} s…`, "info");
+    } catch (err) {
+      showBanner(err.message || "Could not start the capture.", "error");
+    } finally {
+      clearPending();
+      renderDiagnostics();
+    }
+  }
+
+  async function transcribeCapture(name, btn) {
+    const item = cap.items.find((c) => c.name === name);
+    if (item) item.computing = true;
+    clearPending();
+    pendingBtn = btn;
+    btn.classList.add("is-pending");
+    btn.setAttribute("aria-busy", "true");
+    btn.disabled = true;
+    renderDiagnostics();
+    showBanner("Transcribing…", "info");
+    try {
+      const data = await call("captures/" + encodeURIComponent(name) + "/transcribe", {});
+      if (item) item.transcript = data.transcript || "";
+      showBanner("Transcript ready.", "ok");
+    } catch (err) {
+      showBanner(err.message || "Could not transcribe the capture.", "error");
+    } finally {
+      if (item) item.computing = false;
+      clearPending();
+      renderDiagnostics();
+    }
+  }
+
+  async function deleteCapture(name, btn) {
+    clearPending();
+    pendingBtn = btn;
+    btn.classList.add("is-pending");
+    btn.setAttribute("aria-busy", "true");
+    btn.disabled = true;
+    showBanner("Deleting capture…", "info");
+    try {
+      await call("captures/" + encodeURIComponent(name), undefined, "DELETE");
+      cap.items = cap.items.filter((c) => c.name !== name);
+      showBanner("Capture deleted.", "ok");
+    } catch (err) {
+      showBanner(err.message || "Could not delete the capture.", "error");
+    } finally {
+      clearPending();
+      renderDiagnostics();
+    }
+  }
+
+  function captureEventText() {
+    const event = cap.event;
+    if (event && event.state === "recording") {
+      const left = typeof event.remaining === "number" ? event.remaining : event.seconds;
+      return `Recording… ${left} s left.`;
+    }
+    if (event && event.state === "done" && event.ok !== false) return `Saved ${event.name}.`;
+    if (event && event.state === "done") return "Capture failed.";
+    return "";
+  }
+
+  function renderDiagnostics() {
+    const root = document.getElementById("body-diagnostics");
+    let card = root.querySelector("section.capture-card");
+    if (!card) {
+      root.replaceChildren();
+      const durations = el("div", { class: "pill-group", role: "group", "aria-label": "Capture duration" });
+      for (const seconds of [15, 30, 60]) {
+        const btn = el("button", { type: "button", class: "pill-btn", text: `${seconds} s` });
+        btn.dataset.seconds = String(seconds);
+        btn.addEventListener("click", () => { cap.duration = seconds; renderDiagnostics(); });
+        durations.appendChild(btn);
+      }
+      const start = el("button", { type: "button", id: "capture-start", class: "btn-compact", text: "Start capture" });
+      start.addEventListener("click", () => startCapture(start));
+      card = el("section", { class: "card-box capture-card" }, [
+        el("div", { class: "row-title", text: "Capture microphone" }),
+        el("div", { class: "row-sub", text: "Records this companion's microphone through the normal listening path." }),
+        durations, start,
+        el("div", { id: "capture-progress", class: "row-sub", role: "status", "aria-live": "polite" }),
+        el("div", { id: "capture-reason", class: "row-sub" }),
+        el("p", { class: "capture-privacy", text: "Recordings stay on this server; delete them when done." }),
+      ]);
+      root.append(card, el("p", { class: "section-label", text: "Recent captures" }), el("div", { id: "capture-list", class: "panel-list" }));
+    }
+    for (const btn of card.querySelectorAll(".pill-btn")) {
+      btn.setAttribute("aria-pressed", Number(btn.dataset.seconds) === cap.duration ? "true" : "false");
+    }
+    const start = card.querySelector("#capture-start");
+    const reason = captureReason();
+    start.disabled = reason !== "" || pendingBtn === start;
+    card.querySelector("#capture-reason").textContent = reason || "Ready to record.";
+    card.querySelector("#capture-progress").textContent = captureEventText();
+
+    const list = root.querySelector("#capture-list");
+    const keys = new Set(cap.items.map((item) => item.name));
+    prune(list, "article.capture-row", keys);
+    list.querySelector(".empty")?.remove();
+    if (!cap.items.length) {
+      if (!list.querySelector(".empty")) list.appendChild(el("p", { class: "empty", text: cap.loading ? "Loading captures…" : "No captures yet." }));
+      return;
+    }
+    for (const item of cap.items) {
+      const row = keyed(list, "article.capture-row", item.name, () => {
+        const audio = el("audio", { controls: "", preload: "none", "aria-label": `Recording ${item.name}` });
+        const play = el("button", { type: "button", class: "btn-compact btn-ghost", text: "Play" });
+        play.addEventListener("click", () => {
+          if (!audio.getAttribute("src")) audio.src = apiURL("/remote/api/captures/" + encodeURIComponent(item.name) + ".wav");
+          audio.load();
+          audio.play().catch(() => {});
+        });
+        const transcribe = el("button", { type: "button", class: "btn-compact btn-ghost capture-transcribe", text: "Transcribe" });
+        transcribe.addEventListener("click", () => transcribeCapture(item.name, transcribe));
+        const del = el("button", { type: "button", class: "btn-compact btn-ghost capture-delete", text: "Delete" });
+        del.addEventListener("click", () => deleteCapture(item.name, del));
+        return el("article", { class: "capture-row" }, [
+          el("div", { class: "row-info" }, [el("div", { class: "row-title", text: item.name }), el("div", { class: "row-sub" })]),
+          el("div", { class: "btn-row" }, [play, transcribe, del]), audio,
+        ]);
+      });
+      const seconds = Number(item.seconds) || 0;
+      const when = item.created ? new Date(item.created).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+      row.querySelector(".row-sub").textContent = [seconds ? `${seconds} s` : "", fmtBytes(item.size), when].filter(Boolean).join(" · ");
+      const transcribe = row.querySelector(".capture-transcribe");
+      transcribe.disabled = !!item.computing || pendingBtn === transcribe;
+      transcribe.setAttribute("aria-busy", item.computing ? "true" : "false");
+      transcribe.textContent = item.computing ? "Transcribing…" : "Transcribe";
+      let details = row.querySelector("details.capture-transcript");
+      if (item.transcript || item.computing) {
+        if (!details) {
+          details = el("details", { class: "capture-transcript" }, [el("summary", { text: "Transcript" }), el("p")]);
+          row.appendChild(details);
+        }
+        details.querySelector("summary").textContent = item.computing ? "Transcribing…" : "Transcript";
+        details.querySelector("p").textContent = item.transcript || "";
+      } else if (details) {
+        details.remove();
+      }
+    }
+  }
+
   function renderSettings() {
     const root = document.getElementById("body-settings");
     let section = root.querySelector("section.voice-section");
@@ -365,7 +555,7 @@
     }
   }
 
-  function renderAll() { renderHeader(); renderStatus(); renderStories(); renderSettings(); }
+  function renderAll() { renderHeader(); renderStatus(); renderStories(); renderDiagnostics(); renderSettings(); }
 
   function switchTab(name, focusTab) {
     if (!tabs.includes(name)) return;
@@ -381,6 +571,7 @@
       else panel.setAttribute("hidden", "until-found");
     }
     if (name === "history" && !hist.loaded && !hist.loading) loadHistory(false);
+    if (name === "diagnostics" && !cap.loaded && !cap.loading) loadCaptures();
   }
 
   const tabBtns = Array.from(document.querySelectorAll(".tab-btn"));
@@ -404,6 +595,23 @@
     state = applyState(state, next);
     reconnecting = false;
     renderAll();
+  });
+  source.addEventListener("capture", (event) => {
+    let status;
+    try { status = JSON.parse(event.data); } catch { return; }
+    cap.event = status;
+    if (status.state === "recording") {
+      cap.active = status;
+    } else {
+      cap.active = null;
+    }
+    if (status.state === "done") {
+      if (status.ok === false) showBanner(status.error || "Capture failed.", "error");
+      else showBanner(`Saved ${status.name}.`, "ok");
+      loadCaptures();
+      return;
+    }
+    renderDiagnostics();
   });
   source.onerror = () => {
     if (reconnecting) return;

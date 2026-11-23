@@ -94,6 +94,11 @@ function pushState(next) {
   for (const res of sseClients) res.write(frame);
 }
 
+function pushCapture(status) {
+  const frame = `event: capture\ndata: ${JSON.stringify(status)}\n\n`;
+  for (const res of sseClients) res.write(frame);
+}
+
 function imagePNG() {
   return Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 }
@@ -112,6 +117,18 @@ class Remote {
   }
 
   deliver(state) { pushState(state); }
+
+  deliverCapture(status) { pushCapture(status); }
+
+  async waitForPath(pred, timeout = 3000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const found = requests.find(pred);
+      if (found) return found;
+      await this.page.waitForTimeout(20);
+    }
+    throw new Error("timed out waiting for a request path");
+  }
 
   async waitForRequest(pred, timeout = 3000) {
     const deadline = Date.now() + timeout;
@@ -180,6 +197,14 @@ before(async () => {
         try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
         const index = requests.length;
         requests.push({ method: req.method, path: pathname, query: Object.fromEntries(url.searchParams), body });
+        if (req.method === "GET" && pathname.endsWith(".wav")) {
+          pending.push(null);
+          res.writeHead(200, { "content-type": "audio/wav" });
+          res.end();
+          resolveNext();
+          nextResolve = new Promise((r) => { resolveNext = r; });
+          return;
+        }
         pending.push({ res, resolve: () => {} });
         if (pathname === "/remote/api/history" && req.method === "GET") {
           // Tests answer history explicitly, like other commands.
@@ -246,7 +271,7 @@ test("Say posts, shows feedback, and listening and volume controls send the righ
     const listen = await p.waitForRequest((r) => r.path === "/remote/api/listen");
     assert.deepEqual(listen.request.body, { listening: true });
     p.answer(listen.index, { ok: true, message: "Listening mode updated.", state: stateUpdate({}, { listening: true }) });
-    await p.page.waitForFunction(() => document.querySelector('#body-status .pill-btn[aria-pressed="true"]').textContent === "Listen");
+    await p.page.waitForFunction(() => document.querySelector('#body-status .pill-btn[aria-pressed="true"]')?.textContent === "Listen");
 
     const slider = p.page.locator('input[type="range"][aria-label="Volume for BOX-3"]');
     await slider.fill("75");
@@ -369,11 +394,83 @@ test("regression: voice selection updates from the response without a state push
   } finally { await p.close(); }
 });
 
+test("Diagnostics records a capture, streams progress, and manages the file", async () => {
+  const p = await open();
+  const name = "capture-greg-20261123-120000";
+  try {
+    await p.tab("diagnostics");
+    const list = await p.waitForRequest((r) => r.path === "/remote/api/captures" && r.method === "GET");
+    assert.equal(list.request.query.token, TOKEN);
+    p.answer(list.index, { captures: [] });
+    await p.page.waitForFunction(() => document.querySelector("#capture-list .empty"));
+    assert.equal(await p.page.textContent('#body-diagnostics .pill-btn[aria-pressed="true"]'), "60 s");
+    assert.match(await p.page.textContent(".capture-privacy"), /Recordings stay on this server/);
+
+    await p.page.click('#body-diagnostics .pill-btn:has-text("15 s")');
+    await p.page.click("#capture-start");
+    const start = await p.waitForRequest((r) => r.path === "/remote/api/capture");
+    assert.deepEqual(start.request.body, { seconds: 15 });
+    assert.equal(start.request.query.token, TOKEN);
+    assert.equal(await p.page.getAttribute("#capture-start", "aria-busy"), "true");
+    p.answer(start.index, { id: name, name, seconds: 15, started_at: "2026-11-23T12:00:00Z" });
+    await p.page.waitForFunction(() => document.querySelector("#capture-start").disabled);
+
+    p.deliverCapture({ state: "recording", id: name, name, seconds: 15, remaining: 15, started_at: "2026-11-23T12:00:00Z" });
+    await p.page.waitForFunction(() => document.querySelector("#capture-progress").textContent.includes("15 s left"));
+    assert.match(await p.page.textContent("#capture-reason"), /capture is in progress/i);
+    p.deliverCapture({ state: "recording", id: name, name, seconds: 15, remaining: 8, started_at: "2026-11-23T12:00:00Z" });
+    await p.page.waitForFunction(() => document.querySelector("#capture-progress").textContent.includes("8 s left"));
+
+    p.deliverCapture({ state: "done", id: name, name, ok: true });
+    const reload = await p.waitForRequest((r) => r.path === "/remote/api/captures" && r.method === "GET");
+    p.answer(reload.index, { captures: [{ name, seconds: 15, size: 480044, created: "2026-11-23T12:00:00Z", computing: false }] });
+    await p.page.waitForFunction((n) => {
+      const rows = document.querySelectorAll("#capture-list article.capture-row");
+      return rows.length === 1 && document.querySelector("#capture-list").textContent.includes(n);
+    }, name);
+    assert.equal(await p.page.locator("#capture-start").isDisabled(), false);
+
+    await p.page.click('#capture-list button:has-text("Play")');
+    const wav = await p.waitForPath((r) => r.path === "/remote/api/captures/" + name + ".wav");
+    assert.equal(wav.query.token, TOKEN);
+
+    await p.page.click('#capture-list button:has-text("Transcribe")');
+    const transcribe = await p.waitForRequest((r) => r.path === "/remote/api/captures/" + name + "/transcribe");
+    assert.equal(transcribe.request.method, "POST");
+    assert.equal(transcribe.request.query.token, TOKEN);
+    p.answer(transcribe.index, { name, transcript: "a tiny hello", stt_ms: 40, audio_ms: 15000, engine: "parakeet" });
+    await p.page.waitForFunction(() => document.querySelector("#capture-list details.capture-transcript p").textContent === "a tiny hello");
+
+    await p.page.click('#capture-list button:has-text("Delete")');
+    const del = await p.waitForRequest((r) => r.path === "/remote/api/captures/" + name);
+    assert.equal(del.request.method, "DELETE");
+    assert.equal(del.request.query.token, TOKEN);
+    p.answer(del.index, { ok: true });
+    await p.page.waitForFunction(() => document.querySelectorAll("#capture-list article.capture-row").length === 0);
+    await p.shot("diagnostics");
+  } finally { await p.close(); }
+});
+
+test("capture stays disabled during a voice turn with the reason shown", async () => {
+  const p = await open();
+  try {
+    await p.tab("diagnostics");
+    const list = await p.waitForRequest((r) => r.path === "/remote/api/captures" && r.method === "GET");
+    p.answer(list.index, { captures: [] });
+    p.deliver(stateUpdate({}, { live_state: "speaking" }));
+    await p.page.waitForFunction(() => document.querySelector("#capture-start").disabled);
+    assert.match(await p.page.textContent("#capture-reason"), /speaking/i);
+    p.deliver(stateUpdate({}, { live_state: "idle" }));
+    await p.page.waitForFunction(() => !document.querySelector("#capture-start").disabled);
+    assert.equal(await p.page.textContent("#capture-reason"), "Ready to record.");
+  } finally { await p.close(); }
+});
+
 test("tabs support keyboard navigation and controls are labelled", async () => {
   const p = await open();
   try {
     assert.equal(await p.page.getAttribute('nav[role="tablist"]', "aria-label"), "Remote sections");
-    assert.equal(await p.page.locator('.tab-btn[role="tab"]').count(), 4);
+    assert.equal(await p.page.locator('.tab-btn[role="tab"]').count(), 5);
     await p.page.focus("#tab-status");
     await p.page.keyboard.press("ArrowRight");
     assert.equal(await p.page.getAttribute("#tab-stories", "aria-selected"), "true");
