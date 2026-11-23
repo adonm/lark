@@ -28,6 +28,7 @@ type dcRPC interface {
 	SetConfig(accID uint32, key string, val *string) error
 	GetConfig(accID uint32, key string) (*string, error)
 	StartIoForAllAccounts() error
+	RemoveAccount(accID uint32) error
 	GetChatSecurejoinQrCode(accID uint32, chatID *uint32) (string, error)
 	CreateQrSvg(text string) (string, error)
 	SecureJoin(accID uint32, qr string) (uint32, error)

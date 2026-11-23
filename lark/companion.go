@@ -554,7 +554,8 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	if !validCompanionID(id) {
 		return problem(400, "Invalid companion ID")
 	}
-	if _, ok := b.companionByID(id); !ok {
+	c, ok := b.companionByID(id)
+	if !ok {
 		return problem(404, "Companion not found")
 	}
 	terms, err := b.terminalsForCompanion(id)
@@ -597,6 +598,13 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 	}
 	if b.dc != nil {
 		b.dc.forget(id)
+		if accID := c.DCAccountID; accID != 0 {
+			if rpc := b.dc.getRPC(); rpc != nil {
+				if err := rpc.RemoveAccount(accID); err != nil {
+					log.Printf("Lark could not remove Delta Chat account %d for %s: %v", accID, id, err)
+				}
+			}
+		}
 	}
 	if b.hub != nil {
 		b.hub.mu.Lock()

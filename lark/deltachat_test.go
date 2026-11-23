@@ -36,6 +36,7 @@ type stubDCRPC struct {
 	qrJoined      []string
 	deleted       []uint32
 	deletedForAll []uint32
+	removed       []uint32
 	sig           condSignal
 }
 
@@ -108,6 +109,18 @@ func (s *stubDCRPC) GetConfig(accID uint32, key string) (*string, error) {
 }
 
 func (s *stubDCRPC) StartIoForAllAccounts() error { return nil }
+
+func (s *stubDCRPC) RemoveAccount(accID uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.configs, accID)
+	delete(s.contacts, accID)
+	delete(s.chats, accID)
+	delete(s.chatContacts, accID)
+	delete(s.msgs, accID)
+	s.removed = append(s.removed, accID)
+	return nil
+}
 
 func (s *stubDCRPC) GetChatSecurejoinQrCode(accID uint32, _ *uint32) (string, error) {
 	s.mu.Lock()
@@ -1061,6 +1074,12 @@ func TestDeltaChatDeleteForgetsAccountAndWelcome(t *testing.T) {
 	b.dc.mu.Unlock()
 	if mapped {
 		t.Fatal("delete left the companion address mapping")
+	}
+	stub.mu.Lock()
+	removed := slices.Clone(stub.removed)
+	stub.mu.Unlock()
+	if !slices.Contains(removed, accID) {
+		t.Fatalf("delete left Delta Chat account %d instead of removing it: %v", accID, removed)
 	}
 	b.dc.mu.Lock()
 	for acc, cid := range b.dc.byAcc {
