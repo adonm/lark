@@ -103,6 +103,11 @@ chat history, faster face rendering, and separate turn and hardware diagnostics.
    weights or a Vulkan GPU; it does not build ESP-IDF images. Build those locally with the
    commands above (`BOARD=vocat` and `BOARD=box3`).
 
+   For the inner loop, `./scripts/check.sh --fast` builds, vets, and runs only
+   the tests related to the current diff (~10 s) and prints what it chose.
+   See [docs/testing.md](docs/testing.md) for per-area checks, flags and
+   measured timings.
+
    Add `--live` to exercise the product with virtual companions and firmware
    clients for both board layouts. It builds a fresh loopback server with a
    temporary database, real Parakeet Vulkan, Silero and Kokoro, synthetic

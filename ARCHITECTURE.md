@@ -177,11 +177,15 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
 - `--qa` — repeatable `lark sim` scenarios from `lark/qa/*.sim`; `--qa-hw`
   adds the live hardware suite.
 - `--remote-ui` — headless-Chromium DOM tests for the remote page.
+- `--fast [ref]` — build, vet, and only the tests related to the diff against
+  `ref` (default: the last green full gate, else `origin/main`). Local inner
+  loop only; CI runs the full gate.
 - `--e2e-real` — dedicated OpenCode with the configured models (spends quota).
 - `--deployed` — read-only installed-service and OTA probes.
 - `lark sim` drives a virtual board; `lark device` talks to a real one.
 - `lark doctor` prints one line per check and exits non-zero on failures.
 
-See [README.md](README.md) for setup and API tables, [lark/turn-taking.md](lark/turn-taking.md)
+See [README.md](README.md) for setup and API tables, [docs/testing.md](docs/testing.md)
+for per-area checks, `--fast`, flags and measured timings, [lark/turn-taking.md](lark/turn-taking.md)
 for endpoint policy, [lark/stt-speed.md](lark/stt-speed.md) for STT numbers, and
 [docs/qa-report.md](docs/qa-report.md) for the latest QA run.
