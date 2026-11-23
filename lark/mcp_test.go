@@ -201,6 +201,37 @@ func patchControl(t *testing.T, base, id string, terminal object) object {
 	return toolTest(t, base, "patch", object{"companion_id": id, "terminal": terminal}, false)["terminal"].(object)
 }
 
+func TestMCPPatchDefaultsToSpeakingCompanion(t *testing.T) {
+	b, base := wsHarness(t, nil)
+	const termID = "vocat-0001"
+	hw := testConnectWS(t, base, "unit", false)
+	hw.hello(t, termID, "Cake")
+
+	b.hub.mu.Lock()
+	b.hub.terminals[termID].busy = true
+	b.hub.mu.Unlock()
+	patched := toolTest(t, base, "patch", object{"terminal": object{"volume": 33}}, false)["terminal"].(object)
+	if patched["terminal_id"] != termID || patched["volume"] != json.Number("33") {
+		t.Fatalf("patch did not default to the speaking companion's terminal: %+v", patched)
+	}
+
+	b.hub.mu.Lock()
+	b.hub.terminals[termID].busy = false
+	b.hub.mu.Unlock()
+	out := toolTest(t, base, "patch", object{"terminal": object{"volume": 10}}, true)
+	if text := str(out["error"]); !strings.Contains(text, "companion_id: required") {
+		t.Fatalf("missing companion error = %q", text)
+	}
+
+	if _, err := b.createCompanion(t.Context(), object{"id": "mint", "name": "Mint", "form": "a fox"}); err != nil {
+		t.Fatal(err)
+	}
+	out = toolTest(t, base, "patch", object{"companion_id": "mint", "terminal": object{"volume": 10}}, true)
+	if text := str(out["error"]); text != "terminal_id required: no online terminal for companion mint" {
+		t.Fatalf("missing terminal error = %q", text)
+	}
+}
+
 func TestMCPStateSlices(t *testing.T) {
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.timers = newTimerManager(b)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -243,6 +244,10 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 
 func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) {
 	id := strings.ToLower(str(args["companion_id"]))
+	if id == "" && b.hub != nil {
+		// The speaking companion is unambiguous while its turn is in flight.
+		id = b.hub.speakingCompanion()
+	}
 	out := object{"ok": true}
 	// Apply appearance before changing sleep, and leave sleep alone on appearance-only edits.
 	for _, key := range []string{"companion", "terminal", "memory", "timer"} {
@@ -290,7 +295,7 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 	termID := strings.ToLower(str(args["terminal_id"]))
 	if termID == "" {
 		if !validCompanionID(companionID) {
-			return nil, problem(400, "Invalid companion ID")
+			return nil, fieldError("companion_id", "required; pass the companion ID from the turn header")
 		}
 		if b.hub != nil {
 			b.hub.mu.Lock()
@@ -301,12 +306,24 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 		}
 		if termID == "" {
 			terms, _ := b.terminalsForCompanion(companionID)
-			if len(terms) > 0 {
-				termID = terms[0].ID
+			var onlineTerms []terminalRecord
+			for _, t := range terms {
+				if t.Kind != "hardware" {
+					continue
+				}
+				entry := b.terminalEntry(t, false)
+				if online, _ := entry["online"].(bool); online {
+					onlineTerms = append(onlineTerms, t)
+				}
 			}
-		}
-		if termID == "" {
-			return nil, problem(409, "Companion has no attached terminal")
+			switch len(onlineTerms) {
+			case 0:
+				return nil, problem(400, fmt.Sprintf("terminal_id required: no online terminal for companion %s", companionID))
+			case 1:
+				termID = onlineTerms[0].ID
+			default:
+				return nil, problem(400, fmt.Sprintf("terminal_id required: several online terminals for companion %s", companionID))
+			}
 		}
 	}
 	if b.hub == nil {
