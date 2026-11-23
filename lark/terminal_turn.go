@@ -668,7 +668,7 @@ func (h *terminalHub) playTraced(d *terminalSession, stream *AudioStream, trace 
 
 func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id uint64, stream *AudioStream, trace *turnTrace, ttsStart time.Time) error {
 	control := func(state string) bool {
-		op := ttsOpStop
+		var op uint8 = ttsOpStop
 		switch state {
 		case "start":
 			op = ttsOpStart

@@ -1,5 +1,7 @@
 package main
 
+//go:generate go run ./protospec/cmd/protogen
+
 import (
 	"encoding/binary"
 	"errors"
@@ -8,153 +10,19 @@ import (
 )
 
 const (
-	protoMagic      uint8  = 0x4C
-	protoVersion1   uint8  = 1
-	protoHeaderSize        = 8
-	protoMaxPayload uint32 = 320 * 1024
-	resumeTokenLen         = 16
-	resumeWindowMS  uint32 = 30000
-	defaultDevPort         = "8766"
-	frameTag        byte   = 3
-
-	// Terminal -> Lark message types
-	msgHello     uint8 = 0x01
-	msgResume    uint8 = 0x02
-	msgTelemetry uint8 = 0x03
-	msgPointer   uint8 = 0x04
-	msgRecStart  uint8 = 0x06
-	msgRecEnd    uint8 = 0x07
-	msgTTSAck    uint8 = 0x08
-	msgPing      uint8 = 0x0F
-	msgPong      uint8 = 0x10
-
-	// Lark -> Terminal message types
-	msgWelcome    uint8 = 0x81
-	msgReject     uint8 = 0x82
-	msgFrame      uint8 = 0x83
-	msgRecCtrl    uint8 = 0x86
-	msgTTSCtrl    uint8 = 0x87
-	msgTTSPCM     uint8 = 0x88
-	msgChime      uint8 = 0x8A
-	msgPower      uint8 = 0x8B
-	msgVolume     uint8 = 0x8C
-	msgStatus     uint8 = 0x8D
-	msgVoiceOwner uint8 = 0x8E
-
-	// Terminal kind
-	termKindHardware uint8 = 0
-
-	// Display formats
-	dispRGB565 uint8 = 1 << 0
-
-	// Frame codecs
-	codecBitRaw    uint8 = 1 << 0
-	codecBitRLE565 uint8 = 1 << 1
-	codecBitLZ4    uint8 = 1 << 2
-	codecBitJPEG   uint8 = 1 << 3
-	codecBitAll    uint8 = codecBitRaw | codecBitRLE565 | codecBitLZ4 | codecBitJPEG
-
-	// Screen shape
-	shapeRound uint8 = 0
-	shapeRect  uint8 = 1
-
-	// Hello flags
-	helloFlagIfFree uint8 = 1 << 0
-
-	// Welcome flags
-	welcomeFlagBridgeEP uint8 = 1 << 0
-
-	// Capability bits
-	capBattery        uint32 = 1 << 0
-	capDrag           uint32 = 1 << 4
-	capPointerRev     uint32 = 1 << 5
-	capBridgeEndpoint uint32 = 1 << 6
-	capPanelSleep     uint32 = 1 << 7
-
-	// Reject reasons
-	rejectBadToken        uint8 = 1
-	rejectBadVersion      uint8 = 2
-	rejectUnknownTerminal uint8 = 3
-	rejectFull            uint8 = 4
-	rejectOccupied        uint8 = 5
-	rejectBadCaps         uint8 = 6
-
-	// Status states
-	statusIdle      uint8 = 0
-	statusListening uint8 = 1
-	statusThinking  uint8 = 2
-	statusSpeaking  uint8 = 3
-	statusBlocked   uint8 = 4
-	statusDone      uint8 = 5
-	statusError     uint8 = 6
-
-	// Prompt / status kinds
-
-	// Pointer kinds
-	ptrTap  uint8 = 0
-	ptrDrag uint8 = 1
-	ptrUp   uint8 = 2
-
-	// Rec ops & flags
-	recOpStop        uint8 = 0
-	recOpStart       uint8 = 1
-	recOpCancel      uint8 = 2
-	recTargetInter   uint8 = 1 << 0
-	recTargetListen  uint8 = 1 << 6
-	recTargetBridgeE uint8 = 1 << 7
-
-	// TTS ops
-	ttsOpStop  uint8 = 0
-	ttsOpStart uint8 = 1
-	ttsOpEnd   uint8 = 2
-
-	// Chime kinds
-
-	// Chime kinds
-	chimeTap      uint8 = 0
-	chimeThink    uint8 = 1
-	chimeCancel   uint8 = 2
-	chimeIntercom uint8 = 3
-	chimeRing     uint8 = 4
-
-	// RTP constants
-	rtpVersionByte uint8 = 0x80
-	rtpHeaderSize        = 12
-	rtpSamples           = 320
-	rtpPCMBytes          = rtpSamples * 2
-	rtpPacketBytes       = rtpHeaderSize + rtpPCMBytes
-	rtpPTRecPCM    uint8 = 96
+	defaultDevPort      = "8766"
+	frameTag       byte = 3
 )
+
+// Message types, sizes, field offsets and codecs live in
+// terminal_proto_gen.go, generated from protospec/spec.go. This file only
+// holds the envelope helpers and the typed wrappers used by the rest of lark.
 
 var (
 	errProtoMagic = errors.New("invalid protocol magic")
 	errProtoSize  = errors.New("protocol payload exceeds limit")
 	errProtoShort = errors.New("short protocol payload")
 )
-
-type terminalHello struct {
-	protoVersion   uint8
-	kind           uint8
-	capsMask       uint32
-	displayFormats uint8
-	frameCodecs    uint8
-	width          uint16
-	height         uint16
-	shape          uint8
-	flags          uint8
-	udpPort        uint16
-	terminalID     string
-	companionID    string
-	board          string
-	firmware       string
-	token          string
-}
-
-type terminalResume struct {
-	protoVersion uint8
-	resumeToken  [resumeTokenLen]byte
-	terminalID   string
-}
 
 func packProtoPacket(msgType uint8, seq uint16, payload []byte) []byte {
 	pkt := make([]byte, protoHeaderSize+len(payload))
@@ -241,84 +109,27 @@ func readStr16(b []byte, off *int) (string, bool) {
 }
 
 func parseTerminalHello(b []byte) (terminalHello, error) {
-	if len(b) < 21 {
+	h, ok := decodeTerminalHello(b)
+	if !ok {
 		return terminalHello{}, errProtoShort
 	}
-	h := terminalHello{
-		protoVersion:   b[0],
-		kind:           b[1],
-		capsMask:       binary.LittleEndian.Uint32(b[2:6]),
-		displayFormats: b[6],
-		frameCodecs:    b[7],
-		width:          binary.LittleEndian.Uint16(b[8:10]),
-		height:         binary.LittleEndian.Uint16(b[10:12]),
-		shape:          b[12],
-		flags:          b[13],
-		udpPort:        binary.LittleEndian.Uint16(b[14:16]),
-	}
-	idLen, compLen, boardLen, fwLen, tokLen := int(b[16]), int(b[17]), int(b[18]), int(b[19]), int(b[20])
-	if len(b) < 21+idLen+compLen+boardLen+fwLen+tokLen {
-		return terminalHello{}, errProtoShort
-	}
-	off := 21
-	h.terminalID = string(b[off : off+idLen])
-	off += idLen
-	h.companionID = string(b[off : off+compLen])
-	off += compLen
-	h.board = string(b[off : off+boardLen])
-	off += boardLen
-	h.firmware = string(b[off : off+fwLen])
-	off += fwLen
-	h.token = string(b[off : off+tokLen])
 	return h, nil
 }
 
-func encodeTerminalHello(h terminalHello) []byte {
-	tidLen := min(len(h.terminalID), 255)
-	cidLen := min(len(h.companionID), 255)
-	bdLen := min(len(h.board), 255)
-	fwLen := min(len(h.firmware), 255)
-	tokLen := min(len(h.token), 255)
-	b := make([]byte, 0, 21+tidLen+cidLen+bdLen+fwLen+tokLen)
-	b = append(b, h.protoVersion, h.kind)
-	b = binary.LittleEndian.AppendUint32(b, h.capsMask)
-	b = append(b, h.displayFormats, h.frameCodecs)
-	b = binary.LittleEndian.AppendUint16(b, h.width)
-	b = binary.LittleEndian.AppendUint16(b, h.height)
-	b = append(b, h.shape, h.flags)
-	b = binary.LittleEndian.AppendUint16(b, h.udpPort)
-	b = append(b, byte(tidLen), byte(cidLen), byte(bdLen), byte(fwLen), byte(tokLen))
-	b = append(b, h.terminalID[:tidLen]...)
-	b = append(b, h.companionID[:cidLen]...)
-	b = append(b, h.board[:bdLen]...)
-	b = append(b, h.firmware[:fwLen]...)
-	b = append(b, h.token[:tokLen]...)
-	return b
-}
+func encodeTerminalHello(h terminalHello) []byte { return h.encode() }
 
 func parseTerminalResume(b []byte) (terminalResume, error) {
-	if len(b) < 22 {
+	r, ok := decodeTerminalResume(b)
+	if !ok {
 		return terminalResume{}, errProtoShort
 	}
-	var r terminalResume
-	r.protoVersion = b[0]
-	copy(r.resumeToken[:], b[1:17])
-	idLen := int(b[21])
-	if len(b) < 22+idLen {
-		return terminalResume{}, errProtoShort
-	}
-	r.terminalID = string(b[22 : 22+idLen])
 	return r, nil
 }
 
 // The resume frame still carries the retired last-state sequence as zero so
 // the 0.20.0 firmware's fixed layout keeps decoding.
 func encodeTerminalResume(protoVer uint8, token [resumeTokenLen]byte, terminalID string) []byte {
-	b := make([]byte, 0, 22+len(terminalID))
-	b = append(b, protoVer)
-	b = append(b, token[:]...)
-	b = binary.LittleEndian.AppendUint32(b, 0)
-	return appendStr8(b, terminalID)
+	return terminalResume{protoVersion: protoVer, resumeToken: token, terminalID: terminalID}.encode()
 }
 
 func helloCapsFromMask(mask uint32) terminalCaps {
@@ -352,38 +163,34 @@ func capsMaskFromCaps(c terminalCaps) uint32 {
 }
 
 func encodeWelcome(flags uint8, udpPort uint16, ssrc, maxMsgBytes, resumeWinMS uint32, token [resumeTokenLen]byte, terminalID, companionID string) []byte {
-	b := make([]byte, 0, 38+len(terminalID)+len(companionID))
-	b = append(b, protoVersion1, flags)
-	b = binary.LittleEndian.AppendUint16(b, udpPort)
-	b = binary.LittleEndian.AppendUint32(b, ssrc)
-	b = binary.LittleEndian.AppendUint32(b, maxMsgBytes)
-	b = binary.LittleEndian.AppendUint32(b, resumeWinMS)
-	b = binary.LittleEndian.AppendUint32(b, 0) // retired snapshot sequence
-	b = append(b, token[:]...)
-	tidLen := min(len(terminalID), 255)
-	cidLen := min(len(companionID), 255)
-	b = append(b, byte(tidLen), byte(cidLen))
-	b = append(b, terminalID[:tidLen]...)
-	b = append(b, companionID[:cidLen]...)
-	return b
+	return protoWelcome{
+		protoVersion:   protoVersion1,
+		flags:          flags,
+		udpPort:        udpPort,
+		ssrc:           ssrc,
+		maxMsgBytes:    maxMsgBytes,
+		resumeWindowMS: resumeWinMS,
+		resumeToken:    token,
+		terminalID:     terminalID,
+		companionID:    companionID,
+	}.encode()
 }
 
 func encodeReject(reason uint8, message string) []byte {
-	b := make([]byte, 0, 2+len(message))
-	b = append(b, reason)
-	return appendStr8(b, message)
+	return protoReject{reason: reason, message: message}.encode()
 }
 
 func parseTelemetry(b []byte) (terminalTelemetry, bool) {
-	if len(b) < 16 {
+	m, ok := decodeProtoTelemetry(b)
+	if !ok {
 		return terminalTelemetry{}, false
 	}
-	rssi := int(int16(binary.LittleEndian.Uint16(b[0:2])))
-	batt := int(int16(binary.LittleEndian.Uint16(b[2:4])))
-	charging := b[4] != 0
-	cpu := float64(b[5])
-	freeHeap := uint64(binary.LittleEndian.Uint32(b[8:12]))
-	uptime := uint64(binary.LittleEndian.Uint32(b[12:16]))
+	rssi := int(m.wifiRssi)
+	batt := int(m.batteryPct)
+	charging := m.charging != 0
+	cpu := float64(m.cpuPct)
+	freeHeap := uint64(m.freeHeap)
+	uptime := uint64(m.uptimeS)
 	var battPtr *int
 	if batt >= 0 {
 		battPtr = new(batt)
@@ -399,10 +206,11 @@ func parseTelemetry(b []byte) (terminalTelemetry, bool) {
 }
 
 func parsePointer(b []byte) (evName string, x, y int, rev uint16, ok bool) {
-	if len(b) < 8 {
+	m, ok := decodeProtoPointer(b)
+	if !ok {
 		return "", 0, 0, 0, false
 	}
-	switch b[0] {
+	switch m.kind {
 	case ptrTap:
 		evName = "tap"
 	case ptrDrag:
@@ -412,67 +220,42 @@ func parsePointer(b []byte) (evName string, x, y int, rev uint16, ok bool) {
 	default:
 		return "", 0, 0, 0, false
 	}
-	x = int(binary.LittleEndian.Uint16(b[2:4]))
-	y = int(binary.LittleEndian.Uint16(b[4:6]))
-	rev = binary.LittleEndian.Uint16(b[6:8])
-	return evName, x, y, rev, true
+	return evName, int(m.x), int(m.y), m.revLo, true
 }
 
 func encodePointer(kind uint8, x, y, revLo uint16) []byte {
-	var b [8]byte
-	b[0] = kind
-	binary.LittleEndian.PutUint16(b[2:4], x)
-	binary.LittleEndian.PutUint16(b[4:6], y)
-	binary.LittleEndian.PutUint16(b[6:8], revLo)
-	return b[:]
+	return protoPointer{kind: kind, x: x, y: y, revLo: revLo}.encode()
 }
 
 func parseRecStart(b []byte) (session uint16, target string, ok bool) {
-	if len(b) < 3 {
-		return 0, "", false
-	}
-	off := 2
-	target, ok = readStr8(b, &off)
-	return binary.LittleEndian.Uint16(b[0:2]), target, ok
+	m, ok := decodeProtoRecStart(b)
+	return m.session, m.target, ok
 }
 
 func parseRecEnd(b []byte) (session uint16, cancelled bool, target string, ok bool) {
-	if len(b) < 4 {
-		return 0, false, "", false
-	}
-	off := 3
-	target, ok = readStr8(b, &off)
-	return binary.LittleEndian.Uint16(b[0:2]), b[2] != 0, target, ok
+	m, ok := decodeProtoRecEnd(b)
+	return m.session, m.cancelled != 0, m.target, ok
 }
 
 func parseTTSAck(b []byte) (aborted bool, audioID uint64, ok bool) {
-	if len(b) < 9 {
-		return false, 0, false
-	}
-	return b[0] != 0, binary.LittleEndian.Uint64(b[1:9]), true
+	m, ok := decodeProtoTTSAck(b)
+	return m.aborted != 0, m.audioID, ok
 }
 
 func encodeTTSAck(aborted bool, audioID uint64) []byte {
-	var b [9]byte
+	var a uint8
 	if aborted {
-		b[0] = 1
+		a = 1
 	}
-	binary.LittleEndian.PutUint64(b[1:9], audioID)
-	return b[:]
+	return protoTTSAck{aborted: a, audioID: audioID}.encode()
 }
 
 func encodeRecCtrl(op, flags uint8, session uint16, target string) []byte {
-	b := make([]byte, 0, 5+len(target))
-	b = append(b, op, flags)
-	b = binary.LittleEndian.AppendUint16(b, session)
-	return appendStr8(b, target)
+	return protoRecCtrl{op: op, flags: flags, session: session, target: target}.encode()
 }
 
 func encodeTTSCtrl(op uint8, audioID uint64) []byte {
-	var b [9]byte
-	b[0] = op
-	binary.LittleEndian.PutUint64(b[1:9], audioID)
-	return b[:]
+	return protoTTSCtrl{op: op, audioID: audioID}.encode()
 }
 
 func encodeChimePayload(kind string) (byte, bool) {
@@ -493,32 +276,28 @@ func encodeChimePayload(kind string) (byte, bool) {
 }
 
 func encodeVolumeMsg(level int, persist, auto bool, terminalID, companionID string) []byte {
-	var p, a byte
+	var p, a uint8
 	if persist {
 		p = 1
 	}
 	if auto {
 		a = 1
 	}
-	b := make([]byte, 0, 5+len(terminalID)+len(companionID))
-	b = append(b, byte(min(100, max(0, level))), p, a)
-	b = appendStr8(b, terminalID)
-	return appendStr8(b, companionID)
+	return protoVolume{
+		level:       uint8(min(100, max(0, level))),
+		persist:     p,
+		auto:        a,
+		terminalID:  terminalID,
+		companionID: companionID,
+	}.encode()
 }
 
 // The payload keeps its 9-byte layout for 0.20.0 firmware; sequence, progress,
 // kind and text are retired, so only the state byte carries information.
-func encodeStatus(state uint8) []byte {
-	b := make([]byte, 9)
-	b[4] = state
-	return b
-}
+func encodeStatus(state uint8) []byte { return protoStatus{state: state}.encode() }
 
 func encodeVoiceOwner(companionID, terminalID string) []byte {
-	b := make([]byte, 0, 6+len(companionID)+len(terminalID))
-	b = binary.LittleEndian.AppendUint32(b, 0)
-	b = appendStr8(b, companionID)
-	return appendStr8(b, terminalID)
+	return protoVoiceOwner{companionID: companionID, terminalID: terminalID}.encode()
 }
 
 func encodeRTPPacket(dst []byte, pt uint8, seq uint16, ts, ssrc uint32, pcm []byte) int {

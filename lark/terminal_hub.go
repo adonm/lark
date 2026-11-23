@@ -304,7 +304,7 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 	rec, err := h.registerHardwareTerminal(termID, strings.TrimSpace(ev.companionID), ip, port, now)
 	h.b.companionMu.Unlock()
 	if err != nil {
-		reason := rejectBadCaps
+		var reason uint8 = rejectBadCaps
 		if api, ok := err.(*apiError); ok && api.status == 404 {
 			reason = rejectUnknownTerminal
 		}

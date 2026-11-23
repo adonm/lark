@@ -165,29 +165,25 @@ func (s *simTerminal) readLoop() {
 			}
 			s.mu.Unlock()
 		case msgStatus:
-			if len(payload) >= 7 {
+			if msg, ok := decodeProtoStatus(payload); ok {
 				s.mu.Lock()
-				s.state = statusName(payload[4])
+				s.state = statusName(msg.state)
 				s.timeline = append(s.timeline, object{"event": "status", "state": s.state, "t_ms": now.Sub(s.started).Milliseconds()})
 				s.cond.Broadcast()
 				s.mu.Unlock()
 			}
 		case msgRecCtrl:
-			if len(payload) >= 4 {
-				op := payload[0]
-				flags := payload[1]
+			if msg, ok := decodeProtoRecCtrl(payload); ok {
 				s.mu.Lock()
-				switch op {
+				switch msg.op {
 				case recOpStart:
-					sess := binary.LittleEndian.Uint16(payload[2:4])
 					s.recActive = true
-					s.recSess = sess
-					s.recBridgeEP = flags&recTargetBridgeE != 0
-					s.recListen = flags&recTargetListen != 0
+					s.recSess = msg.session
+					s.recBridgeEP = msg.flags&recTargetBridgeE != 0
+					s.recListen = msg.flags&recTargetListen != 0
 					s.recCtrlAt = now
 					s.timeline = append(s.timeline, object{"event": "rec_start", "t_ms": now.Sub(s.started).Milliseconds()})
-					ack := binary.LittleEndian.AppendUint16(nil, sess)
-					ack = appendStr8(ack, "")
+					ack := protoRecStart{session: msg.session}.encode()
 					go func() { _ = s.sendProto(msgRecStart, ack) }()
 				case recOpStop, recOpCancel:
 					s.recActive = false
@@ -197,13 +193,11 @@ func (s *simTerminal) readLoop() {
 				s.mu.Unlock()
 			}
 		case msgTTSCtrl:
-			if len(payload) >= 9 {
-				op := payload[0]
-				audioID := binary.LittleEndian.Uint64(payload[1:9])
+			if msg, ok := decodeProtoTTSCtrl(payload); ok {
 				s.mu.Lock()
-				switch op {
+				switch msg.op {
 				case ttsOpStart:
-					s.ttsAudioID = audioID
+					s.ttsAudioID = msg.audioID
 					s.ttsActive = true
 					s.ttsStartAt = now
 					s.ttsFirstPCMAt = time.Time{}
@@ -212,8 +206,8 @@ func (s *simTerminal) readLoop() {
 				case ttsOpEnd, ttsOpStop:
 					s.ttsActive = false
 					s.timeline = append(s.timeline, object{"event": "tts_end", "t_ms": now.Sub(s.started).Milliseconds()})
-					if op == ttsOpEnd {
-						go func(id uint64) { _ = s.sendProto(msgTTSAck, encodeTTSAck(false, id)) }(audioID)
+					if msg.op == ttsOpEnd {
+						go func(id uint64) { _ = s.sendProto(msgTTSAck, encodeTTSAck(false, id)) }(msg.audioID)
 					}
 				}
 				s.cond.Broadcast()

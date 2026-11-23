@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "audio_logic.h"
 #include "board.h"
 #include "display.h"
 #include "esp_app_desc.h"
@@ -22,6 +23,7 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "media.h"
+#include "net_logic.h"
 #include "power.h"
 #include "proto.h"
 #include "sdkconfig.h"
@@ -101,8 +103,7 @@ static _Alignas(4) uint8_t rtp_pkt[LARK_RTP_PACKET_BYTES];
 
 static uint8_t *rx_buffer;
 static bool tts_accepted;
-static uint8_t tts_carry;
-static bool tts_odd;
+static audio_tts_splitter_t tts_split;
 
 static atomic_bool wifi_online;
 static atomic_uint socket_session, ready_session;
@@ -438,26 +439,17 @@ static void send_status(uint32_t session)
     send_tcp_frame(session, LARK_MSG_TELEMETRY, &st, sizeof(st), true);
 }
 
+static bool tts_pcm_sink(const void *data, size_t len, void *ctx)
+{
+    (void)ctx;
+    return media_tts_pcm(data, len);
+}
+
 static void receive_tts_pcm(const uint8_t *bytes, size_t len)
 {
     if (!len || !tts_accepted) return;
-    if (tts_odd) {
-        uint8_t sample[2] = { tts_carry, *bytes++ };
-        --len;
-        tts_odd = false;
-        if (!media_tts_pcm(sample, sizeof(sample))) {
-            tts_accepted = false;
-            return;
-        }
-    }
-    size_t even = len & ~(size_t)1;
-    if (even && !media_tts_pcm(bytes, even)) {
+    if (!audio_tts_feed(&tts_split, bytes, len, tts_pcm_sink, NULL)) {
         tts_accepted = false;
-        return;
-    }
-    if (len != even) {
-        tts_carry = bytes[even];
-        tts_odd = true;
     }
 }
 
@@ -485,11 +477,11 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         break;
     }
     case LARK_MSG_REJECT: {
-        uint8_t reason = 0;
+        lark_reject_t reject;
         char msg[128];
-        if (!lark_decode_reject(payload, len, &reason, msg, sizeof(msg))) break;
-        ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reason, msg);
-        if (reason == LARK_REJECT_UNKNOWN_TERMINAL) {
+        if (!lark_decode_reject(payload, len, &reject, msg, sizeof(msg))) break;
+        ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reject.reason, msg);
+        if (reject.reason == LARK_REJECT_UNKNOWN_TERMINAL) {
             has_resume_token = false;
         }
         break;
@@ -498,9 +490,9 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         if (!display_apply_frame(payload, len)) ESP_LOGD(TAG, "Ignored display frame");
         break;
     case LARK_MSG_REC_CTRL: {
-        if (len < sizeof(lark_rec_ctrl_t)) break;
         lark_rec_ctrl_t ctrl;
-        memcpy(&ctrl, payload, sizeof(ctrl));
+        char target[32];
+        if (!lark_decode_rec_ctrl(payload, len, &ctrl, target, sizeof(target))) break;
         if (ctrl.op == LARK_REC_STOP || ctrl.op == LARK_REC_CANCEL) {
             media_record_stop(ctrl.op == LARK_REC_CANCEL);
         } else if (ctrl.op == LARK_REC_START) {
@@ -521,28 +513,27 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
         break;
     }
     case LARK_MSG_TTS_CTRL: {
-        if (len < sizeof(lark_tts_ctrl_t)) break;
         lark_tts_ctrl_t ctrl;
-        memcpy(&ctrl, payload, sizeof(ctrl));
+        if (!lark_decode_tts_ctrl(payload, len, &ctrl)) break;
         uint32_t audio_id = (uint32_t)ctrl.audio_id;
         if (ctrl.op == LARK_TTS_START) {
-            tts_odd = false;
+            tts_split = (audio_tts_splitter_t){ 0 };
             tts_accepted = media_tts_start(audio_id);
             if (!tts_accepted) net_client_tts_ack(session, audio_id, true);
         } else if (ctrl.op == LARK_TTS_END) {
             if (tts_accepted) {
-                if (tts_odd) {
+                if (tts_split.odd) {
                     media_interrupt();
                 } else {
                     media_tts_end();
                 }
             }
             tts_accepted = false;
-            tts_odd = false;
+            tts_split = (audio_tts_splitter_t){ 0 };
         } else {
             media_interrupt();
             tts_accepted = false;
-            tts_odd = false;
+            tts_split = (audio_tts_splitter_t){ 0 };
         }
         break;
     }
@@ -579,8 +570,9 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
     case LARK_MSG_STATUS: {
         // Only the state byte is meaningful; text, progress and kind are gone
         // from the protocol, and older servers may still append them.
-        if (len < sizeof(lark_status_t)) break;
-        ESP_LOGD(TAG, "Status state=%u", payload[0]);
+        lark_status_t status;
+        if (!lark_decode_status(payload, len, &status)) break;
+        ESP_LOGD(TAG, "Status state=%u", status.state);
         break;
     }
     case LARK_MSG_PING:
@@ -641,7 +633,7 @@ static void close_sockets(void)
     if (atomic_exchange(&socket_session, 0)) {
         atomic_store(&ready_session, 0);
         tts_accepted = false;
-        tts_odd = false;
+        tts_split = (audio_tts_splitter_t){ 0 };
         media_link_lost();
         display_set_link(false);
     }
@@ -762,20 +754,15 @@ static void drain_ctrl(void)
     ctrl_msg_t msg;
     while (ctrl_queue && xQueueReceive(ctrl_queue, &msg, 0) == pdPASS) {
         if (msg.kind == CTRL_REC_START) {
-            uint8_t wire[3] = {
-                (uint8_t)(msg.rec_session & 0xFF),
-                (uint8_t)(msg.rec_session >> 8),
-                0,
-            };
-            send_tcp_frame(msg.session, LARK_MSG_REC_START, wire, sizeof(wire), true);
+            lark_rec_start_t wire = { .session = msg.rec_session, .target_len = 0 };
+            send_tcp_frame(msg.session, LARK_MSG_REC_START, &wire, sizeof(wire), true);
         } else if (msg.kind == CTRL_REC_END) {
-            uint8_t wire[4] = {
-                (uint8_t)(msg.rec_session & 0xFF),
-                (uint8_t)(msg.rec_session >> 8),
-                msg.cancelled ? 1 : 0,
-                0,
+            lark_rec_end_t wire = {
+                .session = msg.rec_session,
+                .cancelled = msg.cancelled ? 1 : 0,
+                .target_len = 0,
             };
-            send_tcp_frame(msg.session, LARK_MSG_REC_END, wire, sizeof(wire), true);
+            send_tcp_frame(msg.session, LARK_MSG_REC_END, &wire, sizeof(wire), true);
         }
     }
 }
@@ -786,7 +773,7 @@ static void service_task(void *arg)
     for (;;) {
         if (!atomic_load(&wifi_online)) {
             close_sockets();
-            reconnect_ms = 1000;
+            reconnect_ms = net_backoff_reset();
             while (!atomic_load(&wifi_online)) {
                 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             }
@@ -797,10 +784,10 @@ static void service_task(void *arg)
         if (!open_connection(&session)) {
             close_sockets();
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(reconnect_ms));
-            if (reconnect_ms < 30000) reconnect_ms = reconnect_ms > 15000 ? 30000 : reconnect_ms * 2;
+            reconnect_ms = net_backoff_next(reconnect_ms);
             continue;
         }
-        reconnect_ms = 1000;
+        reconnect_ms = net_backoff_reset();
         int64_t after_status = esp_timer_get_time() / 1000 + STATUS_MS;
 
         while (atomic_load(&wifi_online) && tcp_fd >= 0) {

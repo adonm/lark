@@ -179,7 +179,7 @@ func (h *terminalHub) pushRecStart(d *terminalSession, target string, bridgeEndp
 }
 
 func (h *terminalHub) pushRecStop(d *terminalSession, target string, cancelled bool) {
-	op := recOpStop
+	var op uint8 = recOpStop
 	if cancelled {
 		op = recOpCancel
 	}
