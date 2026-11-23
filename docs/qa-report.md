@@ -38,7 +38,7 @@ The library tool phase is **50× faster end-to-end** and **300× faster in-proce
 - Reference and story turns chose the library *because it is the fast path*; neither used web search.
 - The current-events turn tried the library once, missed, and fell back to websearch with a normal spoken answer. No dead end.
 - A requested story is imported as a validated Twee story and opened on the reader silently; the spoken retell happens because the user asked for it.
-- The static prompt grew from 3,928 to 4,226 bytes (about +74 tokens) and stays under the 4,250-byte regression budget. A short per-turn `[library: search before facts]` hint was added because the prompt alone did not reliably trigger the tool on a small fast model; story turns get `[library: import the requested story with companion_id]` so the reader actually opens.
+- The static prompt grew from 3,928 to 4,230 bytes (about +75 tokens) and stays under the 4,250-byte regression budget. A short per-turn `[library: search before facts]` hint was added because the prompt alone did not reliably trigger the tool on a small fast model; story turns get `[library: import the requested story with companion_id]` so the reader actually opens.
 
 ### Content
 
