@@ -65,8 +65,7 @@ jobs:
         with:
           go-version-file: lark/go.mod
           cache-dependency-path: lark/go.sum
-      - name: Install ffmpeg (Delta Chat voice notes)
-        if: matrix.shard == 'dc-remote-library'
+      - name: Install ffmpeg (voice-note decode in the DC tests)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
