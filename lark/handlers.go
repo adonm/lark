@@ -875,6 +875,8 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 				"deltachat": b.dc != nil && b.dc.ready.Load()}, nil
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
+		case path == "/api/library":
+			return libraryPlanReport(b.libraryDir()), nil
 		case path == "/ota/version.json" || path == "/ota/latest.bin":
 			return b.ota.serve(w, path == "/ota/version.json")
 		case path == "/ota/box3/version.json" || path == "/ota/box3/latest.bin":

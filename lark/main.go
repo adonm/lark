@@ -185,6 +185,7 @@ func run() error {
 	b.remote = newRemoteManager(b, findTunnelCLI(home))
 	b.remote.restore(root)
 	defer b.remote.close()
+	go b.provisionLibrary(root)
 	oc.flushHistory = b.history.flush
 	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
 	go b.dc.start(root)

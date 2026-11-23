@@ -250,7 +250,8 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 	db := testDB(t, filepath.Join(dir, "lark.db"))
-	b := &larkServer{root: ctx, token: "unit", db: db, terminals: terminalStore(db), history: &chatHistory{db: db}}
+	b := &larkServer{root: ctx, token: "unit", db: db, terminals: terminalStore(db), history: &chatHistory{db: db},
+		library: filepath.Join(dir, "library")}
 	if setup != nil {
 		setup(b, dir)
 	}

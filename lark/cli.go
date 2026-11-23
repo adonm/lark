@@ -98,6 +98,47 @@ func runCLI(ctx context.Context, cmd string, args []string, out, errOut io.Write
 	return runCLIWithClient(ctx, c, cmd, args, out, errOut)
 }
 
+func printLibraryPlan(out io.Writer, lib object) {
+	fmt.Fprintf(out, "Library (%s):\n", str(lib["dir"]))
+	if msg := str(lib["error"]); msg != "" {
+		fmt.Fprintf(out, "  unavailable: %s\n", msg)
+		return
+	}
+	fmt.Fprintf(out, "  disk: %s free of %s, budget %s\n",
+		humanBytes(jsonInt(lib["free_bytes"])), humanBytes(jsonInt(lib["total_bytes"])),
+		humanBytes(jsonInt(lib["budget_bytes"])))
+	packs, _ := lib["packs"].([]any)
+	for _, item := range packs {
+		m, _ := item.(object)
+		switch str(m["state"]) {
+		case packStateInstalled:
+			fmt.Fprintf(out, "  %s\tinstalled\t%s\n", str(m["name"]), humanBytes(jsonInt(m["installed_bytes"])))
+		case packStateBuilding:
+			fmt.Fprintf(out, "  %s\tbuilding\t%d%%\n", str(m["name"]), jsonInt(m["percent"]))
+		case packStateSkipped:
+			fmt.Fprintf(out, "  %s\tskipped\t%s\n", str(m["name"]), str(m["reason"]))
+		default:
+			fmt.Fprintf(out, "  %s\t%s\t%s needed\n", str(m["name"]), str(m["state"]),
+				humanBytes(jsonInt(m["needed_bytes"])))
+		}
+	}
+}
+
+func jsonInt(value any) int64 {
+	switch v := value.(type) {
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	}
+	return 0
+}
+
 func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []string, out, errOut io.Writer) error {
 	switch cmd {
 	case "status":
@@ -117,12 +158,17 @@ func runCLIWithClient(ctx context.Context, c *cliClient, cmd string, args []stri
 		if err != nil {
 			return err
 		}
+		lib, err := c.do(ctx, http.MethodGet, "/api/library", nil)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(out, "Server: ok=%v opencode=%v stt=%v tts=%v",
 			health["ok"], health["opencode"], health["stt"], health["tts"])
 		if dc, ok := health["deltachat"]; ok {
 			fmt.Fprintf(out, " deltachat=%v", dc)
 		}
 		fmt.Fprintln(out)
+		printLibraryPlan(out, lib)
 		compList, _ := comps["companions"].([]any)
 		termList, _ := terms["terminals"].([]any)
 		fmt.Fprintf(out, "Companions (%d):\n", len(compList))

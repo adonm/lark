@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,5 +53,26 @@ func TestCLIAdminCommands(t *testing.T) {
 	}
 	if got := run("companions"); strings.Contains(got, "cake\t") {
 		t.Fatal("cake still listed after rm:", got)
+	}
+}
+
+func TestStatusReportsLibraryPacks(t *testing.T) {
+	_, base := wsHarness(t, func(b *larkServer, _ string) {
+		if err := os.MkdirAll(b.library, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.library, "gutenberg.db"), []byte("index"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	c := &cliClient{base: base, token: "unit", http: &http.Client{}}
+	var out, errOut bytes.Buffer
+	if err := runCLIWithClient(t.Context(), c, "status", nil, &out, &errOut); err != nil {
+		t.Fatalf("status: %v (%s)", err, errOut.String())
+	}
+	for _, want := range []string{"Library (", "disk:", "gutenberg\tinstalled", "simple\tpending"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status output lacks %q:\n%s", want, out.String())
+		}
 	}
 }

@@ -882,6 +882,7 @@ func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error
 	build := flags.Bool("build", false, "build SQLite indexes from raw files")
 	force := flags.Bool("force", false, "rebuild indexes even when present")
 	status := flags.Bool("status", false, "print library paths, sizes, and counts")
+	plan := flags.Bool("plan", false, "print the disk-aware provisioning plan and exit")
 	search := flags.String("search", "", "search the installed indexes and print JSON")
 	read := flags.String("read", "", "read a bounded section and print JSON")
 	source := flags.String("source", "all", "all, enwiki, simple, or gutenberg")
@@ -902,6 +903,15 @@ func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error
 	}
 	if *status {
 		raw, _ := json.MarshalIndent(libraryStatus(ctx, dir), "", "  ")
+		fmt.Fprintln(out, string(raw))
+		return nil
+	}
+	if *plan {
+		p, err := planLibrary(dir, nil)
+		if err != nil {
+			return err
+		}
+		raw, _ := json.MarshalIndent(p, "", "  ")
 		fmt.Fprintln(out, string(raw))
 		return nil
 	}
@@ -926,7 +936,7 @@ func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error
 		return nil
 	}
 	if !*download && !*build {
-		return errors.New("expected --download, --build, or --status")
+		return errors.New("expected --plan, --download, --build, or --status")
 	}
 	if *download {
 		if *source == "all" || *source == "enwiki" {
@@ -1787,6 +1797,9 @@ func buildWikipedia(ctx context.Context, dir, wiki string, force bool, out io.Wr
 		return err
 	}
 	libraryLog(out, "%s: %d pages indexed in %s (%s)", wiki, count, time.Since(start).Round(time.Second), humanBytes(fileSize(dbPath)))
+	if reclaimed := reclaimWikiDump(dump); reclaimed > 0 {
+		libraryLog(out, "%s: removed the downloaded dump after indexing (%s reclaimed)", wiki, humanBytes(reclaimed))
+	}
 	return nil
 }
 
