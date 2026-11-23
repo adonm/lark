@@ -2,8 +2,7 @@
 
 `./scripts/check.sh` is the gate: shell checks, Node tests, Go vet, the Go race
 suite, the live-tag compile, host C tests under ASan/UBSan, and tracked-file
-hygiene. Run it before every push. CI runs the same phases, with the race suite
-split into three shards.
+hygiene. Run it before every push. CI runs the same phases in one job.
 
 ## To change X, run Y
 
@@ -15,7 +14,7 @@ split into three shards.
 | OpenCode config (`config/opencode/`) | `node --test config/opencode/*.test.mjs` |
 | firmware host logic (`firmware/main/*.c`) | `./scripts/check.sh --fast` (all host C tests, ~1 s) |
 | firmware image | `./scripts/build.sh vocat` or `./scripts/build.sh box3` (incremental; `--force`, `--watch`) |
-| remote page (`lark/web/remote/`) | `./scripts/check.sh --remote-ui` (DOM suite, ~3 s) |
+| remote page (`lark/web/remote/`) | `./scripts/check.sh --remote-ui` (whole gate, then a 3 s DOM suite) |
 | QA sim scenarios (`lark/qa/*.sim`) | `./scripts/check.sh --qa` (~12 s) |
 | QA stub matrix (no models) | `./scripts/check.sh --e2e-stub` (~9 s) |
 | board QA | `./scripts/check.sh --qa-hw` (~19 s) |
@@ -88,28 +87,63 @@ CI never uses `--fast`.
 ## Measured timings
 
 Local: 16 cores, Go 1.26.10, warm build cache, Go test cache cleared before
-each of three full runs (114.8 / 111.8 / 112.1 s).
+each full run. Before parallelising, three runs measured 141.9 / 141.7 /
+141.8 s (`go-race` 139.0 / 139.0 / 139.1 s). After, three runs measured
+29.2 / 27.6 / 27.1 s. The first run includes a 2 s live-tag compile after a
+source change.
 
-| Step | Time |
-| --- | --- |
-| shell | 0.3 s |
-| node | 0.1 s |
-| vet (+ `go mod verify`) | 0.7 s |
-| go-race | 109.3 s |
-| live-tag compile | 0.5 s |
-| host C | 1.0 s |
-| hygiene | 0.0 s |
-| full gate | ~112 s |
+| Step | Before | After |
+| --- | --- | --- |
+| shell | 0.4 s | 0.4 s |
+| node | 0.0 s | 0.0 s |
+| vet (+ `go mod verify`) | 0.5 s | 0.5 s |
+| go-race | 139.0 s | 24.5 s |
+| live-tag compile | 0.4 s | 0.4 s |
+| host C | 1.0 s | 1.0 s |
+| hygiene | 0.0 s | 0.0 s |
+| full gate | ~142 s | ~28 s |
 
-`--qa` adds 11.9 s (14.7 s total), `--qa-hw` adds 18.7 s (21.6 s total), and
-`--remote-ui` adds 3.0 s. The race suite is ~97 % of the local gate.
+The race suite is still most of the gate (~89 %). `--qa` adds 11.9 s,
+`--qa-hw` adds 18.7 s, and `--remote-ui` adds 3.0 s of DOM tests that run
+against the Chromium already in `~/.cache/ms-playwright` (no browser
+download on the hot path; the module is resolved from `node_modules`). A
+`--remote-ui` run therefore costs the full gate plus 3 s, which is what the
+earlier 114.5 s observation measured: the gate, not the DOM suite.
+
+### Parallel suite
+
+`lark/parallel_test.go` documents the split: 256 top-level tests call
+`t.Parallel`, and 19 stay in the sequential phase with `serial(t)`:
+
+- 6 allocation tests: `testing.AllocsPerRun` panics in a parallel test.
+- 5 environment tests (three capture, OTA, MCP stdio): `t.Setenv` forbids
+  `t.Parallel`, and the environment is process state.
+- 2 listen tests that shorten the package-level `listenWindow`.
+- 5 measured tests whose wall-clock bounds (installed library latency,
+  catalog-refresh pacing, playback backpressure) would be invalidated by
+  parallel load.
+- 1 restart test that closes a listener and rebinds the saved port.
+
+The Go test runner completes every test without `t.Parallel` before it
+starts the parallel batch, so the sequential phase is explicit, not luck.
+Its long poles are `TestLibraryLatencyInstalled` (4.1 s of real SQLite
+queries), the 2 s capture tests, and `TestKokoroReal`'s shared engine
+(subtests stay serial because the sherpa engine is not safe to call
+concurrently); `TestKokoroReal` is now the longest parallel test at ~9 s
+under load.
+
+Determinism checks after the change: `go test -race -tags sqlite_fts5
+-count=3 -cpu 2,8 ./...` (six passes, 162 s) and `-count=5` at default
+parallelism (116 s) both finished with 0 failures, as did one run
+concurrent with a `--remote-ui` gate.
 
 CI keeps one offline job (187 s measured before this work). A three-way race
 split was tried and rejected: its best case saved ~87 s (187 s → ~100 s),
 under the 90 s bar, and every shard must reinstall ffmpeg for tests that
 depend on it. That install took 45 s to over 5 minutes on the package mirror;
-one shard ran 402 s, slower than the unsplit job. The firmware build dominates
-the overall workflow anyway.
+one shard ran 402 s, slower than the unsplit job. The suite now parallelises
+inside the one job instead, and Kokoro is skipped there when
+`TTS_MODEL_DIR` has no model pack.
 
 ## Fast stub QA loop and voice fixtures
 
