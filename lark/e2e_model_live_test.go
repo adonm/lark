@@ -38,6 +38,16 @@ func e2ePromptLimit() int32 {
 
 const e2eModelReply = "The sky looks blue because air scatters sunlight."
 
+// e2eStubRule scripts a model reply from the prompt text. Tool, when set, is
+// called through the bridge's real MCP endpoint first, exactly as the agent
+// process would call it.
+type e2eStubRule struct {
+	Match string
+	Reply string
+	Tool  string
+	Args  object
+}
+
 type e2eModel struct {
 	url, alias  string
 	client      *http.Client
@@ -57,6 +67,8 @@ type e2eModel struct {
 	usage       map[ocModel]int
 	tools       map[string]int
 	removed     int
+	rules       []e2eStubRule
+	promptLog   []string
 }
 
 type e2eSession struct {
@@ -526,6 +538,7 @@ func (m *e2eModel) stub(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		}
 		n := m.prompts.Add(1)
 		key := fmt.Sprintf("e2e-%d", n)
+		m.promptLog = append(m.promptLog, in.Text)
 		session.rows = append(session.rows, object{"id": "user-" + key, "type": "user", "text": in.Text})
 		session.wait = make(chan struct{})
 		done := session.wait
@@ -577,6 +590,25 @@ func (m *e2eModel) finishStub(s *e2eSuite, session *e2eSession, id, key, text st
 		<-m.followUp
 	}
 	m.mu.Lock()
+	var rule *e2eStubRule
+	for i := range m.rules {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(m.rules[i].Match)) {
+			rule = &m.rules[i]
+			break
+		}
+	}
+	m.mu.Unlock()
+	if rule != nil {
+		if rule.Reply != "" {
+			reply = rule.Reply
+		}
+		if rule.Tool != "" {
+			if err := m.callTool(s, rule.Tool, rule.Args); err != nil {
+				m.auditMCP("rule tool " + rule.Tool + ": " + err.Error())
+			}
+		}
+	}
+	m.mu.Lock()
 	session.rows = append(session.rows, object{"id": "assistant-" + key, "type": "assistant", "agent": session.state["agent"], "model": m.settings.Model,
 		"finish": "stop", "content": []object{{"type": "text", "text": reply}}})
 	m.mu.Unlock()
@@ -585,4 +617,58 @@ func (m *e2eModel) finishStub(s *e2eSuite, session *e2eSession, id, key, text st
 		SessionID: id, AssistantMessageID: "assistant-" + key, Delta: reply + " ",
 	}}
 	m.events <- ocEvent{Type: "session.execution.succeeded", Data: ocEventData{SessionID: id}}
+}
+
+func (m *e2eModel) setRules(rules []e2eStubRule) {
+	m.mu.Lock()
+	m.rules = append([]e2eStubRule(nil), rules...)
+	m.mu.Unlock()
+}
+
+// userTexts returns every prompt the bridge sent, oldest first. Sessions are
+// ephemeral, so keep a separate log instead of reading session rows.
+func (m *e2eModel) userTexts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.promptLog...)
+}
+
+func (m *e2eModel) sawUserText(fragment string) bool {
+	for _, text := range m.userTexts() {
+		if strings.Contains(text, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// callTool drives the bridge's MCP endpoint the way a model process would.
+func (m *e2eModel) callTool(s *e2eSuite, name string, args object) error {
+	payload := object{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": object{"name": name, "arguments": args}}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, s.base+"/mcp", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", jsonType)
+	req.Header.Set("X-Lark-Token", s.token)
+	res, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	m.mcpCalls.Add(1)
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", res.StatusCode)
+	}
+	var out struct{ Result struct{ IsError bool } }
+	if json.Unmarshal(body, &out) == nil && out.Result.IsError {
+		return fmt.Errorf("tool error")
+	}
+	return nil
 }

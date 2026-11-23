@@ -3,10 +3,16 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 case "$#:${1-}" in
-    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw|1:--remote-ui|1:--fast|2:--fast|1:--no-race) ;;
-    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw | --remote-ui | --fast [ref] | --no-race]\n' "$0" >&2; exit 2 ;;
+    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw|1:--remote-ui|1:--fast|2:--fast|1:--no-race|1:--e2e-stub) ;;
+    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw | --remote-ui | --fast [ref] | --no-race | --e2e-stub]\n' "$0" >&2; exit 2 ;;
 esac
 mode=${1-}
+
+# The stub matrix is the fast development loop: one isolated e2e bridge and
+# every non-hardware scenario. Skip the offline gate entirely.
+if [[ $mode == --e2e-stub ]]; then
+    exec ./scripts/e2e-stub.sh
+fi
 
 check_start=$(date +%s%3N)
 timings=()
