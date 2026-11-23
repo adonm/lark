@@ -21,8 +21,23 @@ import (
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 )
 
+// requireIsolatedQA keeps live QA from writing to an installed Lark server by
+// accident. These suites create companions, Delta Chat accounts and library
+// rows, so only a disposable bridge (the stub e2e server) or an explicit
+// LARK_QA_ALLOW_PRODUCTION=1 opt-in may proceed. scripts/check.sh sets the
+// opt-in for --qa and --qa-hw, which target the installed server on purpose.
+func requireIsolatedQA(t *testing.T) {
+	t.Helper()
+	if os.Getenv("LARK_QA_ALLOW_PRODUCTION") == "1" || os.Getenv("LARK_E2E_MODE") == "stub" {
+		return
+	}
+	t.Fatal("live QA creates companions and other rows on the server; " +
+		"use ./scripts/check.sh --e2e-stub, or set LARK_QA_ALLOW_PRODUCTION=1 to target the installed server deliberately")
+}
+
 func qaLiveClient(t *testing.T) *cliClient {
 	t.Helper()
+	requireIsolatedQA(t)
 	c, err := newCLIClient()
 	if err != nil {
 		t.Fatal(err)
@@ -42,14 +57,31 @@ func qaTempCompanion(t *testing.T, c *cliClient, name, form string) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		// Unknown sims create a blank companion and terminal before the script
-		// attaches them. Remove everything the test added, not just the QA one.
+		// attaches them. Track the ids that appeared during this test and only
+		// remove those: a terminal on a companion that predates the test, or a
+		// configured companion, belongs to someone else.
 		if list, err := c.do(ctx, http.MethodGet, "/api/terminals", nil); err == nil {
 			if items, ok := list["terminals"].([]any); ok {
 				for _, item := range items {
 					m, _ := item.(object)
-					term := str(m["id"])
-					if !beforeTerms[term] {
-						_, _ = c.do(ctx, http.MethodDelete, "/api/terminals/"+term, nil)
+					term, cid := str(m["id"]), str(m["companion_id"])
+					if beforeTerms[term] || (cid != "" && beforeComps[cid]) {
+						continue
+					}
+					_, _ = c.do(ctx, http.MethodDelete, "/api/terminals/"+term, nil)
+				}
+			}
+		}
+		// A sim registers a blank companion before the script attaches its
+		// terminal, so the blank row is no longer linked from any terminal.
+		// Drop the orphan only when it is new and nothing references it.
+		inUse := map[string]bool{}
+		if list, err := c.do(ctx, http.MethodGet, "/api/terminals", nil); err == nil {
+			if items, ok := list["terminals"].([]any); ok {
+				for _, item := range items {
+					m, _ := item.(object)
+					if cid := str(m["companion_id"]); cid != "" {
+						inUse[cid] = true
 					}
 				}
 			}
@@ -59,9 +91,13 @@ func qaTempCompanion(t *testing.T, c *cliClient, name, form string) string {
 				for _, item := range items {
 					m, _ := item.(object)
 					cid := str(m["id"])
-					if cid == id || (!beforeComps[cid] && m["configured"] != true) {
-						_, _ = c.do(ctx, http.MethodDelete, "/api/companions/"+cid, nil)
+					if beforeComps[cid] || inUse[cid] {
+						continue
 					}
+					if cid != id && m["configured"] == true {
+						continue
+					}
+					_, _ = c.do(ctx, http.MethodDelete, "/api/companions/"+cid, nil)
 				}
 			}
 		}

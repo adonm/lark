@@ -327,12 +327,19 @@ phase_real_model() {
     (cd lark && LARK_REAL_MODEL=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestRealModelLarkCodeMode$' .)
 }
 
-phase_qa() { (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestQASimSuite$' .); }
+# --qa and --qa-hw deliberately target the installed server, so they opt in to
+# its writes explicitly. Cleanup removes the rows each test created (see
+# qaTempCompanion and localLibraryRemoveNewStories).
+phase_qa() {
+    (cd lark && LARK_QA_ALLOW_PRODUCTION=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestQASimSuite$' .)
+}
 
-phase_qa_library() { (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestQALocalLibraryBehaviour$' .); }
+phase_qa_library() {
+    (cd lark && LARK_QA_ALLOW_PRODUCTION=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^TestQALocalLibraryBehaviour$' .)
+}
 
 phase_qa_hw() {
-    (cd lark && LARK_QA_HW=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^(TestQASimSuite|TestQAHardwareSuite)$' .)
+    (cd lark && LARK_QA_ALLOW_PRODUCTION=1 LARK_QA_HW=1 "$GO_BIN" test -tags=live,sqlite_fts5 -v -count=1 -run '^(TestQASimSuite|TestQAHardwareSuite)$' .)
 }
 
 phase_remote_ui() {
