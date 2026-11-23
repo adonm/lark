@@ -336,3 +336,37 @@ for tests that depend on it. That install took 45 s to over 5 minutes on the
 package mirror; one shard ran 402 s, slower than the unsplit job. The suite
 parallelises inside one job instead, and Kokoro is skipped there when
 `TTS_MODEL_DIR` has no model pack.
+
+### Security, privacy, and library hardening, 2026-11-24
+
+Fixed on `fix-security` (rebased onto `main` at `bf5bfbb`):
+
+- Entropy failures fail the request instead of minting all-zero `/remote`
+  tokens, portrait ids, or timer ids. `/mcp` now requires a loopback peer like
+  `/debug/pprof`; the HTTP listener stays LAN-reachable for firmware OTA.
+- Tunnel issue/stop/revoke no longer hold the manager lock across opentunnel
+  CLI calls, persist the replacement token before retiring the old one, and
+  report `deleteMeta` failures so a revoked token cannot reappear.
+- A scoped remote token reveals in-person notes plus only the Delta Chat
+  messages its own contact sent; companion replies and intercom stay private.
+  Its cookie is always `Secure`.
+- Debug captures prune to two weeks / 1 GiB on start and save, list at most
+  200, read transcripts and transcribe through bounds, and are removed with
+  their companion; story backgrounds are removed with their story. `doctor`
+  reports capture size.
+- Identity edits are versioned and reconciled on the next turn; a failed PUT
+  stays dirty and a newer edit always wins. A new session advances
+  `context_after_ms` and deletes the replaced OpenCode session.
+- Missing prompt, retired stored voice, broken library packs, orphaned Delta
+  Chat accounts, and schema drift are surfaced by `doctor` instead of failing
+  later as a generic 502.
+- Gutenberg pins resolve through `repoRoot()`, pack builds share one lock (and
+  a provision lock), and lock-open errors read as locked.
+
+Measured (`go test -bench`, 24 stories x 12 passages): `listStories` 56.5 us
+vs `listStorySummaries` 21.2 us; `remoteSnapshot` 101 us cold vs 71 us with
+the compiled-progress cache. The remote page now loads pinned Oat 1.1.0 from
+jsDelivr; `--remote-ui` stubs the CDN and passes offline.
+
+Gates: `./scripts/check.sh`, `--e2e-stub`, `--qa`, `--remote-ui` all pass. Not
+deployed; the endpoint workstream deploys last.
