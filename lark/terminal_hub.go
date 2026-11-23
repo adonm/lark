@@ -99,7 +99,7 @@ type terminalSession struct {
 	meter         time.Time
 	asleep        bool
 	reply         *turnReply // Delta Chat read-out awaiting an in-person reply
-	replySpoken   time.Time  // When the read-out finished playing.
+	replySpoken   time.Time  // When the read-out was delivered; a capture already open then is stale.
 	replyUntil    time.Time
 
 	recording     deviceCapture
@@ -726,7 +726,7 @@ func (h *terminalHub) animate(ctx context.Context) {
 				case d.recording.active() && !d.recording.listen && d.recording.stopTimer == nil && now.Sub(d.recording.started) > captureFailsafe:
 					h.stopRecordingAtLimit(d, now)
 				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(ttsAckFallback)) &&
-				(!losslessTTSAcks(d.firmware) || d.ackClient != d.client):
+					(!losslessTTSAcks(d.firmware) || d.ackClient != d.client):
 					h.playbackDone(d, now, false)
 				case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
 					h.setSleeping(d, true)

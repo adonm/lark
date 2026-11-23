@@ -217,3 +217,24 @@ func TestFollowUpGraceConcurrentAccess(t *testing.T) {
 		t.Fatalf("nameFreeUntil = %v, want a refreshed %v", got, now.Add(time.Second+followUpGrace))
 	}
 }
+
+// Only a reply or notice buys no-name follow-ups. A silent turn must leave the
+// previous grace (possibly expired) untouched.
+func TestSilentReplyGrantsNoFollowUpGrace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := &terminalSession{key: "t", turn: 1, client: &terminalClient{ctx: ctx}, companionID: "c"}
+	h := &terminalHub{terminals: map[string]*terminalSession{"t": d}, companionStatuses: map[string]companionStatusState{}, voiceOwners: map[string]string{}, b: &larkServer{root: ctx}}
+	expired := time.Now().Add(-time.Minute)
+	d.nameFreeUntil = expired
+	h.finishTurn(d, 1, nil, nil)
+	if !d.nameFreeUntil.Equal(expired) {
+		t.Fatal("a silent turn refreshed the follow-up grace")
+	}
+	d.turn = 2
+	view := sceneView{title: "Answer", text: "hello"}
+	h.finishTurn(d, 2, &view, nil)
+	if !d.nameFreeUntil.After(time.Now()) {
+		t.Fatal("a visible reply did not grant follow-up grace")
+	}
+}

@@ -484,7 +484,6 @@ func (u *utterance) at(n int) time.Duration {
 	return pcmDuration(n) + u.speechOffset
 }
 
-
 func utteranceBytes(span time.Duration) int {
 	return sampleRate * 2 * int(span/time.Second)
 }

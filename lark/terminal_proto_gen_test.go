@@ -223,9 +223,9 @@ func TestGeneratedProtoRejectsShortPayloads(t *testing.T) {
 func TestGeneratedProtoZeroesRetiredFields(t *testing.T) {
 	t.Parallel()
 	zero := []struct {
-		name    string
+		name     string
 		typeByte uint8
-		field   []int
+		field    []int
 	}{
 		{"resume last_seq", msgResume, []int{17, 18, 19, 20}},
 		{"welcome seq", msgWelcome, []int{16, 17, 18, 19}},

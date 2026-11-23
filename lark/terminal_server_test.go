@@ -128,7 +128,7 @@ func TestRTPDropsDuplicatesAndReordering(t *testing.T) {
 	t.Parallel()
 	nc := &nativeClient{}
 	for _, tc := range []struct {
-		seq   uint16
+		seq    uint16
 		accept bool
 	}{
 		{100, true},

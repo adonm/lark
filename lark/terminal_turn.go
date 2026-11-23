@@ -19,8 +19,9 @@ const (
 	// first-audio delay at half a second.
 	ttsPrefill    = time.Second
 	ttsPrefillMax = 500 * time.Millisecond
-	maxAudioLead   = 8 * time.Second
-	recStopWait    = 450 * time.Millisecond
+	maxAudioLead  = 8 * time.Second
+	recStopWait   = 450 * time.Millisecond
+	// How long after a read-out finishes playing the child may answer it.
 	deviceReplyTTL = time.Minute
 )
 
@@ -388,7 +389,7 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 			d.replyAudio = nil
 		}
 	}
-	if (view != nil || audio != nil) && d.nameFreeUntil.IsZero() {
+	if view != nil || audio != nil {
 		// A visible reply grants follow-ups now; spoken replies refresh the
 		// grace again when their playback completes.
 		h.freeFollowUpsLocked(d, now)
