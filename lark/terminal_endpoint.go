@@ -361,6 +361,9 @@ func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
 	for c.ctx.Err() == nil {
 		select {
 		case <-c.ctx.Done():
+			if c.listen && u.policy.vadFrames > 0 && u.policy.speechFrames == 0 {
+				h.b.diag.listen.droppedGate.Add(1)
+			}
 			if debugEndpoint {
 				log.Printf("capture worker ctx_cancelled term=%s", d.id)
 			}

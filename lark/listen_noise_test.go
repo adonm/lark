@@ -123,6 +123,16 @@ func TestListenWindowNoiseOnlyClosesWithoutTurn(t *testing.T) {
 	if len(*prompts) != 0 || sttCalls.Load() != 0 {
 		t.Fatalf("noise-only window produced %d prompts and %d STT calls", len(*prompts), sttCalls.Load())
 	}
+	got := b.diag.listen.droppedGate.Load()
+	for range 50 {
+		if got = b.diag.listen.droppedGate.Load(); got > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got == 0 {
+		t.Fatal("noise-only window was not counted as a gate drop")
+	}
 }
 
 // Once speech is heard, hallucinated probe text on the following noise must
