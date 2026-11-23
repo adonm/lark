@@ -14,7 +14,7 @@ const (
 	pcmPacket      = 4 << 10
 	maxAudioLead   = 8 * time.Second
 	recStopWait    = 450 * time.Millisecond
-	deviceReplyTTL = 2 * time.Minute
+	deviceReplyTTL = time.Minute
 )
 
 func recordTarget(s string) (string, bool) {
@@ -546,7 +546,21 @@ func (h *terminalHub) consumeReply(d *terminalSession, reply *turnReply) {
 	}
 	h.mu.Lock()
 	if d.reply == reply {
-		d.reply, d.replyUntil = nil, time.Time{}
+		d.clearReply()
+	}
+	h.mu.Unlock()
+}
+
+// dropStaleReply clears a read-out armed while this capture was already open:
+// the notice interrupted that capture, so its turn cannot answer it. Without
+// this a queued notice can leak its reply context into later turns.
+func (h *terminalHub) dropStaleReply(d *terminalSession, capturedAt time.Time) {
+	if capturedAt.IsZero() {
+		return
+	}
+	h.mu.Lock()
+	if d.reply != nil && capturedAt.Before(d.replySpoken) {
+		d.clearReply()
 	}
 	h.mu.Unlock()
 }
@@ -996,6 +1010,7 @@ func (h *terminalHub) deliverNoticeNowLocked(d *terminalSession, now time.Time, 
 	d.drawer, d.pending = "", nil
 	d.reply = q.reply
 	if q.reply != nil {
+		d.replySpoken = now
 		d.replyUntil = now.Add(deviceReplyTTL)
 	}
 	if q.view != nil {

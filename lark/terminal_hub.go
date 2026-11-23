@@ -89,6 +89,7 @@ type terminalSession struct {
 	meter         time.Time
 	asleep        bool
 	reply         *turnReply // Delta Chat read-out awaiting an in-person reply
+	replySpoken   time.Time  // When the read-out finished playing.
 	replyUntil    time.Time
 
 	recording     deviceCapture
@@ -466,17 +467,45 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 	return true
 }
 
-// pendingReply returns the armed read-out context, dropping it once its TTL
-// expires so a later in-person turn cannot answer an old Delta Chat message.
+// speakingCompanion names the only companion with a turn in flight, so an MCP
+// control call can default companion_id when the model leaves it out.
+func (h *terminalHub) speakingCompanion() string {
+	if h == nil {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	found := ""
+	for _, d := range h.terminals {
+		if d.companionID == "" || !h.active(d) || !d.busy && !d.recording.active() {
+			continue
+		}
+		if found != "" && !strings.EqualFold(found, d.companionID) {
+			return ""
+		}
+		found = d.companionID
+	}
+	return found
+}
+
+// pendingReply returns the armed read-out context when a capture starts after
+// the read-out finished and before its short TTL expires. A capture already
+// open when the notice played is not an answer to it.
 func (d *terminalSession) pendingReply(now time.Time) *turnReply {
 	if d.reply == nil {
 		return nil
 	}
-	if now.Before(d.replyUntil) {
+	if now.Before(d.replyUntil) && !now.Before(d.replySpoken) {
 		return d.reply
 	}
-	d.reply, d.replyUntil = nil, time.Time{}
+	if !now.Before(d.replyUntil) {
+		d.clearReply()
+	}
 	return nil
+}
+
+func (d *terminalSession) clearReply() {
+	d.reply, d.replySpoken, d.replyUntil = nil, time.Time{}, time.Time{}
 }
 
 func (d *terminalSession) status(s terminalTelemetry) {

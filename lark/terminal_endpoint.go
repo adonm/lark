@@ -40,6 +40,7 @@ type endpointCapture struct {
 	listen      bool
 	limitBytes  int // PCM cap for this capture's full window
 	limitSpan   time.Duration
+	started     time.Time // Capture start; a read-out after this is not its answer.
 	reply       *turnReply
 	companionID string
 }
@@ -139,6 +140,7 @@ func (h *terminalHub) startEndpoint(d *terminalSession) {
 		listen:      d.recording.listen,
 		limitSpan:   limit,
 		limitBytes:  utteranceBytes(limit),
+		started:     time.Now(),
 		reply:       reply,
 		companionID: d.companionID,
 	}
@@ -507,6 +509,9 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 		if result.text == "" || (result.listen && isFillerTranscript(result.text)) {
 			h.finishTurn(d, id, nil, nil)
 			return
+		}
+		if result.reply == nil {
+			h.dropStaleReply(d, c.started)
 		}
 		h.runTurnChannel(ctx, d, id, result.text, "voice", result.pcm, turnChannel{reply: result.reply, spec: result.spec})
 	})

@@ -404,6 +404,44 @@ func TestIntercomCardReplyTargetsConversationPartner(t *testing.T) {
 	}
 }
 
+func TestDeviceReplyContextNeedsCaptureAfterNotice(t *testing.T) {
+	h := &terminalHub{}
+	now := time.Now()
+	live := &turnReply{name: "Mum", companionID: "greg", chatID: 200}
+
+	// A capture already open when the notice played is not its answer.
+	started := &terminalSession{reply: live, replySpoken: now, replyUntil: now.Add(deviceReplyTTL)}
+	if got := started.pendingReply(now.Add(-time.Second)); got != nil {
+		t.Fatalf("capture started before the notice was routed: %+v", got)
+	}
+	h.dropStaleReply(started, now.Add(-time.Second))
+	if started.reply != nil || !started.replySpoken.IsZero() || !started.replyUntil.IsZero() {
+		t.Fatal("stale capture kept the notice context for a later turn")
+	}
+	if got := started.pendingReply(now.Add(time.Second)); got != nil {
+		t.Fatalf("cleared context reused by a later turn: %+v", got)
+	}
+
+	// A capture that starts after the notice answers it once.
+	armed := &terminalSession{reply: live, replySpoken: now, replyUntil: now.Add(deviceReplyTTL)}
+	if got := armed.pendingReply(now.Add(time.Second)); got != live {
+		t.Fatalf("capture started after the notice lost the context: %+v", got)
+	}
+	armed.clearReply()
+	if got := armed.pendingReply(now.Add(2 * time.Second)); got != nil {
+		t.Fatalf("consumed reply context was reused: %+v", got)
+	}
+
+	// The shortened TTL ends an unanswered read-out quickly.
+	old := &terminalSession{reply: live, replySpoken: now, replyUntil: now.Add(deviceReplyTTL)}
+	if deviceReplyTTL > time.Minute {
+		t.Fatalf("device reply TTL = %v, want at most 1m", deviceReplyTTL)
+	}
+	if got := old.pendingReply(now.Add(deviceReplyTTL + time.Second)); got != nil {
+		t.Fatalf("expired reply context reused: %+v", got)
+	}
+}
+
 func TestDeviceReplyContextExpires(t *testing.T) {
 	b, _ := wsHarness(t, nil)
 	expired := &terminalSession{
