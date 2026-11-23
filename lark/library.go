@@ -471,6 +471,9 @@ func gutenbergText(ctx context.Context, b *larkServer, dir, ref string) (string,
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", "", err
 	}
+	if info, statErr := os.Stat(bookPath); statErr != nil || info.Size() > 16<<20 {
+		return "", "", "", errors.New("book text is unavailable or too large")
+	}
 	raw, err := os.ReadFile(bookPath)
 	if err != nil {
 		return "", "", "", err
@@ -628,6 +631,9 @@ func (b *larkServer) libraryImportSourceArgs(ctx context.Context, source, ref st
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(text) > libraryImportText {
+		text = text[:libraryImportText]
 	}
 	twee, err := libraryTwee(title, text)
 	if err != nil {
