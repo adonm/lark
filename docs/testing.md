@@ -61,7 +61,6 @@ CI never uses `--fast`.
 | `--live` | virtual companions and firmware clients, real Parakeet/Silero/Kokoro, stub model |
 | `--e2e-real` | dedicated OpenCode with the configured model (spends quota) |
 | `--deployed` | read-only installed-service and OTA probes |
-| `--no-race` | the full gate minus the race suite; CI shards run that instead |
 
 - `LARK_QA_DC=1` enables the live Delta Chat QA tests. They are not part of
   `--qa`; run `cd lark && LARK_QA_DC=1 go test -tags=live,sqlite_fts5 -v
@@ -102,10 +101,14 @@ each of three full runs (114.8 / 111.8 / 112.1 s).
 | full gate | ~112 s |
 
 `--qa` adds 11.9 s (14.7 s total), `--qa-hw` adds 18.7 s (21.6 s total), and
-`--remote-ui` adds 3.0 s. The race suite is ~97 % of the gate, so CI splits it
-by test-name pattern (`endpoint/turn/listen`, `dc/remote/library/terminal`,
-rest); the offline job keeps shell, Node, vet, live compile, C tests and
-hygiene. The previous unsplit offline job took 187 s.
+`--remote-ui` adds 3.0 s. The race suite is ~97 % of the local gate.
+
+CI keeps one offline job (187 s measured before this work). A three-way race
+split was tried and rejected: its best case saved ~87 s (187 s → ~100 s),
+under the 90 s bar, and every shard must reinstall ffmpeg for tests that
+depend on it. That install took 45 s to over 5 minutes on the package mirror;
+one shard ran 402 s, slower than the unsplit job. The firmware build dominates
+the overall workflow anyway.
 
 ## Fast stub QA loop and voice fixtures
 
@@ -151,4 +154,4 @@ To test a real capture locally without publishing it: run
 `lark capture <companion> <seconds>`, copy the WAV into the gitignored
 `lark/qa/fixtures/local/`, add `local/manifest.json` with `origin: "local"`
 and the same fields, then run
-`cd lark && go test -tags sqlite_fts5 -run TestVoiceFixturesEndpointPolicy .`.
+`cd lark && go test -tags sqlite_fts5 -run TestVoiceFixturesEndpointPolicy .`

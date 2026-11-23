@@ -3,8 +3,8 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 case "$#:${1-}" in
-    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw|1:--remote-ui|1:--fast|2:--fast|1:--no-race|1:--e2e-stub) ;;
-    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw | --remote-ui | --fast [ref] | --no-race | --e2e-stub]\n' "$0" >&2; exit 2 ;;
+    0:|1:--live|1:--e2e-real|1:--deployed|1:--real-model|1:--qa|1:--qa-hw|1:--remote-ui|1:--fast|2:--fast|1:--e2e-stub) ;;
+    *) printf 'Usage: %s [--live | --e2e-real | --deployed | --real-model | --qa | --qa-hw | --remote-ui | --fast [ref] | --e2e-stub]\n' "$0" >&2; exit 2 ;;
 esac
 mode=${1-}
 
@@ -289,13 +289,7 @@ export CGO_ENABLED=1
 
 timeit node phase_node
 timeit vet phase_vet
-if [[ $mode == --no-race ]]; then
-    # CI splits the race suite across jobs; the offline job keeps vet and the
-    # live-tag compile so the workflow still covers every build tag.
-    printf 'SKIP go-race (--no-race; CI shards run it)\n'
-else
-    timeit go-race phase_race
-fi
+timeit go-race phase_race
 timeit go-live-compile phase_live_compile
 timeit c-host phase_c_host
 timeit hygiene phase_hygiene
