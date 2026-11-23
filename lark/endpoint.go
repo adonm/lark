@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -65,15 +66,40 @@ type endpointVAD interface {
 	close()
 }
 
+// Silero v5 consumes fixed 512-sample windows at 16 kHz. The capture delivers
+// 20 ms frames (320 samples), so detect accumulates whole windows and reuses
+// the last decision for the partial remainder instead of feeding a short
+// window the model never expected.
+const sileroWindow = 512
+
 type sileroVAD struct {
-	model *sherpa.VoiceActivityDetector
-	frame [sampleRate / 50]float32
+	model  *sherpa.VoiceActivityDetector
+	path   string
+	window [sileroWindow]float32
+	n      int
+	voiced bool
 }
 
+// Loading the ONNX model costs ~23 ms and a capture opens one per turn. Pool
+// the loaded detectors; Reset clears the segment history on hand-out.
+var sileroVADs sync.Pool
+
 func newSileroVAD(path string) endpointVAD {
+	if v := sileroVADs.Get(); v != nil {
+		s := v.(*sileroVAD)
+		if s.path == path {
+			s.reset()
+			return s
+		}
+		s.destroy()
+	}
+	return loadSileroVAD(path)
+}
+
+func loadSileroVAD(path string) *sileroVAD {
 	model := sherpa.NewVoiceActivityDetector(&sherpa.VadModelConfig{
 		SileroVad: sherpa.SileroVadModelConfig{
-			Model: path, Threshold: 0.5, WindowSize: 512,
+			Model: path, Threshold: 0.5, WindowSize: sileroWindow,
 			MinSilenceDuration: float32(vadTail.Seconds()), MinSpeechDuration: 0.12, MaxSpeechDuration: 60,
 		},
 		SampleRate: sampleRate, Provider: "cpu", NumThreads: 1,
@@ -81,22 +107,53 @@ func newSileroVAD(path string) endpointVAD {
 	if model == nil {
 		return nil
 	}
-	return &sileroVAD{model: model}
+	return &sileroVAD{model: model, path: path}
+}
+
+func (s *sileroVAD) reset() {
+	s.model.Reset()
+	s.n, s.voiced = 0, false
 }
 
 func (s *sileroVAD) detect(pcm []byte) bool {
-	for i := range s.frame {
-		s.frame[i] = float32(int16(le.Uint16(pcm[2*i:]))) / 32768
-	}
-	s.model.AcceptWaveform(s.frame[:])
-	voice := s.model.IsSpeech()
-	for !s.model.IsEmpty() {
-		s.model.Pop()
-	}
-	return voice
+	return s.feed(pcm, func(window []float32) bool {
+		s.model.AcceptWaveform(window)
+		voice := s.model.IsSpeech()
+		for !s.model.IsEmpty() {
+			s.model.Pop()
+		}
+		return voice
+	})
 }
 
-func (s *sileroVAD) close() { sherpa.DeleteVoiceActivityDetector(s.model) }
+// feed converts PCM into whole model windows and calls accept for each one.
+func (s *sileroVAD) feed(pcm []byte, accept func([]float32) bool) bool {
+	for i := 0; i+1 < len(pcm); i += 2 {
+		s.window[s.n] = float32(int16(le.Uint16(pcm[i:]))) / 32768
+		s.n++
+		if s.n == len(s.window) {
+			s.voiced = accept(s.window[:])
+			s.n = 0
+		}
+	}
+	return s.voiced
+}
+
+func (s *sileroVAD) destroy() {
+	if s.model != nil {
+		sherpa.DeleteVoiceActivityDetector(s.model)
+		s.model = nil
+	}
+}
+
+func (s *sileroVAD) close() {
+	if s == nil || s.model == nil {
+		return
+	}
+	s.model.Clear()
+	s.n, s.voiced = 0, false
+	sileroVADs.Put(s)
+}
 
 type endpointDecision uint8
 
