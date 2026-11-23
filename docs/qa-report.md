@@ -91,9 +91,14 @@ quoted as kid WER.
   no Send).
 - `lark doctor`: server, models, firmware, disk, library, Delta Chat, tunnels
   and all three terminals green after clearing QA turn failures.
-- Live: `lark capture cake 15` and `lark capture mint 12` while injecting
+- Live: `lark capture cake 15` and `lark capture mint 15` while injecting
   Kokoro speech and pink noise through `lark device … mic` wrote private WAVs
-  (`0700` dir, `0600` file) and re-transcribed the injected speech exactly.
+  (`0700` dir, `0600` file). The mint capture transcribed both injected clips
+  ("What to worry is the loud noise outside", "Tell me a story about a purple
+  frog") and ignored the 5 s noise between them. A real listening window on
+  `vocat-33d8` opened after the reply, heard a 2.2 s injected follow-up plus
+  noise, committed at 400 ms of silence, and started the next turn; diagnostics
+  showed `windows:1`, `closed_silence:2`, no gate drops.
 
 ### Still needed: real kid speech
 
