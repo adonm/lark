@@ -298,16 +298,19 @@ esp_err_t audio_stream_write(const int16_t *pcm, size_t num_samples)
 
 esp_err_t audio_fade_out(int16_t last, bool (*stop_requested)(void))
 {
-    // Fade the last sample and drain the BSP's 90 ms TX queue before yielding the codec.
+    bool stopped = stop_requested && stop_requested();
     int16_t mono[FRAMES] = { 0 };
-    if (last && (!stop_requested || !stop_requested())) {
+    if (last && !stopped) {
         for (int i = 0; i < FADE; ++i) {
             mono[i] = last * (FADE - 1 - i) / FADE;
         }
         ESP_RETURN_ON_ERROR(audio_write_10ms(mono), TAG, "Fade playback");
         memset(mono, 0, sizeof(mono));
     }
-    for (int i = 0; i < DMA_TAIL && (!stop_requested || !stop_requested()); i += FRAMES) {
+    // The BSP queues up to 90 ms of TX. An abort skips the fade but must still
+    // write over that queue, otherwise the next tone or reply starts behind
+    // stale speech; this bounded tail is what makes stop prompt.
+    for (int i = 0; i < DMA_TAIL; i += FRAMES) {
         ESP_RETURN_ON_ERROR(audio_write_10ms(mono), TAG, "Drain playback");
     }
     return ESP_OK;
