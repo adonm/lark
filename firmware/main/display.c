@@ -221,7 +221,9 @@ bool display_apply_frame(const uint8_t *data, size_t len)
 
 void display_set_brightness(int level)
 {
-    if (level < DIM || level > BRIGHT) return;
+    // The bridge raises the pairing screen to 100%; DIM/BRIGHT stay the normal
+    // UI range that idle sleep and touch wake restore.
+    if (level < 0 || level > 100) return;
     atomic_store(&brightness, level);
     if (painter) xTaskNotifyGive(painter);
 }
