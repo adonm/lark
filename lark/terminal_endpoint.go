@@ -29,6 +29,8 @@ type endpointCapture struct {
 	deadline    *time.Timer // Hub owns and stops the wall-clock watchdog.
 	commitAt    time.Time   // Hub writes before closing stop.
 	listen      bool
+	limitBytes  int // PCM cap for this capture's full window
+	limitSpan   time.Duration
 	reply       *turnReply
 	companionID string
 }
@@ -113,6 +115,8 @@ func (h *wsHub) startEndpoint(d *wsTerminal) {
 		result:      make(chan captureResult, 1),
 		listening:   make(chan struct{}),
 		listen:      d.recording.listen,
+		limitSpan:   limit,
+		limitBytes:  utteranceBytes(limit),
 		reply:       reply,
 		companionID: d.companionID,
 	}
@@ -136,6 +140,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 	}
 	var u utterance
 	u.pcm = make([]byte, 0, sampleRate*2*15)
+	u.limit = c.limitBytes
 	var end time.Time
 	var maxVADQueue time.Duration
 	var cached pauseTranscript
@@ -303,7 +308,7 @@ func (h *wsHub) captureEndpoint(d *wsTerminal, c *endpointCapture) {
 		at := pcmDuration(len(u.pcm))
 		decision := endpointWait
 		if vad != nil {
-			decision = u.policy.decision(at, endpointCap, smartTurnCommit, c.listen)
+			decision = u.policy.decision(at, endpointCap, c.limitSpan, smartTurnCommit, c.listen)
 		}
 		if decision != endpointWait {
 			if debugEndpoint {

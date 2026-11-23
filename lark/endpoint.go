@@ -231,8 +231,8 @@ func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, win
 	return false
 }
 
-func (p endpointPolicy) decision(at, capDur time.Duration, smartTurnReady, listen bool) endpointDecision {
-	if at >= endpointLimit {
+func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnReady, listen bool) endpointDecision {
+	if at >= limitDur {
 		if p.hasWords || p.voiced {
 			return endpointCommit
 		}
@@ -258,6 +258,7 @@ func (p endpointPolicy) decision(at, capDur time.Duration, smartTurnReady, liste
 // same whole-clip STT path even if VAD is unavailable.
 type utterance struct {
 	pcm     []byte
+	limit   int // byte cap for this capture; zero uses the single-utterance cap
 	scan    int
 	policy  endpointPolicy
 	preRoll *[listenPreRollBytes]byte
@@ -268,9 +269,18 @@ type utterance struct {
 	preScan int
 }
 
+func utteranceBytes(span time.Duration) int {
+	return sampleRate * 2 * int(span/time.Second)
+}
+
 func (u *utterance) add(pcm []byte, vad endpointVAD) {
-	const limit = sampleRate * 2 * int(endpointLimit/time.Second)
-	u.pcm = append(u.pcm, pcm[:min(len(pcm), limit-len(u.pcm))]...)
+	limit := u.limit
+	if limit <= 0 {
+		limit = utteranceBytes(endpointLimit)
+	}
+	if room := limit - len(u.pcm); room > 0 {
+		u.pcm = append(u.pcm, pcm[:min(len(pcm), room)]...)
+	}
 	for vad != nil && u.scan+endpointBytes <= len(u.pcm) {
 		frame := u.pcm[u.scan : u.scan+endpointBytes]
 		u.scan += endpointBytes

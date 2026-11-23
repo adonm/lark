@@ -192,7 +192,7 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 			t.Fatalf("low-level noise at %v marked as inVoice", at)
 		}
 	}
-	if got := p.decision(200*time.Millisecond+endpointCap, endpointCap, false, false); got != endpointCommit {
+	if got := p.decision(200*time.Millisecond+endpointCap, endpointCap, endpointLimit, false, false); got != endpointCommit {
 		t.Fatalf("noisy silence did not commit at cap: %v", got)
 	}
 
@@ -246,7 +246,7 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 	d.recStart(t, "")
 	d.barrier(t)
 	waitSVG(t, b.ws, id, "rec-send")
-	appendPCM(bytes.Repeat(speechFrame, 15))                         // 300ms speech
+	appendPCM(bytes.Repeat(speechFrame, 15))                              // 300ms speech
 	appendPCM(bytes.Repeat(noiseFrame, int(endpointCap/endpointFrame)+5)) // > cap (1.2s) noisy silence
 	d.until(t, recStop)
 	d.recEnd(t, "", false)
@@ -330,10 +330,10 @@ func TestEndpointNoiseNeverFormsWordsDiscards(t *testing.T) {
 	if p.hasWords {
 		t.Fatal("hasWords should remain false on empty/filler output")
 	}
-	if got := p.decision(endpointCap, endpointCap, true, false); got != endpointWait {
+	if got := p.decision(endpointCap, endpointCap, endpointLimit, true, false); got != endpointWait {
 		t.Fatalf("expected wait before endpointIdle, got %v", got)
 	}
-	if got := p.decision(endpointIdle, endpointCap, true, false); got != endpointDiscard {
+	if got := p.decision(endpointIdle, endpointCap, endpointLimit, true, false); got != endpointDiscard {
 		t.Fatalf("expected discard at endpointIdle, got %v", got)
 	}
 }
@@ -405,10 +405,9 @@ func TestEndpointProbeAllocs(t *testing.T) {
 	allocs := testing.AllocsPerRun(100, func() {
 		p.observeEnergy(500*time.Millisecond, true, 1800)
 		p.observeProgress(500*time.Millisecond, "What is two plus two?", false)
-		_ = p.decision(900*time.Millisecond, endpointCap, true, false)
+		_ = p.decision(900*time.Millisecond, endpointCap, endpointLimit, true, false)
 	})
 	if allocs > 2 {
 		t.Fatalf("probe loop allocs=%.1f, want <= 2", allocs)
 	}
 }
-

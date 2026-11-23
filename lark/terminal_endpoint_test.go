@@ -44,13 +44,13 @@ func TestEndpointWaitsForContinuation(t *testing.T) {
 	if p.observeProgress(750*time.Millisecond, "Hello", false) {
 		t.Fatal("unchanged word count should not advance progress")
 	}
-	if got := p.decision(250*time.Millisecond+endpointQuiet, endpointCap, false, false); got != endpointWait {
+	if got := p.decision(250*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, false, false); got != endpointWait {
 		t.Fatalf("without smartTurnReady at quiet, got %v, want wait", got)
 	}
-	if got := p.decision(250*time.Millisecond+endpointQuiet, endpointCap, true, false); got != endpointCommit {
+	if got := p.decision(250*time.Millisecond+endpointQuiet, endpointCap, endpointLimit, true, false); got != endpointCommit {
 		t.Fatalf("with smartTurnReady at quiet, got %v, want commit", got)
 	}
-	if got := p.decision(250*time.Millisecond+endpointCap, endpointCap, false, false); got != endpointCommit {
+	if got := p.decision(250*time.Millisecond+endpointCap, endpointCap, endpointLimit, false, false); got != endpointCommit {
 		t.Fatalf("at cap without smartTurnReady, got %v, want commit", got)
 	}
 	// Trailing comma or conjunction/filler blocks early smartTurn commit until cap.
@@ -63,21 +63,21 @@ func TestEndpointWaitsForContinuation(t *testing.T) {
 		if !q.incomplete {
 			t.Fatalf("%q should be marked incomplete", incomplete)
 		}
-		if got := q.decision(time.Second+endpointQuiet, endpointCap, true, false); got != endpointWait {
+		if got := q.decision(time.Second+endpointQuiet, endpointCap, endpointLimit, true, false); got != endpointWait {
 			t.Fatalf("%q committed early despite incomplete trailing", incomplete)
 		}
-		if got := q.decision(time.Second+endpointCap, endpointCap, true, false); got != endpointCommit {
+		if got := q.decision(time.Second+endpointCap, endpointCap, endpointLimit, true, false); got != endpointCommit {
 			t.Fatalf("%q did not commit at cap", incomplete)
 		}
 	}
-	if got := empty.decision(endpointIdle, endpointCap, false, false); got != endpointDiscard {
+	if got := empty.decision(endpointIdle, endpointCap, endpointLimit, false, false); got != endpointDiscard {
 		t.Fatalf("initial silence did not discard: %v", got)
 	}
-	if got := empty.decision(endpointIdle, endpointCap, false, true); got != endpointWait {
+	if got := empty.decision(endpointIdle, endpointCap, endpointLimit, false, true); got != endpointWait {
 		t.Fatalf("listen mode should not discard at endpointIdle: %v", got)
 	}
 	p.inVoice = true
-	if got := p.decision(endpointLimit, endpointCap, false, false); got != endpointCommit {
+	if got := p.decision(endpointLimit, endpointCap, endpointLimit, false, false); got != endpointCommit {
 		t.Fatalf("maximum duration did not commit: %v", got)
 	}
 }
@@ -91,7 +91,7 @@ func TestEndpointAccumulatorPreservesOriginalPCM(t *testing.T) {
 	u.add(frame[50:], vad)
 	for range 200 {
 		u.add(quiet, vad)
-		if got := u.policy.decision(pcmDuration(len(u.pcm)), endpointCap, false, false); got != endpointWait {
+		if got := u.policy.decision(pcmDuration(len(u.pcm)), endpointCap, endpointLimit, false, false); got != endpointWait {
 			t.Fatalf("unexpected decision %v", got)
 		}
 	}
@@ -462,5 +462,25 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	})
 	if count.Load() != 2 {
 		t.Fatal("prompt was replayed")
+	}
+}
+
+func TestListenCaptureCapCoversWholeWindow(t *testing.T) {
+	var u utterance
+	span := 305 * time.Second
+	u.limit = utteranceBytes(span)
+	vad := &testEndpointVAD{}
+	second := bytes.Repeat([]byte{12}, sampleRate*2)
+	for range 70 {
+		u.add(second, vad)
+	}
+	if got := len(u.pcm); got != 70*sampleRate*2 {
+		t.Fatalf("listen capture dropped speech after %.0fs: %d bytes", pcmDuration(got).Seconds(), got)
+	}
+	for range 300 {
+		u.add(second, vad)
+	}
+	if got := len(u.pcm); got != utteranceBytes(span) {
+		t.Fatalf("listen capture not bounded by the window: %d bytes", got)
 	}
 }

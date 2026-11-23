@@ -273,7 +273,7 @@ func replaySilero(t *testing.T, pcm []byte, path string, hybrid bool, stt *parak
 			probes++
 			p.observeProgress(at, text, windowed)
 		}
-		switch p.decision(at, endpointCap, false, false) {
+		switch p.decision(at, endpointCap, endpointLimit, false, false) {
 		case endpointCommit:
 			return int(at.Milliseconds()), probes
 		case endpointDiscard:
