@@ -8,6 +8,9 @@
 // cover it without the ESP-IDF codec.
 
 enum {
+    AUDIO_SAMPLE_RATE = 16000,
+    AUDIO_RECORD_MAX_SECONDS = 60,
+    AUDIO_LISTEN_MAX_SECONDS = 305,
     AUDIO_FADE_SAMPLES = 80,       // 5 ms at 16 kHz
     AUDIO_DMA_TAIL_FRAMES = 6 * 240, // BSP TX queue, in samples
     AUDIO_STALE_READ_US = 3000,
@@ -19,10 +22,12 @@ typedef struct {
     size_t tail_frames; // zero/silence frames written after it
 } audio_fade_plan_t;
 
-// A stale RX DMA frame is one that took at least 3 ms to read.
-bool audio_stale_read_is_fresh(int64_t elapsed_us);
+// A DMA read that returned promptly (< 3 ms) was a buffered stale frame; a
+// fresh frame only arrives after the microphone has produced it.
+bool audio_read_waited_for_data(int64_t elapsed_us);
 
-// 60 s normally, the longer listen window when requested.
+// 60 s normally; the listen cap is only a device safety limit because the
+// server owns the 30 s listening window and ends it with REC_STOP.
 size_t audio_record_frame_limit(bool listen);
 
 // An abort skips the fade but must still flush the queued DMA tail.

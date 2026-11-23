@@ -4,13 +4,15 @@
 #include <stdio.h>
 #include <string.h>
 
-static void test_record_limits_and_stale_reads(void)
+static void test_record_limits_and_read_wait(void)
 {
-    assert(audio_record_frame_limit(false) == 960000u);  // 60 s at 16 kHz
-    assert(audio_record_frame_limit(true) == 4880000u);  // 305 s listen window
-    assert(!audio_stale_read_is_fresh(2999));
-    assert(audio_stale_read_is_fresh(3000));
-    assert(audio_stale_read_is_fresh(9000));
+    assert(audio_record_frame_limit(false) == (size_t)AUDIO_SAMPLE_RATE * AUDIO_RECORD_MAX_SECONDS);
+    assert(audio_record_frame_limit(true) == (size_t)AUDIO_SAMPLE_RATE * AUDIO_LISTEN_MAX_SECONDS);
+    // The listen cap only guards against a server that never stops a capture.
+    assert(AUDIO_LISTEN_MAX_SECONDS > 30);
+    assert(!audio_read_waited_for_data(2999));
+    assert(audio_read_waited_for_data(3000));
+    assert(audio_read_waited_for_data(9000));
 }
 
 static void test_fade_and_abort_tail(void)
@@ -86,7 +88,7 @@ static void test_tts_carry_across_chunks(void)
 
 int main(void)
 {
-    test_record_limits_and_stale_reads();
+    test_record_limits_and_read_wait();
     test_fade_and_abort_tail();
     test_mix_fade_chime_and_clamp();
     test_tts_carry_across_chunks();

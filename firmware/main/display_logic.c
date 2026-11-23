@@ -17,3 +17,8 @@ bool display_strip_next(frame_bounds_t area, int *y, int *rows, int strip_rows)
     *rows = n;
     return true;
 }
+
+bool display_idle_dimmed(bool linked, uint32_t now_ms, uint32_t last_touch_ms, uint32_t idle_ms)
+{
+    return !linked && (uint32_t)(now_ms - last_touch_ms) >= idle_ms;
+}

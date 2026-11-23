@@ -69,6 +69,10 @@ int main(void)
     test_full_height_strips();
     test_partial_area();
     test_wider_strips();
+    // Dimming is an offline fallback only; a linked host owns panel power.
+    assert(display_idle_dimmed(false, 300001, 180001, DISPLAY_IDLE_DIM_MS));
+    assert(!display_idle_dimmed(false, 300000, 180001, DISPLAY_IDLE_DIM_MS));
+    assert(!display_idle_dimmed(true, 300001, 180001, DISPLAY_IDLE_DIM_MS));
     puts("PASS display strip scheduling covers both geometries");
     return 0;
 }

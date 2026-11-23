@@ -194,7 +194,7 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
         for (int i = 0; i < AUDIO_STALE_READ_TRIES; ++i) {
             int64_t t0 = esp_timer_get_time();
             ESP_RETURN_ON_ERROR(audio_read_10ms(chunk_buf), TAG, "Prepare recording");
-            if (audio_stale_read_is_fresh(esp_timer_get_time() - t0)) {
+            if (audio_read_waited_for_data(esp_timer_get_time() - t0)) {
                 have_first = true;
                 break;
             }

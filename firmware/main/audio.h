@@ -5,8 +5,9 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "audio_logic.h"
 
-enum { AUDIO_RATE = 16000, AUDIO_MAX_SECONDS = 60, AUDIO_LISTEN_MAX_SECONDS = 305,
+enum { AUDIO_RATE = AUDIO_SAMPLE_RATE,
        AUDIO_RECORD_CHUNK_SAMPLES = 320, AUDIO_10MS = AUDIO_RATE / 100 };
 typedef enum { AUDIO_START_TONE, AUDIO_THINK_TONE, AUDIO_QUIET_TONE, AUDIO_HAPPY_TONE, AUDIO_RING_TONE } audio_tone_t;
 typedef esp_err_t (*audio_capture_sink_t)(const int16_t *pcm, size_t samples, void *ctx);

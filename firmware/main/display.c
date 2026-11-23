@@ -139,7 +139,7 @@ static void paint_task(void *arg)
             taskYIELD();
         }
         xSemaphoreTake(fb_lock, portMAX_DELAY);
-        if (!linked && now_ms() - atomic_load(&last_touch) >= 120000u) {
+        if (display_idle_dimmed(linked, now_ms(), atomic_load(&last_touch), DISPLAY_IDLE_DIM_MS)) {
             atomic_store(&brightness, DIM);
         }
         int level = atomic_load(&brightness);
@@ -234,7 +234,13 @@ void display_sync_power_save(void)
 void display_wake(void)
 {
     atomic_store(&last_touch, now_ms());
-    if (atomic_load(&brightness) != BRIGHT) display_set_brightness(BRIGHT);
+    if (!fb_lock) return;
+    xSemaphoreTake(fb_lock, portMAX_DELAY);
+    bool host_controls = linked;
+    xSemaphoreGive(fb_lock);
+    // While linked, the bridge owns brightness (the pairing screen stays at
+    // 100%); the local fallback only restores dimmed offline panels.
+    if (!host_controls && atomic_load(&brightness) == DIM) display_set_brightness(BRIGHT);
 }
 
 bool display_is_sleeping(void)

@@ -2,14 +2,15 @@
 
 #include <limits.h>
 
-bool audio_stale_read_is_fresh(int64_t elapsed_us)
+bool audio_read_waited_for_data(int64_t elapsed_us)
 {
     return elapsed_us >= AUDIO_STALE_READ_US;
 }
 
 size_t audio_record_frame_limit(bool listen)
 {
-    return listen ? 16000u * 305u : 16000u * 60u;
+    return (size_t)AUDIO_SAMPLE_RATE *
+           (size_t)(listen ? AUDIO_LISTEN_MAX_SECONDS : AUDIO_RECORD_MAX_SECONDS);
 }
 
 audio_fade_plan_t audio_fade_plan(bool stopped, int16_t last)
