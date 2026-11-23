@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -289,7 +288,6 @@ type rowScanner interface{ Scan(...any) error }
 
 // Table definitions share the same SQL codecs between migration and runtime.
 type store[T any] struct {
-	mu                  sync.Mutex
 	db, readDB          *sql.DB
 	table, key, columns string
 	upsert              string
@@ -377,13 +375,60 @@ func terminalStore(d *larkDB) *store[terminalRecord] {
 		}}
 }
 
-func sessionStore(d *larkDB) *store[string] {
-	return &store[string]{db: d.DB, readDB: d.readDB(), table: "sessions", key: "companion_id", columns: "companion_id,session_id,updated_at",
-		upsert: "session_id=excluded.session_id,updated_at=excluded.updated_at,contract_hash='',context_after_ms=excluded.updated_at",
-		scan: func(r rowScanner) (string, string, error) {
-			var id, sid string
-			var at int64
-			err := r.Scan(&id, &sid, &at)
-			return id, sid, err
-		}, values: func(id, sid string) []any { return []any{id, sid, time.Now().UnixMilli()} }}
+// sessionStore only reads and deletes the OpenCode binding. Sessions are
+// written by replaceBinding so the contract hash and dialogue watermark land
+// atomically with the session ID.
+type sessionStore struct {
+	db, readDB *sql.DB
+}
+
+func (s *sessionStore) get(id string) (string, bool, error) {
+	return s.getContext(context.Background(), id)
+}
+
+func (s *sessionStore) getContext(ctx context.Context, id string) (string, bool, error) {
+	rdb := s.readDB
+	if rdb == nil {
+		rdb = s.db
+	}
+	var sid string
+	err := rdb.QueryRowContext(ctx, `SELECT session_id FROM sessions WHERE companion_id=?`, id).Scan(&sid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, problem(502, "Cannot read sessions")
+	}
+	return sid, true, nil
+}
+
+func (s *sessionStore) allContext(ctx context.Context) (map[string]string, error) {
+	rdb := s.readDB
+	if rdb == nil {
+		rdb = s.db
+	}
+	rows, err := rdb.QueryContext(ctx, `SELECT companion_id,session_id FROM sessions`)
+	if err != nil {
+		return nil, problem(502, "Cannot read sessions")
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var id, sid string
+		if err := rows.Scan(&id, &sid); err != nil {
+			return nil, problem(502, "Cannot read sessions")
+		}
+		out[id] = sid
+	}
+	if rows.Err() != nil {
+		return nil, problem(502, "Cannot read sessions")
+	}
+	return out, nil
+}
+
+func (s *sessionStore) delete(id string) error {
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE companion_id=?`, id); err != nil {
+		return problem(502, "Cannot delete session")
+	}
+	return nil
 }

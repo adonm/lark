@@ -150,3 +150,17 @@ func TestSQLiteWALMmapAndConcurrentPool(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// save seeds a session binding for tests. Production only writes bindings
+// through replaceBinding, which carries the contract hash and watermark.
+func (o *openCode) save(device, sid string) error {
+	_, err := o.db.Exec(`INSERT INTO sessions (companion_id,session_id,updated_at) VALUES (?,?,?)
+		ON CONFLICT(companion_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`,
+		device, sid, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	o.invalidateVerified(device)
+	o.sig.notify()
+	return nil
+}

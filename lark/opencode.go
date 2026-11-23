@@ -110,7 +110,7 @@ type openCode struct {
 	project  string
 	db       *larkDB
 	contract string
-	store    *store[string]
+	store    *sessionStore
 	turns    [64]chan struct{}
 
 	mu           sync.Mutex
@@ -132,7 +132,7 @@ type ocReset struct {
 
 func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, settings ocSettings) *openCode {
 	o := &openCode{upstream: u, project: project, settings: settings, db: db,
-		store:  sessionStore(db),
+		store:  &sessionStore{db: db.DB, readDB: db.readDB()},
 		active: make(map[string]context.CancelFunc), activeSource: make(map[string]string),
 		interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
 		verified:     make(map[string]string),
@@ -187,9 +187,9 @@ func (o *openCode) prewarm(ctx context.Context, device, character string) {
 	_, _ = o.ensureSession(ctx, device, character, false)
 }
 
-func (o *openCode) save(device, sid string) error {
+func (o *openCode) forget(device string) error {
 	o.invalidateVerified(device)
-	err := o.store.save(device, sid, sid == "")
+	err := o.store.delete(device)
 	o.sig.notify()
 	return err
 }
@@ -291,7 +291,7 @@ func (o *openCode) reset(ctx context.Context, device string) error {
 func (o *openCode) prepareReset(device string) func(context.Context) error {
 	run := o.prepareMappingChange(device)
 	return func(ctx context.Context) error {
-		return run(ctx, func() error { return o.save(device, "") })
+		return run(ctx, func() error { return o.forget(device) })
 	}
 }
 
