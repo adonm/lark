@@ -53,7 +53,7 @@ const (
 
 type sceneAction struct{ kind, value string }
 
-type intercomCard struct{ companion, heading, text string }
+type intercomCard struct{ companion, reply, heading, text string }
 
 type sceneView struct {
 	title, heading, text string
@@ -66,6 +66,13 @@ type sceneView struct {
 func (s *sceneView) hasIntercom() bool { return s != nil && s.intercom != nil }
 
 func (card intercomCard) scene() sceneView {
+	// Reply targets the conversation partner, not the card's title: a card the
+	// companion sends about its own Delta Chat reply must not record a voice
+	// note addressed to itself.
+	reply := card.reply
+	if reply == "" {
+		reply = card.companion
+	}
 	return sceneView{
 		title:    card.companion,
 		heading:  card.heading,
@@ -73,7 +80,7 @@ func (card intercomCard) scene() sceneView {
 		intercom: &card,
 		actions: map[string]sceneAction{
 			"close": {"close-card", ""},
-			"reply": {"reply", strings.ToLower(card.companion)},
+			"reply": {"reply", strings.ToLower(reply)},
 		},
 	}
 }

@@ -442,6 +442,12 @@ func (h *wsHub) runVoice(ctx context.Context, d *wsTerminal, id uint64, target s
 		recipients := h.b.intercomTargets(others, target)
 		voice := h.b.voiceFor(sender.ID)
 		receipts := h.deliverOnline(ctx, sender, recipients, voice, "", pcm)
+		// A card reply to a Delta Chat contact has no online peer; send the
+		// voice note back over Delta Chat instead of reporting it unreachable.
+		if len(receipts) == 0 && h.b.dc != nil && h.b.dc.ready.Load() {
+			h.sendIntercom(ctx, d, id, others, target, "", pcm)
+			return
+		}
 		// Connected peers can play the original clip before transcription.
 		if len(receipts) != 0 {
 			go func() {
@@ -558,6 +564,12 @@ func (h *wsHub) sendIntercom(ctx context.Context, d *wsTerminal, id uint64, othe
 	if h.b.dc != nil && h.b.dc.ready.Load() {
 		sentTo, err := h.b.dc.sendIntercom(ctx, sender.ID, target, text, pcm)
 		recipients := h.b.intercomTargets(others, target)
+		if len(recipients) == 0 {
+			// Delta Chat names human contacts, who are not LAN peers.
+			for _, name := range sentTo {
+				recipients = append(recipients, companionTarget{ID: name, Name: name})
+			}
+		}
 		h.confirm(ctx, d, id, target, recipients, err == nil && len(sentTo) > 0, false)
 		return
 	}
@@ -865,6 +877,7 @@ type terminalNotice struct {
 	chime        string
 	showCard     bool
 	reply        *turnReply
+	cardReply    string // reply-button target; defaults to the card sender
 	trace        *turnTrace
 }
 
@@ -899,7 +912,7 @@ func (h *wsHub) deliverNotice(ctx context.Context, n terminalNotice) []wsReceipt
 	speakText := shortText(n.speakText, maxMessage, true)
 	var view *sceneView
 	if n.showCard {
-		v := (intercomCard{companion: n.sender.Name, text: text}).scene()
+		v := (intercomCard{companion: n.sender.Name, reply: n.cardReply, text: text}).scene()
 		view = &v
 	}
 	var pcmStream *AudioStream

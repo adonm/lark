@@ -311,3 +311,93 @@ func TestEmitIntercomMatchesContactAddress(t *testing.T) {
 		t.Fatalf("partial name must not send: %+v", got)
 	}
 }
+
+// TestSayReadoutCardRepliesToHumanSender covers the card Reply button after a
+// /say read-out: it used to target the companion itself, so the voice note
+// failed and the device said it could not reach greg.
+func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
+	b, base, stub, _ := dcVoiceHarness(t, func(string) string { return "ok" })
+	ttsCh := make(chan string, 8)
+	b.worker = &synthWorker{requests: make(chan ttsRequest)}
+	b.worker.ready.Store(true)
+	go func() {
+		for {
+			select {
+			case <-b.root.Done():
+				return
+			case req := <-b.worker.requests:
+				ttsCh <- req.text
+				req.done <- ttsResult{pcm: []byte{1, 2, 3, 4}}
+			}
+		}
+	}()
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addDCHuman(stub, greg.DCAccountID, 10, 200, "Mum", "mum@example.org")
+	hw := testConnectWS(t, base, "unit", false)
+	hw.helloHardware(t, "box3-card", "greg", capDrag|capBridgeEndpoint)
+
+	b.sayOnCompanion(t.Context(), "greg", "Mum", 200, "Dinner is ready")
+	b.ws.mu.Lock()
+	d := b.ws.terminals["box3-card"]
+	target := ""
+	if d.view != nil {
+		target = d.view.actions["reply"].value
+	}
+	b.ws.mu.Unlock()
+	if target != "mum" {
+		t.Fatalf("card reply target = %q, want mum", target)
+	}
+	ackNotice(t, hw)
+
+	b.stt = func(context.Context, []byte) (string, error) { return "See you at six", nil }
+	b.ws.mu.Lock()
+	b.ws.startRecording(d, target, time.Now(), true)
+	b.ws.mu.Unlock()
+	hw.until(t, func(f wsFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
+	})
+	hw.recStart(t, "")
+	sendTestUtterance(t, hw)
+	hw.recEnd(t, "", false)
+
+	var sent []stubDCSent
+	sendDeadline := time.Now().Add(3 * time.Second)
+	for len(sent) == 0 && time.Now().Before(sendDeadline) {
+		sent = dcSent(stub)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(sent) != 1 || sent[0].accID != greg.DCAccountID || sent[0].data.Viewtype == nil ||
+		*sent[0].data.Viewtype != deltachat.ViewtypeVoice {
+		t.Fatalf("card reply did not send a voice note to Mum: %+v", sent)
+	}
+	spoken := ""
+	ttsDeadline := time.After(3 * time.Second)
+loop:
+	for {
+		select {
+		case got := <-ttsCh:
+			spoken = got
+			if strings.Contains(got, "Sent to") {
+				break loop
+			}
+		case <-ttsDeadline:
+			break loop
+		}
+	}
+	if spoken != "Sent to Mum!" {
+		t.Fatalf("confirmation = %q, want %q", spoken, "Sent to Mum!")
+	}
+}
+
+func TestIntercomCardReplyTargetsConversationPartner(t *testing.T) {
+	if got := (intercomCard{companion: "Greg", reply: "Mum"}).scene().actions["reply"].value; got != "mum" {
+		t.Fatalf("card reply target = %q, want mum", got)
+	}
+	if got := (intercomCard{companion: "Cake"}).scene().actions["reply"].value; got != "cake" {
+		t.Fatalf("card without an explicit target = %q, want cake", got)
+	}
+}

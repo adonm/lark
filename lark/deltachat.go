@@ -1001,6 +1001,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			chime:        "intercom",
 			showCard:     true,
 			reply:        &turnReply{name: senderName, companionID: companionID, chatID: msg.ChatId},
+			cardReply:    senderName,
 			trace:        traceFrom(turnCtx),
 		})
 	}
@@ -1052,6 +1053,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			speakText:    "I told " + senderName + ": " + reply,
 			voice:        s.b.voiceFor(companionID),
 			showCard:     true,
+			cardReply:    senderName,
 			trace:        traceFrom(turnCtx),
 		})
 	}

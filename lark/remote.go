@@ -1145,6 +1145,7 @@ func (b *larkServer) sayOnCompanion(ctx context.Context, companionID, senderName
 		}
 		if chatID != 0 {
 			n.reply = &turnReply{name: senderName, companionID: companionID, chatID: chatID}
+			n.cardReply = senderName
 		}
 		b.ws.deliverNotice(ctx, n)
 	}
