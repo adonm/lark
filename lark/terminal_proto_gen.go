@@ -782,10 +782,11 @@ func decodeProtoPower(b []byte) (protoPower, bool) {
 	return m, true
 }
 
-// Volume: Set output volume, optionally persisting and auto-adjusting.
+// Volume: Set output volume, optionally persisting. The auto-mode byte is retired.
 type protoVolume struct {
-	level       uint8
-	persist     uint8
+	level   uint8
+	persist uint8
+	// retired auto-volume mode
 	auto        uint8
 	terminalID  string
 	companionID string
@@ -810,7 +811,7 @@ func (m protoVolume) encode() []byte {
 	b := make([]byte, 0, protoVolumeFixedSize+len(m.terminalID)+len(m.companionID))
 	b = append(b, m.level)
 	b = append(b, m.persist)
-	b = append(b, m.auto)
+	b = append(b, 0)
 	b = append(b, byte(len(s0)))
 	b = append(b, byte(len(s1)))
 	b = append(b, s0...)

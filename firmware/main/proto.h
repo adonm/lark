@@ -243,10 +243,11 @@ typedef struct __attribute__((packed)) {
     uint8_t level;
 } lark_power_t;
 
-// VOLUME (0x8C): Set output volume, optionally persisting and auto-adjusting.
+// VOLUME (0x8C): Set output volume, optionally persisting. The auto-mode byte is retired.
 typedef struct __attribute__((packed)) {
     uint8_t level;
     uint8_t persist;
+    // retired auto-volume mode
     uint8_t auto_mode;
     uint8_t id_len;
     uint8_t comp_len;
@@ -800,6 +801,7 @@ static inline size_t lark_encode_volume(uint8_t *dst, size_t cap, const lark_vol
 {
     if (!dst || !m) return 0;
     lark_volume_t tmp = *m;
+    memset(&tmp.auto_mode, 0, sizeof(tmp.auto_mode));
     size_t terminalID_len = terminalID ? strlen(terminalID) : 0;
     if (terminalID_len > 255) terminalID_len = 255;
     tmp.id_len = (uint8_t)terminalID_len;

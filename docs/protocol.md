@@ -241,7 +241,7 @@ Fixed size: 1 bytes.
 
 ### 0x8C VOLUME (Lark → terminal)
 
-Set output volume, optionally persisting and auto-adjusting.
+Set output volume, optionally persisting. The auto-mode byte is retired.
 
 Fixed size: 5 bytes.
 
@@ -249,7 +249,7 @@ Fixed size: 5 bytes.
 | --- | --- | --- | --- | --- |
 | 0 | level | u8 | 1 |  |
 | 1 | persist | u8 | 1 |  |
-| 2 | auto_mode | u8 | 1 |  |
+| 2 | auto_mode | u8 | 1 | retired auto-volume mode |
 | 3 | id_len | str8 | 1 |  |
 | 4 | comp_len | str8 | 1 |  |
 

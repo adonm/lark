@@ -327,11 +327,11 @@ var Messages = []Message{
 	{
 		Name: "Volume", GoName: "protoVolume", CName: "lark_volume_t",
 		MsgGo: "msgVolume", MsgC: "LARK_MSG_VOLUME", TypeByte: 0x8C, ToDevice: true,
-		Doc: "Set output volume, optionally persisting and auto-adjusting.",
+		Doc: "Set output volume, optionally persisting. The auto-mode byte is retired.",
 		Fields: []Field{
 			{Go: "level", C: "level", Kind: U8, Sample: 60},
 			{Go: "persist", C: "persist", Kind: U8, Sample: 1},
-			{Go: "auto", C: "auto_mode", Kind: U8, Sample: 0},
+			{Go: "auto", C: "auto_mode", Kind: U8, Retired: true, Doc: "retired auto-volume mode"},
 			{Go: "terminalID", C: "id_len", CLen: "id_len", Kind: Str8, Str: "vocat-33d8"},
 			{Go: "companionID", C: "comp_len", CLen: "comp_len", Kind: Str8, Str: "cake"},
 		},
