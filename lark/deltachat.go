@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -388,7 +389,11 @@ func (s *dcService) reconcileAccounts(ctx context.Context) object {
 	out["linked"] = len(linked)
 	if rpc := s.getRPC(); rpc != nil {
 		if ids, err := rpc.GetAllAccountIds(); err == nil {
+			slices.Sort(ids)
 			out["on_disk"] = len(ids)
+			// The full id set lets QA prove a run removed the accounts it
+			// created; a crash before cleanup leaves them visible to doctor.
+			out["ids"] = ids
 			orphans := []uint32{}
 			for _, id := range ids {
 				if !linked[id] {

@@ -42,85 +42,35 @@ func qaLiveClient(t *testing.T) *cliClient {
 	if err != nil {
 		t.Fatal(err)
 	}
+	guard, err := newQARunGuard(t.Context(), c)
+	if err != nil {
+		t.Fatalf("QA baseline snapshot: %v", err)
+	}
+	qaGuards.Store(c, guard)
+	t.Cleanup(func() {
+		qaGuards.Delete(c)
+		// Cleanup outlives the test context: a failed test must still remove
+		// its rows and verify the pre-run sets.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := guard.cleanup(ctx); err != nil {
+			t.Errorf("%v", err)
+		}
+	})
 	return c
 }
 
 func qaTempCompanion(t *testing.T, c *cliClient, name, form string) string {
 	t.Helper()
-	beforeComps, beforeTerms := qaIDs(t, c, "/api/companions", "companions"), qaIDs(t, c, "/api/terminals", "terminals")
 	res, err := c.do(t.Context(), http.MethodPost, "/api/companions", object{"name": name, "form": form})
 	if err != nil {
 		t.Fatalf("create temp companion %s: %v", name, err)
 	}
 	id := str(res["id"])
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		// Unknown sims create a blank companion and terminal before the script
-		// attaches them. Track the ids that appeared during this test and only
-		// remove those: a terminal on a companion that predates the test, or a
-		// configured companion, belongs to someone else.
-		if list, err := c.do(ctx, http.MethodGet, "/api/terminals", nil); err == nil {
-			if items, ok := list["terminals"].([]any); ok {
-				for _, item := range items {
-					m, _ := item.(object)
-					term, cid := str(m["id"]), str(m["companion_id"])
-					if beforeTerms[term] || (cid != "" && beforeComps[cid]) {
-						continue
-					}
-					_, _ = c.do(ctx, http.MethodDelete, "/api/terminals/"+term, nil)
-				}
-			}
-		}
-		// A sim registers a blank companion before the script attaches its
-		// terminal, so the blank row is no longer linked from any terminal.
-		// Drop the orphan only when it is new and nothing references it.
-		inUse := map[string]bool{}
-		if list, err := c.do(ctx, http.MethodGet, "/api/terminals", nil); err == nil {
-			if items, ok := list["terminals"].([]any); ok {
-				for _, item := range items {
-					m, _ := item.(object)
-					if cid := str(m["companion_id"]); cid != "" {
-						inUse[cid] = true
-					}
-				}
-			}
-		}
-		if list, err := c.do(ctx, http.MethodGet, "/api/companions", nil); err == nil {
-			if items, ok := list["companions"].([]any); ok {
-				for _, item := range items {
-					m, _ := item.(object)
-					cid := str(m["id"])
-					if beforeComps[cid] || inUse[cid] {
-						continue
-					}
-					if cid != id && m["configured"] == true {
-						continue
-					}
-					_, _ = c.do(ctx, http.MethodDelete, "/api/companions/"+cid, nil)
-				}
-			}
-		}
-	})
+	if g := qaGuardFor(c); g != nil {
+		g.trackCompanion(id)
+	}
 	return id
-}
-
-func qaIDs(t *testing.T, c *cliClient, path, key string) map[string]bool {
-	t.Helper()
-	out := map[string]bool{}
-	res, err := c.do(t.Context(), http.MethodGet, path, nil)
-	if err != nil {
-		return out
-	}
-	if items, ok := res[key].([]any); ok {
-		for _, item := range items {
-			m, _ := item.(object)
-			if id := str(m["id"]); id != "" {
-				out[id] = true
-			}
-		}
-	}
-	return out
 }
 
 func qaSimRun(t *testing.T, board, id, script string) []object {
