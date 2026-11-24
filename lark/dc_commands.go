@@ -14,27 +14,10 @@ import (
 )
 
 func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
-	rpc := s.getRPC()
-	if rpc == nil {
+	rpc, companionID, msg, contact, ok := s.incomingMessage(ctx, accID, msgID)
+	if !ok {
 		return
 	}
-	companionID := s.companionForAccount(ctx, accID)
-	if companionID == "" {
-		return
-	}
-	msg, err := rpc.GetMessage(accID, msgID)
-	if err != nil || msg.IsInfo || msg.FromId == deltachat.ContactSelf || msg.FromId == 0 {
-		return
-	}
-	contact, err := rpc.GetContact(accID, msg.FromId)
-	if err != nil || !contact.IsVerified || contact.IsBlocked {
-		return
-	}
-	chat, err := rpc.GetBasicChatInfo(accID, msg.ChatId)
-	if err != nil || chat.IsContactRequest {
-		return
-	}
-
 	isVoice := (msg.ViewType == deltachat.ViewtypeVoice || msg.ViewType == deltachat.ViewtypeAudio) && msg.File != nil && *msg.File != ""
 	if peerID, isPeer := s.companionByAddr(contact.Address); isPeer {
 		var pcm []byte
@@ -50,29 +33,11 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 
 	text := strings.TrimSpace(msg.Text)
 	if isVoice {
-		pcm, err := decodeAudioToPCM16k(ctx, *msg.File)
-		if err != nil {
-			log.Printf("Delta Chat voice decode error: %v", err)
+		if text, ok = s.transcribeVoice(ctx, msg); !ok {
 			return
 		}
-		transcribe := s.b.sttFunc()
-		if transcribe == nil {
-			return
-		}
-		spoken, err := transcribe(ctx, pcm)
-		if err != nil {
-			log.Printf("Delta Chat voice STT error: %v", err)
-			return
-		}
-		text = strings.TrimSpace(spoken)
 	}
-	senderName := strings.TrimSpace(contact.DisplayName)
-	if senderName == "" {
-		senderName = strings.TrimSpace(contact.Name)
-	}
-	if senderName == "" {
-		senderName = "Friend"
-	}
+	senderName := dcSenderName(contact)
 	if !isVoice && msg.File != nil && strings.HasSuffix(strings.ToLower(*msg.File), ".twee") {
 		s.importTweeAttachment(ctx, rpc, accID, msg.ChatId, senderName, *msg.File)
 		return
@@ -84,81 +49,11 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 
 	private := false
 	if !isVoice && strings.HasPrefix(text, "/") {
-		cmd, arg := splitSlashCommand(text)
-		switch cmd {
-		case "/say":
-			if arg == "" {
-				hint := "Usage: /say <words>"
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
-				return
-			}
-			s.b.sayOnCompanion(ctx, companionID, senderName, msg.ChatId, arg)
-			ack := "Said it."
-			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &ack}); err != nil {
-				log.Printf("Delta Chat SendMsg error: %v", err)
-			}
-			return
-		case "/private":
-			if arg == "" {
-				hint := "Usage: /private <words>"
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
-				return
-			}
-			private = true
-			text = arg
-		case "/help":
-			help := welcomeText(who)
-			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &help}); err != nil {
-				log.Printf("Delta Chat SendMsg error: %v", err)
-			}
-			return
-		case "/remote":
-			if s.b.remote == nil {
-				hint := "Remote controls unavailable."
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
-				return
-			}
-			contactKey := dcContactKey(contact)
-			if strings.EqualFold(arg, "off") {
-				_, err := s.b.remote.revokeContact(ctx, companionID, contactKey)
-				reply := "Remote controls off."
-				if err != nil && !errors.Is(err, context.Canceled) {
-					reply = err.Error()
-				}
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &reply})
-				return
-			}
-			if arg != "" {
-				hint := "Usage: /remote [off]"
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
-				return
-			}
-			link, err := s.b.remote.issue(ctx, companionID, contactKey, contact.Name)
-			if err != nil {
-				errText := err.Error()
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &errText})
-				return
-			}
-			_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &link})
-			return
-		case "/stories":
-			s.sendStoriesList(ctx, rpc, accID, msg.ChatId)
-			return
-		case "/story":
-			if arg == "" {
-				hint := "Usage: /story <name>"
-				_, _ = rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint})
-				return
-			}
-			s.sendStoryFiles(ctx, rpc, companionID, accID, msg.ChatId, arg)
-			return
-		default:
-			hint := "Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /remote, or /help."
-			if _, err := rpc.SendMsg(accID, msg.ChatId, deltachat.MessageData{Text: &hint}); err != nil {
-				log.Printf("Delta Chat SendMsg error: %v", err)
-			}
+		out := s.runCommand(ctx, rpc, accID, msg.ChatId, companionID, senderName, who, contact, parseDCCommand(text))
+		if out.handled {
 			return
 		}
+		private, text = out.private, out.text
 	}
 
 	if s.b.oc == nil {
@@ -199,28 +94,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		return
 	}
 	s.b.chat(companionID, newChat("companion", who.Name, reply, "deltachat"), true)
-
-	outMsg := deltachat.MessageData{Text: &reply}
-	var opusPath string
-	if isVoice && s.b.worker != nil && s.b.worker.ready.Load() {
-		if clean, err := spokenText(reply); err == nil {
-			if pcm, err := s.b.worker.synthesize(turnCtx, s.b.voiceFor(companionID), clean); err == nil && len(pcm) > 0 {
-				if tmp, err := os.CreateTemp("", "lark-reply-*.ogg"); err == nil {
-					opusPath = tmp.Name()
-					_ = tmp.Close()
-					defer os.Remove(opusPath)
-					if err := encodePCMToOpus(turnCtx, pcm, sampleRate, opusPath); err == nil {
-						vt := deltachat.ViewtypeVoice
-						outMsg.File = &opusPath
-						outMsg.Viewtype = &vt
-					}
-				}
-			}
-		}
-	}
-	if _, err := rpc.SendMsg(accID, msg.ChatId, outMsg); err != nil {
-		log.Printf("Delta Chat SendMsg error: %v", err)
-	}
+	s.sendReply(turnCtx, rpc, accID, msg.ChatId, companionID, reply, isVoice)
 	if !private && s.b.hub != nil {
 		s.b.hub.deliverNotice(ctx, terminalNotice{
 			recipientIDs: []string{companionID},
@@ -232,6 +106,177 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 			cardReply:    senderName,
 			trace:        traceFrom(turnCtx),
 		})
+	}
+}
+
+// incomingMessage applies the filters every inbound message needs: a mapped
+// companion, a verified contact, and a real chat (not a contact request).
+func (s *dcService) incomingMessage(ctx context.Context, accID, msgID uint32) (dcRPC, string, deltachat.Message, deltachat.Contact, bool) {
+	rpc := s.getRPC()
+	if rpc == nil {
+		return nil, "", deltachat.Message{}, deltachat.Contact{}, false
+	}
+	companionID := s.companionForAccount(ctx, accID)
+	if companionID == "" {
+		return nil, "", deltachat.Message{}, deltachat.Contact{}, false
+	}
+	msg, err := rpc.GetMessage(accID, msgID)
+	if err != nil || msg.IsInfo || msg.FromId == deltachat.ContactSelf || msg.FromId == 0 {
+		return nil, "", deltachat.Message{}, deltachat.Contact{}, false
+	}
+	contact, err := rpc.GetContact(accID, msg.FromId)
+	if err != nil || !contact.IsVerified || contact.IsBlocked {
+		return nil, "", deltachat.Message{}, deltachat.Contact{}, false
+	}
+	chat, err := rpc.GetBasicChatInfo(accID, msg.ChatId)
+	if err != nil || chat.IsContactRequest {
+		return nil, "", deltachat.Message{}, deltachat.Contact{}, false
+	}
+	return rpc, companionID, msg, contact, true
+}
+
+func (s *dcService) transcribeVoice(ctx context.Context, msg deltachat.Message) (string, bool) {
+	pcm, err := decodeAudioToPCM16k(ctx, *msg.File)
+	if err != nil {
+		log.Printf("Delta Chat voice decode error: %v", err)
+		return "", false
+	}
+	transcribe := s.b.sttFunc()
+	if transcribe == nil {
+		return "", false
+	}
+	spoken, err := transcribe(ctx, pcm)
+	if err != nil {
+		log.Printf("Delta Chat voice STT error: %v", err)
+		return "", false
+	}
+	return strings.TrimSpace(spoken), true
+}
+
+func dcSenderName(contact deltachat.Contact) string {
+	for _, name := range []string{contact.DisplayName, contact.Name} {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "Friend"
+}
+
+// dcCommand is one leading slash command; name is empty for plain text.
+type dcCommand struct {
+	name string
+	arg  string
+}
+
+func parseDCCommand(text string) dcCommand {
+	name, arg := splitSlashCommand(text)
+	return dcCommand{name: name, arg: arg}
+}
+
+// commandOutcome reports whether the command was handled or hands text back
+// to the agent turn (private messages).
+type commandOutcome struct {
+	handled bool
+	private bool
+	text    string
+}
+
+func (s *dcService) runCommand(ctx context.Context, rpc dcRPC, accID, chatID uint32, companionID, senderName string, who companionState, contact deltachat.Contact, cmd dcCommand) commandOutcome {
+	switch cmd.name {
+	case "/say":
+		if cmd.arg == "" {
+			dcSend(rpc, accID, chatID, "Usage: /say <words>")
+			return commandOutcome{handled: true}
+		}
+		s.b.sayOnCompanion(ctx, companionID, senderName, chatID, cmd.arg)
+		dcSend(rpc, accID, chatID, "Said it.")
+		return commandOutcome{handled: true}
+	case "/private":
+		if cmd.arg == "" {
+			dcSend(rpc, accID, chatID, "Usage: /private <words>")
+			return commandOutcome{handled: true}
+		}
+		return commandOutcome{private: true, text: cmd.arg}
+	case "/help":
+		dcSend(rpc, accID, chatID, welcomeText(who))
+		return commandOutcome{handled: true}
+	case "/remote":
+		return commandOutcome{handled: s.runRemoteCommand(ctx, rpc, accID, chatID, companionID, contact, cmd.arg)}
+	case "/stories":
+		s.sendStoriesList(ctx, rpc, accID, chatID)
+		return commandOutcome{handled: true}
+	case "/story":
+		if cmd.arg == "" {
+			dcSend(rpc, accID, chatID, "Usage: /story <name>")
+			return commandOutcome{handled: true}
+		}
+		s.sendStoryFiles(ctx, rpc, companionID, accID, chatID, cmd.arg)
+		return commandOutcome{handled: true}
+	}
+	dcSend(rpc, accID, chatID, "Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /remote, or /help.")
+	return commandOutcome{handled: true}
+}
+
+// runRemoteCommand issues, revokes, or explains the scoped remote link.
+func (s *dcService) runRemoteCommand(ctx context.Context, rpc dcRPC, accID, chatID uint32, companionID string, contact deltachat.Contact, arg string) bool {
+	if s.b.remote == nil {
+		dcSend(rpc, accID, chatID, "Remote controls unavailable.")
+		return true
+	}
+	contactKey := dcContactKey(contact)
+	if strings.EqualFold(arg, "off") {
+		_, err := s.b.remote.revokeContact(ctx, companionID, contactKey)
+		reply := "Remote controls off."
+		if err != nil && !errors.Is(err, context.Canceled) {
+			reply = err.Error()
+		}
+		dcSend(rpc, accID, chatID, reply)
+		return true
+	}
+	if arg != "" {
+		dcSend(rpc, accID, chatID, "Usage: /remote [off]")
+		return true
+	}
+	link, err := s.b.remote.issue(ctx, companionID, contactKey, contact.Name)
+	if err != nil {
+		dcSend(rpc, accID, chatID, err.Error())
+		return true
+	}
+	dcSend(rpc, accID, chatID, link)
+	return true
+}
+
+// sendReply answers the contact, attaching synthesized speech for a voice
+// message when the worker is ready.
+func (s *dcService) sendReply(ctx context.Context, rpc dcRPC, accID, chatID uint32, companionID, reply string, isVoice bool) {
+	outMsg := deltachat.MessageData{Text: &reply}
+	var opusPath string
+	if isVoice && s.b.worker != nil && s.b.worker.ready.Load() {
+		if clean, err := spokenText(reply); err == nil {
+			if pcm, err := s.b.worker.synthesize(ctx, s.b.voiceFor(companionID), clean); err == nil && len(pcm) > 0 {
+				if tmp, err := os.CreateTemp("", "lark-reply-*.ogg"); err == nil {
+					opusPath = tmp.Name()
+					_ = tmp.Close()
+					defer os.Remove(opusPath)
+					if err := encodePCMToOpus(ctx, pcm, sampleRate, opusPath); err == nil {
+						vt := deltachat.ViewtypeVoice
+						outMsg.File = &opusPath
+						outMsg.Viewtype = &vt
+					}
+				}
+			}
+		}
+	}
+	if _, err := rpc.SendMsg(accID, chatID, outMsg); err != nil {
+		log.Printf("Delta Chat SendMsg error: %v", err)
+	}
+}
+
+// dcSend sends one plain reply and logs a transport failure; every command
+// answer goes through it so none is silently dropped.
+func dcSend(rpc dcRPC, accID, chatID uint32, text string) {
+	if _, err := rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &text}); err != nil {
+		log.Printf("Delta Chat SendMsg error: %v", err)
 	}
 }
 
