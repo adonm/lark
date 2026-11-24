@@ -501,7 +501,11 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	mu.Lock()
 	defer mu.Unlock()
 	if err != nil {
-		traceFrom(ctx).fail()
+		// Stop, a replacement turn, or a disconnect cancels the context on
+		// purpose. That is not a failed turn for the recent-turn rate.
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			traceFrom(ctx).fail()
+		}
 		drop(true)
 		return generatedReply{}, err
 	}
