@@ -185,6 +185,44 @@ func TestDoctorWarnsOnDrift(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsOnQALeftovers(t *testing.T) {
+	t.Parallel()
+	server := doctorFixture(t, map[string]any{
+		"/api/terminals": map[string]any{"terminals": []any{
+			map[string]any{"id": "sim-qa", "board": "esp-vocat", "firmware": "sim-0.19.0", "online": false},
+			map[string]any{"id": "sim-live", "board": "esp-vocat", "firmware": "sim-0.19.0", "online": true, "ip": "127.0.0.1"},
+			map[string]any{"id": "box3-test", "board": "esp-box-3", "firmware": "9.9.9", "online": true, "ip": "127.0.0.1"},
+		}},
+		"/api/companions": map[string]any{"companions": []any{
+			map[string]any{"id": "mint", "dc_account_id": 1},
+			map[string]any{"id": "qa-sim", "dc_account_id": 2},
+			map[string]any{"id": "new-companion-2", "dc_account_id": 3},
+		}},
+	})
+	defer server.Close()
+	env := doctorTestEnv(t)
+	env.deviceStatus = func(string) (object, error) { return object{"min_free_heap": 50 << 10}, nil }
+	client := &cliClient{base: server.URL, http: server.Client()}
+	var out, errOut strings.Builder
+	if err := runDoctorWithClient(t.Context(), client, &out, &errOut, env); err != nil {
+		t.Fatalf("warnings must not fail: %v\n%s", err, out.String())
+	}
+	text := out.String()
+	for _, want := range []string{
+		"warn  qa leftovers",
+		"offline terminal sim-qa (lark terminals rm sim-qa)",
+		"companion qa-sim (lark companions rm qa-sim)",
+		"companion new-companion-2 (lark companions rm new-companion-2)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "sim-live (lark terminals rm") {
+		t.Errorf("online sim terminal flagged as leftover:\n%s", text)
+	}
+}
+
 func TestStripJSONComments(t *testing.T) {
 	t.Parallel()
 	in := "{\n// note\n\"url\": \"http://x//y\", /* block */ \"n\": 1\n}"

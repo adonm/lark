@@ -8,8 +8,13 @@ matrix, and firmware builds.
 
 Live QA that targets the installed server requires
 `LARK_QA_ALLOW_PRODUCTION=1`; `./scripts/check.sh --qa` and `--qa-hw` set it,
-and `requireIsolatedQA` fails without it. Cleanup is id-scoped: tests delete
-only rows they created, never by title or name.
+and `requireIsolatedQA` fails without it. Cleanup is id-scoped: each test
+snapshots companion, terminal, and Delta Chat account ids before the run,
+deletes only the ids the run created (detaching attached terminals first), and
+then asserts the sets are identical again. A surviving row fails the test with
+its id, even when the row became configured or terminal-linked mid-test.
+`lark doctor` warns about debris from a crashed run — an offline `sim-*`
+terminal or a `qa-`/`new-companion` companion — with the removal command.
 
 ## To change X, run Y
 
@@ -98,6 +103,8 @@ CI never uses `--fast`.
 - `lark sim [--board vocat|box3] [--id sim-x] [--addr host:port] [--script f]`
   drives a virtual board against the running server; scripts are the ones in
   `lark/qa/`, and stdin works too.
+- `lark terminals rm <id>` removes an offline terminal row (including a
+  leftover `sim-*`); it detaches the row before deleting it.
 - `lark device <terminal> status|tap X Y|tap-label NAME|mic file.wav|screen out.png`
   sends input to, or reads the screen of, a real board.
 - `lark capture <companion> [seconds]` records the voice-owner microphone

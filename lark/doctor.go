@@ -156,6 +156,7 @@ func (d *doctor) checks(ctx context.Context) []doctorCheck {
 		{"deltachat", d.checkDeltaChat},
 		{"deltachat accounts", d.checkDCAccounts},
 		{"deltachat relay", d.checkDCRelay},
+		{"qa leftovers", d.checkQALeftovers},
 	}
 	if body, err := d.fetch(ctx, "/api/terminals", &d.terminals); err == nil {
 		list, _ := body["terminals"].([]any)
@@ -547,6 +548,43 @@ func (d *doctor) checkDCAccounts(ctx context.Context) doctorResult {
 		return warn("%d of %d companions have accounts", withAccount, len(list))
 	}
 	return pass("%d of %d companions have accounts", withAccount, len(list))
+}
+
+// checkQALeftovers catches the debris a crashed QA run leaves on the server:
+// an offline sim terminal or a qa-/new-companion row. A live sim is expected
+// while a test runs, so only offline terminal rows are flagged.
+func (d *doctor) checkQALeftovers(ctx context.Context) doctorResult {
+	terms, err := d.fetch(ctx, "/api/terminals", &d.terminals)
+	if err != nil {
+		return fail("GET /api/terminals: %v", err)
+	}
+	comps, err := d.fetch(ctx, "/api/companions", &d.companions)
+	if err != nil {
+		return fail("GET /api/companions: %v", err)
+	}
+	var leftovers []string
+	if list, ok := terms["terminals"].([]any); ok {
+		for _, item := range list {
+			m, _ := item.(object)
+			id := str(m["id"])
+			if strings.HasPrefix(id, "sim-") && !boolOf(m["online"]) {
+				leftovers = append(leftovers, fmt.Sprintf("offline terminal %s (lark terminals rm %s)", id, id))
+			}
+		}
+	}
+	if list, ok := comps["companions"].([]any); ok {
+		for _, item := range list {
+			m, _ := item.(object)
+			id := str(m["id"])
+			if strings.HasPrefix(id, "qa-") || strings.HasPrefix(id, "new-companion") {
+				leftovers = append(leftovers, fmt.Sprintf("companion %s (lark companions rm %s)", id, id))
+			}
+		}
+	}
+	if len(leftovers) > 0 {
+		return warn("%s", strings.Join(leftovers, "; "))
+	}
+	return pass("no QA leftovers")
 }
 
 func (d *doctor) checkDCRelay(context.Context) doctorResult {
