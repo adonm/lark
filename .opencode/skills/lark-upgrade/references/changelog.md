@@ -4,6 +4,32 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-24 — OpenCode 2.3.2 → 2.4.1
+
+### Affects
+- Host: the OpenCode binary (`~/.opencode/bin/opencode`, shared with the user's interactive OpenCode)
+
+### Breaking Changes
+- None for Lark. `session.hook("context"|"compaction"|"experimental.model.resolve")` is unchanged; both Lark plugins load `active`.
+- Plugins load asynchronously: `/api/model` and `/api/plugin` can be empty for a few seconds after start. Lark refreshes on `model.updated`/`agent.updated`.
+- `experimental_image_generate` is renamed `generate_image`. Lark does not use it.
+- The experimental instruction-entry route is unchanged (`PUT /api/experimental/session/{sid}/instructions/entries/lark.companion` returns 204).
+
+### How to Detect
+- `GET http://127.0.0.1:49375/api/info` reports `2.3.2` while `~/.opencode/bin/opencode --version` reports 2.4.1: the service has not restarted onto the installed binary.
+
+### Upgrade Steps
+1. `cp -a ~/.opencode/bin/opencode ~/.local/share/opencode-bin-backup/opencode-$(~/.opencode/bin/opencode --version)`
+2. `~/.opencode/bin/opencode upgrade`
+3. `systemctl --user restart lark-opencode.service lark.service`
+
+### Verification
+- `lark status` and `lark doctor` pass.
+- `GET /api/plugin` lists `lark.model-fallback` and `lark.context` as `active`.
+- A `lark sim` voice turn returns audio; `/api/agent` lists `deep` on `opencode/glm-5.3#high`.
+
+---
+
 ## 2026-11-24 — Firmware 0.21.0: lossless TTS acks, 12 s TTS buffer, reconnect and telemetry fixes
 
 ### Affects
