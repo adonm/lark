@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -80,22 +79,6 @@ type ocModel struct {
 
 var defaultSmartModel = ocModel{Provider: "opencode", ID: "gemini-4-hydrogen", Variant: "low"}
 
-func parseModelSpec(spec string) ocModel {
-	spec = strings.TrimSpace(spec)
-	if spec == "" {
-		return ocModel{}
-	}
-	prov, rest, ok := strings.Cut(spec, "/")
-	if !ok || prov == "" || rest == "" {
-		return ocModel{}
-	}
-	id, variant, _ := strings.Cut(rest, "#")
-	if id == "" {
-		return ocModel{}
-	}
-	return ocModel{Provider: prov, ID: id, Variant: variant}
-}
-
 type ocPermission struct {
 	Action   string `json:"action"`
 	Resource string `json:"resource"`
@@ -121,7 +104,6 @@ type openCode struct {
 	mu           sync.Mutex
 	sig          condSignal
 	active       map[string]context.CancelFunc
-	activeSource map[string]string
 	interrupts   map[string]bool
 	resets       map[string]*ocReset
 	verified     map[string]string
@@ -139,8 +121,8 @@ type ocReset struct {
 
 func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, settings ocSettings) *openCode {
 	o := &openCode{upstream: u, project: project, settings: settings, db: db,
-		store:  &sessionStore{db: db.DB, readDB: db.readDB()},
-		active: make(map[string]context.CancelFunc), activeSource: make(map[string]string),
+		store:      &sessionStore{db: db.DB, readDB: db.readDB()},
+		active:     make(map[string]context.CancelFunc),
 		interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
 		verified:     make(map[string]string),
 		sessionModel: make(map[string]ocModel),
@@ -655,75 +637,6 @@ func (o *openCode) ensureSession(ctx context.Context, companion companionState, 
 	return created.ID, nil
 }
 
-func sessionMatchesDevice(title, deviceID string) bool {
-	name, ok := strings.CutPrefix(title, "Lark: ")
-	if !ok || deviceID == "" {
-		return false
-	}
-	if strings.EqualFold(name, deviceID) {
-		return true
-	}
-	if id, ok := strings.CutPrefix(name, "scope-"); ok && strings.EqualFold(id, deviceID) {
-		return true
-	}
-	if name, ok := strings.CutSuffix(name, ")"); ok {
-		if i := strings.LastIndex(name, " ("); i >= 0 {
-			return strings.EqualFold(name[i+2:], deviceID)
-		}
-	}
-	return false
-}
-
-func (o *openCode) ListDeviceSessions(ctx context.Context, deviceID, activeSID string) ([]string, error) {
-	return o.listDeviceSessions(ctx, deviceID, activeSID, true)
-}
-
-func (o *openCode) listDeviceSessions(ctx context.Context, deviceID, activeSID string, fallback bool) ([]string, error) {
-	type session struct {
-		ID, Title string
-		Time      struct{ Created int64 }
-	}
-	type page struct {
-		Data   []session
-		Cursor struct{ Next string }
-	}
-	var matches []session
-	seenIDs, seenCursors := make(map[string]bool), make(map[string]bool)
-	params := url.Values{"limit": {"200"}}
-	for {
-		var result page
-		if err := o.jsonCall(ctx, http.MethodGet, "/api/session?"+params.Encode(), nil, &result); err != nil {
-			if fallback && activeSID != "" {
-				return []string{activeSID}, nil
-			}
-			return nil, err
-		}
-		for _, s := range result.Data {
-			if sessionIDRE.MatchString(s.ID) && !seenIDs[s.ID] && (s.ID == activeSID || sessionMatchesDevice(s.Title, deviceID)) {
-				matches = append(matches, s)
-				seenIDs[s.ID] = true
-			}
-		}
-		next := result.Cursor.Next
-		if next == "" || seenCursors[next] {
-			break
-		}
-		seenCursors[next] = true
-		params.Set("cursor", next)
-	}
-	slices.SortFunc(matches, func(a, b session) int {
-		return cmp.Or(cmp.Compare(a.Time.Created, b.Time.Created), strings.Compare(a.ID, b.ID))
-	})
-	ids := make([]string, 0, len(matches))
-	for _, s := range matches {
-		ids = append(ids, s.ID)
-	}
-	if activeSID != "" && !seenIDs[activeSID] {
-		ids = append(ids, activeSID)
-	}
-	return ids, nil
-}
-
 type ocMessage struct {
 	ID, Type, Finish, Outcome string
 	Text                      string
@@ -798,66 +711,6 @@ type ocMessagePage struct {
 	Cursor struct{ Next string }
 }
 
-func (o *openCode) GetSessionMessages(ctx context.Context, sid string) ([]chatEntry, error) {
-	entries := []chatEntry{}
-	cursor, source := "", "text"
-	seen := make(map[string]bool)
-	for {
-		page, err := o.sessionMessagePage(ctx, sid, cursor, source)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, page.entries...)
-		if page.next == "" || seen[page.next] {
-			return entries, nil
-		}
-		seen[page.next] = true
-		cursor, source = page.next, page.source
-	}
-}
-
-type sessionHistoryPage struct {
-	entries      []chatEntry
-	next, source string
-}
-
-func (o *openCode) sessionMessagePage(ctx context.Context, sid, cursor, source string) (sessionHistoryPage, error) {
-	if !sessionIDRE.MatchString(sid) {
-		return sessionHistoryPage{}, problem(400, "Invalid session ID")
-	}
-	params := url.Values{"limit": {"50"}}
-	if cursor == "" {
-		params.Set("order", "asc")
-	} else {
-		params.Set("cursor", cursor)
-	}
-	var result ocMessagePage
-	if err := o.jsonCall(ctx, http.MethodGet, "/api/session/"+sid+"/message?"+params.Encode(), nil, &result); err != nil {
-		return sessionHistoryPage{}, err
-	}
-	page := sessionHistoryPage{source: source}
-	for _, message := range result.Data {
-		if message.Type == "assistant" && message.Finish != "" && message.Finish != "stop" && message.Finish != "length" {
-			continue
-		}
-		if message.Type == "user" {
-			switch message.Metadata.LarkSource {
-			case "typed", "voice", "tap":
-				page.source = message.Metadata.LarkSource
-			default:
-				page.source = "text"
-			}
-		}
-		if entry := message.chat(page.source); entry.ID != "" && (entry.Text != "" || entry.ToolSummary != "") {
-			page.entries = append(page.entries, entry)
-		}
-	}
-	if len(result.Data) != 0 {
-		page.next = result.Cursor.Next
-	}
-	return page, nil
-}
-
 func (o *openCode) lockPrompt(ctx context.Context, companionID string) (context.Context, func(), error) {
 	for {
 		unlock, err := o.lock(ctx, companionID)
@@ -887,7 +740,6 @@ func (o *openCode) lockPrompt(ctx context.Context, companionID string) (context.
 				defer unlock()
 				o.mu.Lock()
 				delete(o.active, companionID)
-				delete(o.activeSource, companionID)
 				o.mu.Unlock()
 				cancel()
 				_ = o.flushInterrupt(context.WithoutCancel(turn), companionID)

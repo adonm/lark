@@ -424,7 +424,7 @@ func TestOpenCodeStreamingAndFallback(t *testing.T) {
 				return o.feed.connected
 			})
 			var heard []string
-			got, err := o.runTurnStreaming(ctx, "ses1", "test", turnStream{sentence: func(s string) {
+			got, err := o.runTurnStreamingWithModel(ctx, "ses1", "test", ocModel{}, turnStream{sentence: func(s string) {
 				heard = append(heard, s)
 				if len(heard) == 1 {
 					close(early)

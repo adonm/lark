@@ -110,7 +110,7 @@ func TestOpenCodeAdmitsPromptBeforeEventStreamConnects(t *testing.T) {
 		}
 	})
 	start := time.Now()
-	reply, err := o.runTurnStreaming(ctx, sid, "Hello", turnStream{sentence: func(string) {
+	reply, err := o.runTurnStreamingWithModel(ctx, sid, "Hello", ocModel{}, turnStream{sentence: func(string) {
 		t.Error("disconnected stream spoke partial text")
 	}}, "", nil)
 	if err != nil || reply != "Ready?" {
@@ -412,7 +412,7 @@ func TestOpenCodeFinalReplyPaginatesToAdmittedPrompt(t *testing.T) {
 		}
 	})
 	tools := 0
-	got, err := o.runTurnStreaming(t.Context(), sid, "Long turn", turnStream{tool: func() { tools++ }}, "", nil)
+	got, err := o.runTurnStreamingWithModel(t.Context(), sid, "Long turn", ocModel{}, turnStream{tool: func() { tools++ }}, "", nil)
 	if err != nil || got != reply || tools != 1 {
 		t.Fatalf("reply %q, err %v, tool callbacks %d", got, err, tools)
 	}

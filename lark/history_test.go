@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -172,85 +171,16 @@ func TestHistoryCursorPagination(t *testing.T) {
 	}
 }
 
-func TestSessionMatchesDevice(t *testing.T) {
+func TestLarkTitleContract(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		title, device string
-		want          bool
-	}{
-		{"Lark: lark-33d8", "lark-33d8", true},
-		{"Lark: scope-virt-1234", "virt-1234", true},
-		{"Lark: Cake (lark-33d8)", "LARK-33D8", true},
-		{"Lark: lark-33d80", "lark-33d8", false},
-		{"Lark: scope-lark-33d80", "lark-33d8", false},
-		{"Lark: Cake (lark-33d80)", "lark-33d8", false},
-		{"Lark: Cake (lark-33d8) archived", "lark-33d8", false},
-		{"Lark: Cake(lark-33d8)", "lark-33d8", false},
-		{"Other: Cake (lark-33d8)", "lark-33d8", false},
-	} {
-		if got := sessionMatchesDevice(tc.title, tc.device); got != tc.want {
-			t.Errorf("sessionMatchesDevice(%q, %q) = %t, want %t", tc.title, tc.device, got, tc.want)
-		}
+	if got := larkTitle("lark-33d8", "Cake"); got != "Lark: Cake (lark-33d8)" {
+		t.Fatalf("named companion title = %q", got)
 	}
-}
-
-func TestListDeviceSessionsFallback(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name      string
-		status    int
-		activeSID string
-		want      []string
-		wantError bool
-	}{
-		{"unlisted active", http.StatusOK, "ses_active", []string{"ses_old", "ses_active"}, false},
-		{"no active", http.StatusOK, "", []string{"ses_old"}, false},
-		{"unavailable with active", http.StatusServiceUnavailable, "ses_active", []string{"ses_active"}, false},
-		{"unavailable without active", http.StatusServiceUnavailable, "", nil, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			o := historyOpenCode(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/api/session" {
-					t.Error("unexpected path", r.URL.Path)
-				}
-				w.WriteHeader(tc.status)
-				fmt.Fprint(w, `{"data":[{"id":"ses_old","title":"Lark: lark-history","time":{"created":100}}]}`)
-			})
-			got, err := o.ListDeviceSessions(t.Context(), "lark-history", tc.activeSID)
-			if !slices.Equal(got, tc.want) || (err != nil) != tc.wantError {
-				t.Fatalf("ListDeviceSessions = %v, %v; want %v (error: %t)", got, err, tc.want, tc.wantError)
-			}
-		})
+	if got := larkTitle("lark-33d8", ""); got != "Lark: lark-33d8" {
+		t.Fatalf("bare companion title = %q", got)
 	}
-}
-
-func TestSessionMessageBackfillExceedsOldPaginationLimit(t *testing.T) {
-	t.Parallel()
-	o := historyOpenCode(t, func(w http.ResponseWriter, r *http.Request) {
-		offset := 0
-		if cursor := r.URL.Query().Get("cursor"); cursor != "" {
-			var err error
-			offset, err = strconv.Atoi(cursor)
-			if err != nil || offset > 500 {
-				t.Error("unexpected cursor", cursor)
-				http.Error(w, "unexpected cursor", 400)
-				return
-			}
-		}
-		data := make([]object, 50)
-		for i := range data {
-			data[i] = object{"id": fmt.Sprintf("msg_%d", offset+i), "type": "user",
-				"text": "Example", "time": object{"created": offset + i}}
-		}
-		next := ""
-		if offset < 500 {
-			next = strconv.Itoa(offset + len(data))
-		}
-		_ = json.NewEncoder(w).Encode(object{"data": data, "cursor": object{"next": next}})
-	})
-	messages, err := o.GetSessionMessages(t.Context(), "ses_test")
-	if err != nil || len(messages) != 550 || messages[0].ID != "msg_0" || messages[549].ID != "msg_549" {
-		t.Fatalf("expected all 550 session messages, got %d (%v)", len(messages), err)
+	if got := larkTitle("lark-33d8", "lark-33d8"); got != "Lark: lark-33d8" {
+		t.Fatalf("companion named after its ID = %q", got)
 	}
 }
 

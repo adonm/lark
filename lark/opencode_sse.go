@@ -293,10 +293,6 @@ type turnStream struct {
 	firstChunk bool
 }
 
-func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, stream turnStream, source string, onChat func(chatEntry)) (string, error) {
-	return o.runTurnStreamingWithModel(ctx, sid, prompt, ocModel{}, stream, source, onChat)
-}
-
 // turnEnded reports whether an SSE event means the turn can be read. A
 // session.status event with any other status is ignored by the caller.
 func turnEnded(event ocEvent) bool {
