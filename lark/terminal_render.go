@@ -102,7 +102,7 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 	}
 	if r.drawer == "" && r.view.title == "" && (mood == "thinking" || mood == "speaking") {
 		r.view.actions = maps.Clone(r.view.actions)
-		r.view.stopControl(pose.stopTaps)
+		r.view.stopControl()
 	}
 	d.renderGen++
 	d.renderNext = &r
@@ -118,218 +118,269 @@ func (h *terminalHub) renderFrames(d *terminalSession) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for d.renderNext != nil && h.active(d) {
-		r, gen, prev, rev := *d.renderNext, d.renderGen, d.svg, d.rev+1
-		wantRGB := d.displayFormats&dispRGB565 != 0
-		codecs := d.frameCodecs
-		oldScene, pointerRev := d.scene, d.caps.PointerRev
-		geometry := d.screen
-		if geometry.width == 0 || geometry.height == 0 {
-			geometry = roundScreen
+		in := frameInput{
+			req:        *d.renderNext,
+			prev:       d.svg,
+			gen:        d.renderGen,
+			rev:        d.rev + 1,
+			wantRGB:    d.displayFormats&dispRGB565 != 0,
+			codecs:     d.frameCodecs,
+			oldScene:   d.scene,
+			pointerRev: d.caps.PointerRev,
+			geometry:   d.screen,
+		}
+		if in.geometry.width == 0 || in.geometry.height == 0 {
+			in.geometry = roundScreen
 		}
 		d.renderNext = nil
 		h.mu.Unlock()
 
-		screen := r.screen
-		var err error
-		if true {
-			spec := pixelSpecForGeometry(geometry)
-			bg, poses, th := h.companionAssets(r.companion)
-			var img *image.RGBA
-			var hits []hitBox
-			switch {
-			case r.drawer != "":
-				img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, poses[poseIndexForMood(r.pose)], th)
-			case r.view.title != "" || r.view.heading != "" || r.view.text != "":
-				img, hits = renderPixelSceneCard(spec, r.view, th)
-			default:
-				poseIdx := poseIndexForMood(r.pose)
-				status := ""
-				switch r.pose.mood {
-				case "listening", "speaking", "thinking":
-					status = r.pose.mood
-				}
-				img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, status, "", r.listenWindow)
-				switch {
-				case status == "listening" && r.listenWindow:
-					hits = []hitBox{{id: "listen-stop", label: "Stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
-					r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
-				case status == "listening":
-					btnH := pixelNavHeight(spec)
-					y := spec.safe.Max.Y - btnH
-					gap := 4
-					bw := (spec.safe.Dx() - gap) / 2
-					hits = addLabeledHit(hits, spec, "rec-cancel", "Cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
-					hits = addLabeledHit(hits, spec, "rec-send", "Send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
-					r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
-				case status == "thinking" || status == "speaking":
-					btnW, btnH := 42, pixelNavHeight(spec)
-					if !spec.round {
-						btnW = 48
-					}
-					btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
-					hits = addLabeledHit(hits, spec, "stop", "Stop", btn)
-					r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
-				default:
-					hits = []hitBox{{id: "listen", label: "Listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
-					if status == "" {
-						hits = addLabeledHit(hits, spec, "menu", "Menu", pixelHomeMenuButtonRect(spec))
-					}
-					r.view.actions = map[string]sceneAction{"listen": {"listen", ""}, "menu": {"menu", ""}}
-				}
-			}
-			if err == nil && img != nil {
-				b := img.Bounds()
-				w, h := b.Dx(), b.Dy()
-				var fb []uint16
-				if cap(d.scratchFB) >= w*h {
-					fb = d.scratchFB[:w*h]
-				} else {
-					fb = make([]uint16, w*h)
-				}
-				for y := range h {
-					for x := range w {
-						c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
-						fb[y*w+x] = pack565(c.R, c.G, c.B)
-					}
-				}
-				screen = svgScreen{fb: fb, hits: hits}
-				screen.grade = r.grade
-				releasePixelImage(img)
-				var srcParts []string
-				if debugScreenText {
-					if r.drawer != "" {
-						srcParts = append(srcParts, r.drawer)
-						if r.drawer == drawerMenu {
-							for _, it := range pixelHomeMenuItems {
-								srcParts = append(srcParts, it.label)
-							}
-						}
-						if r.drawer == drawerMore {
-							for _, it := range pixelMoreMenuItems {
-								srcParts = append(srcParts, it.label)
-							}
-						}
-						if r.drawer == drawerVoice {
-							for _, v := range voiceCatalog {
-								srcParts = append(srcParts, v.Name)
-							}
-						}
-						if r.drawer == drawerStats {
-							for _, row := range r.statsRows {
-								srcParts = append(srcParts, row.title, row.text)
-							}
-						}
-						if r.drawer == drawerVolume {
-							srcParts = append(srcParts, fmt.Sprintf("Level · %d%%", r.vol))
-						}
-						if r.view.menu != nil {
-							if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {
-								srcParts = append(srcParts, "menu-detail-view")
-							}
-							if r.view.menu.notice != "" {
-								srcParts = append(srcParts, r.view.menu.notice)
-							}
-							for _, g := range r.view.menu.games {
-								srcParts = append(srcParts, g.label)
-							}
-							for _, st := range r.view.menu.stories {
-								srcParts = append(srcParts, st.Title)
-							}
-							for _, row := range r.view.menu.rows {
-								srcParts = append(srcParts, row.title, row.text)
-							}
-						}
-						if r.drawer == drawerStoryReader {
-							srcParts = append(srcParts, r.storyTitle, r.storyText)
-							for _, ch := range r.storyChoices {
-								srcParts = append(srcParts, ch.Label)
-							}
-						}
-					} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
-						srcParts = append(srcParts, "home")
-					}
-					if r.view.title != "" {
-						srcParts = append(srcParts, r.view.title)
-					}
-					if r.view.heading != "" {
-						srcParts = append(srcParts, r.view.heading)
-					}
-					if r.view.text != "" {
-						srcParts = append(srcParts, r.view.text)
-					}
-					for _, hb := range hits {
-						srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.id, hb.x1, hb.y1, hb.x2, hb.y2))
-					}
-					screen.source = strings.Join(srcParts, " ")
-				}
-			}
-		}
-
-		var native protocolFrame
-		var rawBytes int
-		fbChanged := !slices.Equal(prev.fb, screen.fb)
-		interactionChanged := pointerRev && wantRGB &&
-			(!maps.Equal(r.view.actions, oldScene.actions) || !slices.Equal(screen.hits, prev.hits))
-		if err == nil && (r.full || fbChanged || screen.grade != prev.grade || interactionChanged) {
-			start := time.Now()
-			if screen.fb != nil && wantRGB {
-				rect := dirtyRect(prev.fb, screen.fb, geometry)
-				if rect.Empty() && (interactionChanged || r.full) {
-					rect = image.Rect(0, 0, 1, 1)
-				}
-				if !rect.Empty() {
-					frameCodecs := codecs
-					fullScene := prev.fb == nil || r.full || screen.grade != prev.grade
-					if !fullScene || r.drawer != "" || r.view.title != "" || r.view.heading != "" || r.view.text != "" {
-						frameCodecs &^= codecBitJPEG
-					}
-					native = d.encoder.encodeWithCodecs(screen.fb, nil, rect, rev, geometry.width, frameCodecs)
-					rawBytes = 12 + rect.Dx()*rect.Dy()*2
-				}
-			}
-			screen.render += time.Since(start)
-		}
+		screen, view, err := h.buildFrame(d, in.req, in.geometry)
+		in.screen, in.req.view = screen, view
+		in.native, in.rawBytes, in.render, in.send = encodeFrame(d, in)
 
 		h.mu.Lock()
-		if !h.active(d) || d.renderGen != gen {
+		if !h.active(d) || d.renderGen != in.gen {
 			continue
 		}
 		if err != nil {
 			log.Printf("Lark screen: %v", err)
 			continue
 		}
-		if prev.fb != nil && len(prev.fb) == d.screen.width*d.screen.height {
-			d.scratchFB = prev.fb
+		h.commitFrame(d, in)
+	}
+	d.rendering, d.renderNext = false, nil
+}
+
+// frameInput is everything one render pass needs after the hub lock is dropped.
+type frameInput struct {
+	req        renderRequest
+	prev       svgScreen
+	screen     svgScreen
+	gen        uint64
+	rev        uint64
+	geometry   screenGeometry
+	oldScene   sceneView
+	native     protocolFrame
+	rawBytes   int
+	render     time.Duration
+	wantRGB    bool
+	send       bool
+	pointerRev bool
+	codecs     uint8
+}
+
+// buildFrame draws the requested scene and packs it into RGB565. It runs
+// without the hub lock; portraits and assets are cached separately.
+func (h *terminalHub) buildFrame(d *terminalSession, r renderRequest, geometry screenGeometry) (svgScreen, sceneView, error) {
+	spec := pixelSpecForGeometry(geometry)
+	bg, poses, th := h.companionAssets(r.companion)
+	var img *image.RGBA
+	var hits []hitBox
+	var err error
+	switch {
+	case r.drawer != "":
+		img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, poses[poseIndexForMood(r.pose)], th)
+	case r.view.title != "" || r.view.heading != "" || r.view.text != "":
+		img, hits = renderPixelSceneCard(spec, r.view, th)
+	default:
+		poseIdx := poseIndexForMood(r.pose)
+		status := ""
+		switch r.pose.mood {
+		case "listening", "speaking", "thinking":
+			status = r.pose.mood
 		}
-		d.scene, d.svg = r.view, screen
-		h.sig.notify()
-		if native.data() != nil {
-			d.rev = rev
-			d.client.enqueueProto(msgFrame, native.data())
-			d.nativeRev = uint16(rev)
-			hk := pointerKey(screen.hits, r.view.actions)
-			if !d.hasActionRev || hk != d.actionHitsKey {
-				d.actionHitsKey = hk
-				d.actionRev = d.nativeRev
-				d.hasActionRev = true
+		img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, status, "", r.listenWindow)
+		switch {
+		case status == "listening" && r.listenWindow:
+			hits = []hitBox{{id: "listen-stop", label: "Stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+			r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
+		case status == "listening":
+			btnH := pixelNavHeight(spec)
+			y := spec.safe.Max.Y - btnH
+			gap := 4
+			bw := (spec.safe.Dx() - gap) / 2
+			hits = addLabeledHit(hits, spec, "rec-cancel", "Cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
+			hits = addLabeledHit(hits, spec, "rec-send", "Send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
+			r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
+		case status == "thinking" || status == "speaking":
+			btnW, btnH := 42, pixelNavHeight(spec)
+			if !spec.round {
+				btnW = 48
 			}
-			r.trace.measure(diagRender, screen.render)
-			codec := "RGB565"
-			switch native.data()[9] {
-			case frameCodecRLE565:
-				codec = "RLE565"
-			case frameCodecJPEG:
-				codec = "JPEG"
-			case frameCodecLZ4:
-				codec = "LZ4"
+			btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
+			hits = addLabeledHit(hits, spec, "stop", "Stop", btn)
+			r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
+		default:
+			hits = []hitBox{{id: "listen", label: "Listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+			if status == "" {
+				hits = addLabeledHit(hits, spec, "menu", "Menu", pixelHomeMenuButtonRect(spec))
 			}
-			h.trackFrame(d, screen.render, len(native.data()), rawBytes, codec)
+			r.view.actions = map[string]sceneAction{"listen": {"listen", ""}, "menu": {"menu", ""}}
 		}
+	}
+	var screen svgScreen
+	if err != nil || img == nil {
+		return screen, r.view, err
+	}
+	b := img.Bounds()
+	dw, dh := b.Dx(), b.Dy()
+	var fb []uint16
+	if cap(d.scratchFB) >= dw*dh {
+		fb = d.scratchFB[:dw*dh]
+	} else {
+		fb = make([]uint16, dw*dh)
+	}
+	for y := range dh {
+		for x := range dw {
+			c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
+			fb[y*dw+x] = pack565(c.R, c.G, c.B)
+		}
+	}
+	screen = svgScreen{fb: fb, hits: hits, grade: r.grade}
+	releasePixelImage(img)
+	if debugScreenText {
+		screen.source = screenSource(r, hits)
+	}
+	return screen, r.view, nil
+}
+
+// screenSource is the labelled hit trace DOM tests wait on.
+func screenSource(r renderRequest, hits []hitBox) string {
+	var srcParts []string
+	if r.drawer != "" {
+		srcParts = append(srcParts, r.drawer)
+		if r.drawer == drawerMenu {
+			for _, it := range pixelHomeMenuItems {
+				srcParts = append(srcParts, it.label)
+			}
+		}
+		if r.drawer == drawerMore {
+			for _, it := range pixelMoreMenuItems {
+				srcParts = append(srcParts, it.label)
+			}
+		}
+		if r.drawer == drawerVoice {
+			for _, v := range voiceCatalog {
+				srcParts = append(srcParts, v.Name)
+			}
+		}
+		if r.drawer == drawerStats {
+			for _, row := range r.statsRows {
+				srcParts = append(srcParts, row.title, row.text)
+			}
+		}
+		if r.drawer == drawerVolume {
+			srcParts = append(srcParts, fmt.Sprintf("Level · %d%%", r.vol))
+		}
+		if r.view.menu != nil {
+			if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {
+				srcParts = append(srcParts, "menu-detail-view")
+			}
+			if r.view.menu.notice != "" {
+				srcParts = append(srcParts, r.view.menu.notice)
+			}
+			for _, g := range r.view.menu.games {
+				srcParts = append(srcParts, g.label)
+			}
+			for _, st := range r.view.menu.stories {
+				srcParts = append(srcParts, st.Title)
+			}
+			for _, row := range r.view.menu.rows {
+				srcParts = append(srcParts, row.title, row.text)
+			}
+		}
+		if r.drawer == drawerStoryReader {
+			srcParts = append(srcParts, r.storyTitle, r.storyText)
+			for _, ch := range r.storyChoices {
+				srcParts = append(srcParts, ch.Label)
+			}
+		}
+	} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
+		srcParts = append(srcParts, "home")
+	}
+	if r.view.title != "" {
+		srcParts = append(srcParts, r.view.title)
+	}
+	if r.view.heading != "" {
+		srcParts = append(srcParts, r.view.heading)
+	}
+	if r.view.text != "" {
+		srcParts = append(srcParts, r.view.text)
+	}
+	for _, hb := range hits {
+		srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.id, hb.x1, hb.y1, hb.x2, hb.y2))
+	}
+	return strings.Join(srcParts, " ")
+}
+
+// encodeFrame diffs against the last committed frame and encodes only when the
+// rectangle, grade, or interaction targets changed. It runs without the lock.
+func encodeFrame(d *terminalSession, in frameInput) (protocolFrame, int, time.Duration, bool) {
+	var native protocolFrame
+	var rawBytes int
+	fbChanged := !slices.Equal(in.prev.fb, in.screen.fb)
+	interactionChanged := in.pointerRev && in.wantRGB &&
+		(!maps.Equal(in.req.view.actions, in.oldScene.actions) || !slices.Equal(in.screen.hits, in.prev.hits))
+	if in.screen.fb == nil || !in.wantRGB {
+		return native, rawBytes, 0, false
+	}
+	if !(in.req.full || fbChanged || in.screen.grade != in.prev.grade || interactionChanged) {
+		return native, rawBytes, 0, false
+	}
+	start := time.Now()
+	rect := dirtyRect(in.prev.fb, in.screen.fb, in.geometry)
+	if rect.Empty() && (interactionChanged || in.req.full) {
+		rect = image.Rect(0, 0, 1, 1)
+	}
+	if !rect.Empty() {
+		frameCodecs := in.codecs
+		fullScene := in.prev.fb == nil || in.req.full || in.screen.grade != in.prev.grade
+		if !fullScene || in.req.drawer != "" || in.req.view.title != "" || in.req.view.heading != "" || in.req.view.text != "" {
+			frameCodecs &^= codecBitJPEG
+		}
+		native = d.encoder.encodeWithCodecs(in.screen.fb, nil, rect, in.rev, in.geometry.width, frameCodecs)
+		rawBytes = 12 + rect.Dx()*rect.Dy()*2
+	}
+	return native, rawBytes, time.Since(start), true
+}
+
+// commitFrame publishes the built frame. The caller holds the hub lock.
+func (h *terminalHub) commitFrame(d *terminalSession, in frameInput) {
+	if in.prev.fb != nil && len(in.prev.fb) == d.screen.width*d.screen.height {
+		d.scratchFB = in.prev.fb
+	}
+	d.scene, d.svg = in.req.view, in.screen
+	h.sig.notify()
+	if in.native.data() == nil {
 		if d.announcing {
 			h.announce(d)
 		}
+		return
 	}
-	d.rendering, d.renderNext = false, nil
+	d.rev = in.rev
+	d.client.enqueueProto(msgFrame, in.native.data())
+	d.nativeRev = uint16(in.rev)
+	hk := pointerKey(in.screen.hits, in.req.view.actions)
+	if !d.hasActionRev || hk != d.actionHitsKey {
+		d.actionHitsKey = hk
+		d.actionRev = d.nativeRev
+		d.hasActionRev = true
+	}
+	in.req.trace.measure(diagRender, in.render)
+	codec := "RGB565"
+	switch in.native.data()[9] {
+	case frameCodecRLE565:
+		codec = "RLE565"
+	case frameCodecJPEG:
+		codec = "JPEG"
+	case frameCodecLZ4:
+		codec = "LZ4"
+	}
+	h.trackFrame(d, in.render, len(in.native.data()), in.rawBytes, codec)
+	if d.announcing {
+		h.announce(d)
+	}
 }
 
 func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
@@ -448,7 +499,7 @@ func (h *terminalHub) frameGrade(d *terminalSession, now time.Time) gradeKey {
 }
 
 func (h *terminalHub) companionPose(d *terminalSession, now time.Time, mood string) companionPose {
-	p := poseFrame(now, d.moodAt, d.last, mood, d.pct, d.vol, d.charging, now.Before(d.meter))
+	p := poseFrame(mood, d.pct, d.vol, d.charging, now.Before(d.meter))
 	p.stopTaps = d.stopTaps
 	p.canContinue = mood == "thinking" && h.bridgeEndpoint(d) && d.queuedVoice == nil
 	return p

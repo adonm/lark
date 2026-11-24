@@ -575,7 +575,6 @@ type renderRequest struct {
 	view         sceneView
 	companion    *companionState
 	pose         companionPose
-	screen       svgScreen
 	grade        gradeKey
 	drawer       string
 	menuPage     int
