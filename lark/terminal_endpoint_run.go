@@ -111,6 +111,11 @@ func (h *terminalHub) newEndpointRun(d *terminalSession, c *endpointCapture) *en
 		nameGate:    c.nameGate,
 		companionID: c.companionID,
 		decode:      h.b.decodeClip,
+		// The first probe and Smart Turn check may run as soon as speech is
+		// heard; only later checks need a quiet offset.
+		lastProbeAt:    -endpointProbeEvery,
+		smartCheckedAt: -1,
+		smartProb:      -1,
 	}
 	r.u.pcm = make([]byte, 0, sampleRate*2*15)
 	r.u.limit = c.limitBytes
