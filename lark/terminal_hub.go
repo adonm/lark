@@ -111,6 +111,7 @@ type terminalSession struct {
 	trace         *turnTrace
 	cancel        context.CancelFunc
 	busy          bool
+	turnPhase     turnPhase
 	stopTaps      int
 	stopTapAt     time.Time
 	agentSetScene bool

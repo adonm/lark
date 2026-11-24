@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -37,6 +38,74 @@ func recordTarget(s string) (string, bool) {
 
 func (d *terminalSession) noticeBusy() bool {
 	return d.busy || d.recording.active() || d.queuedVoice != nil || d.stopAudio != nil || d.awaitAck
+}
+
+// turnPhase is the turn lifecycle the boolean flags imply. busy, ttsStarted and
+// awaitAck remain the source of truth for behaviour; the phase only makes the
+// expected order explicit and turns an invalid order into a logged (and in
+// tests, returned) error.
+type turnPhase uint8
+
+const (
+	turnIdle     turnPhase = iota
+	turnRunning            // a prompt is in flight: busy
+	turnSpeaking           // reply audio is playing or awaiting the board's ack
+)
+
+func (p turnPhase) String() string {
+	switch p {
+	case turnIdle:
+		return "idle"
+	case turnRunning:
+		return "running"
+	case turnSpeaking:
+		return "speaking"
+	}
+	return "unknown"
+}
+
+func turnTransitionAllowed(from, to turnPhase) bool {
+	if from == to {
+		// Settling an already-correct phase is not a transition.
+		return to != turnRunning
+	}
+	switch from {
+	case turnIdle:
+		return to == turnRunning || to == turnSpeaking
+	case turnRunning:
+		return to == turnIdle || to == turnSpeaking
+	case turnSpeaking:
+		return to == turnIdle || to == turnRunning
+	}
+	return false
+}
+
+// transitionTurn reports an illegal order instead of silently accepting it.
+func (d *terminalSession) transitionTurn(to turnPhase) error {
+	from := d.turnPhase
+	if !turnTransitionAllowed(from, to) {
+		return fmt.Errorf("terminal %s: illegal turn transition %v -> %v", d.id, from, to)
+	}
+	d.turnPhase = to
+	return nil
+}
+
+func (d *terminalSession) setTurnPhase(to turnPhase) {
+	if err := d.transitionTurn(to); err != nil {
+		log.Print(err)
+	}
+}
+
+// settleTurnPhase picks the phase the flags already describe.
+func (d *terminalSession) settleTurnPhase() {
+	switch {
+	case d.ttsStarted || d.awaitAck:
+		d.setTurnPhase(turnSpeaking)
+	case d.busy:
+		d.setTurnPhase(turnRunning)
+	default:
+		d.setTurnPhase(turnIdle)
+	}
 }
 
 func (h *terminalHub) bridgeEndpoint(d *terminalSession) bool {
@@ -172,6 +241,7 @@ func (h *terminalHub) tryStoryVoiceChoice(d *terminalSession, turnID uint64, tex
 	}
 	target := d.story.choices[idx].Target
 	d.busy = false
+	d.setTurnPhase(turnIdle)
 	d.turn = 0
 	h.setCompanionStatus(d.companionID, statusIdle)
 	h.advanceStoryPassage(d, target, true)
@@ -315,6 +385,7 @@ func (h *terminalHub) cancelLocalTurn(d *terminalSession) {
 	d.turn++
 	d.trace = nil
 	d.busy = false
+	d.setTurnPhase(turnIdle)
 	d.resetStopTaps()
 	d.agentSetScene = false
 	if d.cancel != nil {
@@ -349,6 +420,7 @@ func (h *terminalHub) beginTurn(d *terminalSession, now time.Time, keepView bool
 	d.trace = traceFrom(ctx)
 	id := d.turn
 	d.cancel, d.busy = cancel, true
+	d.setTurnPhase(turnRunning)
 	if !keepView {
 		h.pushChime(d, "think")
 	}
@@ -376,6 +448,7 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 		return
 	}
 	d.busy = false
+	d.settleTurnPhase()
 	d.finished++
 	now := time.Now()
 	d.last = now
@@ -755,6 +828,7 @@ func (h *terminalHub) playTraced(d *terminalSession, stream *AudioStream, trace 
 		} else {
 			d.replyAudio = nil
 			d.ttsStarted = false
+			d.settleTurnPhase()
 		}
 		if !d.busy && d.cancel != nil {
 			d.cancel()
@@ -812,6 +886,7 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 				return context.Canceled
 			}
 			d.ttsStarted = true
+			d.setTurnPhase(turnSpeaking)
 			h.setCompanionStatus(d.companionID, statusSpeaking)
 			h.mu.Unlock()
 			if !control("start") {
@@ -878,6 +953,7 @@ func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 	d.ttsStarted, d.awaitAck, d.ackClient = false, false, nil
 	d.replyAudio = nil
 	d.audio++
+	d.settleTurnPhase()
 }
 
 func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bool) {
@@ -886,6 +962,7 @@ func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bo
 		d.armReplyTTL(now)
 	}
 	d.awaitAck, d.ackClient = false, nil
+	d.settleTurnPhase()
 	if d.pending != nil {
 		d.view, d.pending = d.pending, nil
 	}
