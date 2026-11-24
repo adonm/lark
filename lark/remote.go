@@ -993,13 +993,13 @@ func remoteStateResponse(b *larkServer, ctx context.Context, companionID, messag
 }
 
 func (b *larkServer) remoteSay(r *http.Request, companionID string) (any, error) {
-	args, err := jsonBody(r)
-	if err != nil {
+	var req remoteSayRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	text := strings.TrimSpace(str(args["text"]))
+	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		return nil, problem(400, "Enter something to say.")
+		return nil, problem(400, "Enter something to say")
 	}
 	clean, err := spokenText(text)
 	if err != nil {
@@ -1010,101 +1010,75 @@ func (b *larkServer) remoteSay(r *http.Request, companionID string) (any, error)
 }
 
 func (b *larkServer) remoteListen(r *http.Request, companionID string) (any, error) {
-	args, err := jsonBody(r)
-	if err != nil {
+	var req remoteListenRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	on, ok := args["listening"].(bool)
-	if !ok {
-		return nil, problem(400, "Expected listening to be true or false.")
+	if req.Listening == nil {
+		return nil, problem(400, "Expected listening to be true or false")
 	}
-	if _, err := b.patchCompanion(r.Context(), companionID, object{"listening": on}); err != nil {
+	if err := b.setListening(r.Context(), companionID, *req.Listening); err != nil {
 		return nil, err
 	}
 	return remoteStateResponse(b, r.Context(), companionID, "Listening mode updated."), nil
 }
 
 func (b *larkServer) remoteVolume(r *http.Request, companionID string) (any, error) {
-	args, err := jsonBody(r)
-	if err != nil {
+	var req remoteVolumeRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	terminalID := strings.ToLower(strings.TrimSpace(str(args["terminal"])))
+	terminalID := strings.ToLower(strings.TrimSpace(req.Terminal))
 	if terminalID == "" {
-		return nil, problem(400, "Terminal is required.")
+		return nil, problem(400, "Terminal is required")
 	}
 	t, ok := b.terminalByID(terminalID)
-	if !ok || !strings.EqualFold(t.CompanionID, companionID) {
+	if !ok {
+		return nil, problem(404, "Terminal not found")
+	}
+	if !strings.EqualFold(t.CompanionID, companionID) {
 		return nil, problem(403, "Terminal out of scope")
 	}
-	if b.hub == nil {
-		return nil, problem(503, "Terminal hub unavailable")
-	}
-	volArgs := object{}
-	if raw, exists := args["volume"]; exists {
-		level, ok := companionInt(raw)
-		if !ok || level < 0 || level > 100 {
-			return nil, problem(400, "Volume must be 0..100.")
-		}
-		volArgs["volume"] = level
-	}
-	if len(volArgs) == 0 {
+	if req.Volume == nil {
 		return nil, problem(400, `Expected {"volume":0..100}`)
 	}
-	if _, err := b.hub.terminalVolumeControl(r.Context(), terminalID, volArgs); err != nil {
+	if _, err := b.setVolume(r.Context(), terminalID, *req.Volume); err != nil {
 		return nil, err
 	}
 	return remoteStateResponse(b, r.Context(), companionID, "Volume updated."), nil
 }
 
 func (b *larkServer) remoteVoice(r *http.Request, companionID string) (any, error) {
-	args, err := jsonBody(r)
-	if err != nil {
+	var req remoteVoiceRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	voice := str(args["voice"])
-	if !b.voices.allowed(voice) {
-		return nil, problem(400, "Unknown voice.")
-	}
-	if _, err := b.patchCompanion(r.Context(), companionID, object{"voice": voice}); err != nil {
+	if err := b.setVoice(r.Context(), companionID, req.Voice, true); err != nil {
 		return nil, err
 	}
-	b.previewVoiceOnCompanion(companionID, voice)
+	b.previewVoiceOnCompanion(companionID, req.Voice)
 	return remoteStateResponse(b, r.Context(), companionID, "Voice updated."), nil
 }
 
 func (b *larkServer) remoteStory(r *http.Request, companionID string, restart bool) (any, error) {
-	args, err := jsonBody(r)
-	if err != nil {
+	var req remoteStoryRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	storyID := strings.TrimSpace(str(args["story"]))
+	storyID := strings.TrimSpace(req.Story)
 	if storyID == "" {
-		return nil, problem(400, "Missing story ID.")
-	}
-	st, err := b.loadStory(r.Context(), storyID)
-	if err != nil {
-		return nil, problem(404, "Story not found.")
+		return nil, problem(400, "Missing story ID")
 	}
 	if restart {
-		if err := b.clearStoryProgress(r.Context(), companionID, st.ID); err != nil {
-			return nil, problem(502, "Could not reset progress.")
+		if _, err := b.restartStory(r.Context(), companionID, storyID); err != nil {
+			return nil, err
 		}
+		return remoteStateResponse(b, r.Context(), companionID, "Started over on device."), nil
 	}
-	if b.hub != nil {
-		b.hub.mu.Lock()
-		for _, d := range b.hub.terminalsFor(companionID) {
-			if b.hub.active(d) {
-				b.hub.openStory(d, st, false)
-			}
-		}
-		b.hub.mu.Unlock()
+	if _, err := b.openStory(r.Context(), companionID, storyID); err != nil {
+		return nil, err
 	}
-	message := "Opened on device."
-	if restart {
-		message = "Started over on device."
-	}
-	return remoteStateResponse(b, r.Context(), companionID, message), nil
+	return remoteStateResponse(b, r.Context(), companionID, "Opened on device."), nil
 }
 
 func encodeHistoryCursor(c historyCursor) string {
@@ -1160,13 +1134,6 @@ func (b *larkServer) remoteHistory(ctx context.Context, tok remoteToken, query u
 		if err != nil {
 			return nil, problem(400, "Invalid history cursor.")
 		}
-	}
-	if cursor == nil && query.Get("before_ts") != "" && query.Get("before_id") != "" {
-		ts, err := strconv.ParseInt(query.Get("before_ts"), 10, 64)
-		if err != nil {
-			return nil, problem(400, "Invalid history cursor.")
-		}
-		cursor = &historyCursor{TS: ts, ID: query.Get("before_id")}
 	}
 
 	// A scoped link shows in-person notes and only the Delta Chat messages

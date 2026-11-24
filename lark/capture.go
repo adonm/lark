@@ -299,23 +299,14 @@ func (b *larkServer) saveCapture(run *captureRun, result captureResult) (string,
 }
 
 func (b *larkServer) captureAPI(r *http.Request) (any, error) {
-	obj, err := jsonBody(r)
-	if err != nil {
+	var req captureRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	companionID := str(obj["companion_id"])
-	if companionID == "" {
+	if req.CompanionID == "" {
 		return nil, problem(400, "companion_id is required")
 	}
-	seconds := 20
-	if raw, ok := obj["seconds"]; ok {
-		n, ok := companionInt(raw)
-		if !ok || n < 1 || n > 60 {
-			return nil, problem(400, "seconds must be between 1 and 60")
-		}
-		seconds = n
-	}
-	run, err := b.beginCapture(companionID, seconds)
+	run, err := b.startCapture(req.CompanionID, req, captureDefaultSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +319,7 @@ func (b *larkServer) captureAPI(r *http.Request) (any, error) {
 		return nil, err
 	}
 	return object{
-		"path": path, "companion_id": companionID, "seconds": seconds,
+		"path": path, "companion_id": run.companionID, "seconds": run.seconds,
 		"audio_ms": len(result.pcm) * 1000 / (2 * sampleRate), "bytes": len(result.pcm),
 	}, nil
 }
@@ -494,19 +485,11 @@ func infoTime(item object) int64 {
 }
 
 func (b *larkServer) remoteCaptureStart(r *http.Request, companionID string) (any, error) {
-	obj, err := jsonBody(r)
-	if err != nil {
+	var req captureRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	seconds := 60
-	if raw, ok := obj["seconds"]; ok {
-		n, ok := companionInt(raw)
-		if !ok || n < 1 || n > 60 {
-			return nil, problem(400, "seconds must be between 1 and 60")
-		}
-		seconds = n
-	}
-	run, err := b.beginCapture(companionID, seconds)
+	run, err := b.startCapture(companionID, req, capturePageSeconds)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -291,7 +290,11 @@ func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) 
 }
 
 func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args object) (object, error) {
-	termID := strings.ToLower(str(args["terminal_id"]))
+	var patch terminalPatch
+	if err := decodeInput(args, &patch); err != nil {
+		return nil, err
+	}
+	termID := strings.ToLower(patch.TerminalID)
 	if termID == "" {
 		if !validCompanionID(companionID) {
 			return nil, fieldError("companion_id", "required; pass the companion ID from the turn header")
@@ -325,13 +328,20 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 			}
 		}
 	}
-	if b.hub == nil {
-		return nil, problem(503, "Terminal hub unavailable")
-	}
-	ctrl := maps.Clone(args)
-	delete(ctrl, "terminal_id")
-	if len(ctrl) == 0 {
+	var update terminalUpdate
+	var err error
+	switch {
+	case patch.Volume == nil && patch.Sleep == nil:
 		return nil, problem(400, "Expected a terminal setting")
+	case patch.Volume == nil:
+		update, err = b.setSleep(ctx, termID, *patch.Sleep)
+	case patch.Sleep == nil:
+		update, err = b.setVolume(ctx, termID, *patch.Volume)
+	default:
+		update, err = b.applyTerminal(ctx, termID, terminalSetting{Volume: patch.Volume, Sleep: patch.Sleep})
 	}
-	return b.hub.terminalVolumeControl(ctx, termID, ctrl)
+	if err != nil {
+		return nil, err
+	}
+	return update.object(), nil
 }

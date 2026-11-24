@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
-	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -175,75 +173,35 @@ func sendError(w http.ResponseWriter, err error) {
 	sendJSON(w, status, object{"error": err.Error()})
 }
 
-func jsonBody(r *http.Request) (object, error) {
-	kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if kind != jsonType {
-		return nil, problem(415, "Expected application/json")
-	}
-	lengths := r.Header.Values("Content-Length")
-	if len(r.TransferEncoding) != 0 || len(lengths) > 1 {
-		return nil, problem(400, "Request requires a single Content-Length")
-	}
-	if len(lengths) == 0 && r.ContentLength <= 0 {
-		return nil, problem(411, "Content-Length required")
-	}
-	if len(lengths) != 0 && len(lengths[0]) > 12 {
-		return nil, problem(400, "Invalid Content-Length")
-	}
-	if r.ContentLength > maxJSON {
-		return nil, problem(413, "Request body too large")
-	}
-	if r.ContentLength < 0 {
-		return nil, problem(400, "Invalid Content-Length")
-	}
-	buf := make([]byte, r.ContentLength)
-	if _, err := io.ReadFull(r.Body, buf); err != nil {
-		var timed net.Error
-		if errors.As(err, &timed) && timed.Timeout() {
-			return nil, problem(408, "Request body timed out")
-		}
-		return nil, problem(400, "Incomplete request body")
-	}
-	return decodeObject(buf)
-}
-
 func (b *larkServer) voiceFor(companionID string) string {
 	c := b.companionFor(companionID)
 	return b.voices.resolve(c.Voice, companionTheme(c.Name))
 }
 
 func (b *larkServer) volumeAPI(r *http.Request, id string) (any, error) {
-	args, err := jsonBody(r)
+	var req volumeRequest
+	if err := decodeRequest(r, &req); err != nil {
+		return nil, err
+	}
+	if req.Volume == nil {
+		return nil, problem(400, `Expected {"volume":0..100}`)
+	}
+	update, err := b.setVolume(r.Context(), id, *req.Volume)
 	if err != nil {
 		return nil, err
 	}
-	level, ok := args["volume"]
-	if !ok || len(args) != 1 || level == nil {
-		return nil, problem(400, `Expected {"volume":0..100}`)
-	}
-	if b.hub == nil {
-		return nil, problem(503, "Terminal hub unavailable")
-	}
-	return b.hub.terminalVolumeControl(r.Context(), id, args)
+	return update.object(), nil
 }
 
 func (b *larkServer) voiceAPI(r *http.Request, id string) (any, error) {
-	obj, err := jsonBody(r)
-	if err != nil {
+	var req remoteVoiceRequest
+	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
-	voice := str(obj["voice"])
-	if !b.voices.allowed(voice) {
-		return nil, problem(400, "Unsupported voice")
-	}
-	save := b.voices.save
-	if b.hub != nil {
-		save = b.hub.saveVoice
-	}
-	if err := save(id, voice); err != nil {
+	if err := b.setVoice(r.Context(), id, req.Voice, false); err != nil {
 		return nil, err
 	}
-	return object{"companion_id": id, "voice": voice}, nil
+	return object{"companion_id": id, "voice": req.Voice}, nil
 }
 
 func intercomConfirmation(target string, recipients []companionTarget, sent, partial bool) (title, reply string) {

@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -543,68 +542,18 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 	return out, nil
 }
 
-func volumeCommand(args object) (level int, set bool, err error) {
-	volume, err := mcpUint(args, "volume")
-	if err != nil || volume != nil && *volume > 100 {
-		return 0, false, problem(400, "Volume must be an integer from 0 to 100")
-	}
-	if volume != nil {
-		return int(*volume), true, nil
-	}
-	return 0, false, nil
-}
-
+// terminalVolumeControl formats the shared terminal command for the patch
+// tool and the terminal REST routes.
 func (h *terminalHub) terminalVolumeControl(ctx context.Context, id string, args object) (object, error) {
-	level, setVolume, err := volumeCommand(args)
+	var set terminalSetting
+	if err := decodeInput(args, &set); err != nil {
+		return nil, err
+	}
+	update, err := h.b.applyTerminal(ctx, id, set)
 	if err != nil {
 		return nil, err
 	}
-	sleep, setSleep := args["sleep"]
-	asleep, isBool := sleep.(bool)
-	if setSleep && !isBool {
-		return nil, problem(400, "Sleep must be a boolean")
-	}
-	if !setVolume && !setSleep {
-		return nil, problem(400, "Expected volume or sleep")
-	}
-	id = strings.ToLower(id)
-	if !setSleep {
-		if _, ok := h.b.terminalByID(id); !ok {
-			return nil, problem(404, "Terminal not found")
-		}
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	d := h.terminals[id]
-	if d == nil || !h.active(d) {
-		if setSleep {
-			return nil, problem(409, "Terminal is not connected")
-		}
-		h.mu.Unlock()
-		h.settingsMu.Lock()
-		if !setVolume {
-			level = h.b.volumePref(id)
-		}
-		err := h.b.saveVolumePref(ctx, id, level)
-		h.settingsMu.Unlock()
-		h.mu.Lock()
-		if err != nil {
-			return nil, err
-		}
-		return object{"ok": true, "terminal_id": id, "volume": level, "sleeping": false}, nil
-	}
-	if setVolume {
-		if err := h.setVolume(ctx, d, level, ""); err != nil {
-			return nil, err
-		}
-	}
-	if setSleep {
-		now := time.Now()
-		d.last = now
-		h.setSleeping(d, asleep)
-		h.render(d, now, false)
-	}
-	return object{"ok": true, "terminal_id": d.id, "companion_id": d.companionID, "volume": d.vol, "sleeping": d.asleep}, nil
+	return update.object(), nil
 }
 
 func validChime(kind string) bool {
