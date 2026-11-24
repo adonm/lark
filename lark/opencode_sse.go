@@ -297,6 +297,55 @@ func (o *openCode) runTurnStreaming(ctx context.Context, sid, prompt string, str
 	return o.runTurnStreamingWithModel(ctx, sid, prompt, ocModel{}, stream, source, onChat)
 }
 
+// turnEnded reports whether an SSE event means the turn can be read. A
+// session.status event with any other status is ignored by the caller.
+func turnEnded(event ocEvent) bool {
+	switch event.Type {
+	case "session.status":
+		return event.Data.Status.Type == "idle"
+	case "session.idle", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted":
+		return true
+	}
+	return false
+}
+
+// turnProgress feeds text and tool events into the streaming sentence output.
+type turnProgress struct {
+	stream        turnStream
+	streamed      *streamedText
+	trace         *turnTrace
+	start         time.Time
+	firstSentence *bool
+	markTool      func()
+}
+
+func (p *turnProgress) handleEvent(event ocEvent) {
+	if strings.HasPrefix(event.Type, "session.tool.") {
+		if p.stream.sentence != nil {
+			for _, s := range p.streamed.flush() {
+				if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, alphaNum) {
+					p.trace.measure(diagFirstSentence, time.Since(p.start))
+					*p.firstSentence = true
+				}
+				p.stream.sentence(s)
+			}
+		}
+		p.streamed.sentenceExtractor = sentenceExtractor{}
+		p.markTool()
+	}
+	if p.stream.sentence != nil || p.trace != nil && (!*p.firstSentence || p.streamed.onFirst != nil) {
+		for _, s := range p.streamed.addEvent(event) {
+			if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, alphaNum) {
+				p.trace.measure(diagFirstSentence, time.Since(p.start))
+				*p.firstSentence = true
+			}
+			if p.stream.sentence != nil {
+				p.stream.sentence(s)
+			}
+		}
+	}
+}
+
 func (o *openCode) runTurnStreamingWithModel(ctx context.Context, sid, prompt string, model ocModel, stream turnStream, source string, onChat func(chatEntry)) (string, error) {
 	start := time.Now()
 	trace := traceFrom(ctx)
@@ -403,6 +452,8 @@ func (o *openCode) runTurnStreamingWithModel(ctx context.Context, sid, prompt st
 	if trace != nil {
 		streamed.onFirst = func() { trace.measure(diagLLMFirst, time.Since(start)) }
 	}
+	progress := &turnProgress{stream: stream, streamed: &streamed, trace: trace, start: start,
+		firstSentence: &firstSentence, markTool: markTool}
 stream:
 	for events != nil {
 		select {
@@ -412,43 +463,17 @@ stream:
 			if !ok {
 				break stream
 			}
-			switch event.Type {
-			case "session.status":
-				if event.Data.Status.Type != "idle" {
-					continue
-				}
-				fallthrough
-			case "session.idle", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted":
+			switch {
+			case event.Type == "session.status" && event.Data.Status.Type != "idle":
+				continue
+			case turnEnded(event):
 				reply, err := readFinal()
 				if !errors.Is(err, errNoFinal) {
 					return reply, err
 				}
 				break stream
 			default:
-				if strings.HasPrefix(event.Type, "session.tool.") {
-					if stream.sentence != nil {
-						for _, s := range streamed.flush() {
-							if trace != nil && !firstSentence && strings.ContainsFunc(s, alphaNum) {
-								trace.measure(diagFirstSentence, time.Since(start))
-								firstSentence = true
-							}
-							stream.sentence(s)
-						}
-					}
-					streamed.sentenceExtractor = sentenceExtractor{}
-					markTool()
-				}
-				if stream.sentence != nil || trace != nil && (!firstSentence || streamed.onFirst != nil) {
-					for _, s := range streamed.addEvent(event) {
-						if trace != nil && !firstSentence && strings.ContainsFunc(s, alphaNum) {
-							trace.measure(diagFirstSentence, time.Since(start))
-							firstSentence = true
-						}
-						if stream.sentence != nil {
-							stream.sentence(s)
-						}
-					}
-				}
+				progress.handleEvent(event)
 			}
 		}
 	}
