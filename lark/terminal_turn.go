@@ -98,13 +98,17 @@ func (d *terminalSession) setTurnPhase(to turnPhase) {
 
 // settleTurnPhase picks the phase the flags already describe.
 func (d *terminalSession) settleTurnPhase() {
+	var to turnPhase
 	switch {
 	case d.ttsStarted || d.awaitAck:
-		d.setTurnPhase(turnSpeaking)
+		to = turnSpeaking
 	case d.busy:
-		d.setTurnPhase(turnRunning)
+		to = turnRunning
 	default:
-		d.setTurnPhase(turnIdle)
+		to = turnIdle
+	}
+	if d.turnPhase != to {
+		d.setTurnPhase(to)
 	}
 }
 
