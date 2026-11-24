@@ -26,6 +26,13 @@ const (
 	captureMaxBytes  = int64(1) << 30
 	captureListMax   = 200
 	captureReadMax   = 64 << 20 // One capture's WAV must fit comfortably in memory.
+	// The remote page shows a finished capture briefly, then returns to idle.
+	captureDoneWindow = 20 * time.Second
+	// A capture run gets its own window plus this slack before timing out.
+	captureTimeoutSlack = 30 * time.Second
+	// 16 kHz mono s16le, the width capture WAVs and transcripts share.
+	captureBytesPerSecond = 2 * sampleRate
+	captureWAVHeader      = 44 // Canonical PCM WAV header size.
 )
 
 // debugCaptureDir is local to the host, mode 0700, and never uploaded to a
@@ -320,7 +327,7 @@ func (b *larkServer) captureAPI(r *http.Request) (any, error) {
 	}
 	return object{
 		"path": path, "companion_id": run.companionID, "seconds": run.seconds,
-		"audio_ms": len(result.pcm) * 1000 / (2 * sampleRate), "bytes": len(result.pcm),
+		"audio_ms": len(result.pcm) * 1000 / captureBytesPerSecond, "bytes": len(result.pcm),
 	}, nil
 }
 
@@ -386,7 +393,7 @@ func (s *captureState) status(companionID string) object {
 		return object{"state": "recording", "id": job.name, "name": job.name, "seconds": job.seconds,
 			"remaining": remaining, "started_at": job.started.UTC().Format(time.RFC3339)}
 	}
-	if out := s.done[companionID]; out.name != "" && time.Since(out.at) < 20*time.Second {
+	if out := s.done[companionID]; out.name != "" && time.Since(out.at) < captureDoneWindow {
 		item := object{"state": "done", "id": out.name, "name": out.name, "ok": out.ok}
 		if out.err != "" {
 			item["error"] = out.err
@@ -447,7 +454,7 @@ func (b *larkServer) captureFiles(companionID string) ([]object, error) {
 		path := filepath.Join(debugCaptureDir(), name)
 		item := object{
 			"name": id, "created": info.ModTime().UTC().Format(time.RFC3339),
-			"size": info.Size(), "seconds": max(0, int((info.Size()-44)/(2*sampleRate))),
+			"size": info.Size(), "seconds": max(0, int((info.Size()-captureWAVHeader)/captureBytesPerSecond)),
 			"computing": b.captures.computing(id),
 		}
 		if text := readCaptureTranscript(captureTranscriptPath(path)); text != "" {
@@ -495,7 +502,7 @@ func (b *larkServer) remoteCaptureStart(r *http.Request, companionID string) (an
 	}
 	b.captures.start(run)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.seconds+30)*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.seconds)*time.Second+captureTimeoutSlack)
 		defer cancel()
 		result, err := b.waitCapture(ctx, run)
 		if err == nil {
@@ -550,7 +557,7 @@ func (b *larkServer) remoteCaptureTranscribe(r *http.Request, companionID, name 
 	}
 	return object{
 		"name": name, "transcript": text, "stt_ms": milliseconds(elapsed),
-		"audio_ms": len(pcm) * 1000 / (2 * sampleRate), "engine": sttEngine,
+		"audio_ms": len(pcm) * 1000 / captureBytesPerSecond, "engine": sttEngine,
 	}, nil
 }
 
@@ -605,7 +612,7 @@ func (b *larkServer) sttAPI(r *http.Request) (any, error) {
 		return nil, problem(400, "Cannot read audio")
 	}
 	pcm := raw
-	if len(raw) >= 44 && bytes.Equal(raw[:4], []byte("RIFF")) {
+	if len(raw) >= captureWAVHeader && bytes.Equal(raw[:4], []byte("RIFF")) {
 		pcm, err = parseWAVPCM16k(raw)
 		if err != nil {
 			return nil, problem(400, err.Error())
@@ -623,7 +630,7 @@ func (b *larkServer) sttAPI(r *http.Request) (any, error) {
 	return object{
 		"transcript": text,
 		"stt_ms":     milliseconds(elapsed),
-		"audio_ms":   len(pcm) * 1000 / (2 * sampleRate),
+		"audio_ms":   len(pcm) * 1000 / captureBytesPerSecond,
 		"engine":     sttEngine,
 	}, nil
 }

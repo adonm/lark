@@ -35,6 +35,9 @@ type companionState struct {
 	IdentitySynced  int64 `json:"identity_synced,omitempty"`
 }
 
+// Bounds one OpenCode title/entry sync so an edit never blocks on the agent.
+const companionSyncTimeout = 2 * time.Second
+
 func blankCompanion() companionState {
 	return companionState{companionLook: companionLook{Name: "New Companion"}}
 }
@@ -529,7 +532,7 @@ func (b *larkServer) runPortraitBackground(id string, q *portraitBGQueue) {
 func (b *larkServer) syncCompanionTitle(ctx context.Context, companionID string) {
 	b.companionTitles.Lock()
 	defer b.companionTitles.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, companionSyncTimeout)
 	defer cancel()
 	sid, err := b.oc.get(companionID)
 	if err != nil || sid == "" {
@@ -542,7 +545,7 @@ func (b *larkServer) syncCompanionTitle(ctx context.Context, companionID string)
 }
 
 func (b *larkServer) syncCompanionEntry(ctx context.Context, c companionState) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, companionSyncTimeout)
 	defer cancel()
 	b.oc.reconcileCompanionIdentity(ctx, c.ID)
 }

@@ -38,6 +38,13 @@ const (
 	remotePoll       = 750 * time.Millisecond
 	remoteKeepAlive  = 15 * time.Second
 	remoteTokenBytes = 16
+	// opentunnel route add/down can block on systemd; bound one CLI call.
+	tunnelTimeout = 90 * time.Second
+	// History paging: a page is small, the query is clipped, and one search
+	// term is bounded so LIKE cannot scan an unbounded string.
+	remoteHistoryLimit    = 20
+	remoteHistoryLimitMax = 50
+	remoteHistoryQueryMax = 100
 )
 
 //go:embed web/remote/*.html web/remote/*.css web/remote/*.js
@@ -47,7 +54,7 @@ type tunnelRunner func(context.Context, ...string) ([]byte, error)
 
 func tunnelCLI(bin string) tunnelRunner {
 	return func(ctx context.Context, args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, tunnelTimeout)
 		defer cancel()
 		return exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	}
@@ -1109,30 +1116,30 @@ func (b *larkServer) remoteHistory(ctx context.Context, tok remoteToken, query u
 	if b.history != nil {
 		b.history.flush(companionID)
 	}
-	limit := 20
+	limit := remoteHistoryLimit
 	if raw := query.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			return nil, problem(400, "Expected a positive history limit.")
+			return nil, problem(400, "Expected a positive history limit")
 		}
-		limit = min(n, 50)
+		limit = min(n, remoteHistoryLimitMax)
 	}
 	channel := strings.TrimSpace(query.Get("channel"))
 	switch channel {
 	case "", "all", "in_person", "deltachat":
 	default:
-		return nil, problem(400, "Unknown history filter.")
+		return nil, problem(400, "Unknown history filter")
 	}
 	q := strings.TrimSpace(query.Get("q"))
-	if len(q) > 100 {
-		q = q[:100]
+	if len(q) > remoteHistoryQueryMax {
+		q = q[:remoteHistoryQueryMax]
 	}
 	var cursor *historyCursor
 	if raw := query.Get("cursor"); raw != "" {
 		var err error
 		cursor, err = decodeHistoryCursor(raw)
 		if err != nil {
-			return nil, problem(400, "Invalid history cursor.")
+			return nil, problem(400, "Invalid history cursor")
 		}
 	}
 
@@ -1164,7 +1171,7 @@ func (b *larkServer) remoteHistory(ctx context.Context, tok remoteToken, query u
 
 	rows, err := b.db.readDB().QueryContext(ctx, querySQL, args...)
 	if err != nil {
-		return nil, problem(502, "Cannot read history.")
+		return nil, problem(502, "Cannot read history")
 	}
 	defer rows.Close()
 	c := b.companionFor(companionID)
@@ -1173,7 +1180,7 @@ func (b *larkServer) remoteHistory(ctx context.Context, tok remoteToken, query u
 		var id, role, sender, text, rowChannel string
 		var ts int64
 		if err := rows.Scan(&id, &role, &sender, &text, &rowChannel, &ts); err != nil {
-			return nil, problem(502, "Cannot read history.")
+			return nil, problem(502, "Cannot read history")
 		}
 		items = append(items, object{
 			"id":      id,
@@ -1185,7 +1192,7 @@ func (b *larkServer) remoteHistory(ctx context.Context, tok remoteToken, query u
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, problem(502, "Cannot read history.")
+		return nil, problem(502, "Cannot read history")
 	}
 	out := object{"items": items, "has_more": false}
 	if len(items) > limit {

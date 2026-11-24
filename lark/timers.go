@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"regexp"
 	"slices"
@@ -16,6 +17,14 @@ import (
 const (
 	timerGrace  = 2 * time.Second
 	timerExpiry = 2 * time.Minute
+	// Scheduling policy: a timer fires within a day and no sooner than half a
+	// minute if it wakes the agent; a device may hold 8 and the host 32.
+	timerMinSeconds     = 1
+	timerMaxSeconds     = 86400
+	timerMaxDelay       = 24 * time.Hour
+	timerWakeMinSeconds = 30
+	timerLimitPerDevice = 8
+	timerLimitTotal     = 32
 )
 
 var timerIDRE = regexp.MustCompile(`^[a-f0-9]{24}$`)
@@ -209,22 +218,22 @@ func editTimer(t savedTimer, edit timerEdit, now time.Time, update bool) (savedT
 	}
 	var err error
 	if seconds != nil {
-		if *seconds < 1 || *seconds > 86400 {
+		if *seconds < timerMinSeconds || *seconds > timerMaxSeconds {
 			return t, problem(400, "in_seconds must be 1–86400")
 		}
 		t.FireAt = now.Add(time.Duration(*seconds) * time.Second).In(now.Location())
 	} else if atSet {
 		t.FireAt, err = parseTimerAt(*edit.At, now.Location())
 		delay := t.FireAt.Sub(now)
-		if err != nil || delay <= 0 || delay > 24*time.Hour {
+		if err != nil || delay <= 0 || delay > timerMaxDelay {
 			return t, problem(400, "at must be RFC3339 or local time within the next 24 hours")
 		}
 	}
 	if edit.WakeAgent != nil {
 		t.WakeAgent = *edit.WakeAgent
 	}
-	if t.WakeAgent && (atSet || seconds != nil && *seconds < 30 ||
-		seconds == nil && edit.WakeAgent != nil && *edit.WakeAgent && t.FireAt.Sub(now) < 30*time.Second) {
+	if t.WakeAgent && (atSet || seconds != nil && *seconds < timerWakeMinSeconds ||
+		seconds == nil && edit.WakeAgent != nil && *edit.WakeAgent && t.FireAt.Sub(now) < timerWakeMinSeconds*time.Second) {
 		return t, problem(400, "wake_agent requires in_seconds of at least 30")
 	}
 	if edit.Label != nil {
@@ -317,10 +326,10 @@ func (m *timerManager) set(ctx context.Context, t savedTimer) error {
 	}
 	notes, _ := json.Marshal(t.Notes)
 	result, err := m.b.db.ExecContext(ctx, `INSERT INTO timers (`+timerColumns+`)
-		SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE companion_id=?) < 8
-		AND (SELECT count(*) FROM timers) < 32`,
+		SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE companion_id=?) < ?
+		AND (SELECT count(*) FROM timers) < ?`,
 		t.ID, t.CompanionID, t.Label, t.Say, t.Chime, t.WakeAgent, t.CreatedAt.Format(time.RFC3339Nano), t.FireAt.Format(time.RFC3339Nano),
-		string(notes), t.CompanionID)
+		string(notes), t.CompanionID, timerLimitPerDevice, timerLimitTotal)
 	if err != nil {
 		return problem(502, "Cannot save timer")
 	}
@@ -329,7 +338,7 @@ func (m *timerManager) set(ctx context.Context, t savedTimer) error {
 		return problem(502, "Cannot save timer")
 	}
 	if n == 0 {
-		return problem(409, "Timer limit reached (8 per device, 32 total)")
+		return problem(409, fmt.Sprintf("Timer limit reached (%d per device, %d total)", timerLimitPerDevice, timerLimitTotal))
 	}
 	m.armLocked(t.ID, time.Until(t.FireAt))
 	return nil

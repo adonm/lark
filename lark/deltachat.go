@@ -21,6 +21,8 @@ const (
 	defaultChatmailRelay = "nine.testrun.org"
 	dcWelcomeVersion     = "3"
 	dcRemovePending      = "dc_remove_pending:"
+	// Restart the rpc-server after a crash without hot-looping.
+	dcRestartDelay = 2 * time.Second
 )
 
 type dcRPC interface {
@@ -139,7 +141,7 @@ func (s *dcService) start(ctx context.Context) {
 			return
 		case <-s.stopCh:
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(dcRestartDelay):
 		}
 	}
 }
