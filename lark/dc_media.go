@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	imagecolor "image/color"
 	"image/png"
 	"io"
 	"log"
@@ -46,30 +45,6 @@ func imageToPNG(img image.Image) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
-}
-
-func fbToPNG(fb []uint16, geom screenGeometry) ([]byte, error) {
-	w, h := geom.width, geom.height
-	img := image.NewNRGBA(image.Rect(0, 0, w, h))
-	for y := range h {
-		for x := range w {
-			v := fb[y*w+x]
-			r5 := uint8((v >> 11) & 0x1f)
-			g6 := uint8((v >> 5) & 0x3f)
-			b5 := uint8(v & 0x1f)
-			img.SetNRGBA(x, y, imagecolor.NRGBA{
-				R: (r5 << 3) | (r5 >> 2),
-				G: (g6 << 2) | (g6 >> 4),
-				B: (b5 << 3) | (b5 >> 2),
-				A: 255,
-			})
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 func decodeAudioToPCM16k(ctx context.Context, path string) ([]byte, error) {

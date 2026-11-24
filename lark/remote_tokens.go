@@ -72,11 +72,6 @@ type remoteToken struct {
 	ContactName string // Display name at issue time, used to scope history.
 }
 
-func (t remoteToken) matchesSender(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	return name != "" && (name == t.Contact || (t.ContactName != "" && name == strings.ToLower(t.ContactName)))
-}
-
 type remoteScope struct {
 	cancel context.CancelFunc
 	server *http.Server

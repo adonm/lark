@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -271,28 +270,6 @@ func updateCompanion(c companionState, args object, voices companionVoices) (com
 	var err error
 	c.Configured, err = companionBool(args, "configured", c.Configured || editLook)
 	return c, err
-}
-
-func companionInt(raw any) (int, bool) {
-	switch v := raw.(type) {
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case float64:
-		if float64(int(v)) != v {
-			return 0, false
-		}
-		return int(v), true
-	case json.Number:
-		n, err := v.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(n), true
-	default:
-		return 0, false
-	}
 }
 
 func companionBool(args object, key string, fallback bool) (bool, error) {
