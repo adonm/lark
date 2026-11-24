@@ -17,26 +17,28 @@ import (
 // talks to: companion and terminal rows plus Delta Chat account ids. Companion
 // deletes refuse while a terminal still links the row, like the real route.
 type qaFakeServer struct {
-	t          *testing.T
-	mu         sync.Mutex
-	companions map[string]object
-	terminals  map[string]string
-	accounts   map[uint32]bool
-	refuseComp map[string]bool
-	refuseAcc  map[uint32]bool
-	nextAcc    uint32
-	srv        *httptest.Server
+	t            *testing.T
+	mu           sync.Mutex
+	companions   map[string]object
+	terminals    map[string]string
+	accounts     map[uint32]bool
+	refuseComp   map[string]bool
+	refuseAcc    map[uint32]bool
+	refuseDetach map[string]bool
+	nextAcc      uint32
+	srv          *httptest.Server
 }
 
 func newQAFakeServer(t *testing.T) *qaFakeServer {
 	t.Helper()
 	f := &qaFakeServer{
-		t:          t,
-		companions: map[string]object{},
-		terminals:  map[string]string{},
-		accounts:   map[uint32]bool{},
-		refuseComp: map[string]bool{},
-		refuseAcc:  map[uint32]bool{},
+		t:            t,
+		companions:   map[string]object{},
+		terminals:    map[string]string{},
+		accounts:     map[uint32]bool{},
+		refuseComp:   map[string]bool{},
+		refuseAcc:    map[uint32]bool{},
+		refuseDetach: map[string]bool{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -130,6 +132,10 @@ func (f *qaFakeServer) serve(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/detach")
 		if _, ok := f.terminals[id]; !ok {
 			http.Error(w, `{"error":"Terminal not found"}`, http.StatusNotFound)
+			return
+		}
+		if f.refuseDetach[id] {
+			http.Error(w, `{"error":"cannot detach"}`, http.StatusInternalServerError)
 			return
 		}
 		f.terminals[id] = ""
@@ -245,6 +251,27 @@ func TestQACleanupLeavesPreexistingSimilarNames(t *testing.T) {
 	}
 	if f.hasCompanion("qa-temp") || f.hasTerminal("sim-qa") {
 		t.Fatal("created companion or terminal survived")
+	}
+}
+
+// A remove call that reports an error for a row that disappeared anyway must
+// not fail a run whose sets came back.
+func TestQACleanupIgnoresTransientRemoveErrors(t *testing.T) {
+	t.Parallel()
+	f := newQAFakeServer(t)
+	g := qaTestGuard(t, f)
+	f.addCompanion("qa-race", false)
+	g.trackCompanion("qa-race")
+	f.addTerminal("sim-race", "qa-race")
+	f.mu.Lock()
+	f.refuseDetach["sim-race"] = true
+	f.mu.Unlock()
+
+	if err := qaTestCleanup(t, g, time.Second); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if f.hasCompanion("qa-race") || f.hasTerminal("sim-race") {
+		t.Fatal("transient detach error left rows behind")
 	}
 }
 

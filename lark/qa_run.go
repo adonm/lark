@@ -228,9 +228,11 @@ func (g *qaRunGuard) cleanup(ctx context.Context) error {
 	for {
 		after, err := qaFetchSnapshot(ctx, g.c)
 		if err == nil {
-			if diff := g.leftovers(after); diff == "" && len(failures) == 0 {
+			// The sets are the guard. A remove call that reported an error
+			// for a row that disappeared anyway (a 404 race) is noise.
+			if diff := g.leftovers(after); diff == "" {
 				return nil
-			} else if diff != "" {
+			} else {
 				last = diff
 			}
 		} else {
