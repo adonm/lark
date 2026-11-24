@@ -105,7 +105,9 @@ func parsePassageHeader(line string, lineNo int) (name, bg string, end bool, err
 	return name, bg, end, nil
 }
 
-func parseTwee(src string) (*compiledStory, error) {
+// lexTwee splits the source into passages and validates each header. Lines
+// before the first header must be blank.
+func lexTwee(src string) ([]rawStoryPassage, error) {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
 	rawLines := strings.Split(src, "\n")
 
@@ -133,15 +135,16 @@ func parseTwee(src string) (*compiledStory, error) {
 		}
 		cur.lines = append(cur.lines, rawStoryLine{lineNo: lineNo, text: line})
 	}
+	return rawPassages, nil
+}
 
-	var title string
-	var startName string
-	var storyRaw []rawStoryPassage
+// collectStoryPassages separates StoryTitle and StoryData from the story's
+// own passages and rejects special passages the runtime does not support.
+func collectStoryPassages(rawPassages []rawStoryPassage) (title, startName string, storyRaw []rawStoryPassage, err error) {
 	seenNames := map[string]bool{}
-
 	for _, rp := range rawPassages {
 		if seenNames[rp.name] {
-			return nil, fmt.Errorf("line %d: duplicate passage %q", rp.lineNo, rp.name)
+			return "", "", nil, fmt.Errorf("line %d: duplicate passage %q", rp.lineNo, rp.name)
 		}
 		seenNames[rp.name] = true
 
@@ -153,7 +156,7 @@ func parseTwee(src string) (*compiledStory, error) {
 			}
 			title = strings.TrimSpace(strings.Join(parts, "\n"))
 			if title == "" {
-				return nil, fmt.Errorf("line %d: StoryTitle cannot be empty", rp.lineNo)
+				return "", "", nil, fmt.Errorf("line %d: StoryTitle cannot be empty", rp.lineNo)
 			}
 		case "StoryData":
 			var parts []string
@@ -164,17 +167,29 @@ func parseTwee(src string) (*compiledStory, error) {
 			if body != "" {
 				var data map[string]any
 				if err := json.Unmarshal([]byte(body), &data); err != nil {
-					return nil, fmt.Errorf("line %d: invalid StoryData JSON: %v", rp.lineNo, err)
+					return "", "", nil, fmt.Errorf("line %d: invalid StoryData JSON: %v", rp.lineNo, err)
 				}
 				if s, ok := data["start"].(string); ok {
 					startName = strings.TrimSpace(s)
 				}
 			}
 		case "StoryIncludes", "StoryStylesheet", "StoryScript":
-			return nil, fmt.Errorf("line %d: unsupported Twee special passage %q", rp.lineNo, rp.name)
+			return "", "", nil, fmt.Errorf("line %d: unsupported Twee special passage %q", rp.lineNo, rp.name)
 		default:
 			storyRaw = append(storyRaw, rp)
 		}
+	}
+	return title, startName, storyRaw, nil
+}
+
+func parseTwee(src string) (*compiledStory, error) {
+	rawPassages, err := lexTwee(src)
+	if err != nil {
+		return nil, err
+	}
+	title, startName, storyRaw, err := collectStoryPassages(rawPassages)
+	if err != nil {
+		return nil, err
 	}
 
 	if title == "" {
@@ -210,198 +225,10 @@ func parseTwee(src string) (*compiledStory, error) {
 		cs.Start = 0
 	}
 
-	internFlag := func(name string, lineNo int) (uint16, error) {
-		if idx, ok := cs.FlagIdx[name]; ok {
-			return idx, nil
-		}
-		if len(cs.Flags) >= maxStoryFlags {
-			return 0, fmt.Errorf("line %d: too many flags (max %d)", lineNo, maxStoryFlags)
-		}
-		idx := uint16(len(cs.Flags))
-		cs.Flags = append(cs.Flags, name)
-		cs.FlagIdx[name] = idx
-		return idx, nil
-	}
-
-	type ifFrame struct {
-		ifNotOp int
-		jumpOp  int
-		hasElse bool
-		lineNo  int
-	}
-
 	for pIdx, rp := range storyRaw {
-		var ops []storyOp
-		var stack []ifFrame
-		linkCount := 0
-		textLen := 0
-
-		for _, rl := range rp.lines {
-			if containsHTML(rl.text) {
-				return nil, fmt.Errorf("line %d: HTML tags are not allowed", rl.lineNo)
-			}
-			line := rl.text
-			emittedContentOnLine := false
-			pos := 0
-			for pos < len(line) {
-				nextMacro := strings.Index(line[pos:], "<<")
-				nextLink := strings.Index(line[pos:], "[[")
-				nextIdx := -1
-				kind := 0 // 1=macro, 2=link
-				if nextMacro >= 0 && (nextLink < 0 || nextMacro < nextLink) {
-					nextIdx = pos + nextMacro
-					kind = 1
-				} else if nextLink >= 0 {
-					nextIdx = pos + nextLink
-					kind = 2
-				}
-				if nextIdx < 0 {
-					chunk := line[pos:]
-					if chunk != "" {
-						ops = append(ops, storyOp{kind: opText, text: chunk})
-						textLen += len(chunk)
-						emittedContentOnLine = true
-					}
-					break
-				}
-				if nextIdx > pos {
-					chunk := line[pos:nextIdx]
-					ops = append(ops, storyOp{kind: opText, text: chunk})
-					textLen += len(chunk)
-					emittedContentOnLine = true
-				}
-				if kind == 1 {
-					end := strings.Index(line[nextIdx+2:], ">>")
-					if end < 0 {
-						return nil, fmt.Errorf("line %d: unclosed macro <<", rl.lineNo)
-					}
-					body := strings.TrimSpace(line[nextIdx+2 : nextIdx+2+end])
-					pos = nextIdx + 2 + end + 2
-
-					switch {
-					case strings.HasPrefix(body, "set "):
-						rest := strings.TrimSpace(body[4:])
-						if !strings.HasPrefix(rest, "$") {
-							return nil, fmt.Errorf("line %d: <<set>> variable must start with $", rl.lineNo)
-						}
-						toIdx := strings.Index(rest, " to ")
-						if toIdx < 0 {
-							return nil, fmt.Errorf("line %d: <<set>> must use 'to' (e.g. <<set $flag to true>>)", rl.lineNo)
-						}
-						flagName := strings.TrimSpace(rest[1:toIdx])
-						if !isValidFlagName(flagName) {
-							return nil, fmt.Errorf("line %d: invalid flag name %q", rl.lineNo, flagName)
-						}
-						valStr := strings.TrimSpace(rest[toIdx+4:])
-						var val storyVal
-						switch valStr {
-						case "true":
-							val = storyVal{Bool: true}
-						case "false":
-							val = storyVal{Bool: false}
-						default:
-							num, err := strconv.ParseFloat(valStr, 64)
-							if err != nil {
-								return nil, fmt.Errorf("line %d: <<set>> value %q must be true, false, or a number", rl.lineNo, valStr)
-							}
-							val = storyVal{IsNum: true, Num: num}
-						}
-						fIdx, err := internFlag(flagName, rl.lineNo)
-						if err != nil {
-							return nil, err
-						}
-						ops = append(ops, storyOp{kind: opSet, flag: fIdx, val: val})
-
-					case strings.HasPrefix(body, "if "):
-						rest := strings.TrimSpace(body[3:])
-						if !strings.HasPrefix(rest, "$") {
-							return nil, fmt.Errorf("line %d: <<if>> variable must start with $", rl.lineNo)
-						}
-						flagName := strings.TrimSpace(rest[1:])
-						if !isValidFlagName(flagName) {
-							return nil, fmt.Errorf("line %d: invalid <<if>> condition %q", rl.lineNo, rest)
-						}
-						fIdx, err := internFlag(flagName, rl.lineNo)
-						if err != nil {
-							return nil, err
-						}
-						opIdx := len(ops)
-						ops = append(ops, storyOp{kind: opIfNot, flag: fIdx})
-						stack = append(stack, ifFrame{ifNotOp: opIdx, jumpOp: -1, lineNo: rl.lineNo})
-
-					case body == "else":
-						if len(stack) == 0 {
-							return nil, fmt.Errorf("line %d: <<else>> without matching <<if>>", rl.lineNo)
-						}
-						top := &stack[len(stack)-1]
-						if top.hasElse {
-							return nil, fmt.Errorf("line %d: duplicate <<else>>", rl.lineNo)
-						}
-						top.hasElse = true
-						top.jumpOp = len(ops)
-						ops = append(ops, storyOp{kind: opJump})
-						ops[top.ifNotOp].target = len(ops)
-
-					case body == "endif":
-						if len(stack) == 0 {
-							return nil, fmt.Errorf("line %d: <<endif>> without matching <<if>>", rl.lineNo)
-						}
-						top := stack[len(stack)-1]
-						stack = stack[:len(stack)-1]
-						if top.hasElse {
-							ops[top.jumpOp].target = len(ops)
-						} else {
-							ops[top.ifNotOp].target = len(ops)
-						}
-
-					default:
-						return nil, fmt.Errorf("line %d: unsupported macro <<%s>>", rl.lineNo, body)
-					}
-				} else {
-					end := strings.Index(line[nextIdx+2:], "]]")
-					if end < 0 {
-						return nil, fmt.Errorf("line %d: unclosed link [[", rl.lineNo)
-					}
-					body := strings.TrimSpace(line[nextIdx+2 : nextIdx+2+end])
-					pos = nextIdx + 2 + end + 2
-					if body == "" {
-						return nil, fmt.Errorf("line %d: empty link [[]]", rl.lineNo)
-					}
-					var label, target string
-					if arrow := strings.Index(body, "->"); arrow >= 0 {
-						label = strings.TrimSpace(body[:arrow])
-						target = strings.TrimSpace(body[arrow+2:])
-					} else if pipe := strings.IndexByte(body, '|'); pipe >= 0 {
-						label = strings.TrimSpace(body[:pipe])
-						target = strings.TrimSpace(body[pipe+1:])
-					} else {
-						label = body
-						target = body
-					}
-					if label == "" || target == "" {
-						return nil, fmt.Errorf("line %d: invalid link [[%s]]", rl.lineNo, body)
-					}
-					targetIdx, ok := cs.ByName[target]
-					if !ok {
-						return nil, fmt.Errorf("line %d: link target %q does not exist", rl.lineNo, target)
-					}
-					linkCount++
-					ops = append(ops, storyOp{kind: opChoice, text: label, target: targetIdx})
-				}
-			}
-			if emittedContentOnLine || len(rp.lines) > 1 {
-				if emittedContentOnLine {
-					ops = append(ops, storyOp{kind: opText, text: "\n"})
-					textLen++
-				} else if strings.TrimSpace(line) == "" && textLen > 0 {
-					ops = append(ops, storyOp{kind: opText, text: "\n"})
-					textLen++
-				}
-			}
-		}
-
-		if len(stack) > 0 {
-			return nil, fmt.Errorf("line %d: unclosed <<if>> in passage %q", stack[len(stack)-1].lineNo, rp.name)
+		ops, linkCount, textLen, err := compilePassage(cs, rp)
+		if err != nil {
+			return nil, err
 		}
 		if linkCount > maxStoryChoices {
 			return nil, fmt.Errorf("passage %q has %d links (max %d)", rp.name, linkCount, maxStoryChoices)
@@ -418,7 +245,232 @@ func parseTwee(src string) (*compiledStory, error) {
 		cs.Passages[pIdx].Ops = ops
 	}
 
-	// Reachability check from Start.
+	if err := validateReachable(cs); err != nil {
+		return nil, err
+	}
+	return cs, nil
+}
+
+// internFlag returns the index of a story flag, adding it on first use.
+func (cs *compiledStory) internFlag(name string, lineNo int) (uint16, error) {
+	if idx, ok := cs.FlagIdx[name]; ok {
+		return idx, nil
+	}
+	if len(cs.Flags) >= maxStoryFlags {
+		return 0, fmt.Errorf("line %d: too many flags (max %d)", lineNo, maxStoryFlags)
+	}
+	idx := uint16(len(cs.Flags))
+	cs.Flags = append(cs.Flags, name)
+	cs.FlagIdx[name] = idx
+	return idx, nil
+}
+
+type tweeIfFrame struct {
+	ifNotOp int
+	jumpOp  int
+	hasElse bool
+	lineNo  int
+}
+
+// compilePassage turns one passage's raw lines into runtime ops and returns
+// the link and text lengths used by the size limits.
+func compilePassage(cs *compiledStory, rp rawStoryPassage) ([]storyOp, int, int, error) {
+	var ops []storyOp
+	var stack []tweeIfFrame
+	linkCount := 0
+	textLen := 0
+
+	for _, rl := range rp.lines {
+		if containsHTML(rl.text) {
+			return nil, 0, 0, fmt.Errorf("line %d: HTML tags are not allowed", rl.lineNo)
+		}
+		line := rl.text
+		emittedContentOnLine := false
+		pos := 0
+		for pos < len(line) {
+			nextMacro := strings.Index(line[pos:], "<<")
+			nextLink := strings.Index(line[pos:], "[[")
+			nextIdx := -1
+			kind := 0 // 1=macro, 2=link
+			if nextMacro >= 0 && (nextLink < 0 || nextMacro < nextLink) {
+				nextIdx = pos + nextMacro
+				kind = 1
+			} else if nextLink >= 0 {
+				nextIdx = pos + nextLink
+				kind = 2
+			}
+			if nextIdx < 0 {
+				chunk := line[pos:]
+				if chunk != "" {
+					ops = append(ops, storyOp{kind: opText, text: chunk})
+					textLen += len(chunk)
+					emittedContentOnLine = true
+				}
+				break
+			}
+			if nextIdx > pos {
+				chunk := line[pos:nextIdx]
+				ops = append(ops, storyOp{kind: opText, text: chunk})
+				textLen += len(chunk)
+				emittedContentOnLine = true
+			}
+			if kind == 1 {
+				end := strings.Index(line[nextIdx+2:], ">>")
+				if end < 0 {
+					return nil, 0, 0, fmt.Errorf("line %d: unclosed macro <<", rl.lineNo)
+				}
+				body := strings.TrimSpace(line[nextIdx+2 : nextIdx+2+end])
+				pos = nextIdx + 2 + end + 2
+				var macroErr error
+				ops, stack, macroErr = cs.macroOps(body, ops, stack, rl.lineNo)
+				if macroErr != nil {
+					return nil, 0, 0, macroErr
+				}
+			} else {
+				end := strings.Index(line[nextIdx+2:], "]]")
+				if end < 0 {
+					return nil, 0, 0, fmt.Errorf("line %d: unclosed link [[", rl.lineNo)
+				}
+				body := strings.TrimSpace(line[nextIdx+2 : nextIdx+2+end])
+				pos = nextIdx + 2 + end + 2
+				op, err := cs.linkOp(body, rl.lineNo)
+				if err != nil {
+					return nil, 0, 0, err
+				}
+				linkCount++
+				ops = append(ops, op)
+			}
+		}
+		if emittedContentOnLine || len(rp.lines) > 1 {
+			if emittedContentOnLine {
+				ops = append(ops, storyOp{kind: opText, text: "\n"})
+				textLen++
+			} else if strings.TrimSpace(line) == "" && textLen > 0 {
+				ops = append(ops, storyOp{kind: opText, text: "\n"})
+				textLen++
+			}
+		}
+	}
+
+	if len(stack) > 0 {
+		return nil, 0, 0, fmt.Errorf("line %d: unclosed <<if>> in passage %q", stack[len(stack)-1].lineNo, rp.name)
+	}
+	return ops, linkCount, textLen, nil
+}
+
+// macroOps appends the op for one <<...>> body and keeps the <<if>> stack in
+// sync. It returns the updated slices because append can reallocate.
+func (cs *compiledStory) macroOps(body string, ops []storyOp, stack []tweeIfFrame, lineNo int) ([]storyOp, []tweeIfFrame, error) {
+	switch {
+	case strings.HasPrefix(body, "set "):
+		rest := strings.TrimSpace(body[4:])
+		if !strings.HasPrefix(rest, "$") {
+			return nil, nil, fmt.Errorf("line %d: <<set>> variable must start with $", lineNo)
+		}
+		toIdx := strings.Index(rest, " to ")
+		if toIdx < 0 {
+			return nil, nil, fmt.Errorf("line %d: <<set>> must use 'to' (e.g. <<set $flag to true>>)", lineNo)
+		}
+		flagName := strings.TrimSpace(rest[1:toIdx])
+		if !isValidFlagName(flagName) {
+			return nil, nil, fmt.Errorf("line %d: invalid flag name %q", lineNo, flagName)
+		}
+		valStr := strings.TrimSpace(rest[toIdx+4:])
+		var val storyVal
+		switch valStr {
+		case "true":
+			val = storyVal{Bool: true}
+		case "false":
+			val = storyVal{Bool: false}
+		default:
+			num, err := strconv.ParseFloat(valStr, 64)
+			if err != nil {
+				return nil, nil, fmt.Errorf("line %d: <<set>> value %q must be true, false, or a number", lineNo, valStr)
+			}
+			val = storyVal{IsNum: true, Num: num}
+		}
+		fIdx, err := cs.internFlag(flagName, lineNo)
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, storyOp{kind: opSet, flag: fIdx, val: val})
+
+	case strings.HasPrefix(body, "if "):
+		rest := strings.TrimSpace(body[3:])
+		if !strings.HasPrefix(rest, "$") {
+			return nil, nil, fmt.Errorf("line %d: <<if>> variable must start with $", lineNo)
+		}
+		flagName := strings.TrimSpace(rest[1:])
+		if !isValidFlagName(flagName) {
+			return nil, nil, fmt.Errorf("line %d: invalid <<if>> condition %q", lineNo, rest)
+		}
+		fIdx, err := cs.internFlag(flagName, lineNo)
+		if err != nil {
+			return nil, nil, err
+		}
+		opIdx := len(ops)
+		ops = append(ops, storyOp{kind: opIfNot, flag: fIdx})
+		stack = append(stack, tweeIfFrame{ifNotOp: opIdx, jumpOp: -1, lineNo: lineNo})
+
+	case body == "else":
+		if len(stack) == 0 {
+			return nil, nil, fmt.Errorf("line %d: <<else>> without matching <<if>>", lineNo)
+		}
+		top := &stack[len(stack)-1]
+		if top.hasElse {
+			return nil, nil, fmt.Errorf("line %d: duplicate <<else>>", lineNo)
+		}
+		top.hasElse = true
+		top.jumpOp = len(ops)
+		ops = append(ops, storyOp{kind: opJump})
+		ops[top.ifNotOp].target = len(ops)
+
+	case body == "endif":
+		if len(stack) == 0 {
+			return nil, nil, fmt.Errorf("line %d: <<endif>> without matching <<if>>", lineNo)
+		}
+		top := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if top.hasElse {
+			ops[top.jumpOp].target = len(ops)
+		} else {
+			ops[top.ifNotOp].target = len(ops)
+		}
+
+	default:
+		return nil, nil, fmt.Errorf("line %d: unsupported macro <<%s>>", lineNo, body)
+	}
+	return ops, stack, nil
+}
+
+// linkOp resolves one [[...]] body to a choice op.
+func (cs *compiledStory) linkOp(body string, lineNo int) (storyOp, error) {
+	if body == "" {
+		return storyOp{}, fmt.Errorf("line %d: empty link [[]]", lineNo)
+	}
+	var label, target string
+	if arrow := strings.Index(body, "->"); arrow >= 0 {
+		label = strings.TrimSpace(body[:arrow])
+		target = strings.TrimSpace(body[arrow+2:])
+	} else if pipe := strings.IndexByte(body, '|'); pipe >= 0 {
+		label = strings.TrimSpace(body[:pipe])
+		target = strings.TrimSpace(body[pipe+1:])
+	} else {
+		label = body
+		target = body
+	}
+	if label == "" || target == "" {
+		return storyOp{}, fmt.Errorf("line %d: invalid link [[%s]]", lineNo, body)
+	}
+	targetIdx, ok := cs.ByName[target]
+	if !ok {
+		return storyOp{}, fmt.Errorf("line %d: link target %q does not exist", lineNo, target)
+	}
+	return storyOp{kind: opChoice, text: label, target: targetIdx}, nil
+}
+
+// validateReachable checks every passage is reachable from Start.
+func validateReachable(cs *compiledStory) error {
 	visited := make([]bool, len(cs.Passages))
 	queue := []int{cs.Start}
 	visited[cs.Start] = true
@@ -434,9 +486,8 @@ func parseTwee(src string) (*compiledStory, error) {
 	}
 	for i, p := range cs.Passages {
 		if !visited[i] {
-			return nil, fmt.Errorf("passage %q is unreachable from %q", p.Name, cs.Passages[cs.Start].Name)
+			return fmt.Errorf("passage %q is unreachable from %q", p.Name, cs.Passages[cs.Start].Name)
 		}
 	}
-
-	return cs, nil
+	return nil
 }
