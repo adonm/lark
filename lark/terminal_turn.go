@@ -22,6 +22,7 @@ const (
 	ttsPrefillMax = 500 * time.Millisecond
 	maxAudioLead  = 8 * time.Second
 	recStopWait   = 450 * time.Millisecond
+	captionWait   = 30 * time.Second
 	// How long after a read-out finishes playing the child may answer it.
 	deviceReplyTTL = time.Minute
 )
@@ -563,7 +564,7 @@ func (h *terminalHub) runVoice(ctx context.Context, d *terminalSession, id uint6
 		// Connected peers can play the original clip before transcription.
 		if len(receipts) != 0 {
 			go func() {
-				captionCtx, cancel := context.WithTimeout(context.WithValue(h.b.root, traceKey{}, traceFrom(ctx)), 30*time.Second)
+				captionCtx, cancel := context.WithTimeout(context.WithValue(h.b.root, traceKey{}, traceFrom(ctx)), captionWait)
 				defer cancel()
 				transcript, _ := h.b.transcribe(captionCtx, pcm)
 				h.caption(receipts, sender, transcript)
