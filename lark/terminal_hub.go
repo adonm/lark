@@ -271,40 +271,12 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 		return false
 	}
 	termID := strings.ToLower(strings.TrimSpace(ev.terminalID))
-	screen, board := roundScreen, ""
-	dispFmt := ev.displayFormats
-	if dispFmt == 0 {
-		dispFmt = dispRGB565
-	}
-	frameCodecs := ev.frameCodecs
-	if frameCodecs == 0 && dispFmt&dispRGB565 != 0 {
-		frameCodecs = codecBitAll
-	}
 	if !terminalIDRE.MatchString(termID) {
 		c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "invalid hardware terminal ID"))
 		return false
 	}
-	board = "esp-vocat"
-	if ev.board != "" {
-		board = ev.board
-	}
-	if board == "esp-box-3" {
-		screen = screenGeometry{320, 240, "rect"}
-	}
-	if ev.width > 0 {
-		screen.width = int(ev.width)
-	}
-	if ev.height > 0 {
-		screen.height = int(ev.height)
-	}
-	if ev.shape == shapeRect {
-		screen.shape = "rect"
-	} else if ev.shape == shapeRound {
-		screen.shape = "round"
-	}
-	if screen.width < 1 || screen.width > screenSize || screen.height < 1 || screen.height > screenSize ||
-		screen.shape != "round" && screen.shape != "rect" || board != "esp-vocat" && board != "esp-box-3" ||
-		dispFmt&dispRGB565 == 0 {
+	screen, board, dispFmt, frameCodecs, ok := helloDisplay(ev)
+	if !ok {
 		c.enqueueProto(msgReject, encodeReject(rejectBadCaps, "invalid display capabilities"))
 		return false
 	}
@@ -326,6 +298,48 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 		return false
 	}
 
+	d := h.newHardwareSession(c, rec, ev, screen, board, dispFmt, frameCodecs, now)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.attachHardwareLocked(c, d, now)
+}
+
+// helloDisplay resolves and validates the advertised display capabilities.
+func helloDisplay(ev terminalHello) (screen screenGeometry, board string, dispFmt, frameCodecs uint8, ok bool) {
+	screen, board = roundScreen, "esp-vocat"
+	dispFmt = ev.displayFormats
+	if dispFmt == 0 {
+		dispFmt = dispRGB565
+	}
+	frameCodecs = ev.frameCodecs
+	if frameCodecs == 0 && dispFmt&dispRGB565 != 0 {
+		frameCodecs = codecBitAll
+	}
+	if ev.board != "" {
+		board = ev.board
+	}
+	if board == "esp-box-3" {
+		screen = screenGeometry{320, 240, "rect"}
+	}
+	if ev.width > 0 {
+		screen.width = int(ev.width)
+	}
+	if ev.height > 0 {
+		screen.height = int(ev.height)
+	}
+	if ev.shape == shapeRect {
+		screen.shape = "rect"
+	} else if ev.shape == shapeRound {
+		screen.shape = "round"
+	}
+	ok = screen.width >= 1 && screen.width <= screenSize && screen.height >= 1 && screen.height <= screenSize &&
+		(screen.shape == "round" || screen.shape == "rect") &&
+		(board == "esp-vocat" || board == "esp-box-3") &&
+		dispFmt&dispRGB565 != 0
+	return screen, board, dispFmt, frameCodecs, ok
+}
+
+func (h *terminalHub) newHardwareSession(c *terminalClient, rec terminalRecord, ev terminalHello, screen screenGeometry, board string, dispFmt, frameCodecs uint8, now time.Time) *terminalSession {
 	d := &terminalSession{
 		client:         c,
 		id:             rec.ID,
@@ -357,9 +371,12 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
 	d.vol = h.b.volumePref(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
+	return d
+}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// attachHardwareLocked installs a registered session, replacing a reconnect.
+// The caller holds the hub lock.
+func (h *terminalHub) attachHardwareLocked(c *terminalClient, d *terminalSession, now time.Time) bool {
 	if h.closed || c.ctx.Err() != nil {
 		return false
 	}

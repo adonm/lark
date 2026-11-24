@@ -156,55 +156,13 @@ func writeNativeReject(conn net.Conn, reason uint8, msg string) {
 
 func (s *terminalServer) serveConn(conn net.Conn) {
 	defer conn.Close()
-	if tc, ok := conn.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-		_ = tc.SetKeepAlive(true)
-		_ = tc.SetKeepAlivePeriod(15 * time.Second)
-		_ = tc.SetReadBuffer(128 << 10)
-		_ = tc.SetWriteBuffer(128 << 10)
-	}
-
+	tuneTCP(conn)
 	br := bufio.NewReaderSize(conn, 16<<10)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	msgType, _, payload, err := readProtoFrame(br)
-	if err != nil {
+	hs, ok := readNativeHandshake(conn, br, s.hub.b.token)
+	if !ok {
 		return
 	}
-
-	var hello terminalHello
-	var resume terminalResume
-	isResume := false
-	switch msgType {
-	case msgHello:
-		hello, err = parseTerminalHello(payload)
-		if err != nil {
-			writeNativeReject(conn, rejectBadCaps, "invalid hello")
-			return
-		}
-		if hello.protoVersion != protoVersion1 {
-			writeNativeReject(conn, rejectBadVersion, "protocol version mismatch")
-			return
-		}
-		if s.hub.b.token == "" || subtle.ConstantTimeCompare([]byte(hello.token), []byte(s.hub.b.token)) != 1 {
-			writeNativeReject(conn, rejectBadToken, "invalid token")
-			return
-		}
-	case msgResume:
-		isResume = true
-		resume, err = parseTerminalResume(payload)
-		if err != nil {
-			writeNativeReject(conn, rejectUnknownTerminal, "invalid resume")
-			return
-		}
-		if resume.protoVersion != protoVersion1 {
-			writeNativeReject(conn, rejectBadVersion, "protocol version mismatch")
-			return
-		}
-	default:
-		writeNativeReject(conn, rejectBadVersion, "expected hello or resume")
-		return
-	}
-
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 	remoteIP, err := netip.ParseAddr(host)
 	if err != nil {
@@ -214,40 +172,15 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 
 	ctx, cancel := context.WithCancel(s.hub.b.root)
 	ssrc := s.nextSSRC()
-	var initialUDP *net.UDPAddr
-	if !isResume && hello.udpPort > 0 {
-		initialUDP = &net.UDPAddr{IP: remoteIP.AsSlice(), Port: int(hello.udpPort)}
-	}
-	nc := &nativeClient{
-		server:      s,
-		hub:         s.hub,
-		conn:        conn,
-		br:          br,
-		remoteIP:    remoteIP,
-		ssrc:        ssrc,
-		ctrlOut:     make(chan nativeOutMsg, 64),
-		out:         make(chan nativeOutMsg, 192),
-		frameNotify: make(chan struct{}, 1),
-		udpAddr:     initialUDP,
-	}
-	c := &terminalClient{
-		native: nc,
-		ctx:    ctx,
-		cancel: cancel,
-	}
+	nc := newNativeClient(s, conn, br, remoteIP, ssrc, hs)
+	c := &terminalClient{native: nc, ctx: ctx, cancel: cancel}
 	nc.client = c
 
-	s.hub.mu.Lock()
-	if s.hub.closed || len(s.hub.clients) >= 64 {
-		s.hub.mu.Unlock()
+	if !s.admitClient(c) {
 		cancel()
 		writeNativeReject(conn, rejectFull, "server full")
 		return
 	}
-	s.hub.clients[c] = struct{}{}
-	s.hub.conns.Add(1)
-	s.hub.mu.Unlock()
-
 	s.peersMu.Lock()
 	s.peers[ssrc] = nc
 	s.peersMu.Unlock()
@@ -262,33 +195,121 @@ func (s *terminalServer) serveConn(conn net.Conn) {
 		s.hub.detach(c)
 	}()
 
-	var ok bool
-	if isResume {
-		ok = s.hub.handleResume(c, resume, time.Now())
+	if hs.isResume {
+		ok = s.hub.handleResume(c, hs.resume, time.Now())
 	} else {
-		ok = s.hub.handleHello(c, hello, time.Now())
+		ok = s.hub.handleHello(c, hs.hello, time.Now())
 	}
 	if !ok {
-		// Flush any REJECT frame queued before closing.
-		select {
-		case msg := <-nc.ctrlOut:
-			pkt := packProtoPacket(msg.msgType, nc.txSeq, msg.payload)
-			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			_, _ = conn.Write(pkt)
-		default:
-		}
+		s.flushQueuedReject(nc)
 		return
 	}
-
 	go nc.writeLoop()
-
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
-		mType, _, mPayload, err := readProtoFrame(nc.br)
+		msgType, _, payload, err := readProtoFrame(nc.br)
 		if err != nil || c.ctx.Err() != nil {
 			return
 		}
-		s.handleTCPMessage(nc, mType, mPayload)
+		s.handleTCPMessage(nc, msgType, payload)
+	}
+}
+
+func tuneTCP(conn net.Conn) {
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(15 * time.Second)
+		_ = tc.SetReadBuffer(128 << 10)
+		_ = tc.SetWriteBuffer(128 << 10)
+	}
+}
+
+// nativeHandshake is the parsed first frame: hello or resume.
+type nativeHandshake struct {
+	hello    terminalHello
+	resume   terminalResume
+	isResume bool
+}
+
+func readNativeHandshake(conn net.Conn, br *bufio.Reader, token string) (nativeHandshake, bool) {
+	var hs nativeHandshake
+	msgType, _, payload, err := readProtoFrame(br)
+	if err != nil {
+		return hs, false
+	}
+	switch msgType {
+	case msgHello:
+		hs.hello, err = parseTerminalHello(payload)
+		if err != nil {
+			writeNativeReject(conn, rejectBadCaps, "invalid hello")
+			return hs, false
+		}
+		if hs.hello.protoVersion != protoVersion1 {
+			writeNativeReject(conn, rejectBadVersion, "protocol version mismatch")
+			return hs, false
+		}
+		if token == "" || subtle.ConstantTimeCompare([]byte(hs.hello.token), []byte(token)) != 1 {
+			writeNativeReject(conn, rejectBadToken, "invalid token")
+			return hs, false
+		}
+	case msgResume:
+		hs.isResume = true
+		hs.resume, err = parseTerminalResume(payload)
+		if err != nil {
+			writeNativeReject(conn, rejectUnknownTerminal, "invalid resume")
+			return hs, false
+		}
+		if hs.resume.protoVersion != protoVersion1 {
+			writeNativeReject(conn, rejectBadVersion, "protocol version mismatch")
+			return hs, false
+		}
+	default:
+		writeNativeReject(conn, rejectBadVersion, "expected hello or resume")
+		return hs, false
+	}
+	return hs, true
+}
+
+func newNativeClient(s *terminalServer, conn net.Conn, br *bufio.Reader, remoteIP netip.Addr, ssrc uint32, hs nativeHandshake) *nativeClient {
+	var initialUDP *net.UDPAddr
+	if !hs.isResume && hs.hello.udpPort > 0 {
+		initialUDP = &net.UDPAddr{IP: remoteIP.AsSlice(), Port: int(hs.hello.udpPort)}
+	}
+	return &nativeClient{
+		server:      s,
+		hub:         s.hub,
+		conn:        conn,
+		br:          br,
+		remoteIP:    remoteIP,
+		ssrc:        ssrc,
+		ctrlOut:     make(chan nativeOutMsg, 64),
+		out:         make(chan nativeOutMsg, 192),
+		frameNotify: make(chan struct{}, 1),
+		udpAddr:     initialUDP,
+	}
+}
+
+// admitClient takes the connected-client slot before any hub registration.
+func (s *terminalServer) admitClient(c *terminalClient) bool {
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
+	if s.hub.closed || len(s.hub.clients) >= 64 {
+		return false
+	}
+	s.hub.clients[c] = struct{}{}
+	s.hub.conns.Add(1)
+	return true
+}
+
+// flushQueuedReject writes a REJECT frame queued before the write loop started.
+func (s *terminalServer) flushQueuedReject(nc *nativeClient) {
+	select {
+	case msg := <-nc.ctrlOut:
+		pkt := packProtoPacket(msg.msgType, nc.txSeq, msg.payload)
+		_ = nc.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		_, _ = nc.conn.Write(pkt)
+	default:
 	}
 }
 
