@@ -49,6 +49,12 @@ func TestCLIAdminCommands(t *testing.T) {
 	if got := run("terminals", "detach", "vocat-33d8"); !strings.Contains(got, "Detached vocat-33d8") {
 		t.Fatal(got)
 	}
+	if got := run("terminals", "rm", "vocat-33d8"); !strings.Contains(got, "Removed terminal vocat-33d8") {
+		t.Fatal(got)
+	}
+	if got := run("terminals"); strings.Contains(got, "vocat-33d8") {
+		t.Fatal("terminal still listed after rm:", got)
+	}
 	if got := run("companions", "rm", "cake"); !strings.Contains(got, "Removed companion cake") {
 		t.Fatal(got)
 	}
