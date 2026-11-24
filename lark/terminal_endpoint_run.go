@@ -173,6 +173,9 @@ func (r *endpointRun) loop() {
 			r.finishCancelled()
 			return
 		case result := <-r.probeCh:
+			if debugEndpoint {
+				log.Printf("endpoint probe term=%s at=%v text=%s err=%v", r.d.id, result.at, redactTranscript(result.text), result.err)
+			}
 			r.acceptProbe(result)
 		case turn := <-r.smartTurnCh:
 			r.acceptSmartTurn(turn)
@@ -324,9 +327,6 @@ func (r *endpointRun) startProbe(at time.Duration) {
 
 func (r *endpointRun) acceptProbe(result pauseTranscript) {
 	r.cancelProbe()
-	if debugEndpoint {
-		log.Printf("endpoint probe term=%s at=%v text=%s err=%v", r.d.id, result.at, redactTranscript(result.text), result.err)
-	}
 	if result.err != nil {
 		return
 	}
@@ -367,8 +367,17 @@ func (r *endpointRun) cancelProbe() {
 	}
 }
 
+// smartFn reads the engine on every check: Smart Turn finishes loading in the
+// background, so a capture that starts before it is ready must still use it.
+func (r *endpointRun) smartFn() func([]byte) (float32, error) {
+	if r.hub != nil && r.hub.b != nil && r.hub.b.endpoint != nil {
+		return r.hub.b.endpoint.smart()
+	}
+	return r.smart
+}
+
 func (r *endpointRun) smartTurnDue(at time.Duration) bool {
-	return r.smart != nil && r.vad != nil && r.u.policy.hasWords &&
+	return r.smartFn() != nil && r.vad != nil && r.u.policy.hasWords &&
 		!r.u.policy.incomplete && r.smartTurnCh == nil &&
 		(r.smartCheckedAt != r.u.policy.lastVoicedAt && at-r.u.policy.lastVoicedAt >= endpointSpecQuiet ||
 			r.smartCheckedQuiet < endpointQuiet && r.smartProb < smartTurnThreshold &&
@@ -383,7 +392,7 @@ func (r *endpointRun) startSmartTurn(at time.Duration) {
 	wordAt := r.u.policy.lastVoicedAt
 	startOff := max(0, len(r.u.pcm)-endpointProbeWindow)
 	pcm := r.u.pcm[startOff:len(r.u.pcm):len(r.u.pcm)]
-	fn := r.smart
+	fn := r.smartFn()
 	go func() {
 		prob, err := fn(pcm)
 		if err != nil {
@@ -407,7 +416,7 @@ func (r *endpointRun) acceptSmartTurn(turn smartTurnResult) {
 
 func (r *endpointRun) speculateDue(at time.Duration) bool {
 	if r.listen || r.companionID == "" || r.hub == nil || r.hub.b == nil || r.hub.b.oc == nil ||
-		r.spec != nil || r.smart == nil || r.vad == nil || !r.u.policy.hasWords || r.u.policy.incomplete {
+		r.spec != nil || r.smartFn() == nil || r.vad == nil || !r.u.policy.hasWords || r.u.policy.incomplete {
 		return false
 	}
 	return at-r.u.policy.lastVoicedAt >= endpointSpecQuiet &&
