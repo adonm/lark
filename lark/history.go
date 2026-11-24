@@ -331,8 +331,6 @@ func (b *larkServer) recordChat(id string, entry chatEntry, persist bool) (chatE
 	return entry, ok
 }
 
-func (h *terminalHub) broadcastChat(id string, entry chatEntry) {}
-
 func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, before *historyCursor) (historyPage, error) {
 	out := historyPage{CompanionID: id, Messages: []chatEntry{}}
 	if limit < 1 {
@@ -420,12 +418,8 @@ func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, ar
 				b.hub.stopCompanionTurn(t)
 			}
 			b.hub.companionChanged(id, companion)
-			if archiveHistory {
-				b.hub.historyArchived(id)
-			}
 		}
 		return nil
 	})
 }
 
-func (h *terminalHub) historyArchived(id string) {}

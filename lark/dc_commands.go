@@ -455,22 +455,6 @@ func (s *dcService) pairInvite(companionID string) (string, error) {
 	return shortenDeltaChatInvite(qr), nil
 }
 
-func (s *dcService) pairQR(companionID string) (string, error) {
-	rpc := s.getRPC()
-	if rpc == nil {
-		return "", errors.New("Delta Chat unavailable")
-	}
-	accID := s.accountForCompanion(companionID)
-	if accID == 0 {
-		return "", errors.New("Companion has no Delta Chat account")
-	}
-	qr, err := rpc.GetChatSecurejoinQrCode(accID, nil)
-	if err != nil {
-		return "", err
-	}
-	return rpc.CreateQrSvg(qr)
-}
-
 // shortenDeltaChatInvite strips optional display-name and version query
 // parameters from a Delta Chat invite URL so the QR version and module count
 // stay as small as possible.
