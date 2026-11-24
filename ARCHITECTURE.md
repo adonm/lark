@@ -69,6 +69,15 @@ capture with `POST /remote/api/capture`, lists it at `GET
 `GET /remote/api/captures/{name}.wav`, and removes both files with `DELETE
 /remote/api/captures/{name}`. Capture progress arrives as `capture` SSE events.
 
+**Commands and errors.** Each capability sits behind one command in
+`commands.go`: `setVolume`/`setSleep`, `setVoice`, `setListening`,
+`openStory`/`restartStory`, `startCapture`, and `sayOnCompanion` (say). The
+admin API, MCP tools, Delta Chat commands, the device menu, and the remote page
+decode a typed request (`requests.go`, unknown fields rejected with a field
+error) and only format the command's result, so validation and side effects
+cannot drift between transports. Commands return `problem` or `fieldError`;
+each transport renders that one error in its own status or text shape.
+
 **Firmware.** ESP-IDF C for ESP-VoCat v1.2 and ESP32-S3-BOX-3. Renders
 360×360 (VoCat) or 320×240 (BOX-3) RGB565 frames, draws a fallback face when
 offline, reports telemetry, accepts OTA, and drives endpointing when it
