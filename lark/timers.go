@@ -43,7 +43,9 @@ type timerManager struct {
 	// HTTP MCP calls do not carry a trusted OpenCode session ID. Reject
 	// wake-agent scheduling on a device while its timer-triggered turn runs.
 	fromTimerTurn map[string]int
-	onFired       func(string)
+	// onFired observes a claimed timer after delivery. Tests share the channel
+	// to await a real fire; production leaves it nil.
+	onFired func(string)
 }
 
 type timerHandle struct{ timer *time.Timer }
@@ -127,12 +129,6 @@ func (b *larkServer) timerState(ctx context.Context, id string, now time.Time) (
 	return out, nil
 }
 
-func (m *timerManager) activeCount(ctx context.Context, id string) int {
-	var count int
-	_ = m.b.db.readDB().QueryRowContext(ctx, "SELECT count(*) FROM timers WHERE companion_id=?", id).Scan(&count)
-	return count
-}
-
 func (m *timerManager) restore(now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,13 +152,13 @@ func (m *timerManager) restore(now time.Time) error {
 	return nil
 }
 
-func parseTimer(args object, now time.Time) (savedTimer, error) {
+func parseTimer(edit timerEdit, now time.Time) (savedTimer, error) {
 	id, err := randomHex(12)
 	if err != nil {
 		return savedTimer{}, problem(500, "Cannot create a timer identifier")
 	}
-	t := savedTimer{ID: id, CompanionID: strings.ToLower(str(args["companion_id"])), CreatedAt: now.In(now.Location()), Label: "Timer", Chime: "celebrate"}
-	return editTimer(t, args, now, false)
+	t := savedTimer{ID: id, CompanionID: strings.ToLower(edit.CompanionID), CreatedAt: now.In(now.Location()), Label: "Timer", Chime: "celebrate"}
+	return editTimer(t, edit, now, false)
 }
 
 func parseTimerAt(raw string, loc *time.Location) (time.Time, error) {
@@ -178,62 +174,84 @@ func parseTimerAt(raw string, loc *time.Location) (time.Time, error) {
 	return time.Time{}, errors.New("invalid timer timestamp")
 }
 
-func editTimer(t savedTimer, args object, now time.Time, update bool) (savedTimer, error) {
-	seconds, err := mcpUint(args, "in_seconds")
-	at, atSet := args["at"]
-	if err != nil || atSet && seconds != nil || !update && !atSet && seconds == nil {
+// timerEdit is one timer create, update, or cancel. Nil fields were absent.
+type timerEdit struct {
+	Op          *string `json:"op,omitempty"`
+	CompanionID string  `json:"companion_id,omitempty"`
+	ID          string  `json:"id,omitempty"`
+	All         *bool   `json:"all,omitempty"`
+	InSeconds   *int    `json:"in_seconds,omitempty"`
+	At          *string `json:"at,omitempty"`
+	Label       *string `json:"label,omitempty"`
+	Say         *string `json:"say,omitempty"`
+	Chime       *string `json:"chime,omitempty"`
+	WakeAgent   *bool   `json:"wake_agent,omitempty"`
+	Notes       any     `json:"notes,omitempty"`
+}
+
+// fieldCount reports how many editable fields the request carries, excluding
+// identity and operation keys.
+func (e timerEdit) fieldCount() int {
+	n := 0
+	for _, set := range []bool{e.InSeconds != nil, e.At != nil, e.Label != nil, e.Say != nil,
+		e.Chime != nil, e.WakeAgent != nil, e.Notes != nil} {
+		if set {
+			n++
+		}
+	}
+	return n
+}
+
+func editTimer(t savedTimer, edit timerEdit, now time.Time, update bool) (savedTimer, error) {
+	seconds, atSet := edit.InSeconds, edit.At != nil
+	if atSet && seconds != nil || !update && !atSet && seconds == nil {
 		return t, problem(400, "Provide exactly one of in_seconds or at")
 	}
+	var err error
 	if seconds != nil {
 		if *seconds < 1 || *seconds > 86400 {
 			return t, problem(400, "in_seconds must be 1–86400")
 		}
 		t.FireAt = now.Add(time.Duration(*seconds) * time.Second).In(now.Location())
 	} else if atSet {
-		t.FireAt, err = parseTimerAt(str(at), now.Location())
+		t.FireAt, err = parseTimerAt(*edit.At, now.Location())
 		delay := t.FireAt.Sub(now)
 		if err != nil || delay <= 0 || delay > 24*time.Hour {
 			return t, problem(400, "at must be RFC3339 or local time within the next 24 hours")
 		}
 	}
-	if v, ok := args["wake_agent"]; ok {
-		if t.WakeAgent, ok = v.(bool); !ok {
-			return t, problem(400, "Expected boolean wake_agent")
-		}
+	if edit.WakeAgent != nil {
+		t.WakeAgent = *edit.WakeAgent
 	}
 	if t.WakeAgent && (atSet || seconds != nil && *seconds < 30 ||
-		seconds == nil && args["wake_agent"] == true && t.FireAt.Sub(now) < 30*time.Second) {
+		seconds == nil && edit.WakeAgent != nil && *edit.WakeAgent && t.FireAt.Sub(now) < 30*time.Second) {
 		return t, problem(400, "wake_agent requires in_seconds of at least 30")
 	}
-	if raw, set := args["label"]; set {
-		if t.Label = shortText(raw, 60, true); t.Label == "" {
+	if edit.Label != nil {
+		if t.Label = shortText(*edit.Label, 60, true); t.Label == "" {
 			t.Label = "Timer"
 		}
 	}
-	if raw, present := args["say"]; present {
-		s, ok := raw.(string)
-		if !ok {
-			return t, fieldError("timer.say", "expected a string")
-		}
+	if edit.Say != nil {
 		t.Say = ""
-		if s != "" || !update {
-			t.Say, err = spokenText(s)
+		if *edit.Say != "" || !update {
+			t.Say, err = spokenText(*edit.Say)
 			if err != nil {
 				return t, err
 			}
 		}
 	}
-	if _, present := args["chime"]; present {
-		t.Chime = str(args["chime"])
+	if edit.Chime != nil {
+		t.Chime = *edit.Chime
 		if !validChime(t.Chime) {
 			return t, problem(400, "Unknown chime kind")
 		}
 	}
-	if raw, present := args["notes"]; present {
-		if a, ok := raw.([]any); update && ok && len(a) == 0 {
+	if edit.Notes != nil {
+		if a, ok := edit.Notes.([]any); update && ok && len(a) == 0 {
 			t.Notes = nil
 		} else {
-			t.Notes, _, err = melodyInput(raw, "timer.notes")
+			t.Notes, _, err = melodyInput(edit.Notes, "timer.notes")
 			if err != nil {
 				return t, err
 			}
@@ -242,7 +260,7 @@ func editTimer(t savedTimer, args object, now time.Time, update bool) (savedTime
 	return t, nil
 }
 
-func (m *timerManager) update(ctx context.Context, id, companion string, args object, now time.Time) (savedTimer, error) {
+func (m *timerManager) update(ctx context.Context, id, companion string, edit timerEdit, now time.Time) (savedTimer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var t savedTimer
@@ -266,7 +284,7 @@ func (m *timerManager) update(ctx context.Context, id, companion string, args ob
 		return t, problem(403, "Companion out of scope")
 	}
 	before := t.FireAt
-	t, err = editTimer(t, args, now, true)
+	t, err = editTimer(t, edit, now, true)
 	if err != nil {
 		return t, err
 	}
@@ -388,7 +406,6 @@ func (m *timerManager) fire(id string, expected *timerHandle) {
 			m.mu.Unlock()
 		}()
 	}
-	m.b.timerUpdate(t.CompanionID)
 	m.b.deliverTimer(m.ctx, t)
 	if m.onFired != nil {
 		m.onFired(id)
@@ -443,8 +460,6 @@ func (m *timerManager) cancelTimers(ctx context.Context, companion, id string) (
 	}
 	return ids, nil
 }
-
-func (b *larkServer) timerUpdate(id string) {}
 
 func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	who, ok := b.companionByID(t.CompanionID)
@@ -522,17 +537,24 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 	if m == nil {
 		return nil, problem(503, "Timers unavailable")
 	}
-	if raw, exists := args["companion_id"]; exists {
-		id = strings.ToLower(str(raw))
+	var edit timerEdit
+	if err := decodeInput(args, &edit); err != nil {
+		return nil, err
+	}
+	if edit.CompanionID != "" {
+		id = strings.ToLower(edit.CompanionID)
 	}
 	if !validCompanionID(id) {
 		return nil, problem(400, "Invalid timer companion_id")
 	}
-	op, present := args["op"]
-	_, secs := args["in_seconds"]
-	_, at := args["at"]
-	if !present && (secs || at) {
-		op = "set"
+	edit.CompanionID = id
+	if edit.Op == nil && (edit.InSeconds != nil || edit.At != nil) {
+		op := "set"
+		edit.Op = &op
+	}
+	op := ""
+	if edit.Op != nil {
+		op = *edit.Op
 	}
 	switch op {
 	case "set":
@@ -541,44 +563,35 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 			return nil, problem(404, "Companion not found")
 		}
 		now := time.Now().In(b.location())
-		t, err := parseTimer(withCompanion(args, id), now)
+		t, err := parseTimer(edit, now)
 		if err != nil {
 			return nil, err
 		}
 		if err := m.set(ctx, t); err != nil {
 			return nil, err
 		}
-		b.timerUpdate(id)
 		entry := newChat("card", who.Name, "Timer: "+t.Label, "timer")
 		entry.SceneTitle = t.Label
 		b.chat(id, entry, true)
 		return t.state(now), nil
 	case "cancel":
-		timerID, all := str(args["id"]), args["all"] == true
-		if all && timerID != "" || !all && !timerIDRE.MatchString(timerID) {
+		all := edit.All != nil && *edit.All
+		if all && edit.ID != "" || !all && !timerIDRE.MatchString(edit.ID) {
 			return nil, problem(400, "Provide exactly one of id or all=true")
 		}
-		if _, err := m.cancelTimers(ctx, id, timerID); err != nil {
+		if _, err := m.cancelTimers(ctx, id, edit.ID); err != nil {
 			return nil, err
 		}
-		b.timerUpdate(id)
-		return object{"companion_id": id, "id": timerID, "all": all, "cancelled": true}, nil
+		return object{"companion_id": id, "id": edit.ID, "all": all, "cancelled": true}, nil
 	case "update":
-		timerID := str(args["id"])
-		_, hasAll := args["all"]
-		fields := len(args) - 2
-		if _, present := args["companion_id"]; present {
-			fields--
-		}
-		if !timerIDRE.MatchString(timerID) || hasAll || fields < 1 {
+		if !timerIDRE.MatchString(edit.ID) || edit.All != nil || edit.fieldCount() < 1 {
 			return nil, fieldError("timer", "update requires id and at least one field to change")
 		}
 		now := time.Now()
-		t, err := m.update(ctx, timerID, id, args, now)
+		t, err := m.update(ctx, edit.ID, id, edit, now)
 		if err != nil {
 			return nil, err
 		}
-		b.timerUpdate(id)
 		return t.state(now), nil
 	}
 	return nil, problem(400, "Unknown timer operation")
