@@ -453,7 +453,11 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		b.syncCompanionEntry(ctx, c)
 	}
 	if op != "get" && b.dc != nil && b.dc.ready.Load() && c.DCAccountID != 0 {
-		go b.dc.syncProfile(c, c.DCAccountID)
+		go func() {
+			if err := b.dc.syncProfile(c, c.DCAccountID); err != nil {
+				log.Printf("Delta Chat profile for %s: %v", c.ID, err)
+			}
+		}()
 	}
 	if op != "get" && before.PortraitID != "" && before.PortraitID != c.PortraitID {
 		b.hub.invalidateAssets(before.PortraitID)

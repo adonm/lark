@@ -291,7 +291,9 @@ func (s *dcService) sendWelcomeIfNeeded(ctx context.Context, c companionState, a
 		log.Printf("Delta Chat welcome SendMsg error (%s): %v", c.ID, err)
 		return
 	}
-	_ = s.b.db.setMeta(ctx, key, dcWelcomeVersion)
+	if err := s.b.db.setMeta(ctx, key, dcWelcomeVersion); err != nil {
+		log.Printf("Delta Chat could not record welcome for %s: %v", c.ID, err)
+	}
 }
 
 func (s *dcService) syncWelcomes(ctx context.Context) {
@@ -410,7 +412,9 @@ func (s *dcService) unpairContact(companionID string, contactID uint32) error {
 		return errors.New("Companion has no Delta Chat account")
 	}
 	if chatID, err := rpc.GetChatIdByContactId(accID, contactID); err == nil && chatID != nil {
-		_ = rpc.DeleteChat(accID, *chatID)
+		if err := rpc.DeleteChat(accID, *chatID); err != nil {
+			log.Printf("Delta Chat could not delete chat for contact %d: %v", contactID, err)
+		}
 	}
 	return rpc.DeleteContact(accID, contactID)
 }
@@ -467,10 +471,9 @@ func (s *dcService) pairQR(companionID string) (string, error) {
 	return rpc.CreateQrSvg(qr)
 }
 
-// contactName is the name shown to agents in me.contacts for a Delta Chat
-// contact, so emit targets and read-out labels always match it.
-// shortenDeltaChatInvite strips optional display-name and version query parameters
-// from a Delta Chat invite URL so the QR version and module count stay as small as possible.
+// shortenDeltaChatInvite strips optional display-name and version query
+// parameters from a Delta Chat invite URL so the QR version and module count
+// stay as small as possible.
 func shortenDeltaChatInvite(raw string) string {
 	idx := strings.IndexByte(raw, '#')
 	if idx < 0 {
@@ -492,6 +495,8 @@ func shortenDeltaChatInvite(raw string) string {
 	return prefix + strings.Join(kept, "&")
 }
 
+// contactName is the name shown to agents in me.contacts for a Delta Chat
+// contact, so emit targets and read-out labels always match it.
 func (s *dcService) contactName(ct deltachat.Contact) string {
 	if name := strings.TrimSpace(ct.DisplayName); name != "" {
 		return name

@@ -263,7 +263,9 @@ func (s *dcService) ensureCompanion(ctx context.Context, c companionState) (uint
 			return 0, err
 		}
 	}
-	s.syncProfile(c, accID)
+	if err := s.syncProfile(c, accID); err != nil {
+		log.Printf("Delta Chat profile for %s: %v", c.ID, err)
+	}
 	addrPtr, err := rpc.GetConfig(accID, "addr")
 	s.mu.Lock()
 	s.byAcc[accID] = c.ID
@@ -285,7 +287,9 @@ func (s *dcService) provisionAccount(ctx context.Context, rpc dcRPC, c companion
 		return err
 	}
 	whoCalls := "nobody"
-	_ = rpc.SetConfig(accID, "who_can_call_me", &whoCalls)
+	if err := rpc.SetConfig(accID, "who_can_call_me", &whoCalls); err != nil {
+		return err
+	}
 	if err := rpc.AddTransportFromQr(accID, "dcaccount:"+s.relay); err != nil {
 		return err
 	}
@@ -326,7 +330,9 @@ func (s *dcService) clearPendingRemoval(ctx context.Context, accID uint32) {
 	if s.b == nil || s.b.db == nil {
 		return
 	}
-	_, _ = s.b.db.ExecContext(ctx, `DELETE FROM meta WHERE key=?`, fmt.Sprintf("%s%d", dcRemovePending, accID))
+	if _, err := s.b.db.ExecContext(ctx, `DELETE FROM meta WHERE key=?`, fmt.Sprintf("%s%d", dcRemovePending, accID)); err != nil {
+		log.Printf("Delta Chat could not clear pending removal of account %d: %v", accID, err)
+	}
 }
 
 // retryPendingRemovals runs whenever the rpc-server becomes ready.
@@ -399,25 +405,33 @@ func (s *dcService) reconcileAccounts(ctx context.Context) object {
 	return out
 }
 
-func (s *dcService) syncProfile(c companionState, accID uint32) {
+func (s *dcService) syncProfile(c companionState, accID uint32) error {
 	rpc := s.getRPC()
 	if rpc == nil || accID == 0 {
-		return
+		return nil
 	}
 	name := c.Name
-	_ = rpc.SetConfig(accID, "displayname", &name)
-	if pngBytes, err := companionAvatarPNG(s.b, c); err == nil {
-		tmp, err := os.CreateTemp("", "lark-avatar-*.png")
-		if err == nil {
-			path := tmp.Name()
-			_, werr := tmp.Write(pngBytes)
-			cerr := tmp.Close()
-			if werr == nil && cerr == nil {
-				_ = rpc.SetConfig(accID, "selfavatar", &path)
-			}
-			_ = os.Remove(path)
-		}
+	if err := rpc.SetConfig(accID, "displayname", &name); err != nil {
+		return err
 	}
+	pngBytes, err := companionAvatarPNG(s.b, c)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp("", "lark-avatar-*.png")
+	if err != nil {
+		return err
+	}
+	path := tmp.Name()
+	defer os.Remove(path)
+	if _, err := tmp.Write(pngBytes); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return rpc.SetConfig(accID, "selfavatar", &path)
 }
 
 func (s *dcService) autoPairAll(ctx context.Context) {
