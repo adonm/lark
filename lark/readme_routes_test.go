@@ -176,7 +176,7 @@ func TestREADMEListsEveryRoute(t *testing.T) {
 	}
 	routeCode := regexp.MustCompile(`(?:path ==|HasPrefix\(path,)\s*"(/[^"]*)"`)
 	checked := 0
-	for _, name := range []string{"handlers.go", "companion.go", "terminal.go", "remote.go"} {
+	for _, name := range []string{"handlers.go", "companion.go", "terminal.go", "remote_api.go", "remote_tokens.go"} {
 		src, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
