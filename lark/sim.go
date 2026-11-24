@@ -492,6 +492,24 @@ func (s *simTerminal) sawState(want string) bool {
 	return false
 }
 
+type simVerb func(s *simTerminal, ctx context.Context, line string, fields []string, out object) error
+
+var simVerbs = map[string]simVerb{
+	"attach":       simAttach,
+	"tap":          simTap,
+	"tap-label":    simTapLabel,
+	"say":          simSay,
+	"wait":         simWait,
+	"wait-current": simWaitCurrent,
+	"sleep":        simSleep,
+	"state":        simState,
+	"wait-rec":     simWaitRec,
+	"hits":         simHits,
+	"screen":       simScreen,
+	"record":       simRecord,
+	"timeline":     simTimeline,
+}
+
 func (s *simTerminal) execLine(ctx context.Context, line string) (object, error) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
@@ -500,264 +518,12 @@ func (s *simTerminal) execLine(ctx context.Context, line string) (object, error)
 	t0 := time.Now()
 	cmd := fields[0]
 	out := object{"cmd": cmd}
-	switch cmd {
-	case "attach":
-		if len(fields) != 2 {
-			return nil, errors.New("usage: attach <companion>")
-		}
-		s.mu.Lock()
-		prevFrames := s.frameCount
-		s.mu.Unlock()
-		if _, err := s.client.do(ctx, http.MethodPost, "/api/terminals/"+s.id+"/attach", object{"companion_id": fields[1]}); err != nil {
-			return nil, err
-		}
-		s.waitFor(5*time.Second, func() bool { return s.frameCount > prevFrames })
-		out["companion"] = fields[1]
-	case "tap":
-		if len(fields) != 3 {
-			return nil, errors.New("usage: tap <x> <y>")
-		}
-		x, err := strconv.Atoi(fields[1])
-		if err != nil {
-			return nil, err
-		}
-		y, err := strconv.Atoi(fields[2])
-		if err != nil {
-			return nil, err
-		}
-		s.mu.Lock()
-		prevFrames := s.frameCount
-		s.mu.Unlock()
-		if err := s.sendTap(x, y); err != nil {
-			return nil, err
-		}
-		s.waitFor(500*time.Millisecond, func() bool { return s.frameCount > prevFrames || s.recActive })
-		out["x"], out["y"] = x, y
-	case "tap-label":
-		if len(fields) < 2 {
-			return nil, errors.New("usage: tap-label <label>")
-		}
-		label := strings.Join(fields[1:], " ")
-		var res object
-		var x, y int
-		var matched string
-		var err error
-		deadline := time.Now().Add(500 * time.Millisecond)
-		for {
-			res, err = s.client.do(ctx, http.MethodGet, "/api/terminals/"+s.id+"/hits", nil)
-			if err != nil {
-				return nil, err
-			}
-			x, y, matched, err = resolveHitLabel(res, label)
-			if err == nil || !time.Now().Before(deadline) {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if rev, ok := numInt(res["rev"]); ok && rev > 0 {
-			s.waitFor(500*time.Millisecond, func() bool { return s.frameRev == uint16(rev) })
-		}
-		s.mu.Lock()
-		prevFrames := s.frameCount
-		s.mu.Unlock()
-		if err := s.sendTap(x, y); err != nil {
-			return nil, err
-		}
-		s.waitFor(500*time.Millisecond, func() bool { return s.frameCount > prevFrames || s.recActive })
-		out["label"], out["matched"], out["x"], out["y"] = label, matched, x, y
-	case "say":
-		if len(fields) < 2 {
-			return nil, errors.New("usage: say <wav|text>")
-		}
-		arg := strings.TrimSpace(strings.TrimPrefix(line, "say"))
-		var pcm []byte
-		var err error
-		if strings.HasSuffix(strings.ToLower(arg), ".wav") {
-			pcm, err = readWAVPCM16k(arg)
-		} else if _, statErr := os.Stat(arg); statErr == nil {
-			pcm, err = readWAVPCM16k(arg)
-		} else {
-			pcm, err = s.ttsWAV(ctx, arg)
-		}
-		if err != nil {
-			return nil, err
-		}
-		s.mu.Lock()
-		active := s.recActive
-		s.mu.Unlock()
-		if !active {
-			s.recSess++
-			b := binary.LittleEndian.AppendUint16(nil, s.recSess)
-			b = appendStr8(b, "")
-			if err := s.sendProto(msgRecStart, b); err != nil {
-				return nil, err
-			}
-			if !s.waitFor(2*time.Second, func() bool { return s.recActive }) {
-				return nil, errors.New("timed out waiting for REC_CTRL start")
-			}
-		}
-		pkt := make([]byte, rtpPacketBytes)
-		sentBytes := 0
-		for off := 0; off < len(pcm); off += rtpPCMBytes {
-			s.mu.Lock()
-			stillActive := s.recActive
-			s.mu.Unlock()
-			if !stillActive {
-				break
-			}
-			var chunk [rtpPCMBytes]byte
-			copy(chunk[:], pcm[off:min(len(pcm), off+rtpPCMBytes)])
-			s.rtpSeq++
-			s.rtpTS += rtpSamples
-			n := encodeRTPPacket(pkt, rtpPTRecPCM, s.rtpSeq, s.rtpTS, s.ssrc, chunk[:])
-			if _, err := s.udp.WriteToUDP(pkt[:n], s.srvUDP); err != nil {
-				return nil, err
-			}
-			sentBytes += rtpPCMBytes
-			time.Sleep(20 * time.Millisecond)
-		}
-		s.mu.Lock()
-		s.speechEndAt = time.Now()
-		stillActive := s.recActive
-		bridgeEP := s.recBridgeEP
-		s.mu.Unlock()
-		if stillActive && bridgeEP {
-			// Feed silence tail so Silero endpoint detects end-of-speech. The
-			// bridge's cap is 1.2 s, so leave a little margin.
-			var silence [rtpPCMBytes]byte
-			for range 90 {
-				s.mu.Lock()
-				ok := s.recActive
-				s.mu.Unlock()
-				if !ok {
-					break
-				}
-				s.rtpSeq++
-				s.rtpTS += rtpSamples
-				n := encodeRTPPacket(pkt, rtpPTRecPCM, s.rtpSeq, s.rtpTS, s.ssrc, silence[:])
-				_, _ = s.udp.WriteToUDP(pkt[:n], s.srvUDP)
-				time.Sleep(20 * time.Millisecond)
-			}
-		}
-		s.mu.Lock()
-		stillActive = s.recActive
-		s.mu.Unlock()
-		if stillActive {
-			b := binary.LittleEndian.AppendUint16(nil, s.recSess)
-			b = append(b, 0)
-			b = appendStr8(b, "")
-			_ = s.sendProto(msgRecEnd, b)
-		}
-		out["bytes"] = sentBytes
-	case "wait":
-		if len(fields) < 2 {
-			return nil, errors.New("usage: wait <state> [timeout]")
-		}
-		want := fields[1]
-		timeout := 30 * time.Second
-		if len(fields) >= 3 {
-			if d, err := time.ParseDuration(fields[2]); err == nil {
-				timeout = d
-			}
-		}
-		ok := s.waitFor(timeout, func() bool { return s.stateReached(want) })
-		if !ok {
-			s.mu.Lock()
-			got := s.state
-			s.mu.Unlock()
-			return nil, fmt.Errorf("timed out waiting for state %q (current %q)", want, got)
-		}
-		out["state"] = want
-	case "wait-current":
-		if len(fields) < 2 {
-			return nil, errors.New("usage: wait-current <state> [timeout]")
-		}
-		want := fields[1]
-		timeout := 30 * time.Second
-		if len(fields) >= 3 {
-			if d, err := time.ParseDuration(fields[2]); err == nil {
-				timeout = d
-			}
-		}
-		ok := s.waitFor(timeout, func() bool { return s.state == want })
-		if !ok {
-			s.mu.Lock()
-			got := s.state
-			s.mu.Unlock()
-			return nil, fmt.Errorf("timed out waiting for current state %q (current %q)", want, got)
-		}
-		out["state"] = want
-	case "sleep":
-		if len(fields) != 2 {
-			return nil, errors.New("usage: sleep <ms>")
-		}
-		ms, err := strconv.Atoi(fields[1])
-		if err != nil || ms < 0 || ms > 30000 {
-			return nil, errors.New("sleep must be 0..30000 ms")
-		}
-		time.Sleep(time.Duration(ms) * time.Millisecond)
-		out["ms"] = ms
-	case "state":
-		s.mu.Lock()
-		out["state"] = s.state
-		s.mu.Unlock()
-	case "wait-rec":
-		timeout := 10 * time.Second
-		if len(fields) >= 2 {
-			if d, err := time.ParseDuration(fields[1]); err == nil {
-				timeout = d
-			}
-		}
-		if !s.waitFor(timeout, func() bool { return s.recActive }) {
-			return nil, fmt.Errorf("timed out waiting for REC_CTRL start")
-		}
-		out["rec"] = true
-	case "hits":
-		res, err := s.client.do(ctx, http.MethodGet, "/api/terminals/"+s.id+"/hits", nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, key := range []string{"screen", "rev"} {
-			if v, ok := res[key]; ok {
-				out[key] = v
-			}
-		}
-		if hits, ok := res["hits"].([]any); ok {
-			out["hits"] = hits
-		}
-	case "screen":
-		if len(fields) != 2 {
-			return nil, errors.New("usage: screen <out.png>")
-		}
-		s.mu.Lock()
-		fbCopy := append([]uint16(nil), s.fb...)
-		rev := s.frameRev
-		s.mu.Unlock()
-		if err := writeFBToPNG(fbCopy, s.spec.width, s.spec.height, fields[1]); err != nil {
-			return nil, err
-		}
-		out["path"], out["rev"] = fields[1], rev
-	case "record":
-		if len(fields) != 2 {
-			return nil, errors.New("usage: record <out.wav>")
-		}
-		s.waitFor(30*time.Second, func() bool { return !s.ttsActive && len(s.ttsBuf) > 0 })
-		s.mu.Lock()
-		pcm := append([]byte(nil), s.ttsBuf...)
-		s.mu.Unlock()
-		if err := writeWAV16k(fields[1], pcm); err != nil {
-			return nil, err
-		}
-		out["path"], out["bytes"] = fields[1], len(pcm)
-	case "timeline":
-		s.mu.Lock()
-		out["events"] = append([]object(nil), s.timeline...)
-		s.mu.Unlock()
-	default:
+	verb, ok := simVerbs[cmd]
+	if !ok {
 		return nil, fmt.Errorf("unknown sim command %q", cmd)
+	}
+	if err := verb(s, ctx, line, fields, out); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()
