@@ -406,3 +406,8 @@ Measured: `newSileroVAD` 22.6 ms/op to load vs 0.5 ms or less pooled
 (`BenchmarkSileroVADLoad`/`Acquire`); deferred tool handoff 626–674 ns vs
 12.3 ns direct over 500 turns; Kokoro first-audio 294.5 ms with and without
 the 1 s prefill for a normal opening sentence (`BenchmarkTTSFirstAudioPrefill`).
+
+Gates: `./scripts/check.sh`, `--e2e-stub`, `--qa`, `--qa-hw`, and
+`--remote-ui` pass. Deployed last; `lark doctor` is green, a greg voice turn
+succeeded, and cake's listening window opened and closed with
+`tts_gap_ms=0` on the current stream.
