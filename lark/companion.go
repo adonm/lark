@@ -367,20 +367,28 @@ func (b *larkServer) changeCompanionPrepared(ctx context.Context, id, op string,
 }
 
 func (b *larkServer) patchCompanion(ctx context.Context, id string, args object) (any, error) {
-	c := withCompanion(args, id)
-	op, supplied := c["op"]
-	if !supplied {
-		op = "update"
+	var edit companionPatch
+	if err := decodeInput(args, &edit); err != nil {
+		return nil, err
 	}
-	if _, set := c["portrait"]; set && op != "update" {
+	return b.patchCompanionEdit(ctx, id, edit)
+}
+
+// patchCompanionEdit applies one decoded companion patch.
+func (b *larkServer) patchCompanionEdit(ctx context.Context, id string, edit companionPatch) (any, error) {
+	c := edit.object()
+	if _, supplied := c["op"]; !supplied {
+		c["op"] = "update"
+	}
+	if _, set := c["portrait"]; set && c["op"] != "update" {
 		return nil, fieldError("companion.portrait", "requires companion update")
 	}
-	switch op {
+	switch c["op"] {
 	case "update", "reset_blank":
 	default:
 		return nil, fieldError("companion.op", "unknown operation")
 	}
-	c["op"] = op
+	c["companion_id"] = id
 	result, err := b.companionTool(ctx, c)
 	if err != nil {
 		return nil, err
@@ -769,13 +777,15 @@ func (b *larkServer) companionAPI(w http.ResponseWriter, r *http.Request, path s
 		}
 		return b.companionEntry(c, true), nil
 	case http.MethodPatch, http.MethodPut:
-		args, err := jsonBody(r)
-		if err != nil {
+		var edit companionPatch
+		if err := decodeRequest(r, &edit); err != nil {
 			return nil, err
 		}
-		args["op"] = "update"
-		args["companion_id"] = id
-		return b.companionTool(r.Context(), args)
+		if edit.Op == nil {
+			op := "update"
+			edit.Op = &op
+		}
+		return b.patchCompanionEdit(r.Context(), id, edit)
 	case http.MethodDelete:
 		if err := b.deleteCompanion(r.Context(), id); err != nil {
 			return nil, err

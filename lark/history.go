@@ -357,13 +357,12 @@ func (b *larkServer) readHistoryPage(ctx context.Context, id string, limit int, 
 func (b *larkServer) resetCompanion(r *http.Request, id string) (any, error) {
 	var archiveHistory bool
 	if r.ContentLength != 0 {
-		args, err := jsonBody(r)
-		if err != nil {
+		var req archiveHistoryRequest
+		if err := decodeRequest(r, &req); err != nil {
 			return nil, err
 		}
-		archiveHistory, err = companionBool(args, "archive_history", false)
-		if err != nil {
-			return nil, err
+		if req.ArchiveHistory != nil {
+			archiveHistory = *req.ArchiveHistory
 		}
 	}
 	if b.oc == nil {
