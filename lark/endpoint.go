@@ -20,30 +20,8 @@ const (
 	endpointFrame = 20 * time.Millisecond
 	endpointBytes = sampleRate / 50 * 2
 	endpointLimit = 60 * time.Second
-	endpointIdle  = 6 * time.Second
-	endpointQuiet = 400 * time.Millisecond
-	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
-	// call overlaps the remaining quiet window instead of racing the commit.
-	endpointSpecQuiet   = 180 * time.Millisecond
-	endpointCap         = 1200 * time.Millisecond
-	endpointProbeEvery  = 250 * time.Millisecond
-	endpointProbeWindow = 4 * sampleRate * 2 // last <= 4 s
-	// A monologue with no pause still has to become a turn.
-	endpointMonologue = 20 * time.Second
-	vadTail           = 320 * time.Millisecond
-	// Floor-relative gate margins, in RMS counts. The live boards deliver
-	// speech around 20-25 RMS over a room floor of 1-4, so the margins are
-	// small on purpose; Silero still owns the actual speech decision.
-	gateMargin = 5.0
-	// Calibration frames: one second of 20 ms frames.
-	gateCalibFrames = 50
-	// Below this fraction of the running speech level, VAD-positive audio is
-	// room noise (its 320 ms tail, a fan, a bump), not a quieter word.
-	speechEnergyRatio           = 0.12
-	smartTurnThreshold          = float32(0.90)
-	smartTurnSpeculateThreshold = float32(0.40)
-	sileroModel                 = "silero_vad_v5.onnx"
-	sileroSHA256                = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
+	sileroModel   = "silero_vad_v5.onnx"
+	sileroSHA256  = "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396"
 )
 
 // The native model is configured locally; do not download anything at startup.
@@ -161,6 +139,32 @@ const (
 	endpointWait endpointDecision = iota
 	endpointCommit
 	endpointDiscard
+)
+
+// Endpoint policy. Times are policy-clock offsets from capture start.
+const (
+	endpointIdle  = 6 * time.Second
+	endpointQuiet = 400 * time.Millisecond
+	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
+	// call overlaps the remaining quiet window instead of racing the commit.
+	endpointSpecQuiet   = 180 * time.Millisecond
+	endpointCap         = 1200 * time.Millisecond
+	endpointProbeEvery  = 250 * time.Millisecond
+	endpointProbeWindow = 4 * sampleRate * 2 // last <= 4 s
+	// A monologue with no pause still has to become a turn.
+	endpointMonologue = 20 * time.Second
+	vadTail           = 320 * time.Millisecond
+	// Floor-relative gate margins, in RMS counts. The live boards deliver
+	// speech around 20-25 RMS over a room floor of 1-4, so the margins are
+	// small on purpose; Silero still owns the actual speech decision.
+	gateMargin = 5.0
+	// Calibration frames: one second of 20 ms frames.
+	gateCalibFrames = 50
+	// Below this fraction of the running speech level, VAD-positive audio is
+	// room noise (its 320 ms tail, a fan, a bump), not a quieter word.
+	speechEnergyRatio           = 0.12
+	smartTurnThreshold          = float32(0.90)
+	smartTurnSpeculateThreshold = float32(0.40)
 )
 
 type endpointPolicy struct {
@@ -412,25 +416,38 @@ func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnRe
 }
 
 func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn float32, listen bool) endpointDecision {
+	switch d := p.classify(at, capDur, limitDur, smartTurn, listen); {
+	case d == decisionContinue:
+		return endpointWait
+	case d.discards():
+		return endpointDiscard
+	default:
+		return endpointCommit
+	}
+}
+
+// classify resolves every endpoint rule once. The run loop treats any stopping
+// decision the same; the reason only drives diagnostics and discard handling.
+func (p endpointPolicy) classify(at, capDur, limitDur time.Duration, smartTurn float32, listen bool) decision {
 	if at >= limitDur {
 		if p.speechFrames > 0 {
-			return endpointCommit
+			return decisionCommitCap
 		}
 		// Noise that never crossed the speech gate must not become a turn.
-		return endpointDiscard
+		return decisionDiscardNoise
 	}
 	if !p.voiced {
 		if !listen && at >= endpointIdle {
-			return endpointDiscard
+			return decisionDiscardIdle
 		}
-		return endpointWait
+		return decisionContinue
 	}
 	if p.inVoice {
 		// A monologue should not wait for silence past this point.
 		if p.lastVoicedAt-p.firstVoicedAt >= endpointMonologue {
-			return endpointCommit
+			return decisionCommitMonologue
 		}
-		return endpointWait
+		return decisionContinue
 	}
 	// The segment is over acoustically. Transcript growth on quiet audio is
 	// not allowed to extend this: only new voiced frames can.
@@ -439,17 +456,17 @@ func (p endpointPolicy) decide(at, capDur, limitDur time.Duration, smartTurn flo
 		// Speech was heard but no usable transcript arrived; commit so the
 		// caller can say "didn't catch that" instead of dropping it silently.
 		if silence >= capDur {
-			return endpointCommit
+			return decisionCommitNoWords
 		}
-		return endpointWait
+		return decisionContinue
 	}
 	if silence >= capDur {
-		return endpointCommit
+		return decisionCommitCap
 	}
 	if silence >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {
-		return endpointCommit
+		return decisionCommitQuiet
 	}
-	return endpointWait
+	return decisionContinue
 }
 
 // speechSpan is how much speech-like audio this segment contained. It decides
