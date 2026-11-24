@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -178,6 +179,8 @@ const (
 	captureMaxSeconds     = 60
 	captureDefaultSeconds = 20 // Interactive CLI default.
 	capturePageSeconds    = 60 // Remote page default.
+	// The CLI HTTP client allows this much overhead beyond the window.
+	captureCLIRequestSlack = 20 * time.Second
 )
 
 // captureSeconds validates a requested length, or applies the transport's
@@ -190,6 +193,15 @@ func captureSeconds(raw *int, def int) (int, error) {
 		return 0, problem(400, fmt.Sprintf("seconds must be between %d and %d", captureMinSeconds, captureMaxSeconds))
 	}
 	return *raw, nil
+}
+
+// parseCaptureSeconds validates the CLI's optional length argument.
+func parseCaptureSeconds(arg string) (int, error) {
+	n, err := strconv.Atoi(arg)
+	if err != nil {
+		return 0, problem(400, fmt.Sprintf("seconds must be between %d and %d", captureMinSeconds, captureMaxSeconds))
+	}
+	return captureSeconds(&n, captureDefaultSeconds)
 }
 
 // startCapture is the one capture entry point for the CLI and remote page.

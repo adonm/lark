@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -14,16 +12,16 @@ func cliCapture(ctx context.Context, c *cliClient, args []string, out, errOut io
 	if len(args) < 1 || len(args) > 2 {
 		return captureUsage()
 	}
-	seconds := 20
+	seconds := captureDefaultSeconds
 	if len(args) == 2 {
-		n, convErr := strconv.Atoi(args[1])
-		if convErr != nil || n < 1 || n > 60 {
-			return errors.New("seconds must be between 1 and 60")
+		var parseErr error
+		seconds, parseErr = parseCaptureSeconds(args[1])
+		if parseErr != nil {
+			return parseErr
 		}
-		seconds = n
 	}
 	slow := *c
-	slow.http = &http.Client{Timeout: time.Duration(seconds+20) * time.Second}
+	slow.http = &http.Client{Timeout: time.Duration(seconds)*time.Second + captureCLIRequestSlack}
 	fmt.Fprintf(errOut, "Recording %ds of microphone audio; stay quiet or speak normally.\n", seconds)
 	res, err := slow.do(ctx, http.MethodPost, "/api/capture", object{"companion_id": args[0], "seconds": seconds})
 	if err != nil {
