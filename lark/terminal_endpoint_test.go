@@ -743,9 +743,13 @@ func TestRecordingSessionsGateAcksAndEnds(t *testing.T) {
 // transcript text may only appear when LARK_DEBUG_TRANSCRIPTS opts in.
 func TestEndpointLogsRedactTranscripts(t *testing.T) {
 	t.Parallel()
-	src, err := os.ReadFile("terminal_endpoint.go")
-	if err != nil {
-		t.Fatal(err)
+	var src []byte
+	for _, name := range []string{"terminal_endpoint.go", "terminal_endpoint_run.go"} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src = append(src, raw...)
 	}
 	for _, raw := range []string{"text=%q", "spec=%q", "final=%q"} {
 		if bytes.Contains(src, []byte(raw)) {
