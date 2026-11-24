@@ -121,78 +121,108 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 	if evName == "drag" || evName == "up" {
 		return
 	}
+	h.pointerAction(d, key, a, now)
+}
+
+// pointerAction dispatches by scene family so each family reads on its own.
+func (h *terminalHub) pointerAction(d *terminalSession, key string, a sceneAction, now time.Time) {
 	switch a.kind {
-	case "menu":
+	case "menu", "menu-open", "menu-back", "menu-page":
+		h.pointerMenu(d, a, now)
+	case "story-open", "story-choice":
+		h.pointerStory(d, a)
+	case "menu-detail":
+		h.pointerDetail(d, a, now)
+	case "volume-step", "vol-minus", "vol-plus":
+		h.pointerVolume(d, a)
+	case "voice-set", "voice-select":
+		h.selectAndPreviewVoice(d, a.value)
+	case "intercom-to", "listen", "reply", "rec-cancel", "rec-send", "rec-continue", "stop":
+		h.pointerTurnControl(d, key, a, now)
+	case "close-card", "close-view", "stop-turn", "companion", "dismiss":
+		h.pointerScene(d, a, now)
+	case "unpair-contact":
+		h.pointerUnpair(d, a)
+	}
+}
+
+func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Time) {
+	if a.kind == "menu" {
 		h.chime(d, "tap")
 		d.drawer, d.card, d.pending = drawerMenu, nil, nil
 		d.menuPage = 0
 		d.view = nil
 		h.render(d, now, false)
-	case "menu-open", "menu-back", "menu-page":
-		if d.drawer != drawerMenu && d.drawer != drawerMore && d.drawer != drawerVolume && d.drawer != drawerVoice &&
-			d.drawer != drawerIntercom && d.drawer != drawerStats && d.drawer != drawerStoryReader &&
-			d.scene.menu != d.menuData {
+		return
+	}
+	if d.drawer != drawerMenu && d.drawer != drawerMore && d.drawer != drawerVolume && d.drawer != drawerVoice &&
+		d.drawer != drawerIntercom && d.drawer != drawerStats && d.drawer != drawerStoryReader &&
+		d.scene.menu != d.menuData {
+		return
+	}
+	h.chime(d, "tap")
+	wasPair := d.drawer == drawerPair
+	switch a.kind {
+	case "menu-open":
+		if d.drawer == drawerMenu {
+			d.homePage = d.menuPage
+		}
+		d.drawer, d.menuPage = a.value, 0
+		if d.drawer == drawerPair {
+			h.pushPower(d, 100, true)
+		}
+	case "menu-back":
+		if d.drawer == drawerStoryReader {
+			h.stopPlayback(d, true)
+			d.drawer, d.menuPage = drawerStories, 0
+			d.story = nil
+			h.loadMenu(d)
+			return
+		} else if d.menuData != nil && d.menuData.memoryDetail != nil {
+			d.menuData.memoryDetail = nil
+		} else if d.menuData != nil && d.menuData.detail != nil {
+			d.menuData.detail = nil
+		} else if d.drawer == drawerMenu {
+			d.drawer = ""
+		} else if d.drawer == drawerVolume || d.drawer == drawerPair || d.drawer == drawerUnpair || d.drawer == drawerStats {
+			d.drawer, d.menuPage = drawerMore, 0
+		} else {
+			d.drawer, d.menuPage = drawerMenu, d.homePage
+		}
+	case "menu-page":
+		d.menuPage, _ = strconv.Atoi(a.value)
+		if d.drawer == drawerStoryReader && d.story != nil {
+			h.stopPlayback(d, true)
+			d.storyPage = d.menuPage
+			if h.b != nil && h.b.db != nil && d.companionID != "" {
+				prog := storyProgress{
+					CompanionID: d.companionID,
+					StoryID:     d.story.id,
+					Passage:     d.story.currentPassageName(),
+					Page:        d.storyPage,
+					Flags:       d.story.compiled.flagsMap(d.story.flags),
+				}
+				go func() {
+					_ = h.b.setStoryProgress(context.Background(), prog)
+				}()
+			}
+		}
+	}
+	if wasPair && d.drawer != drawerPair {
+		h.pushPower(d, d.brightness(), true)
+	}
+	if a.kind != "menu-back" {
+		switch d.drawer {
+		case drawerStories, drawerMemories, drawerPair, drawerUnpair:
+			h.loadMenu(d)
 			return
 		}
-		h.chime(d, "tap")
-		wasPair := d.drawer == drawerPair
-		switch a.kind {
-		case "menu-open":
-			if d.drawer == drawerMenu {
-				d.homePage = d.menuPage
-			}
-			d.drawer, d.menuPage = a.value, 0
-			if d.drawer == drawerPair {
-				h.pushPower(d, 100, true)
-			}
-		case "menu-back":
-			if d.drawer == drawerStoryReader {
-				h.stopPlayback(d, true)
-				d.drawer, d.menuPage = drawerStories, 0
-				d.story = nil
-				h.loadMenu(d)
-				return
-			} else if d.menuData != nil && d.menuData.memoryDetail != nil {
-				d.menuData.memoryDetail = nil
-			} else if d.menuData != nil && d.menuData.detail != nil {
-				d.menuData.detail = nil
-			} else if d.drawer == drawerMenu {
-				d.drawer = ""
-			} else if d.drawer == drawerVolume || d.drawer == drawerPair || d.drawer == drawerUnpair || d.drawer == drawerStats {
-				d.drawer, d.menuPage = drawerMore, 0
-			} else {
-				d.drawer, d.menuPage = drawerMenu, d.homePage
-			}
-		case "menu-page":
-			d.menuPage, _ = strconv.Atoi(a.value)
-			if d.drawer == drawerStoryReader && d.story != nil {
-				h.stopPlayback(d, true)
-				d.storyPage = d.menuPage
-				if h.b != nil && h.b.db != nil && d.companionID != "" {
-					prog := storyProgress{
-						CompanionID: d.companionID,
-						StoryID:     d.story.id,
-						Passage:     d.story.currentPassageName(),
-						Page:        d.storyPage,
-						Flags:       d.story.compiled.flagsMap(d.story.flags),
-					}
-					go func() {
-						_ = h.b.setStoryProgress(context.Background(), prog)
-					}()
-				}
-			}
-		}
-		if wasPair && d.drawer != drawerPair {
-			h.pushPower(d, d.brightness(), true)
-		}
-		if a.kind != "menu-back" {
-			switch d.drawer {
-			case drawerStories, drawerMemories, drawerPair, drawerUnpair:
-				h.loadMenu(d)
-				return
-			}
-		}
-		h.render(d, now, false)
+	}
+	h.render(d, now, false)
+}
+
+func (h *terminalHub) pointerStory(d *terminalSession, a sceneAction) {
+	switch a.kind {
 	case "story-open":
 		if d.menuData != nil && d.scene.menu == d.menuData {
 			for _, st := range d.menuData.storyList {
@@ -212,50 +242,42 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 				return
 			}
 		}
-	case "menu-detail":
-		i, _ := strconv.Atoi(a.value)
-		if d.menuData != nil && d.scene.menu == d.menuData {
-			if d.drawer == drawerMemories && i >= 0 && i < len(d.menuData.memories) {
-				d.menuData.memoryDetail = &d.menuData.memories[i]
-				h.chime(d, "tap")
-				h.render(d, now, false)
-			} else if i >= 0 && i < len(d.menuData.rows) {
-				d.menuData.detail = &d.menuData.rows[i]
-				h.chime(d, "tap")
-				h.render(d, now, false)
-			}
+	}
+}
+
+func (h *terminalHub) pointerDetail(d *terminalSession, a sceneAction, now time.Time) {
+	i, _ := strconv.Atoi(a.value)
+	if d.menuData != nil && d.scene.menu == d.menuData {
+		if d.drawer == drawerMemories && i >= 0 && i < len(d.menuData.memories) {
+			d.menuData.memoryDetail = &d.menuData.memories[i]
+			h.chime(d, "tap")
+			h.render(d, now, false)
+		} else if i >= 0 && i < len(d.menuData.rows) {
+			d.menuData.detail = &d.menuData.rows[i]
+			h.chime(d, "tap")
+			h.render(d, now, false)
 		}
-	case "volume-step":
-		op := "vol-plus"
+	}
+}
+
+func (h *terminalHub) pointerVolume(d *terminalSession, a sceneAction) {
+	op := a.kind
+	if a.kind == "volume-step" {
+		op = "vol-plus"
 		if strings.HasPrefix(a.value, "-") {
 			op = "vol-minus"
 		}
-		if err := h.setVolume(d.client.ctx, d, 0, op); err != nil && h.active(d) {
-			h.setCompanionStatus(d.companionID, statusError)
-		}
-	case "voice-set":
-		h.selectAndPreviewVoice(d, a.value)
+	}
+	if err := h.setVolume(d.client.ctx, d, 0, op); err != nil && h.active(d) {
+		h.setCompanionStatus(d.companionID, statusError)
+	}
+}
+
+func (h *terminalHub) pointerTurnControl(d *terminalSession, key string, a sceneAction, now time.Time) {
+	switch a.kind {
 	case "intercom-to":
 		h.chime(d, "tap")
 		h.startRecording(d, a.value, now, true)
-	case "close-card":
-		h.chime(d, "tap")
-		d.card = nil
-		h.render(d, now, false)
-	case "close-view", "stop-turn":
-		h.leaveScene(d, now, "leave-scene")
-	case "unpair-contact":
-		cid, err := strconv.ParseUint(a.value, 10, 32)
-		if err == nil && cid > 0 && h.b.dc != nil && d.companionID != "" {
-			compID := d.companionID
-			h.mu.Unlock()
-			_ = h.b.dc.unpairContact(compID, uint32(cid))
-			h.mu.Lock()
-			if h.active(d) && d.drawer == drawerUnpair {
-				h.chime(d, "tap")
-				h.loadMenu(d)
-			}
-		}
 	case "rec-cancel", "rec-send":
 		h.recordingControl(d, now, a.kind == "rec-cancel")
 	case "rec-continue":
@@ -264,17 +286,6 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 		}
 	case "stop":
 		h.tapStop(d, now)
-	case "companion":
-		h.leaveScene(d, now, "leave-scene")
-	case "dismiss":
-		d.card = nil
-		h.render(d, now, false)
-	case "voice-select":
-		h.selectAndPreviewVoice(d, a.value)
-	case "vol-minus", "vol-plus":
-		if err := h.setVolume(d.client.ctx, d, 0, a.kind); err != nil && h.active(d) {
-			h.setCompanionStatus(d.companionID, statusError)
-		}
 	case "listen", "reply":
 		if (key == "companion-ring" || key == "listen") && (d.busy || d.ttsStarted || d.awaitAck) {
 			return // The previous idle frame may still have a Talk target.
@@ -283,6 +294,34 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 			h.recordingControl(d, now, false)
 		} else {
 			h.startRecording(d, a.value, now, true)
+		}
+	}
+}
+
+func (h *terminalHub) pointerScene(d *terminalSession, a sceneAction, now time.Time) {
+	switch a.kind {
+	case "close-card":
+		h.chime(d, "tap")
+		d.card = nil
+		h.render(d, now, false)
+	case "close-view", "stop-turn", "companion":
+		h.leaveScene(d, now, "leave-scene")
+	case "dismiss":
+		d.card = nil
+		h.render(d, now, false)
+	}
+}
+
+func (h *terminalHub) pointerUnpair(d *terminalSession, a sceneAction) {
+	cid, err := strconv.ParseUint(a.value, 10, 32)
+	if err == nil && cid > 0 && h.b.dc != nil && d.companionID != "" {
+		compID := d.companionID
+		h.mu.Unlock()
+		_ = h.b.dc.unpairContact(compID, uint32(cid))
+		h.mu.Lock()
+		if h.active(d) && d.drawer == drawerUnpair {
+			h.chime(d, "tap")
+			h.loadMenu(d)
 		}
 	}
 }
