@@ -572,3 +572,18 @@ func TestRemoteVolumeStoryOpenAndRevoke(t *testing.T) {
 	}
 	remoteHTTP(t, http.MethodGet, h.base, "", "/remote?token="+url.QueryEscape(h.token), nil, 401)
 }
+
+// A missing terminal is a not-found; a terminal owned by another companion is
+// out of scope. Both used to answer 403.
+func TestRemoteVolumeScopeErrors(t *testing.T) {
+	t.Parallel()
+	h := newRemoteHarness(t)
+	remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/volume", object{"terminal": "nosuch", "volume": 50}, 404)
+	if _, err := h.b.createCompanion(t.Context(), object{"id": "milo", "name": "Milo", "form": "a cat"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.b.terminals.save("vocat-r002", terminalRecord{ID: "vocat-r002", Kind: "hardware", CompanionID: "milo"}, false); err != nil {
+		t.Fatal(err)
+	}
+	remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/volume", object{"terminal": "vocat-r002", "volume": 50}, 403)
+}
