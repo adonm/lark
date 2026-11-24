@@ -189,28 +189,17 @@ func run() error {
 	b.remote = newRemoteManager(b, findTunnelCLI(home))
 	b.remote.restore(root)
 	defer b.remote.close()
-	if stub == nil {
-		go b.provisionLibrary(root)
-	}
+	startProvisioning(b, stub)
 	oc.flushHistory = b.history.flush
-	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
-	if stub != nil {
-		stub.startDC(b)
-	} else {
-		go b.dc.start(root)
-	}
+	startDeltaChat(b, stub, local)
 	defer b.dc.shutdown()
-	var termSrv *terminalServer
-	if devicePort != 0 {
-		termSrv, err = newTerminalServer(b.hub, host, devicePorts)
-		if err != nil {
-			b.hub.shutdown()
-			finish()
-			_ = listener.Close()
-			<-worker.done
-			return err
-		}
-		log.Printf("Lark native device listener on %s", termSrv.tcpLn.Addr().String())
+	termSrv, err := startTerminalServer(b, host, devicePorts, devicePort)
+	if err != nil {
+		b.hub.shutdown()
+		finish()
+		_ = listener.Close()
+		<-worker.done
+		return err
 	}
 	stopDiagnostics := b.sampleDiagnostics(started, dbPath)
 	defer stopDiagnostics()
@@ -225,28 +214,64 @@ func run() error {
 	}
 	// Models load after the listener is up: terminals, /health and admin pages
 	// work immediately, and turns wait for a model instead of failing.
+	modelsDone := startModels(b, paths, stub)
+	return startHTTP(b, listener, termSrv, modelsDone, started, finish)
+}
+
+// startProvisioning starts the background library provisioning. The e2e stub
+// supplies its own library, so it never provisions.
+func startProvisioning(b *larkServer, stub *stubConfig) {
+	if stub == nil {
+		go b.provisionLibrary(b.root)
+	}
+}
+
+func startDeltaChat(b *larkServer, stub *stubConfig, local string) {
+	b.dc = newDCService(b, findDCRPCBinary(local), filepath.Join(local, "deltachat"), os.Getenv("LARK_CHATMAIL_RELAY"))
+	if stub != nil {
+		stub.startDC(b)
+	} else {
+		go b.dc.start(b.root)
+	}
+}
+
+func startTerminalServer(b *larkServer, host, devicePorts string, devicePort int) (*terminalServer, error) {
+	if devicePort == 0 {
+		return nil, nil
+	}
+	termSrv, err := newTerminalServer(b.hub, host, devicePorts)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("Lark native device listener on %s", termSrv.tcpLn.Addr().String())
+	return termSrv, nil
+}
+
+// startModels loads speech models in the background and starts clip warming.
+// The stub is ready immediately, so its channel is already closed.
+func startModels(b *larkServer, paths modelPaths, stub *stubConfig) <-chan struct{} {
 	var modelsDone <-chan struct{}
 	if stub != nil {
 		ready := make(chan struct{})
 		close(ready)
 		modelsDone = ready
 	} else {
-		modelsDone = b.loadModels(root, paths)
+		modelsDone = b.loadModels(b.root, paths)
 	}
 	go func() {
 		// Warming needs Kokoro; wait for the background load instead of
 		// spending the pre-synthesis budget on a not-yet-ready worker.
-		ready, cancel := context.WithTimeout(root, modelWait)
+		ready, cancel := context.WithTimeout(b.root, modelWait)
 		defer cancel()
-		if err := models.tts.await(ready); err != nil {
+		if err := b.models.tts.await(ready); err != nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(root, ttsWait)
+		ctx, cancel := context.WithTimeout(b.root, ttsWait)
 		defer cancel()
-		_, _ = b.clips.getWith(ctx, worker.warm, b.voices.fallback, "Sent to everyone!")
-		b.clips.warmFillers(ctx, worker, b.voices.fallback)
+		_, _ = b.clips.getWith(ctx, b.worker.warm, b.voices.fallback, "Sent to everyone!")
+		b.clips.warmFillers(ctx, b.worker, b.voices.fallback)
 		for _, v := range voiceCatalog {
-			_, _ = b.clips.getWith(ctx, worker.warm, v.ID, voicePreviewText(v.ID))
+			_, _ = b.clips.getWith(ctx, b.worker.warm, v.ID, voicePreviewText(v.ID))
 		}
 		if list, err := b.allCompanions(ctx); err == nil {
 			seen := map[string]bool{b.voices.fallback: true}
@@ -254,11 +279,15 @@ func run() error {
 				v := b.voiceFor(c.ID)
 				if !seen[v] {
 					seen[v] = true
-					b.clips.warmFillers(ctx, worker, v)
+					b.clips.warmFillers(ctx, b.worker, v)
 				}
 			}
 		}
 	}()
+	return modelsDone
+}
+
+func startHTTP(b *larkServer, listener net.Listener, termSrv *terminalServer, modelsDone <-chan struct{}, started time.Time, finish context.CancelFunc) error {
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 105 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	log.Print(larkListeningPrefix + listener.Addr().String())
@@ -271,9 +300,10 @@ func run() error {
 	schemaDone := make(chan struct{})
 	go func() {
 		defer close(schemaDone)
-		b.runSchemaUpgrade(root, 5*time.Second, 5*time.Minute)
+		b.runSchemaUpgrade(b.root, 5*time.Second, 5*time.Minute)
 	}()
 	defer func() { finish(); <-schemaDone; b.history.close() }()
+	var err error
 	select {
 	case <-signals.Done():
 		b.timers.close()
@@ -292,8 +322,8 @@ func run() error {
 	b.hub.shutdown()
 	termSrv.shutdown()
 	<-modelsDone
-	<-worker.done
-	oc.client.CloseIdleConnections()
+	<-b.worker.done
+	b.oc.client.CloseIdleConnections()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
