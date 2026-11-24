@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-func testWikiDB(t *testing.T, path string, pages map[string]string) {
+func testWikiDB(t testing.TB, path string, pages map[string]string) {
 	t.Helper()
 	db, err := sql.Open("lark-sqlite3", path+"?_journal_mode=OFF&_synchronous=OFF")
 	if err != nil {
@@ -54,7 +54,7 @@ func testWikiDB(t *testing.T, path string, pages map[string]string) {
 	}
 }
 
-func testGutenbergDB(t *testing.T, dir string, books []gutenbergRecord) {
+func testGutenbergDB(t testing.TB, dir string, books []gutenbergRecord) {
 	t.Helper()
 	path := filepath.Join(dir, "gutenberg.db")
 	db, err := sql.Open("lark-sqlite3", path+"?_journal_mode=OFF&_synchronous=OFF")
