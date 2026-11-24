@@ -6,7 +6,6 @@ import (
 	imagecolor "image/color"
 	"strconv"
 	"strings"
-	"time"
 
 	"lark/fonts/dogica"
 )
@@ -21,8 +20,7 @@ type companionPose struct {
 	canContinue bool
 }
 
-func poseFrame(now, moodAt, last time.Time, mood string, pct, vol int, charging, showMeter bool) companionPose {
-	_, _, _ = now, moodAt, last
+func poseFrame(mood string, pct, vol int, charging, showMeter bool) companionPose {
 	return companionPose{
 		mood:      mood,
 		battery:   pct,
@@ -110,12 +108,11 @@ func timerScene(message string) sceneView {
 	}
 }
 
-func (s *sceneView) stopControl(taps int) {
+func (s *sceneView) stopControl() {
 	if s.actions == nil {
 		s.actions = map[string]sceneAction{}
 	}
 	s.actions["stop"] = sceneAction{"stop-turn", ""}
-	_ = taps
 }
 
 type menuRow struct{ title, text string }
