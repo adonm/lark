@@ -539,19 +539,16 @@ func (s *dcService) contactName(ct deltachat.Contact) string {
 func (s *dcService) sendStoriesList(ctx context.Context, rpc dcRPC, accID, chatID uint32) {
 	stories, err := s.b.listStorySummaries(ctx)
 	if err != nil {
-		msg := "Could not load stories."
-		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		dcSend(rpc, accID, chatID, "Could not load stories.")
 		return
 	}
 	if len(stories) == 0 {
-		msg := "No stories yet."
-		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
+		dcSend(rpc, accID, chatID, "No stories yet.")
 		return
 	}
 	lines := []string{"Stories:"}
 	for _, st := range stories {
 		lines = append(lines, fmt.Sprintf("- %s (%s, %d passages)", st.Title, st.ID, st.Passages))
 	}
-	out := strings.Join(lines, "\n")
-	_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &out})
+	dcSend(rpc, accID, chatID, strings.Join(lines, "\n"))
 }
