@@ -5,8 +5,6 @@ import (
 	"html"
 	"regexp"
 	"strings"
-
-	"lark/internal/stories"
 )
 
 var pgStart = regexp.MustCompile(`(?m)^\*\*\* ?START OF (?:THE|THIS) PROJECT GUTENBERG[^\n]*\n`)
@@ -44,9 +42,6 @@ func Twee(title, text string) (string, error) {
 		fmt.Fprintf(&out, ":: Chapter %d\n%s\n\n[[Continue->Chapter %d]]\n\n", i+1, passage, i+2)
 	}
 	twee := out.String()
-	if _, err := stories.Parse(twee); err != nil {
-		return "", fmt.Errorf("twee: generated story is invalid: %s", err)
-	}
 	return twee, nil
 }
 

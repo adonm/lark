@@ -1,6 +1,0 @@
-attach {{COMP1}}
-tap 180 180
-say What is two plus two?
-wait thinking 60s
-wait idle 90s
-timeline

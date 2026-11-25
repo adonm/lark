@@ -1,7 +1,7 @@
 // Package protospec is the single source of truth for the terminal wire
 // protocol. The generator in this package renders firmware/main/proto.h, the
-// Go codec in lark/terminal_proto_gen.go, the generated protocol catalogue in
-// docs/protocol.md, and the cross-language fixtures.
+// Go codec in lark/internal/proto/proto_gen.go, the generated protocol
+// catalogue in docs/protocol.md, and the cross-language fixtures.
 //
 // A message is a fixed prefix of scalar fields followed by length-prefixed
 // string fields. That ordering is deliberate: it keeps the C structs packed

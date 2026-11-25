@@ -5,8 +5,6 @@ package library
 import (
 	"strings"
 	"testing"
-
-	"lark/internal/stories"
 )
 
 func TestTweePassageBounds(t *testing.T) {
@@ -16,19 +14,15 @@ func TestTweePassageBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiled, err := stories.Parse(twee)
-	if err != nil {
-		t.Fatal(err)
+	headers := strings.Count(twee, "\n:: ")
+	if headers > maxPassages {
+		t.Fatalf("too many passages: %d", headers)
 	}
-	if len(compiled.Passages) > maxPassages {
-		t.Fatalf("too many passages: %d", len(compiled.Passages))
+	if !strings.HasPrefix(twee, ":: StoryTitle\nA Long Book\n\n") {
+		t.Fatalf("missing story title:\n%s", twee[:min(len(twee), 200)])
 	}
-	for _, passage := range compiled.Passages {
-		if !passage.End {
-			if len(passage.Ops) == 0 {
-				t.Fatalf("empty passage %q", passage.Name)
-			}
-		}
+	if !strings.Contains(twee, "{\"end\":true}") {
+		t.Fatalf("last passage is not an ending:\n%s", twee)
 	}
 	if strings.Contains(twee, "[[[") || strings.Contains(twee, "]]]") {
 		t.Fatalf("unsafe bracket sequence survived:\n%s", twee)

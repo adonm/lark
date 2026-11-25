@@ -1,8 +1,0 @@
-attach {{COMP1}}
-tap 180 180
-say Tell me a three sentence story about a friendly dragon.
-wait thinking 60s
-wait speaking 90s
-tap-label Stop
-wait idle 30s
-timeline

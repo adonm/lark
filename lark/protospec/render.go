@@ -18,11 +18,7 @@ type File struct {
 // Render generates every output. It is deterministic; the drift guard compares
 // these bytes against the committed files.
 func Render() ([]File, error) {
-	goSrc, err := renderGo()
-	if err != nil {
-		return nil, err
-	}
-	protoSrc, err := renderGoFile("proto", true)
+	protoSrc, err := renderGoFile("proto")
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +41,6 @@ func Render() ([]File, error) {
 	return []File{
 		{Path: "firmware/main/proto.h", Content: cSrc},
 		{Path: "firmware/tests/testdata/proto_fixtures.h", Content: fixC},
-		{Path: "lark/terminal_proto_gen.go", Content: goSrc},
 		{Path: "lark/internal/proto/proto_gen.go", Content: protoSrc},
 		{Path: "lark/protospec/fixtures_gen.go", Content: fixGo},
 		{Path: "docs/protocol.md", Content: docs},
@@ -81,16 +76,12 @@ func decodeName(m Message) string {
 	return "decode" + strings.ToUpper(m.GoName[:1]) + m.GoName[1:]
 }
 
-// goStyle names identifiers for one generated Go package. The legacy package
-// main output stays unexported; the internal/proto copy exports everything so
-// other packages can use the same generated codec.
-type goStyle struct {
-	pkg    string
-	export bool
-}
+// goStyle names identifiers for the generated proto package. Every identifier
+// is exported so internal/edge and the tests share one generated codec.
+type goStyle struct{ pkg string }
 
 func (s goStyle) name(v string) string {
-	if !s.export || v == "" {
+	if v == "" {
 		return v
 	}
 	return strings.ToUpper(v[:1]) + v[1:]
@@ -99,18 +90,11 @@ func (s goStyle) name(v string) string {
 func (s goStyle) typeName(m Message) string { return s.name(m.GoName) }
 func (s goStyle) msgName(m Message) string  { return s.name(m.MsgGo) }
 func (s goStyle) fieldName(f Field) string  { return s.name(f.Go) }
-func (s goStyle) encodeName() string {
-	if s.export {
-		return "Encode"
-	}
-	return "encode"
-}
+func (s goStyle) encodeName() string          { return "Encode" }
 func (s goStyle) decodeName(m Message) string { return s.name(decodeName(m)) }
 
-func renderGo() ([]byte, error) { return renderGoFile("main", false) }
-
-func renderGoFile(pkg string, export bool) ([]byte, error) {
-	s := goStyle{pkg: pkg, export: export}
+func renderGoFile(pkg string) ([]byte, error) {
+	s := goStyle{pkg: pkg}
 	var b bytes.Buffer
 	b.WriteString(header)
 	fmt.Fprintf(&b, "\npackage %s\n\nimport (\n\t\"encoding/binary\"\n)\n\n", pkg)

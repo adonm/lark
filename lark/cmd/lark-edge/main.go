@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -11,12 +12,21 @@ import (
 	"syscall"
 
 	"lark/internal/edge"
+	"lark/internal/library"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if len(os.Args) > 1 && os.Args[1] == "ota" {
 		if err := runOTA(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	// Bulk Wikipedia/Gutenberg provisioning needs a compiled SQLite builder;
+	// the brain reads the resulting FTS5 indexes directly.
+	if len(os.Args) > 1 && os.Args[1] == "library" {
+		if err := library.RunCLI(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
 			log.Fatal(err)
 		}
 		return
