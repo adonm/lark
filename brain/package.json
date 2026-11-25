@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/*.test.ts"
+    "test": "node --test src/*.test.ts",
+    "start": "node src/main.ts",
+    "cli": "node src/cli.ts"
   },
   "dependencies": {
+    "@deltachat/jsonrpc-client": "2.56.0",
     "@opencode/sdk": "2.4.1"
   },
   "devDependencies": {
