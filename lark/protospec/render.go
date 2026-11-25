@@ -22,6 +22,10 @@ func Render() ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
+	protoSrc, err := renderGoFile("proto", true)
+	if err != nil {
+		return nil, err
+	}
 	cSrc, err := renderC()
 	if err != nil {
 		return nil, err
@@ -42,6 +46,7 @@ func Render() ([]File, error) {
 		{Path: "firmware/main/proto.h", Content: cSrc},
 		{Path: "firmware/tests/testdata/proto_fixtures.h", Content: fixC},
 		{Path: "lark/terminal_proto_gen.go", Content: goSrc},
+		{Path: "lark/internal/proto/proto_gen.go", Content: protoSrc},
 		{Path: "lark/protospec/fixtures_gen.go", Content: fixGo},
 		{Path: "docs/protocol.md", Content: docs},
 	}, nil
@@ -76,10 +81,39 @@ func decodeName(m Message) string {
 	return "decode" + strings.ToUpper(m.GoName[:1]) + m.GoName[1:]
 }
 
-func renderGo() ([]byte, error) {
+// goStyle names identifiers for one generated Go package. The legacy package
+// main output stays unexported; the internal/proto copy exports everything so
+// other packages can use the same generated codec.
+type goStyle struct {
+	pkg    string
+	export bool
+}
+
+func (s goStyle) name(v string) string {
+	if !s.export || v == "" {
+		return v
+	}
+	return strings.ToUpper(v[:1]) + v[1:]
+}
+
+func (s goStyle) typeName(m Message) string { return s.name(m.GoName) }
+func (s goStyle) msgName(m Message) string  { return s.name(m.MsgGo) }
+func (s goStyle) fieldName(f Field) string  { return s.name(f.Go) }
+func (s goStyle) encodeName() string {
+	if s.export {
+		return "Encode"
+	}
+	return "encode"
+}
+func (s goStyle) decodeName(m Message) string { return s.name(decodeName(m)) }
+
+func renderGo() ([]byte, error) { return renderGoFile("main", false) }
+
+func renderGoFile(pkg string, export bool) ([]byte, error) {
+	s := goStyle{pkg: pkg, export: export}
 	var b bytes.Buffer
 	b.WriteString(header)
-	b.WriteString("\npackage main\n\nimport (\n\t\"encoding/binary\"\n)\n\n")
+	fmt.Fprintf(&b, "\npackage %s\n\nimport (\n\t\"encoding/binary\"\n)\n\n", pkg)
 
 	b.WriteString("// Protocol constants.\nconst (\n")
 	for _, c := range Constants {
@@ -89,19 +123,20 @@ func renderGo() ([]byte, error) {
 		if c.Doc != "" {
 			fmt.Fprintf(&b, "\t// %s\n", c.Doc)
 		}
-		fmt.Fprintf(&b, "\t%s = %s\n", c.Go, goConstValue(c))
+		fmt.Fprintf(&b, "\t%s = %s\n", s.name(c.Go), goConstValue(c))
 	}
 	b.WriteString(")\n\n")
 
 	b.WriteString("// Message type bytes.\nconst (\n")
 	for _, m := range Messages {
-		fmt.Fprintf(&b, "\t%s uint8 = 0x%02X\n", m.MsgGo, m.TypeByte)
+		fmt.Fprintf(&b, "\t%s uint8 = 0x%02X\n", s.msgName(m), m.TypeByte)
 	}
 	b.WriteString(")\n\n")
 
 	for _, m := range Messages {
+		typeName := s.typeName(m)
 		b.WriteString("// " + m.Name + ": " + m.Doc + "\n")
-		fmt.Fprintf(&b, "type %s struct {\n", m.GoName)
+		fmt.Fprintf(&b, "type %s struct {\n", typeName)
 		if m.Opaque {
 			b.WriteString("\tpayload []byte\n")
 		}
@@ -115,29 +150,29 @@ func renderGo() ([]byte, error) {
 			}
 			switch f.Kind {
 			case Str8, Str16:
-				fmt.Fprintf(&b, "\t%s string\n", f.Go)
+				fmt.Fprintf(&b, "\t%s string\n", s.fieldName(f))
 			case Bytes:
-				fmt.Fprintf(&b, "\t%s [%d]byte\n", f.Go, f.Count)
+				fmt.Fprintf(&b, "\t%s [%d]byte\n", s.fieldName(f), f.Count)
 			default:
-				fmt.Fprintf(&b, "\t%s %s\n", f.Go, goScalar(f.Kind))
+				fmt.Fprintf(&b, "\t%s %s\n", s.fieldName(f), goScalar(f.Kind))
 			}
 		}
 		b.WriteString("}\n\n")
 		if m.Opaque {
-			fmt.Fprintf(&b, "func (m %s) encode() []byte { return append([]byte(nil), m.payload...) }\n", m.GoName)
-			fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) { return %s{payload: b}, true }\n\n", decodeName(m), m.GoName, m.GoName)
+			fmt.Fprintf(&b, "func (m %s) %s() []byte { return append([]byte(nil), m.payload...) }\n", typeName, s.encodeName())
+			fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) { return %s{payload: b}, true }\n\n", s.decodeName(m), typeName, typeName)
 			continue
 		}
-		fmt.Fprintf(&b, "const %sFixedSize = %d\n", m.GoName, m.FixedSize())
+		fmt.Fprintf(&b, "const %sFixedSize = %d\n", typeName, m.FixedSize())
 		off := 0
 		for _, f := range m.Fields {
-			fmt.Fprintf(&b, "const %s%sOff = %d\n", m.GoName, f.Go, off)
+			fmt.Fprintf(&b, "const %s%sOff = %d\n", typeName, s.fieldName(f), off)
 			off += f.Size()
 		}
 		b.WriteString("\n")
 
 		// encode
-		fmt.Fprintf(&b, "func (m %s) encode() []byte {\n", m.GoName)
+		fmt.Fprintf(&b, "func (m %s) %s() []byte {\n", typeName, s.encodeName())
 		// String prefixes are part of the fixed prefix; bodies follow it.
 		vi := 0
 		for _, f := range m.Fields {
@@ -148,7 +183,7 @@ func renderGo() ([]byte, error) {
 			if f.Kind == Str16 {
 				limit = 65535
 			}
-			arg := "m." + f.Go
+			arg := "m." + s.fieldName(f)
 			if f.Retired {
 				arg = `""`
 			}
@@ -156,10 +191,10 @@ func renderGo() ([]byte, error) {
 			fmt.Fprintf(&b, "\tif len(s%d) > %d {\n\t\ts%d = s%d[:%d]\n\t}\n", vi, limit, vi, vi, limit)
 			vi++
 		}
-		fmt.Fprintf(&b, "\tb := make([]byte, 0, %sFixedSize", m.GoName)
+		fmt.Fprintf(&b, "\tb := make([]byte, 0, %sFixedSize", typeName)
 		for _, f := range m.Fields {
 			if f.Variable() && !f.Retired {
-				fmt.Fprintf(&b, "+len(m.%s)", f.Go)
+				fmt.Fprintf(&b, "+len(m.%s)", s.fieldName(f))
 			}
 		}
 		b.WriteString(")\n")
@@ -184,17 +219,17 @@ func renderGo() ([]byte, error) {
 			}
 			switch f.Kind {
 			case U8:
-				fmt.Fprintf(&b, "\tb = append(b, m.%s)\n", f.Go)
+				fmt.Fprintf(&b, "\tb = append(b, m.%s)\n", s.fieldName(f))
 			case U16:
-				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint16(b, m.%s)\n", f.Go)
+				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint16(b, m.%s)\n", s.fieldName(f))
 			case I16:
-				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint16(b, uint16(m.%s))\n", f.Go)
+				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint16(b, uint16(m.%s))\n", s.fieldName(f))
 			case U32:
-				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint32(b, m.%s)\n", f.Go)
+				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint32(b, m.%s)\n", s.fieldName(f))
 			case U64:
-				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint64(b, m.%s)\n", f.Go)
+				fmt.Fprintf(&b, "\tb = binary.LittleEndian.AppendUint64(b, m.%s)\n", s.fieldName(f))
 			case Bytes:
-				fmt.Fprintf(&b, "\tb = append(b, m.%s[:]...)\n", f.Go)
+				fmt.Fprintf(&b, "\tb = append(b, m.%s[:]...)\n", s.fieldName(f))
 			}
 		}
 		vi = 0
@@ -220,27 +255,27 @@ func renderGo() ([]byte, error) {
 		b.WriteString("\treturn b\n}\n\n")
 
 		// decode
-		fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) {\n", decodeName(m), m.GoName)
-		fmt.Fprintf(&b, "\tvar m %s\n", m.GoName)
-		fmt.Fprintf(&b, "\tif len(b) < %sFixedSize {\n\t\treturn m, false\n\t}\n", m.GoName)
+		fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) {\n", s.decodeName(m), typeName)
+		fmt.Fprintf(&b, "\tvar m %s\n", typeName)
+		fmt.Fprintf(&b, "\tif len(b) < %sFixedSize {\n\t\treturn m, false\n\t}\n", typeName)
 		for _, f := range m.Fields {
 			if f.Variable() {
 				continue
 			}
-			c := fmt.Sprintf("%s%sOff", m.GoName, f.Go)
+			c := fmt.Sprintf("%s%sOff", typeName, s.fieldName(f))
 			switch f.Kind {
 			case U8:
-				fmt.Fprintf(&b, "\tm.%s = b[%s]\n", f.Go, c)
+				fmt.Fprintf(&b, "\tm.%s = b[%s]\n", s.fieldName(f), c)
 			case U16:
-				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint16(b[%s : %s+2])\n", f.Go, c, c)
+				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint16(b[%s : %s+2])\n", s.fieldName(f), c, c)
 			case I16:
-				fmt.Fprintf(&b, "\tm.%s = int16(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", f.Go, c, c)
+				fmt.Fprintf(&b, "\tm.%s = int16(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", s.fieldName(f), c, c)
 			case U32:
-				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint32(b[%s : %s+4])\n", f.Go, c, c)
+				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint32(b[%s : %s+4])\n", s.fieldName(f), c, c)
 			case U64:
-				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint64(b[%s : %s+8])\n", f.Go, c, c)
+				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint64(b[%s : %s+8])\n", s.fieldName(f), c, c)
 			case Bytes:
-				fmt.Fprintf(&b, "\tcopy(m.%s[:], b[%s:%s+%d])\n", f.Go, c, c, f.Count)
+				fmt.Fprintf(&b, "\tcopy(m.%s[:], b[%s:%s+%d])\n", s.fieldName(f), c, c, f.Count)
 			}
 		}
 		hasVar := false
@@ -250,20 +285,20 @@ func renderGo() ([]byte, error) {
 			}
 		}
 		if hasVar {
-			fmt.Fprintf(&b, "\toff := %sFixedSize\n", m.GoName)
+			fmt.Fprintf(&b, "\toff := %sFixedSize\n", typeName)
 			vi := 0
 			for _, f := range m.Fields {
 				if !f.Variable() {
 					continue
 				}
-				lenOff := fmt.Sprintf("%s%sOff", m.GoName, f.Go)
+				lenOff := fmt.Sprintf("%s%sOff", typeName, s.fieldName(f))
 				if f.Kind == Str8 {
 					fmt.Fprintf(&b, "\tn%d := int(b[%s])\n", vi, lenOff)
 				} else {
 					fmt.Fprintf(&b, "\tn%d := int(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", vi, lenOff, lenOff)
 				}
 				fmt.Fprintf(&b, "\tif off+n%d > len(b) {\n\t\treturn m, false\n\t}\n", vi)
-				fmt.Fprintf(&b, "\tm.%s = string(b[off : off+n%d])\n", f.Go, vi)
+				fmt.Fprintf(&b, "\tm.%s = string(b[off : off+n%d])\n", s.fieldName(f), vi)
 				fmt.Fprintf(&b, "\toff += n%d\n", vi)
 				vi++
 			}
