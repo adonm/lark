@@ -4,6 +4,35 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-25 — faster models, text-only Delta Chat, calmer turns
+
+### Affects
+- Host: `~/.local/share/lark/opencode/config/opencode/opencode.jsonc`, `~/.config/lark/lark.env`, and the running `lark.service`.
+- Devices: no firmware change.
+
+### Breaking Changes
+- Outbound Delta Chat messages are text-only. Incoming voice notes still transcribe, and device replies or spoken intercom clips are transcribed before sending; there is no Opus attachment any more.
+- `patch` with `companion.portrait` returns `status: "generating"` immediately; the new look and a short ready notice arrive seconds later.
+
+### How to Detect
+- `lark doctor` reports the old `deepseek-v4.1-flash` / `glm-5.3` defaults.
+- A reply to a voice note arrives as a `ViewtypeVoice` attachment.
+- A short unfinished fragment still stops at 1.2 s while Smart Turn is below 0.25.
+
+### Upgrade Steps
+1. Back up `lark.db` and `lark.env`.
+2. Update and run `lark deploy`; `setup-opencode-config.py` rewrites an untouched generated config to primary `opencode/claude-haiku-5-5#none`, deep `opencode/gemini-4-hydrogen#high`, fallback `opencode/gemini-4-hydrogen#minimal`.
+3. Remove `LARK_DEBUG_ENDPOINT=1` from `lark.env`; slow turns now log their own stage breakdown.
+4. Restart `lark.service`.
+
+### Verification
+- `lark doctor` shows the three new model references and green checks.
+- A paired contact's voice note gets a text reply with no file attachment.
+- Two `"tea"` timers 30 s apart leave one active timer.
+- The first token arriving after 8 s on the primary falls back once instead of hanging.
+
+---
+
 ## 2026-11-24 — OpenCode 2.3.2 → 2.4.1
 
 ### Affects

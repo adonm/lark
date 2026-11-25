@@ -12,7 +12,7 @@ As of 2026-11-24 on `main`:
 - `--remote-ui` passes the headless-Chromium page suite in about 3 s.
 - `--qa` passes the sim suite; `--qa-hw` adds the hardware subtests and skips
   them when no board is attached.
-- Static prompt: 4,155 bytes (agent 3,786 + MCP instructions 369) against the
+- Static prompt: 4,176 bytes (agent 3,807 + MCP instructions 369) against the
   4,250-byte budget. A worst-case state line (3 terminals, 5 timers, 5 stories,
   60-byte labels) measures 1,176 bytes against its 1,280-byte bound.
 - Companion models: primary `opencode/claude-haiku-5-5#none`, deep
