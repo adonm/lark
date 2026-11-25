@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"image"
+	"io"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"time"
@@ -37,14 +42,15 @@ type terminalCaps struct {
 }
 
 type terminalTelemetry struct {
-	Battery    *int     `json:"battery_pct"`
-	Charge     *bool    `json:"charging"`
-	WiFi       *int     `json:"wifi_rssi"`
-	HasBattery *bool    `json:"has_battery"`
-	Volume     *int     `json:"volume"`
-	FreeHeap   *uint64  `json:"free_heap"`
-	Uptime     *uint64  `json:"uptime_s"`
-	CPU        *float64 `json:"cpu_pct"`
+	Battery        *int     `json:"battery_pct"`
+	Charge         *bool    `json:"charging"`
+	WiFi           *int     `json:"wifi_rssi"`
+	HasBattery     *bool    `json:"has_battery"`
+	Volume         *int     `json:"volume"`
+	FreeHeap       *uint64  `json:"free_heap"`
+	Uptime         *uint64  `json:"uptime_s"`
+	CPU            *float64 `json:"cpu_pct"`
+	AudioUnderruns *uint32  `json:"audio_underruns"`
 }
 
 type terminalSession struct {
@@ -129,6 +135,7 @@ type terminalSession struct {
 	awaitAck   bool
 	audioUntil time.Time
 	ackClient  *terminalClient // connection that owes the playback ack
+	underruns  *underrunSpan   // Board counter bracket for the current playback.
 }
 
 func (c *terminalClient) pingRTT() *float64 {
@@ -620,6 +627,108 @@ func (d *terminalSession) status(s terminalTelemetry) {
 
 func (d *terminalSession) voiceTheme() string {
 	return companionTheme(d.companion.Name)
+}
+
+// underrunSpan brackets one playback with the board's boot-lifetime
+// audio_underruns counter. The board only exposes that counter over its own
+// /status endpoint, so the bridge samples it when playback starts and after the
+// ack: the delta describes this reply, while the raw counter keeps every gap
+// since boot.
+type underrunSpan struct {
+	read  func(context.Context, string) (*uint32, error)
+	ip    string
+	trace *turnTrace
+	start chan *uint32 // buffered; closed after the start sample (nil if unreadable)
+}
+
+const underrunPollWait = 1500 * time.Millisecond
+
+// deviceUnderruns reads audio_underruns from the board's unauthenticated
+// /status response. A missing field or address is not an error worth logging.
+func deviceUnderruns(ctx context.Context, ip string) (*uint32, error) {
+	if ip == "" {
+		return nil, errors.New("terminal has no device address")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(ip, "80")+"/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := underrunClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("device status: HTTP %d", res.StatusCode)
+	}
+	var st struct {
+		AudioUnderruns *uint32 `json:"audio_underruns"`
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&st); err != nil {
+		return nil, err
+	}
+	return st.AudioUnderruns, nil
+}
+
+var underrunClient = &http.Client{Timeout: underrunPollWait, Transport: &http.Transport{Proxy: nil}}
+
+func (b *larkServer) readUnderruns(ctx context.Context, ip string) (*uint32, error) {
+	if b.underruns != nil {
+		return b.underruns(ctx, ip)
+	}
+	return deviceUnderruns(ctx, ip)
+}
+
+// beginUnderruns starts the pre-playback sample. It runs away from the actor so
+// a slow board HTTP server cannot delay the first PCM.
+func (h *terminalHub) beginUnderruns(d *terminalSession, trace *turnTrace) {
+	if h == nil || h.b == nil || d.kind != "hardware" || d.ip == "" {
+		return
+	}
+	span := &underrunSpan{read: h.b.readUnderruns, ip: d.ip, trace: trace, start: make(chan *uint32, 1)}
+	d.underruns = span
+	go func() {
+		ctx, cancel := context.WithTimeout(h.b.root, underrunPollWait)
+		defer cancel()
+		value, err := span.read(ctx, span.ip)
+		if err != nil {
+			value = nil
+		}
+		span.start <- value
+		close(span.start)
+	}()
+}
+
+// finishUnderruns samples the counter after playback and posts the delta. An
+// aborted stream has no meaningful gap count.
+func (h *terminalHub) finishUnderruns(d *terminalSession) {
+	span := d.underruns
+	d.underruns = nil
+	if span == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(h.b.root, underrunPollWait)
+		defer cancel()
+		end, err := span.read(ctx, span.ip)
+		if err != nil || end == nil {
+			return
+		}
+		u := terminalUnderruns{counter: *end, trace: span.trace}
+		start, ok := <-span.start
+		if ok && start != nil && *end >= *start {
+			delta := *end - *start
+			u.delta = &delta
+		}
+		d.post(terminalEvent{kind: evUnderruns, now: time.Now(), underruns: u})
+	}()
+}
+
+func (h *terminalHub) applyUnderruns(d *terminalSession, u terminalUnderruns) {
+	d.telemetry.AudioUnderruns = &u.counter
+	if u.delta != nil && u.trace != nil {
+		u.trace.underruns(*u.delta)
+	}
 }
 
 type renderRequest struct {

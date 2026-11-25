@@ -809,6 +809,7 @@ func (h *terminalHub) playTraced(d *terminalSession, stream *AudioStream, trace 
 	h.stopPlayback(d, true)
 	d.stopAudio = cancel
 	id := d.audio
+	h.beginUnderruns(d, trace)
 	go func() {
 		defer cancel()
 		err := h.streamPlayback(ctx, d, id, stream, trace, ttsStart)
@@ -967,6 +968,7 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 }
 
 func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
+	d.underruns = nil
 	if d.stopAudio != nil {
 		d.stopAudio()
 		d.stopAudio = nil
@@ -981,6 +983,11 @@ func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 }
 
 func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bool) {
+	if aborted {
+		d.underruns = nil
+	} else {
+		h.finishUnderruns(d)
+	}
 	if !aborted {
 		h.freeFollowUpsNow(d, now)
 		d.armReplyTTL(now)

@@ -128,6 +128,7 @@ type diagTurn struct {
 	STTQueue      *float64 `json:"stt_queue_ms"`
 	STTRun        *float64 `json:"stt_run_ms"`
 	Resample      *float64 `json:"resample_ms"`
+	Underruns     *uint32  `json:"underruns_delta"`
 	Error         bool     `json:"error,omitempty"`
 	Silent        bool     `json:"silent,omitempty"`
 	ToolErrors    []string `json:"tool_errors,omitempty"`
@@ -324,6 +325,18 @@ func (d *diagnostics) specFirst(elapsed time.Duration) {
 	d.metrics[diagSpecFirst].add(milliseconds(elapsed), 32)
 	d.mu.Unlock()
 	d.sig.notify()
+}
+
+// underruns attaches the board's underrun delta to the turn that was speaking.
+// The board counts every gap since boot; this records only this reply's share.
+func (t *turnTrace) underruns(delta uint32) {
+	if t == nil {
+		return
+	}
+	t.d.mu.Lock()
+	t.record.Underruns = &delta
+	t.d.mu.Unlock()
+	t.d.sig.notify()
 }
 
 func (t *turnTrace) audioEnqueued(at time.Time) {

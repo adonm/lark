@@ -38,6 +38,34 @@ func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsRecordsUnderrunDelta(t *testing.T) {
+	t.Parallel()
+	b := &larkServer{}
+	trace := traceFrom(b.traceTurn(t.Context(), "vocat-33d8", "Cake", "voice", time.Now()))
+	h := &terminalHub{b: b}
+	d := &terminalSession{id: "vocat-33d8", kind: "hardware"}
+	delta := uint32(2)
+	h.handleTerminal(d, terminalEvent{kind: evUnderruns, now: time.Now(),
+		underruns: terminalUnderruns{counter: 19, delta: &delta, trace: trace}})
+	if d.telemetry.AudioUnderruns == nil || *d.telemetry.AudioUnderruns != 19 {
+		t.Fatalf("board counter = %v, want 19", d.telemetry.AudioUnderruns)
+	}
+	row := b.diagnosticReport().Turns[0]
+	if row.Underruns == nil || *row.Underruns != 2 {
+		t.Fatalf("turn underruns = %v, want the 2 counted during this reply", row.Underruns)
+	}
+	// A later sample without a start bracket refreshes the board counter but
+	// cannot attribute a delta to the finished turn.
+	h.handleTerminal(d, terminalEvent{kind: evUnderruns, now: time.Now(),
+		underruns: terminalUnderruns{counter: 21, trace: trace}})
+	if *d.telemetry.AudioUnderruns != 21 {
+		t.Fatalf("board counter = %v, want 21", *d.telemetry.AudioUnderruns)
+	}
+	if row := b.diagnosticReport().Turns[0]; row.Underruns == nil || *row.Underruns != 2 {
+		t.Fatalf("unbracketed sample overwrote the turn delta: %v", row.Underruns)
+	}
+}
+
 func TestDiagnosticsListeningCountersAndSegments(t *testing.T) {
 	t.Parallel()
 	b := &larkServer{}

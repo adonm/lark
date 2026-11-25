@@ -50,6 +50,7 @@ type larkServer struct {
 	remote          *remoteManager
 	captures        captureState
 	diag            diagnostics
+	underruns       func(context.Context, string) (*uint32, error) // Test hook; nil reads the board
 	loc             *time.Location
 	companionMu     sync.Mutex // Serializes companion and voice writes through hub publication.
 	companionTitles sync.Mutex

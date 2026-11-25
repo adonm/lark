@@ -200,6 +200,7 @@ const (
 	evEndpointStop
 	evFrameBuilt
 	evCaption
+	evUnderruns
 )
 
 type terminalRender struct {
@@ -270,6 +271,7 @@ type terminalEvent struct {
 	endpoint  terminalEndpoint
 	frame     terminalFrameBuilt
 	caption   terminalCaption
+	underruns terminalUnderruns
 	reason    string
 
 	fn   func(*terminalSession)
@@ -302,6 +304,14 @@ type terminalStartTurn struct {
 type terminalCaption struct {
 	view    *pixel.Scene
 	oldView *pixel.Scene
+}
+
+// terminalUnderruns carries one bracketed board counter sample back to the
+// session actor. delta is nil when the start sample was unavailable.
+type terminalUnderruns struct {
+	counter uint32
+	delta   *uint32
+	trace   *turnTrace
 }
 
 // terminalActor serializes one session's state. The queue is unbounded and the
@@ -617,6 +627,8 @@ func (h *terminalHub) handleTerminal(d *terminalSession, ev terminalEvent) {
 		h.endpointStop(d, ev.endpoint.c, ev.endpoint.discards, ev.now)
 	case evFrameBuilt:
 		h.handleFrameBuilt(d, ev.frame)
+	case evUnderruns:
+		h.applyUnderruns(d, ev.underruns)
 	}
 	d.syncMode()
 }
