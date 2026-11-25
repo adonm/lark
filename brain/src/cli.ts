@@ -242,6 +242,15 @@ async function capture(args: string[]): Promise<void> {
   process.stdout.write(`${str(response.path)}\n`);
 }
 
+async function library(args: string[]): Promise<void> {
+  if (args.length > 1) throw new Error("Usage: lark library [--plan|--status]");
+  if (args.length === 1 && args[0] !== "--plan" && args[0] !== "--status") {
+    throw new Error("Usage: lark library [--plan|--status]");
+  }
+  const plan = await request("/api/library");
+  process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+}
+
 export async function run(argv: string[]): Promise<number> {
   const [command, ...args] = argv;
   try {
@@ -263,11 +272,14 @@ export async function run(argv: string[]): Promise<number> {
       case "capture":
         await capture(args);
         return 0;
+      case "library":
+        await library(args);
+        return 0;
       case undefined:
       case "help":
       case "--help":
         process.stdout.write(
-          "Usage: lark <status|doctor|companions|terminals|tunnels|capture> [args]\n",
+          "Usage: lark <status|doctor|companions|terminals|tunnels|capture|library|ota|deploy> [args]\n",
         );
         return command === undefined ? 1 : 0;
       default:

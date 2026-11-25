@@ -1,6 +1,6 @@
-// Twee 3 subset used by Lark stories. This mirrors lark/internal/stories
-// (parse, compile, validate, eval, voice matching) so a story authored against
-// the Go server behaves identically in the embedded brain.
+// Twee 3 subset used by Lark stories. This replaces the removed Go
+// lark/internal/stories package (parse, compile, validate, eval, voice
+// matching); a story authored against the v1 server parses identically here.
 
 export const MAX_PASSAGES = 64;
 export const MAX_PASSAGE_TEXT = 600;

@@ -1,0 +1,58 @@
+/* Page glue only: Oat supplies the design system (tokens, components, states).
+   Keep this file to layout and the tab/hidden-panel behaviour Oat lacks. */
+.shell {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 1.1rem 1rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+.hero { display: flex; align-items: center; gap: 0.9rem; }
+.hero-meta { min-width: 0; flex: 1; }
+.hero-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.hero-meta h1 { margin: 0; font-size: 1.25rem; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-meta p { margin: 0.25rem 0 0; }
+.portrait, .portrait-placeholder { width: 64px; height: 64px; border-radius: 14px; flex: 0 0 auto; object-fit: cover; image-rendering: pixelated; }
+.portrait-placeholder { background: var(--muted); }
+.tabs-bar { display: flex; overflow-x: auto; gap: 0.25rem; border-bottom: 1px solid var(--border); }
+.tab-btn { flex: 1 0 auto; min-height: 44px; padding: 0.55rem 0.5rem; font-size: 0.85rem; white-space: nowrap; }
+.tab-btn[aria-selected="true"] { text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 3px; }
+.panel-list { display: flex; flex-direction: column; gap: 0.9rem; }
+.card-box, .row-card, .capture-row, .hist-item { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; }
+.row-card, .capture-row, .hist-item { gap: 0.5rem; }
+.row-info { min-width: 0; flex: 1; }
+.row-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-sub { font-size: 0.85rem; }
+.inline-form { display: flex; gap: 0.5rem; }
+.inline-form input { flex: 1; min-width: 0; }
+.pill-group { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.voice-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+.voice-btn { min-height: 44px; text-align: left; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.range-row { display: flex; align-items: center; gap: 0.75rem; }
+.range-row input[type="range"] { flex: 1; min-height: 32px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.hist-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.visually-hidden { position: absolute !important; clip-path: inset(50%) !important; overflow: hidden !important; width: 1px !important; height: 1px !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; }
+/* Keep inactive panels findable (find-in-page) without rendering them. */
+[hidden="until-found"] { display: block !important; content-visibility: hidden; }
+.status-banner { display: none; padding: 0.65rem 0.9rem; border-radius: 10px; font-size: 0.85rem; }
+.status-banner[data-visible="true"] { display: block; }
+.status-banner[data-tone="error"] { background: #fee2e2; color: #991b1b; }
+.status-banner[data-tone="ok"] { background: #dcfce7; color: #166534; }
+.state-pill { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+.state-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
+.state-pill[data-state="idle"] .state-dot { background: #16a34a; }
+.state-pill[data-state="listening"] .state-dot { background: #2563eb; }
+.state-pill[data-state="thinking"] .state-dot { background: #d97706; }
+.state-pill[data-state="speaking"] .state-dot { background: #7c3aed; }
+.state-pill[data-state="sleeping"] .state-dot { background: #64748b; }
+.is-pending { opacity: 0.6; }
+.hist-meta { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.78rem; }
+.hist-speaker { font-weight: 700; }
+.hist-text { font-size: 0.92rem; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.capture-transcript summary { cursor: pointer; font-weight: 600; min-height: 32px; display: flex; align-items: center; }
+.capture-transcript p { margin: 0.35rem 0 0; white-space: pre-wrap; word-break: break-word; }
+.capture-row audio { width: 100%; }
+.story-bar { width: 100%; }
+.empty { text-align: center; padding: 1.5rem 0.5rem; margin: 0; }

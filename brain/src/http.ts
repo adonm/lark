@@ -32,7 +32,7 @@ const REMOTE_POLL_MS = 750;
 const REMOTE_KEEPALIVE_MS = 15_000;
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const DEFAULT_REMOTE_DIR = resolve(HERE, "../../lark/web/remote");
+const DEFAULT_REMOTE_DIR = resolve(HERE, "../../web/remote");
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
