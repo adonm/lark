@@ -130,6 +130,24 @@ export interface MessagePage {
   nextCursor?: MessageCursor;
 }
 
+export type RemoteHistoryChannel = "all" | "in_person" | "deltachat";
+
+export interface RemoteHistoryQuery {
+  companionId: string;
+  channel: RemoteHistoryChannel;
+  /** Lowercased Delta Chat address of the scoped contact. */
+  contact: string;
+  /** Lowercased display name at issue time. */
+  contactName: string;
+  q: string;
+  limit: number;
+  cursor?: MessageCursor;
+}
+
+export function escapeLike(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
 export interface MemoryRow<T = unknown> {
   scope: string;
   key: string;
@@ -332,6 +350,14 @@ export class LarkDb {
 
   deleteMeta(key: string): void {
     this.#db.prepare(`DELETE FROM meta WHERE key = ?`).run(key);
+  }
+
+  /** Meta keys matching a SQL LIKE pattern, for durable retry queues. */
+  listMetaKeys(pattern: string): string[] {
+    return this.#db
+      .prepare(`SELECT key FROM meta WHERE key LIKE ? ORDER BY key`)
+      .all(pattern)
+      .map((row) => String(row.key));
   }
 
   // ---- companions -------------------------------------------------------
@@ -591,6 +617,48 @@ export class LarkDb {
 
   deleteMessages(companionId: string): void {
     this.#db.prepare(`DELETE FROM messages WHERE companion_id = ?`).run(companionId.toLowerCase());
+  }
+
+  /**
+   * Remote-page history: in-person room notes plus only the scoped contact's
+   * own Delta Chat messages. Companion replies and other contacts stay hidden.
+   */
+  listRemoteMessages(query: RemoteHistoryQuery): MessagePage {
+    const limit = Math.max(1, Math.min(50, Math.trunc(query.limit)));
+    let sql = `SELECT * FROM messages WHERE companion_id = ?`;
+    const args: (string | number)[] = [query.companionId.toLowerCase()];
+    const peerClause = `(role = 'user' AND LOWER(sender) IN (?, ?))`;
+    if (query.channel === "in_person") {
+      sql += ` AND channel = 'in_person'`;
+    } else if (query.channel === "deltachat") {
+      sql += ` AND channel = 'deltachat' AND ${peerClause}`;
+      args.push(query.contact.toLowerCase(), query.contactName.toLowerCase());
+    } else {
+      sql += ` AND (channel = 'in_person' OR (channel = 'deltachat' AND ${peerClause}))`;
+      args.push(query.contact.toLowerCase(), query.contactName.toLowerCase());
+    }
+    if (query.q !== "") {
+      const pattern = `%${escapeLike(query.q.toLowerCase())}%`;
+      sql += ` AND (LOWER(text) LIKE ? ESCAPE '\\' OR LOWER(sender) LIKE ? ESCAPE '\\')`;
+      args.push(pattern, pattern);
+    }
+    if (query.cursor !== undefined) {
+      sql += ` AND ts_ms <= ? AND (ts_ms < ? OR id < ?)`;
+      args.push(query.cursor.beforeTs, query.cursor.beforeTs, query.cursor.beforeId);
+    }
+    sql += ` ORDER BY ts_ms DESC, id DESC LIMIT ?`;
+    args.push(limit + 1);
+    const rows = this.#db.prepare(sql).all(...args).map(messageFrom);
+    const hasMore = rows.length > limit;
+    const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
+    const oldest = page[0];
+    return {
+      messages: page,
+      hasMore,
+      ...(hasMore && oldest !== undefined
+        ? { nextCursor: { beforeTs: oldest.tsMs, beforeId: oldest.id } }
+        : {}),
+    };
   }
 
   // ---- memory -----------------------------------------------------------
