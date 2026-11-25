@@ -28,7 +28,7 @@ type sttJob struct {
 	ctx    context.Context
 	pcm    []byte
 	at     time.Time
-	timing *sttTiming
+	timing *Timing
 	res    chan sttResult
 }
 
@@ -159,11 +159,11 @@ func (p *STT) Transcribe(ctx context.Context, pcm []byte) (string, error) {
 		ctx:    ctx,
 		pcm:    pcm,
 		at:     time.Now(),
-		timing: timingFrom(ctx),
+		timing: sttTimingFrom(ctx),
 		res:    make(chan sttResult, 1),
 	}
 	q := p.commits
-	if isProbe(ctx) {
+	if isSTTProbe(ctx) {
 		q = p.probes
 	}
 	select {
