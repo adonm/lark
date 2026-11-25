@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"context"
@@ -12,12 +12,12 @@ import (
 	"path/filepath"
 )
 
-func libraryStatus(ctx context.Context, dir string) object {
-	out := object{"dir": dir, "sources": object{}}
-	for _, name := range librarySourceOrder {
+func Status(ctx context.Context, dir string) map[string]any {
+	out := map[string]any{"dir": dir, "sources": map[string]any{}}
+	for _, name := range sourceOrder {
 		pack, _ := libraryPackByName(name)
-		path := filepath.Join(dir, librarySources[name].db)
-		entry := object{"path": path}
+		path := filepath.Join(dir, sources[name].db)
+		entry := map[string]any{"path": path}
 		available, reason := libraryPackHealth(dir, pack)
 		entry["available"] = available
 		if reason != "" {
@@ -29,7 +29,7 @@ func libraryStatus(ctx context.Context, dir string) object {
 			entry["error"] = err.Error()
 		}
 		if available {
-			db, err := openLibraryDB(path, true)
+			db, err := openDB(path, true)
 			if err != nil {
 				entry["available"], entry["error"] = false, err.Error()
 			} else {
@@ -71,7 +71,7 @@ func libraryStatus(ctx context.Context, dir string) object {
 
 // ---- Downloader and index builder ----
 
-func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error {
+func RunCLI(ctx context.Context, args []string, out, errOut io.Writer) error {
 	flags := flag.NewFlagSet("library", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	download := flags.Bool("download", false, "download raw dumps and books")
@@ -87,7 +87,7 @@ func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	dir := env("LARK_LIBRARY_DIR", defaultLibraryDir())
+	dir := env("LARK_LIBRARY_DIR", DefaultDir())
 	if dir == "" {
 		return errors.New("cannot resolve the library directory")
 	}
@@ -98,7 +98,7 @@ func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error
 		return err
 	}
 	if *status {
-		raw, _ := json.MarshalIndent(libraryStatus(ctx, dir), "", "  ")
+		raw, _ := json.MarshalIndent(Status(ctx, dir), "", "  ")
 		fmt.Fprintln(out, string(raw))
 		return nil
 	}
@@ -112,18 +112,20 @@ func runLibrary(ctx context.Context, args []string, out, errOut io.Writer) error
 		return nil
 	}
 	if *search != "" || *read != "" {
-		b := &larkServer{library: dir}
-		args := object{"source": *source}
-		op := "search"
+		lib := New(dir)
+		name := *source
+		if name == "all" {
+			name = "auto"
+		}
+		var result any
+		var err error
 		if *read != "" {
-			op, args["title"] = "read", *read
+			result, err = lib.Read(ctx, name, *read, 0)
 		} else {
-			args["query"] = *search
+			hits, available, searchErr := lib.Search(ctx, *search, name, 5)
+			err = searchErr
+			result = map[string]any{"ok": true, "results": hits, "available": available}
 		}
-		if *source == "all" {
-			args["source"] = "auto"
-		}
-		result, err := b.mcpLibrary(ctx, object{"op": op, "query": args["query"], "title": args["title"], "source": args["source"]})
 		if err != nil {
 			return err
 		}

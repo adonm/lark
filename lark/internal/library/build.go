@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"bufio"
@@ -24,7 +24,7 @@ func buildWikipedia(ctx context.Context, dir, wiki string, force bool, out io.Wr
 	if _, err := os.Stat(dump); err != nil {
 		return fmt.Errorf("%s: dump missing (%w)", wiki, err)
 	}
-	dbPath := filepath.Join(dir, librarySources[wiki].db)
+	dbPath := filepath.Join(dir, sources[wiki].db)
 	if _, err := os.Stat(dbPath); err == nil && !force {
 		libraryLog(out, "%s: index exists", wiki)
 		return nil
@@ -180,8 +180,8 @@ func ingestWikiDump(ctx context.Context, dump string, db *sql.DB, out io.Writer)
 		if len(text) < 24 {
 			continue
 		}
-		if len(text) > libraryMaxText {
-			text = strings.ToValidUTF8(text[:libraryMaxText], "")
+		if len(text) > maxText {
+			text = strings.ToValidUTF8(text[:maxText], "")
 		}
 		id++
 		if _, err := insertPage.Exec(id, page.Title, text); err != nil {
@@ -219,7 +219,7 @@ func ingestWikiDump(ctx context.Context, dump string, db *sql.DB, out io.Writer)
 }
 
 func buildGutenberg(ctx context.Context, dir string, force bool, out io.Writer) error {
-	dbPath := filepath.Join(dir, librarySources["gutenberg"].db)
+	dbPath := filepath.Join(dir, sources["gutenberg"].db)
 	if _, err := os.Stat(dbPath); err == nil && !force {
 		libraryLog(out, "gutenberg: index exists")
 		return nil

@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"lark/internal/library"
 )
 
 type condSignal struct {
@@ -183,7 +185,7 @@ func run() error {
 		history: &chatHistory{db: db},
 		portraits: &portraitStore{dir: filepath.Join(local, "portraits"),
 			generate: configuredPortraitGenerator(ocAPI, ocURL != "", os.Getenv("OPENCODE_API_KEY"))},
-		library: env("LARK_LIBRARY_DIR", filepath.Join(local, "library")),
+		lib:     library.New(env("LARK_LIBRARY_DIR", filepath.Join(local, "library"))),
 		ota:     otaFile{path: filepath.Join(env("LARK_OTA_DIR", filepath.Join(project, "firmware/build")), "lark.bin")},
 		box3OTA: otaFile{path: filepath.Join(env("LARK_BOX3_OTA_DIR", filepath.Join(project, "firmware/build-box3")), "lark_box3.bin")}}
 	b.hub = newTerminalHub(b, true)
@@ -223,7 +225,7 @@ func run() error {
 // supplies its own library, so it never provisions.
 func startProvisioning(b *larkServer, stub *stubConfig) {
 	if stub == nil {
-		go b.provisionLibrary(b.root)
+		go b.lib.Provision(b.root)
 	}
 }
 
@@ -393,7 +395,7 @@ func main() {
 		err = runMCPStdio()
 	case "library":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		err = runLibrary(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		err = library.RunCLI(ctx, os.Args[2:], os.Stdout, os.Stderr)
 		cancel()
 	case "-h", "--help", "help":
 		usage(os.Stdout)

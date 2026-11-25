@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"fmt"
@@ -22,17 +22,17 @@ func gutenbergBody(text string) string {
 	return strings.TrimSpace(text)
 }
 
-func libraryTwee(title, text string) (string, error) {
+func Twee(title, text string) (string, error) {
 	title = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(title, "\n", " "), "::", ":"))
 	if title == "" {
 		title = "Library Story"
 	}
-	passages := splitLibraryPassages(text, libraryPassage)
+	passages := splitLibraryPassages(text, passageRunes)
 	if len(passages) == 0 {
 		passages = []string{"Once upon a time."}
 	}
-	if len(passages) > libraryPassages {
-		passages = passages[:libraryPassages]
+	if len(passages) > maxPassages {
+		passages = passages[:maxPassages]
 	}
 	var out strings.Builder
 	fmt.Fprintf(&out, ":: StoryTitle\n%s\n\n", title)
@@ -45,7 +45,7 @@ func libraryTwee(title, text string) (string, error) {
 	}
 	twee := out.String()
 	if _, err := stories.Parse(twee); err != nil {
-		return "", fieldError("twee", "generated story is invalid: %s", err)
+		return "", fmt.Errorf("twee: generated story is invalid: %s", err)
 	}
 	return twee, nil
 }

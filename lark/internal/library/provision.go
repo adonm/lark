@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 // against this volume, then downloads and indexes missing packs one at a time,
 // smallest first. Installed packs and builds already running elsewhere are
 // left alone.
-func (b *larkServer) provisionLibrary(ctx context.Context) {
-	dir := b.libraryDir()
+func (l *Library) Provision(ctx context.Context) {
+	dir := l.Dir()
 	if dir == "" {
 		return
 	}

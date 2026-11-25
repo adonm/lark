@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"compress/gzip"
@@ -87,7 +87,7 @@ func probeDownloadSize(ctx context.Context, client *http.Client, url string) (in
 	if err != nil {
 		return 0, false
 	}
-	req.Header.Set("User-Agent", libraryUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	res, err := client.Do(req)
 	if err != nil {
 		return 0, false
@@ -235,7 +235,7 @@ func downloadSegment(ctx context.Context, client *http.Client, url, path string,
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", libraryUserAgent)
+		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
 		res, err := client.Do(req)
 		if err != nil {
@@ -276,7 +276,7 @@ func downloadRange(ctx context.Context, client *http.Client, url, part string, o
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", libraryUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
@@ -412,7 +412,7 @@ func downloadWikipedia(ctx context.Context, dir, wiki string, out io.Writer) err
 	libraryLog(out, "downloading %s", name)
 	client := &http.Client{Timeout: 0, Transport: &http.Transport{ResponseHeaderTimeout: 60 * time.Second,
 		MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}}
-	if err := downloadFile(ctx, client, libraryWikiDumps+"/"+wikiSlug(wiki)+"/latest/"+name, dest, "sha1", expect, out); err != nil {
+	if err := downloadFile(ctx, client, wikiDumpsBase+"/"+wikiSlug(wiki)+"/latest/"+name, dest, "sha1", expect, out); err != nil {
 		return err
 	}
 	libraryLog(out, "%s verified (%s)", name, humanBytes(fileSize(dest)))
@@ -420,7 +420,7 @@ func downloadWikipedia(ctx context.Context, dir, wiki string, out io.Writer) err
 }
 
 func fetchWikiSHA1(ctx context.Context, wiki string) (map[string]string, error) {
-	url := libraryWikiDumps + "/" + wiki + "/latest/" + wiki + "-latest-sha1sums.txt"
+	url := wikiDumpsBase + "/" + wiki + "/latest/" + wiki + "-latest-sha1sums.txt"
 	raw, err := fetchText(ctx, url, 16<<20)
 	if err != nil {
 		return nil, err
@@ -447,7 +447,7 @@ func fetchText(ctx context.Context, url string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", libraryUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -560,7 +560,7 @@ func downloadGutenberg(ctx context.Context, dir string, limit, jobs int, out io.
 				if !exists {
 					continue
 				}
-				url := fmt.Sprintf("%s/cache/epub/%d/pg%d.txt", libraryGutenberg, id, id)
+				url := fmt.Sprintf("%s/cache/epub/%d/pg%d.txt", gutenbergBase, id, id)
 				dest := path + ".part"
 				if err := downloadSmall(ctx, client, url, dest); err != nil {
 					libraryLog(out, "gutenberg %d: %v", id, err)
@@ -613,7 +613,7 @@ func downloadSmall(ctx context.Context, client *http.Client, url, dest string) e
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", libraryUserAgent)
+		req.Header.Set("User-Agent", userAgent)
 		if offset > 0 {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 		}
@@ -681,7 +681,7 @@ func loadGutenbergCatalog(ctx context.Context, dir string, out io.Writer) (map[i
 	if _, err := os.Stat(path); err != nil {
 		libraryLog(out, "fetching Gutenberg catalog")
 		if err := downloadSmall(ctx, &http.Client{Timeout: 300 * time.Second},
-			libraryGutenberg+"/cache/epub/feeds/pg_catalog.csv.gz", path+".part"); err != nil {
+			gutenbergBase+"/cache/epub/feeds/pg_catalog.csv.gz", path+".part"); err != nil {
 			return nil, err
 		}
 		if err := os.Rename(path+".part", path); err != nil {

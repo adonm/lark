@@ -3,15 +3,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha1"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"lark/internal/library"
 	"lark/internal/stories"
 )
 
@@ -56,7 +52,15 @@ func testWikiDB(t testing.TB, path string, pages map[string]string) {
 	}
 }
 
-func testGutenbergDB(t testing.TB, dir string, books []gutenbergRecord) {
+type gutenbergFixture struct {
+	ID     int64
+	Title  string
+	Author string
+	Path   string
+	SHA256 string
+}
+
+func testGutenbergDB(t testing.TB, dir string, books []gutenbergFixture) {
 	t.Helper()
 	path := filepath.Join(dir, "gutenberg.db")
 	db, err := sql.Open("lark-sqlite3", path+"?_journal_mode=OFF&_synchronous=OFF")
@@ -105,7 +109,7 @@ func TestLibrarySearchReadImport(t *testing.T) {
 	if err := os.WriteFile(bookPath, []byte(book), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	testGutenbergDB(t, dir, []gutenbergRecord{{ID: 11, Title: "Alice's Adventures in Wonderland",
+	testGutenbergDB(t, dir, []gutenbergFixture{{ID: 11, Title: "Alice's Adventures in Wonderland",
 		Author: "Lewis Carroll", Path: bookPath}})
 
 	db, err := openLarkDB(context.Background(), filepath.Join(dir, "lark.db"))
@@ -113,14 +117,14 @@ func TestLibrarySearchReadImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	b := &larkServer{library: dir, db: db}
+	b := &larkServer{lib: library.New(dir), db: db}
 	ctx := context.Background()
 
 	out, err := b.mcpLibrary(ctx, object{"op": "search", "query": "why is the sky blue"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hits, _ := out["results"].([]libraryHit)
+	hits, _ := out["results"].([]library.Hit)
 	if len(hits) == 0 || hits[0].Source != "simple" || hits[0].Title != "Sky" {
 		t.Fatalf("unexpected search results: %#v", out["results"])
 	}
@@ -145,7 +149,7 @@ func TestLibrarySearchReadImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chars := int(read["chars"].(int)); chars > libraryReadMax || chars == 0 {
+	if chars := int(read["chars"].(int)); chars > library.ReadMax || chars == 0 {
 		t.Fatalf("read returned %d chars", chars)
 	}
 	next, err := b.mcpLibrary(ctx, object{"op": "read", "source": "simple", "title": "Sky", "section": json.Number("1")})
@@ -195,72 +199,6 @@ func TestLibrarySearchReadImport(t *testing.T) {
 		t.Fatalf("expected one Gutenberg title, got %#v", list)
 	}
 }
-
-func TestLibraryTweePassageBounds(t *testing.T) {
-	t.Parallel()
-	text := strings.Repeat("A sentence with several words to fill the passage. ", 2000)
-	twee, err := libraryTwee("A Long Book", text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := stories.Parse(twee)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(compiled.Passages) > libraryPassages {
-		t.Fatalf("too many passages: %d", len(compiled.Passages))
-	}
-	for _, passage := range compiled.Passages {
-		if !passage.End {
-			if len(passage.Ops) == 0 {
-				t.Fatalf("empty passage %q", passage.Name)
-			}
-		}
-	}
-	if strings.Contains(twee, "[[[") || strings.Contains(twee, "]]]") {
-		t.Fatalf("unsafe bracket sequence survived:\n%s", twee)
-	}
-}
-
-func TestDownloadResumeAndChecksum(t *testing.T) {
-	t.Parallel()
-	payload := bytes.Repeat([]byte("offline library payload\n"), 4096)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeContent(w, r, "file", time.Time{}, bytes.NewReader(payload))
-	}))
-	defer server.Close()
-
-	dir := t.TempDir()
-	dest := filepath.Join(dir, "file.bin")
-	part := dest + ".part"
-	if err := os.WriteFile(part, payload[:1000], 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha1.Sum(payload)
-	expect := hex.EncodeToString(sum[:])
-	if err := downloadFile(t.Context(), server.Client(), server.URL, dest, "sha1", expect, ioDiscard{}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Fatalf("resumed file mismatch: %d bytes", len(got))
-	}
-	if _, err := os.Stat(part); !os.IsNotExist(err) {
-		t.Fatalf("partial file survived: %v", err)
-	}
-
-	if err := downloadFile(t.Context(), server.Client(), server.URL, filepath.Join(dir, "bad.bin"), "sha1",
-		strings.Repeat("0", 40), ioDiscard{}); err == nil {
-		t.Fatal("expected checksum mismatch")
-	}
-}
-
-type ioDiscard struct{}
-
-func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestLibraryPromptBudget(t *testing.T) {
 	t.Parallel()

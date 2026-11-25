@@ -484,7 +484,7 @@ func (d *doctor) checkLibrary(ctx context.Context) doctorResult {
 		pack, _ := item.(object)
 		name, state := str(pack["name"]), str(pack["state"])
 		part := name + " " + state
-		if state == packStateInstalled {
+		if state == "installed" {
 			part += " " + humanBytes(jsonInt(pack["installed_bytes"]))
 		} else if reason := str(pack["reason"]); reason != "" {
 			part += " (" + reason + ")"
@@ -493,7 +493,7 @@ func (d *doctor) checkLibrary(ctx context.Context) doctorResult {
 			part += "; last error: " + lastErr
 		}
 		parts = append(parts, part)
-		if state != packStateInstalled {
+		if state != "installed" {
 			notInstalled = append(notInstalled, name)
 		}
 	}

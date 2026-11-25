@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lark/internal/library"
 )
 
 type larkServer struct {
@@ -42,10 +43,8 @@ type larkServer struct {
 	history         *chatHistory
 	timers          *timerManager
 	portraits       *portraitStore
-	library         string
+	lib             *library.Library
 	libraryStats    libraryStats
-	libraryMu       sync.Mutex
-	libraryDBs      map[string]*sql.DB
 	remote          *remoteManager
 	captures        captureState
 	diag            diagnostics
@@ -326,7 +325,7 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 		case path == "/api/diagnostics":
 			return b.diagnosticReport(), nil
 		case path == "/api/library":
-			return libraryPlanReport(b.libraryDir()), nil
+			return library.PlanReport(b.lib.Dir()), nil
 		case path == "/ota/version.json" || path == "/ota/latest.bin":
 			return b.ota.serve(w, path == "/ota/version.json")
 		case path == "/ota/box3/version.json" || path == "/ota/box3/latest.bin":

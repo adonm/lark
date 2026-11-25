@@ -18,6 +18,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"lark/internal/library"
 )
 
 func (s *testWS) helloV2(t *testing.T, id, cat string) protocolFrame {
@@ -368,7 +370,7 @@ func wsHarness(t *testing.T, setup func(*larkServer, string)) (*larkServer, stri
 	ctx, cancel := context.WithCancel(t.Context())
 	db := testDB(t, filepath.Join(dir, "lark.db"))
 	b := &larkServer{root: ctx, token: "unit", db: db, terminals: terminalStore(db), history: &chatHistory{db: db},
-		library: filepath.Join(dir, "library")}
+		lib: library.New(filepath.Join(dir, "library"))}
 	if setup != nil {
 		setup(b, dir)
 	}

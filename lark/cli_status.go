@@ -79,15 +79,28 @@ func printLibraryPlan(out io.Writer, lib object) {
 	for _, item := range packs {
 		m, _ := item.(object)
 		switch str(m["state"]) {
-		case packStateInstalled:
+		case "installed":
 			fmt.Fprintf(out, "  %s\tinstalled\t%s\n", str(m["name"]), humanBytes(jsonInt(m["installed_bytes"])))
-		case packStateBuilding:
+		case "building":
 			fmt.Fprintf(out, "  %s\tbuilding\t%d%%\n", str(m["name"]), jsonInt(m["percent"]))
-		case packStateSkipped:
+		case "skipped":
 			fmt.Fprintf(out, "  %s\tskipped\t%s\n", str(m["name"]), str(m["reason"]))
 		default:
 			fmt.Fprintf(out, "  %s\t%s\t%s needed\n", str(m["name"]), str(m["state"]),
 				humanBytes(jsonInt(m["needed_bytes"])))
 		}
 	}
+}
+
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for n >= div*unit && exp < 4 {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }

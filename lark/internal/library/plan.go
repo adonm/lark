@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"errors"
@@ -113,7 +113,7 @@ func libraryBudget(total, free int64) int64 {
 }
 
 func libraryPackDB(dir string, pack libraryPack) string {
-	return filepath.Join(dir, librarySources[pack.name].db)
+	return filepath.Join(dir, sources[pack.name].db)
 }
 
 func libraryPackDump(dir string, pack libraryPack) string {
@@ -199,7 +199,7 @@ func libraryPackHealth(dir string, pack libraryPack) (bool, string) {
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return false, "index file is empty"
 	}
-	db, err := openLibraryDB(dbPath, true)
+	db, err := openDB(dbPath, true)
 	if err != nil {
 		return false, "index cannot be opened: " + err.Error()
 	}
@@ -415,12 +415,12 @@ func (p libraryPlan) pack(name string) (libraryPackPlan, bool) {
 	return libraryPackPlan{}, false
 }
 
-func libraryPlanReport(dir string) object {
+func PlanReport(dir string) map[string]any {
 	plan, err := planLibrary(dir, nil)
 	if err != nil {
-		return object{"dir": dir, "error": err.Error()}
+		return map[string]any{"dir": dir, "error": err.Error()}
 	}
-	return object{"dir": plan.Dir, "total_bytes": plan.TotalBytes, "free_bytes": plan.FreeBytes,
+	return map[string]any{"dir": plan.Dir, "total_bytes": plan.TotalBytes, "free_bytes": plan.FreeBytes,
 		"budget_bytes": plan.BudgetBytes, "reserve_bytes": plan.ReserveBytes,
 		"updated_at": plan.UpdatedAt, "packs": plan.Packs}
 }

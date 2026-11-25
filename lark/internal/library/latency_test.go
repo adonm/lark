@@ -1,11 +1,9 @@
 //go:build sqlite_fts5
 
-package main
+package library
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -15,15 +13,14 @@ import (
 // skip when no library is present, so the offline suite still runs on a fresh
 // checkout.
 func TestLibraryLatencyInstalled(t *testing.T) {
-	serial(t)
-	dir := env("LARK_LIBRARY_DIR", defaultLibraryDir())
-	var sources []string
-	for _, name := range librarySourceOrder {
-		if _, err := os.Stat(filepath.Join(dir, librarySources[name].db)); err == nil {
-			sources = append(sources, name)
+	lib := New(env("LARK_LIBRARY_DIR", DefaultDir()))
+	var installed []string
+	for _, name := range sourceOrder {
+		if lib.installed(name) {
+			installed = append(installed, name)
 		}
 	}
-	if len(sources) == 0 {
+	if len(installed) == 0 {
 		t.Skip("no installed library indexes")
 	}
 	queries := []string{
@@ -33,22 +30,21 @@ func TestLibraryLatencyInstalled(t *testing.T) {
 		"Roman empire",
 		"how do volcanoes erupt",
 	}
-	if slices.Contains(sources, "simple") {
+	if slices.Contains(installed, "simple") {
 		queries = append(queries, "what is a mammal")
 	}
-	b := &larkServer{library: dir}
 	ctx := context.Background()
 
 	search := []time.Duration{}
 	for _, query := range queries {
 		for range 2 {
-			if _, err := b.mcpLibrary(ctx, object{"op": "search", "query": query, "limit": 5}); err != nil {
+			if _, _, err := lib.Search(ctx, query, "auto", 5); err != nil {
 				t.Fatal(err)
 			}
 		}
 		for range 10 {
 			start := time.Now()
-			if _, err := b.mcpLibrary(ctx, object{"op": "search", "query": query, "limit": 5}); err != nil {
+			if _, _, err := lib.Search(ctx, query, "auto", 5); err != nil {
 				t.Fatal(err)
 			}
 			search = append(search, time.Since(start))
@@ -56,14 +52,14 @@ func TestLibraryLatencyInstalled(t *testing.T) {
 	}
 	slices.Sort(search)
 	p50, p95 := percentile(search, 50), percentile(search, 95)
-	t.Logf("library.search on %v: p50 %v, p95 %v, n=%d", sources, p50, p95, len(search))
+	t.Logf("library.search on %v: p50 %v, p95 %v, n=%d", installed, p50, p95, len(search))
 	// bm25 ranks every matching row on the full 7.25M-page enwiki index.
 	// Ranking through the FTS5 rank column keeps that scan on the index pages;
 	// snippets come from the final rows only. Measured 2026-11-23: p50 30 ms,
 	// p95 160 ms across all packs (was 90/170 with snippet() on every candidate).
 	// The small packs stay well under 50 ms.
 	searchLimit := 50 * time.Millisecond
-	if slices.Contains(sources, "enwiki") {
+	if slices.Contains(installed, "enwiki") {
 		searchLimit = 250 * time.Millisecond
 		if p50 > 50*time.Millisecond {
 			t.Fatalf("library.search p50 on enwiki %v exceeds 50ms", p50)
@@ -75,18 +71,17 @@ func TestLibraryLatencyInstalled(t *testing.T) {
 
 	// Read the strongest hit from each source and time bounded reads.
 	read := []time.Duration{}
-	for _, source := range sources {
-		out, err := b.mcpLibrary(ctx, object{"op": "search", "query": queries[0], "source": source, "limit": 1})
+	for _, source := range installed {
+		hits, _, err := lib.Search(ctx, queries[0], source, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		hits, _ := out["results"].([]libraryHit)
 		if len(hits) == 0 {
 			continue
 		}
 		for range 10 {
 			start := time.Now()
-			if _, err := b.mcpLibrary(ctx, object{"op": "read", "source": source, "title": hits[0].Ref}); err != nil {
+			if _, err := lib.Read(ctx, source, hits[0].Ref, 0); err != nil {
 				t.Fatal(err)
 			}
 			read = append(read, time.Since(start))

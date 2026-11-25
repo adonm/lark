@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -29,24 +27,5 @@ func TestStoredSessionIDIsValidatedBeforeUse(t *testing.T) {
 	}
 	if _, err := o.readBinding(t.Context(), "greg"); err == nil {
 		t.Fatal("readBinding accepted an invalid session id")
-	}
-}
-
-func TestChecksumAndManifestWritesReportErrors(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	if err := writeChecksums(filepath.Join(dir, "SHA256SUMS"), map[string]string{"a": "b"}); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(dir, "file")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	blocked := filepath.Join(file, "SHA256SUMS")
-	if err := writeChecksums(blocked, map[string]string{"a": "b"}); err == nil {
-		t.Fatal("writeChecksums into a directory path succeeded")
-	}
-	if err := appendLine(blocked, object{"id": 1}); err == nil {
-		t.Fatal("appendLine into a directory path succeeded")
 	}
 }

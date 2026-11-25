@@ -2,12 +2,32 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// createPackDB writes a minimal valid index so health checks see real rows.
+func createPackDB(t *testing.T, path, table string) {
+	t.Helper()
+	db, err := sql.Open("lark-sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE ` + table + ` (id INTEGER PRIMARY KEY, title TEXT NOT NULL, text TEXT NOT NULL DEFAULT '')`,
+		`INSERT INTO ` + table + ` (id,title) VALUES (1,'one')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestCLIAdminCommands(t *testing.T) {
 	t.Parallel()
@@ -66,14 +86,14 @@ func TestCLIAdminCommands(t *testing.T) {
 func TestStatusReportsLibraryPacks(t *testing.T) {
 	t.Parallel()
 	_, base := wsHarness(t, func(b *larkServer, _ string) {
-		if err := os.MkdirAll(b.library, 0o700); err != nil {
+		if err := os.MkdirAll(b.lib.Dir(), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		createPackDB(t, filepath.Join(b.library, "gutenberg.db"), "books")
-		if err := os.MkdirAll(filepath.Join(b.library, "books"), 0o700); err != nil {
+		createPackDB(t, filepath.Join(b.lib.Dir(), "gutenberg.db"), "books")
+		if err := os.MkdirAll(filepath.Join(b.lib.Dir(), "books"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(b.library, "books", "00001.txt"), []byte("text"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(b.lib.Dir(), "books", "00001.txt"), []byte("text"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	})
