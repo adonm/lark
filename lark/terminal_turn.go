@@ -19,7 +19,7 @@ const (
 	// so the cap only delays a reply whose stream stays short; it bounds the
 	// first-audio delay at half a second.
 	ttsPrefill    = time.Second
-	ttsPrefillMax = 500 * time.Millisecond
+	ttsPrefillMax = 250 * time.Millisecond
 	maxAudioLead  = 8 * time.Second
 	recStopWait   = 450 * time.Millisecond
 	captionWait   = 30 * time.Second

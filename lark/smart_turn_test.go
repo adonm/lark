@@ -208,7 +208,8 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 		t.Fatalf("noisy silence did not commit at cap: %v", got)
 	}
 
-	// 2. End-to-end WS: VAD stuck in speech + Smart Turn incomplete forever still commits within cap.
+	// 2. End-to-end WS: VAD stuck in speech + Smart Turn incomplete forever
+	// still commits, at the hesitation cap for a short unfinished fragment.
 	var clips atomic.Int32
 	b, base := wsHarness(t, func(b *larkServer, _ string) {
 		b.endpoint = &endpointSettings{
@@ -258,8 +259,8 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 	d.recStart(t, "")
 	d.barrier(t)
 	waitSVG(t, b.hub, id, "rec-send")
-	appendPCM(bytes.Repeat(speechFrame, 15))                              // 300ms speech
-	appendPCM(bytes.Repeat(noiseFrame, int(endpointCap/endpointFrame)+5)) // > cap (1.2s) noisy silence
+	appendPCM(bytes.Repeat(speechFrame, 15))                                        // 300ms speech
+	appendPCM(bytes.Repeat(noiseFrame, int(endpointHesitationCap/endpointFrame)+5)) // past the hesitation cap
 	d.until(t, recStop)
 	d.recEnd(t, "", false)
 	d.until(t, idleOrDone)
@@ -322,7 +323,7 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 	d.recStart(t, "")
 	d.barrier(t)
 	appendPCM(bytes.Repeat(speechFrame, 15))
-	appendPCM(bytes.Repeat(noiseFrame, int(endpointCap/endpointFrame)+10))
+	appendPCM(bytes.Repeat(noiseFrame, int(endpointHesitationCap/endpointFrame)+10))
 	d.until(t, recStop)
 	d.recEnd(t, "", false)
 	d.until(t, idleOrDone)

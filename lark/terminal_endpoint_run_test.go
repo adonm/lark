@@ -26,6 +26,8 @@ func testEndpointRun(listen bool) *endpointRun {
 		listen:    listen,
 		limitSpan: endpointLimit,
 		decode:    func(context.Context, []byte) (string, error) { return "", nil },
+		// No Smart Turn result yet, as on a live run before its first check.
+		smartProb: -1,
 	}
 	r.u.pcm = make([]byte, 0, sampleRate*2)
 	r.u.limit = c.limitBytes
@@ -286,5 +288,59 @@ func TestEndpointDecisionsMapToLegacy(t *testing.T) {
 		if got := tc.d.stops(); got != (tc.want != endpointWait) {
 			t.Fatalf("%v.stops() = %v, want %v", tc.d, got, tc.want != endpointWait)
 		}
+	}
+}
+
+// A short unfinished fragment with a very low Smart Turn probability waits
+// past the normal cap, and the child continuing mid-wait resumes cleanly.
+func TestEndpointRunHesitationContinuesWhenKidResumes(t *testing.T) {
+	t.Parallel()
+	r := testEndpointRun(false)
+	at := time.Unix(0, 0)
+	feedEndpointFrames(r, voicedEndpointFrame, 1, &at)
+	r.u.policy.observeProgress(r.u.policy.lastVoicedAt, "can you put his", false)
+	r.smartProb = 0.05
+	feedEndpointFrames(r, silentEndpointFrame, 60, &at) // 1200 ms, past the cap
+	if got := r.decision(); got != decisionContinue {
+		t.Fatalf("hesitation at the cap: %v, want continue", got)
+	}
+	feedEndpointFrames(r, voicedEndpointFrame, 20, &at) // resumes at about 1.6 s
+	r.u.policy.observeProgress(r.u.policy.lastVoicedAt, "can you put his shoes on please.", false)
+	r.smartProb = 0.92
+	feedEndpointFrames(r, silentEndpointFrame, 20, &at) // 400 ms after the resume
+	if got := r.decision(); got != decisionCommitQuiet {
+		t.Fatalf("resumed complete thought: %v, want commit quiet", got)
+	}
+}
+
+// If the child truly stopped, the extra second ends and the turn commits.
+func TestEndpointRunHesitationCommitsAtExtendedCap(t *testing.T) {
+	t.Parallel()
+	r := testEndpointRun(false)
+	at := time.Unix(0, 0)
+	feedEndpointFrames(r, voicedEndpointFrame, 1, &at)
+	r.u.policy.observeProgress(r.u.policy.lastVoicedAt, "can you put his", false)
+	r.smartProb = 0.05
+	feedEndpointFrames(r, silentEndpointFrame, 60, &at)
+	if got := r.decision(); got != decisionContinue {
+		t.Fatalf("before the hesitation cap: %v, want continue", got)
+	}
+	feedEndpointFrames(r, silentEndpointFrame, 55, &at) // past 2.2 s total
+	if got := r.decision(); got != decisionCommitCap {
+		t.Fatalf("at the hesitation cap: %v, want commit cap", got)
+	}
+}
+
+// A normal complete thought keeps the 400 ms quiet commit.
+func TestEndpointRunNormalThoughtStillCommitsAtQuiet(t *testing.T) {
+	t.Parallel()
+	r := testEndpointRun(false)
+	at := time.Unix(0, 0)
+	feedEndpointFrames(r, voicedEndpointFrame, 1, &at)
+	r.u.policy.observeProgress(r.u.policy.lastVoicedAt, "What time is it", false)
+	r.smartProb = 0.92
+	feedEndpointFrames(r, silentEndpointFrame, 20, &at) // 400 ms quiet
+	if got := r.decision(); got != decisionCommitQuiet {
+		t.Fatalf("normal thought: %v, want commit quiet", got)
 	}
 }

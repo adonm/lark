@@ -147,10 +147,13 @@ const (
 	endpointQuiet = 400 * time.Millisecond
 	// Speculation starts on an earlier, weaker end-of-turn signal so the LLM
 	// call overlaps the remaining quiet window instead of racing the commit.
-	endpointSpecQuiet   = 180 * time.Millisecond
-	endpointCap         = 1200 * time.Millisecond
-	endpointProbeEvery  = 250 * time.Millisecond
-	endpointProbeWindow = 4 * sampleRate * 2 // last <= 4 s
+	endpointSpecQuiet = 180 * time.Millisecond
+	endpointCap       = 1200 * time.Millisecond
+	// A short, clearly unfinished fragment gets one extra second when Smart
+	// Turn is also unsure. This preserves normal 400 ms / 1.2 s turns.
+	endpointHesitationCap = 2200 * time.Millisecond
+	endpointProbeEvery    = 250 * time.Millisecond
+	endpointProbeWindow   = 4 * sampleRate * 2 // last <= 4 s
 	// A monologue with no pause still has to become a turn.
 	endpointMonologue = 20 * time.Second
 	vadTail           = 320 * time.Millisecond
@@ -162,9 +165,10 @@ const (
 	gateCalibFrames = 50
 	// Below this fraction of the running speech level, VAD-positive audio is
 	// room noise (its 320 ms tail, a fan, a bump), not a quieter word.
-	speechEnergyRatio           = 0.12
-	smartTurnThreshold          = float32(0.90)
-	smartTurnSpeculateThreshold = float32(0.40)
+	speechEnergyRatio            = 0.12
+	smartTurnThreshold           = float32(0.90)
+	smartTurnSpeculateThreshold  = float32(0.40)
+	smartTurnHesitationThreshold = float32(0.25)
 )
 
 type endpointPolicy struct {
@@ -408,7 +412,7 @@ func (p *endpointPolicy) observeProgress(probeAt time.Duration, text string, win
 }
 
 func (p endpointPolicy) decision(at, capDur, limitDur time.Duration, smartTurnReady, listen bool) endpointDecision {
-	var prob float32
+	prob := float32(-1) // No Smart Turn result, not a zero probability.
 	if smartTurnReady {
 		prob = smartTurnThreshold
 	}
@@ -461,6 +465,12 @@ func (p endpointPolicy) classify(at, capDur, limitDur time.Duration, smartTurn f
 		return decisionContinue
 	}
 	if silence >= capDur {
+		// Smart Turn ran and judged this a clearly unfinished thought. Give a
+		// short fragment one more second instead of cutting the child off.
+		if smartTurn >= 0 && smartTurn < smartTurnHesitationThreshold &&
+			(p.wordCount <= 5 || p.incomplete) && silence < endpointHesitationCap {
+			return decisionContinue
+		}
 		return decisionCommitCap
 	}
 	if silence >= endpointQuiet && smartTurn >= smartTurnThreshold && !p.incomplete {

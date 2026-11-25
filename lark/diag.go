@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"log"
 	"math"
 	"os"
 	"runtime"
@@ -275,7 +276,43 @@ func (t *turnTrace) measure(metric diagMetric, elapsed time.Duration) {
 		}
 	}
 	t.d.mu.Unlock()
+	if metric == diagE2E && value > 5000 {
+		t.logSlowTurn()
+	}
 	t.d.sig.notify()
+}
+
+// logSlowTurn writes one stage breakdown for a turn over five seconds so a
+// slow incident is diagnosable without leaving verbose endpoint logging on.
+func (t *turnTrace) logSlowTurn() {
+	t.d.mu.Lock()
+	record := *t.record
+	t.d.mu.Unlock()
+	parts := []string{"e2e_ms=" + fmtStage(record.E2E), "terminal=" + record.Terminal, "source=" + record.Source}
+	for _, stage := range []struct {
+		name  string
+		value *float64
+	}{
+		{"stt_ms", record.STT}, {"llm_first_ms", record.First}, {"first_sentence_ms", record.FirstSentence},
+		{"llm_total_ms", record.Total}, {"tts_first_ms", record.TTS}, {"tts_queue_ms", record.TTSQueue},
+		{"tts_infer_ms", record.TTSInfer}, {"first_pcm_ms", record.FirstPCM}, {"gate_ms", record.Gate},
+		{"prompt_submit_ms", record.PromptSubmit},
+	} {
+		if stage.value != nil {
+			parts = append(parts, stage.name+"="+fmtStage(stage.value))
+		}
+	}
+	if record.Error {
+		parts = append(parts, "error=true")
+	}
+	log.Print("Lark slow turn " + strings.Join(parts, " "))
+}
+
+func fmtStage(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*value, 'f', 0, 64)
 }
 
 // specFirst records time-to-first-sentence for a speculative call. It is not
