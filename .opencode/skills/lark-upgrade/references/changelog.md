@@ -21,12 +21,12 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ### Upgrade Steps
 1. Back up `lark.db` and `lark.env`.
-2. Update and run `lark deploy`; `setup-opencode-config.py` rewrites an untouched generated config to primary `opencode/claude-haiku-5-5#none`, deep `opencode/gemini-4-hydrogen#high`, fallback `opencode/gemini-4-hydrogen#minimal`.
+2. Update and run `lark deploy`; `setup-opencode-config.py` rewrites an untouched generated config to primary `opencode/claude-haiku-5-5#none`, deep `opencode/claude-sonnet-5-5#high`, fallback `opencode/gpt-6-luna#low`.
 3. Remove `LARK_DEBUG_ENDPOINT=1` from `lark.env`; slow turns now log their own stage breakdown.
 4. Restart `lark.service`.
 
 ### Verification
-- `lark doctor` shows the three new model references and green checks.
+- `lark doctor` shows `primary opencode/claude-haiku-5-5#none, deep opencode/claude-sonnet-5-5#high, fallback opencode/gpt-6-luna#low` and green checks.
 - A paired contact's voice note gets a text reply with no file attachment.
 - Two `"tea"` timers 30 s apart leave one active timer.
 - The first token arriving after 8 s on the primary falls back once instead of hanging.

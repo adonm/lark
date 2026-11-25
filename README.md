@@ -241,10 +241,10 @@ Edit the dedicated `~/.local/share/lark/opencode/config/opencode/opencode.jsonc`
 {
   "agents": {
     "lark": { "model": "opencode/claude-haiku-5-5#none" },
-    "deep": { "model": "opencode/gemini-4-hydrogen#high" }
+    "deep": { "model": "opencode/claude-sonnet-5-5#high" }
   },
   "plugins": [
-    { "package": "./lark-model-router", "options": { "fallback": "opencode/gemini-4-hydrogen#minimal" } },
+    { "package": "./lark-model-router", "options": { "fallback": "opencode/gpt-6-luna#low" } },
     { "package": "./lark-context" }
   ]
 }

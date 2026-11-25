@@ -28,8 +28,8 @@ def put(path, content):
 
 
 PRIMARY_MODEL = "opencode/claude-haiku-5-5#none"
-FALLBACK_MODEL = "opencode/gemini-4-hydrogen#minimal"
-DEEP_MODEL = "opencode/gemini-4-hydrogen#high"
+FALLBACK_MODEL = "opencode/gpt-6-luna#low"
+DEEP_MODEL = "opencode/claude-sonnet-5-5#high"
 # Earlier releases shipped these generated defaults. Rewrite only a config
 # whose three model references all match one set, so installs keep deliberate
 # model selections.
@@ -38,6 +38,8 @@ LEGACY_DEFAULTS = [
      "opencode-go/glm-5.3-flash#low"),
     ({"lark": "opencode/deepseek-v4.1-flash#low", "deep": "opencode/glm-5.3#high"},
      "opencode/glm-5.3-flash#low"),
+    ({"lark": "opencode/claude-haiku-5-5#none", "deep": "opencode/gemini-4-hydrogen#high"},
+     "opencode/gemini-4-hydrogen#minimal"),
 ]
 DEEP_SYSTEM = (
     "Research and draft for a voice companion. Use the local library for grounded facts: "

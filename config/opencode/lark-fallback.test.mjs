@@ -3,12 +3,12 @@ import test from "node:test"
 import plugin from "./lark-fallback.js"
 
 const primary = { providerID: "opencode", id: "claude-haiku-5-5", variant: "none" }
-const backup = { providerID: "opencode", id: "gemini-4-hydrogen", variant: "minimal" }
+const backup = { providerID: "opencode", id: "gpt-6-luna", variant: "low" }
 const rateLimit = { status: 429, type: "provider.rate-limit" }
 const base = { sessionID: "ses_smoke", agent: "lark", kind: "primary", model: primary }
 const user = { id: "msg_user", type: "user", metadata: { larkSource: "typed" } }
 
-async function setup(initial = [user], model = primary, fallback = "opencode/gemini-4-hydrogen#minimal") {
+async function setup(initial = [user], model = primary, fallback = "opencode/gpt-6-luna#low") {
   const hooks = new Map()
   const rows = [...initial]
   const settled = Promise.withResolvers()
@@ -69,7 +69,7 @@ test("identical references and different providers do not retry as a fallback", 
   }
 })
 
-test("healthy Gemini stays primary without touching the prompt", async () => {
+test("healthy Luna stays primary without touching the prompt", async () => {
   const h = await setup()
   assert.deepEqual(await h.resolve(), primary)
   await h.response(200)
@@ -77,7 +77,7 @@ test("healthy Gemini stays primary without touching the prompt", async () => {
   assert.deepEqual(h.rows, [user])
 })
 
-test("Gemini HTTP 429 retries the same user message on Haiku immediately", async () => {
+test("Luna HTTP 429 retries the same user message on Haiku immediately", async () => {
   const h = await setup()
   await h.response(429)
   assert.deepEqual(await h.retry(rateLimit), { retry: true, delay: 0 })
@@ -91,7 +91,7 @@ test("Gemini HTTP 429 retries the same user message on Haiku immediately", async
   assert.deepEqual(await h.resolve(), primary)
 })
 
-test("Gemini HTTP 503 switches immediately; a Haiku limit is terminal", async () => {
+test("Luna HTTP 503 switches immediately; a Haiku limit is terminal", async () => {
   const h = await setup()
   await h.response(503)
   assert.deepEqual(await h.retry({ type: "provider.internal", status: 503 }), { retry: true, delay: 0 })
@@ -116,7 +116,7 @@ test("only the exact Console endpoint-unavailable 403 switches", async () => {
   }
 })
 
-test("published text and possible tool effects block a Gemini replay", async () => {
+test("published text and possible tool effects block a Luna replay", async () => {
   for (const content of [[{ type: "text" }], [{ type: "tool" }], []]) {
     const h = await setup([user, { id: "msg_earlier", type: "assistant", content }])
     await h.response(429)

@@ -39,11 +39,10 @@ companion. Lark talks to it over SSE. The agent gets the `tools.lark` MCP tools:
 | `library` | Search/read/list/import from the local text library. |
 | `emit` | Intercom, speak on a terminal, play notes or a named sound. |
 
-A `deep` subagent (`opencode/gemini-4-hydrogen#high` by default) handles
+A `deep` subagent (`opencode/claude-sonnet-5-5#high` by default) handles
 multi-step plans, hard questions, and stories. The primary companion model is
 `opencode/claude-haiku-5-5#none`; the fallback router retries once on
-`opencode/gemini-4-hydrogen#minimal` for a rate limit or supported upstream
-rejection. When the primary accepts a prompt but emits no token for 8 s, Lark
+`opencode/gpt-6-luna#low` for a rate limit or supported upstream rejection. When the primary accepts a prompt but emits no token for 8 s, Lark
 interrupts it and retries once on that fallback model too.
 
 **Delta Chat.** One `deltachat-rpc-server` child process and one Chatmail

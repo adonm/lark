@@ -69,6 +69,9 @@ class SetupOpenCodeConfigTest(unittest.TestCase):
         self.assertIn("./lark-model-router", packages)
         self.assertIn("./lark-context", packages)
         self.assertTrue((self.dir / "./lark-context/index.js").exists())
+        self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/claude-haiku-5-5#none")
+        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/claude-sonnet-5-5#high")
+        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gpt-6-luna#low")
 
     def test_commented_jsonc_is_parsed_and_completed(self):
         self.config.write_text(
@@ -118,8 +121,8 @@ class SetupOpenCodeConfigTest(unittest.TestCase):
         self.run_installer()
         cfg = self.read()
         self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/claude-haiku-5-5#none")
-        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/gemini-4-hydrogen#high")
-        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gemini-4-hydrogen#minimal")
+        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/claude-sonnet-5-5#high")
+        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gpt-6-luna#low")
 
     def test_previous_defaults_migrate(self):
         self.config.write_text(json.dumps({
@@ -133,8 +136,23 @@ class SetupOpenCodeConfigTest(unittest.TestCase):
         self.run_installer()
         cfg = self.read()
         self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/claude-haiku-5-5#none")
-        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/gemini-4-hydrogen#high")
-        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gemini-4-hydrogen#minimal")
+        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/claude-sonnet-5-5#high")
+        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gpt-6-luna#low")
+
+    def test_gemini_benchmark_defaults_migrate(self):
+        self.config.write_text(json.dumps({
+            "agents": {
+                "lark": {"model": "opencode/claude-haiku-5-5#none"},
+                "deep": {"model": "opencode/gemini-4-hydrogen#high"},
+            },
+            "plugins": [{"package": "./lark-model-router",
+                         "options": {"fallback": "opencode/gemini-4-hydrogen#minimal"}}],
+        }))
+        self.run_installer()
+        cfg = self.read()
+        self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/claude-haiku-5-5#none")
+        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/claude-sonnet-5-5#high")
+        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gpt-6-luna#low")
 
     def test_invalid_jsonc_fails_loudly(self):
         self.config.write_text('{"plugins": [')

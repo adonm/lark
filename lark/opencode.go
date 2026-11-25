@@ -85,7 +85,7 @@ var defaultSmartModel = ocModel{Provider: "opencode", ID: "gemini-4-hydrogen", V
 // whole turn timeout, and the HTTP-status fallback plugin cannot see them.
 const defaultFirstTokenStallTimeout = 8 * time.Second
 
-var defaultFallbackModel = ocModel{Provider: "opencode", ID: "gemini-4-hydrogen", Variant: "minimal"}
+var defaultFallbackModel = ocModel{Provider: "opencode", ID: "gpt-6-luna", Variant: "low"}
 
 var errFirstTokenStall = errors.New("primary model stalled before its first token")
 

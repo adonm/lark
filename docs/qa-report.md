@@ -16,8 +16,7 @@ As of 2026-11-24 on `main`:
   4,250-byte budget. A worst-case state line (3 terminals, 5 timers, 5 stories,
   60-byte labels) measures 1,176 bytes against its 1,280-byte bound.
 - Companion models: primary `opencode/claude-haiku-5-5#none`, deep
-  `opencode/gemini-4-hydrogen#high`, fallback
-  `opencode/gemini-4-hydrogen#minimal`.
+  `opencode/claude-sonnet-5-5#high`, fallback `opencode/gpt-6-luna#low`.
 - Firmware source is 0.21.0.
 
 Open gaps:
