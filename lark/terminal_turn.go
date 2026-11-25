@@ -7,6 +7,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"lark/internal/stories"
 )
 
 const (
@@ -167,7 +169,7 @@ func (h *terminalHub) tryStoryVoiceChoice(d *terminalSession, turnID uint64, tex
 		if !h.active(d) || d.turn != turnID || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
 			return
 		}
-		idx, ok := matchStoryChoice(text, d.story.choices)
+		idx, ok := stories.MatchChoice(text, d.story.choices)
 		if !ok {
 			return
 		}

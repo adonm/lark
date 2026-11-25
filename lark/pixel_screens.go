@@ -15,6 +15,9 @@ import (
 	"rsc.io/qr"
 )
 
+// maxStoryChoices caps the choice buttons the story reader lays out.
+const maxStoryChoices = 3
+
 type pixelTextOp struct {
 	x, y  int
 	text  string
@@ -419,7 +422,7 @@ func renderPixelReader(spec pixelDisplaySpec, title, body string, page, bodyScal
 	return finishPixelScreen(c, spec, texts)
 }
 
-func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, choices []storyChoice, end bool, page int, bg, narrator *image.RGBA, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, int) {
+func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, choices []string, end bool, page int, bg, narrator *image.RGBA, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, int) {
 	if th.border.A == 0 {
 		th = defaultPixelTheme()
 	}
@@ -488,10 +491,10 @@ func renderPixelStoryReaderWithHits(spec pixelDisplaySpec, title, body string, c
 			r := image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+choiceH)
 			c.panel(r.Min.X, r.Min.Y, r.Dx(), r.Dy(), pxTileBG, th.accent)
 			pBox := physicalRect(image.Rect(r.Min.X+3, r.Min.Y+1, r.Max.X-3, r.Max.Y-1), s)
-			label := truncateEllipsisPx(ch.Label, dogica.Bold, bodyScale, pBox.Dx())
+			label := truncateEllipsisPx(ch, dogica.Bold, bodyScale, pBox.Dx())
 			texts = addCenteredText(texts, pBox, label, dogica.Bold, bodyScale, pxInk)
 			id := fmt.Sprintf("choice-%d", i)
-			hits = addLabeledHit(hits, spec, id, ch.Label, r)
+			hits = addLabeledHit(hits, spec, id, ch, r)
 			acts[id] = sceneAction{"story-choice", strconv.Itoa(i)}
 		}
 		navY := bottomY - btnNavH

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"lark/internal/stories"
 )
 
 func (b *larkServer) serveRemoteEvents(w http.ResponseWriter, r *http.Request, companionID string) {
@@ -161,7 +163,7 @@ func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, por
 	}
 	slices.SortFunc(terminals, func(a, b object) int { return strings.Compare(str(a["id"]), str(b["id"])) })
 
-	progressByStory := make(map[string]storyProgress)
+	progressByStory := make(map[string]stories.Progress)
 	if plist, err := b.listStoryProgress(ctx, companionID); err == nil {
 		for _, p := range plist {
 			progressByStory[p.StoryID] = p

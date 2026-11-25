@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"lark/internal/stories"
 )
 
 // One command per capability sits here. Transports decode their own typed
@@ -139,28 +141,28 @@ func (b *larkServer) setListening(ctx context.Context, companionID string, on bo
 }
 
 // openStory shows an existing story on every live terminal for a companion.
-func (b *larkServer) openStory(ctx context.Context, companionID, storyID string) (savedStory, error) {
+func (b *larkServer) openStory(ctx context.Context, companionID, storyID string) (stories.Saved, error) {
 	st, err := b.loadStory(ctx, storyID)
 	if err != nil {
-		return savedStory{}, problem(404, "Story not found")
+		return stories.Saved{}, problem(404, "Story not found")
 	}
 	b.showStory(companionID, st)
 	return st, nil
 }
 
-func (b *larkServer) restartStory(ctx context.Context, companionID, storyID string) (savedStory, error) {
+func (b *larkServer) restartStory(ctx context.Context, companionID, storyID string) (stories.Saved, error) {
 	st, err := b.loadStory(ctx, storyID)
 	if err != nil {
-		return savedStory{}, problem(404, "Story not found")
+		return stories.Saved{}, problem(404, "Story not found")
 	}
 	if err := b.clearStoryProgress(ctx, companionID, st.ID); err != nil {
-		return savedStory{}, problem(502, "Could not reset progress")
+		return stories.Saved{}, problem(502, "Could not reset progress")
 	}
 	b.showStory(companionID, st)
 	return st, nil
 }
 
-func (b *larkServer) showStory(companionID string, st savedStory) {
+func (b *larkServer) showStory(companionID string, st stories.Saved) {
 	if b.hub == nil {
 		return
 	}

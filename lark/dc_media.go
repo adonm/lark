@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
+
+	"lark/internal/stories"
 )
 
 func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
@@ -174,7 +176,7 @@ func (s *dcService) importTweeAttachment(ctx context.Context, rpc dcRPC, accID, 
 		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
 		return
 	}
-	cs, err := parseTwee(string(raw))
+	cs, err := stories.Parse(string(raw))
 	if err != nil {
 		msg := fmt.Sprintf("Could not import story:\n%s", err.Error())
 		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
@@ -192,16 +194,16 @@ func (s *dcService) importTweeAttachment(ctx context.Context, rpc dcRPC, accID, 
 }
 
 func (s *dcService) sendStoryFiles(ctx context.Context, rpc dcRPC, companionID string, accID, chatID uint32, query string) {
-	stories, err := s.b.listStories(ctx)
+	list, err := s.b.listStories(ctx)
 	if err != nil {
 		msg := "Could not load stories."
 		_, _ = rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &msg})
 		return
 	}
 	q := strings.ToLower(strings.TrimSpace(query))
-	var found *savedStory
-	for i := range stories {
-		st := &stories[i]
+	var found *stories.Saved
+	for i := range list {
+		st := &list[i]
 		if st.ID == q || strings.EqualFold(st.Title, query) {
 			found = st
 			break

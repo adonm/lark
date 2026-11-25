@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"lark/internal/stories"
 )
 
 const (
@@ -630,7 +632,7 @@ type renderRequest struct {
 	statsRows    []menuRow
 	storyTitle   string
 	storyText    string
-	storyChoices []storyChoice
+	storyChoices []stories.Choice
 	storyEnd     bool
 	storyBG      *image.RGBA
 	storyPage    int
@@ -642,13 +644,13 @@ type renderRequest struct {
 // openStory starts opening a story from outside the actor. Twee parsing, saved
 // progress, and the background load run in the caller goroutine; the session
 // commit runs in its actor.
-func (h *terminalHub) openStory(d *terminalSession, st savedStory, narrate bool) {
+func (h *terminalHub) openStory(d *terminalSession, st stories.Saved, narrate bool) {
 	d.post(terminalEvent{kind: evStoryOpen, now: time.Now(), story: terminalStory{st: st, narrate: narrate}})
 }
 
-func (h *terminalHub) openStoryEvent(d *terminalSession, st savedStory, narrate bool) {
+func (h *terminalHub) openStoryEvent(d *terminalSession, st stories.Saved, narrate bool) {
 	go func() {
-		cs, err := parseTwee(st.Twee)
+		cs, err := stories.Parse(st.Twee)
 		if err != nil {
 			return
 		}
@@ -657,14 +659,14 @@ func (h *terminalHub) openStoryEvent(d *terminalSession, st savedStory, narrate 
 			title:      cs.Title,
 			compiled:   cs,
 			passageIdx: -1,
-			flags:      cs.flagsSlice(nil),
+			flags:      cs.FlagsSlice(nil),
 		}
 		page := 0
 		entered := false
 		if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
 			if prog, ok, perr := h.b.getStoryProgress(d.client.ctx, d.companionID.get(), st.ID); perr == nil && ok {
 				if idx, exists := cs.ByName[prog.Passage]; exists {
-					sess.flags = cs.flagsSlice(prog.Flags)
+					sess.flags = cs.FlagsSlice(prog.Flags)
 					sess.enterPassage(idx, false)
 					page = prog.Page
 					entered = true
@@ -718,12 +720,12 @@ func (h *terminalHub) advanceStoryPassage(d *terminalSession, targetIdx int, nar
 		}
 	}
 	if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
-		prog := storyProgress{
+		prog := stories.Progress{
 			CompanionID: d.companionID.get(),
 			StoryID:     sess.id,
 			Passage:     sess.currentPassageName(),
 			Page:        0,
-			Flags:       sess.compiled.flagsMap(sess.flags),
+			Flags:       sess.compiled.FlagsMap(sess.flags),
 		}
 		go func() {
 			_ = h.b.setStoryProgress(context.Background(), prog)

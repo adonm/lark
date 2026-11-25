@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"lark/internal/stories"
 )
 
 func bindMenu(c *testWS, h *terminalHub, termID string) {
@@ -283,7 +285,7 @@ func TestOpenStoryEntersStartPassage(t *testing.T) {
 
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
 	d := b.hub.live("vocat-story-open")
-	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, false)
+	b.hub.openStory(d, stories.Saved{ID: "test-owl", Title: "Test Owl", Twee: twee}, false)
 	sess := waitTerm(t, d, func(st terminalState) bool { return st.story != nil }).story
 
 	if sess == nil || sess.text != "Once upon a time." || len(sess.choices) != 1 {
@@ -300,7 +302,7 @@ func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *term
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, termID, "Cake")
 	d := b.hub.live(termID)
-	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
+	b.hub.openStory(d, stories.Saved{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
 	waitTerm(t, d, func(st terminalState) bool { return st.story != nil })
 	return requests, d, b, b.worker
 }

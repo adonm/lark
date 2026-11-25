@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"lark/internal/stories"
 )
 
 // terminalMode is the coarse session phase. Detailed state (capture phase, open
@@ -273,7 +275,7 @@ type terminalEvent struct {
 }
 
 type terminalStory struct {
-	st      savedStory
+	st      stories.Saved
 	narrate bool
 	idx     int
 	bg      *image.RGBA

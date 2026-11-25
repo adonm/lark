@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"lark/internal/stories"
 )
 
 // benchServer builds a companion with many stories and a saved reading
@@ -33,7 +35,7 @@ func benchServer(tb testing.TB) *larkServer {
 			tb.Fatal(err)
 		}
 	}
-	if err := b.setStoryProgress(context.Background(), storyProgress{CompanionID: "greg", StoryID: "story-00", Passage: "P6"}); err != nil {
+	if err := b.setStoryProgress(context.Background(), stories.Progress{CompanionID: "greg", StoryID: "story-00", Passage: "P6"}); err != nil {
 		tb.Fatal(err)
 	}
 	return b

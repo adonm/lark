@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"log"
-	"strings"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )

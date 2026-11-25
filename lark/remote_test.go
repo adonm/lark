@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
+
+	"lark/internal/stories"
 )
 
 func fakeTunnelRunner(calls *[]string) tunnelRunner {
@@ -176,7 +178,7 @@ func TestRemoteRESTCommandsAndHistoryCursor(t *testing.T) {
 	if _, _, err := b.saveStory(t.Context(), "lost_island", ":: StoryTitle\nLost Island\n\n:: Start\nShore.\n\n[[Cave->Cave]]\n\n:: Cave {\"end\":true}\nFound treasure.\n", "", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.setStoryProgress(t.Context(), storyProgress{CompanionID: "greg", StoryID: "lost_island", Passage: "Cave"}); err != nil {
+	if err := b.setStoryProgress(t.Context(), stories.Progress{CompanionID: "greg", StoryID: "lost_island", Passage: "Cave"}); err != nil {
 		t.Fatal(err)
 	}
 

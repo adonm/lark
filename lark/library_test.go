@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lark/internal/stories"
 )
 
 func testWikiDB(t testing.TB, path string, pages map[string]string) {
@@ -168,7 +170,7 @@ func TestLibrarySearchReadImport(t *testing.T) {
 	if !strings.Contains(saved.Author, "Wikipedia") {
 		t.Fatalf("missing attribution: %q", saved.Author)
 	}
-	if _, err := parseTwee(saved.Twee); err != nil {
+	if _, err := stories.Parse(saved.Twee); err != nil {
 		t.Fatalf("imported Twee is invalid: %v", err)
 	}
 
@@ -201,7 +203,7 @@ func TestLibraryTweePassageBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiled, err := parseTwee(twee)
+	compiled, err := stories.Parse(twee)
 	if err != nil {
 		t.Fatal(err)
 	}

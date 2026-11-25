@@ -212,7 +212,7 @@ func newWhisperMel() *whisperMel {
 func hzToMelSlaney(hz float64) float64 {
 	const (
 		minLogHz  = 1000.0
-		minLogMel = 15.0 // 1000 * 3 / 200
+		minLogMel = 15.0                // 1000 * 3 / 200
 		logStep   = 0.06875177742094912 // ln(6.4) / 27
 	)
 	if hz >= minLogHz {

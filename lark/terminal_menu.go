@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"lark/internal/stories"
 )
 
 // handleProto hands one inbound frame to the session actor. The payload aliases
@@ -199,12 +201,12 @@ func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Ti
 			h.stopPlayback(d, true)
 			d.storyPage = d.menuPage
 			if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
-				prog := storyProgress{
+				prog := stories.Progress{
 					CompanionID: d.companionID.get(),
 					StoryID:     d.story.id,
 					Passage:     d.story.currentPassageName(),
 					Page:        d.storyPage,
-					Flags:       d.story.compiled.flagsMap(d.story.flags),
+					Flags:       d.story.compiled.FlagsMap(d.story.flags),
 				}
 				go func() {
 					_ = h.b.setStoryProgress(context.Background(), prog)
@@ -463,7 +465,7 @@ func (h *terminalHub) clearView(d *terminalSession) {
 
 type menuContent struct {
 	stories      []pixelStory
-	storyList    []savedStory
+	storyList    []stories.Saved
 	games        []tile
 	memories     []pixelMemoryItem
 	memoryTitles map[string]string
@@ -538,7 +540,11 @@ func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, 
 			img, hits, acts := renderPixelListWithHits(spec, "Story", nil, "No story open", 0, th, th.accent2)
 			return img, hits, acts, nil
 		}
-		img, hits, acts, _ := renderPixelStoryReaderWithHits(spec, r.storyTitle, r.storyText, r.storyChoices, r.storyEnd, r.storyPage, r.storyBG, narrator, th)
+		labels := make([]string, len(r.storyChoices))
+		for i, ch := range r.storyChoices {
+			labels[i] = ch.Label
+		}
+		img, hits, acts, _ := renderPixelStoryReaderWithHits(spec, r.storyTitle, r.storyText, labels, r.storyEnd, r.storyPage, r.storyBG, narrator, th)
 		return img, hits, acts, nil
 	case drawerStories:
 		if len(m.stories) == 0 {
@@ -658,7 +664,7 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 	var m menuContent
 	switch drawer {
 	case drawerStories:
-		stories, err := b.listStories(ctx)
+		list, err := b.listStories(ctx)
 		m.notice = "No stories yet"
 		progMap := map[string]string{}
 		if progs, perr := b.listStoryProgress(ctx, id); perr == nil {
@@ -667,7 +673,7 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 			}
 		}
 		palette := []imagecolor.RGBA{pxMint, pxPeach, pxSky}
-		for i, st := range stories {
+		for i, st := range list {
 			m.storyList = append(m.storyList, st)
 			m.stories = append(m.stories, pixelStory{
 				ID:       st.ID,
@@ -712,8 +718,8 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 		entries, err := b.memoryEntries(ctx, "companion:"+id)
 		m.notice = "No memories yet"
 		m.memoryTitles = map[string]string{}
-		if stories, serr := b.listStories(ctx); serr == nil {
-			for _, st := range stories {
+		if list, serr := b.listStories(ctx); serr == nil {
+			for _, st := range list {
 				m.memoryTitles[st.ID] = st.Title
 			}
 		}

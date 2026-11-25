@@ -518,17 +518,17 @@ func (s *dcService) contactName(ct deltachat.Contact) string {
 }
 
 func (s *dcService) sendStoriesList(ctx context.Context, rpc dcRPC, accID, chatID uint32) {
-	stories, err := s.b.listStorySummaries(ctx)
+	list, err := s.b.listStorySummaries(ctx)
 	if err != nil {
 		dcSend(rpc, accID, chatID, "Could not load stories.")
 		return
 	}
-	if len(stories) == 0 {
+	if len(list) == 0 {
 		dcSend(rpc, accID, chatID, "No stories yet.")
 		return
 	}
 	lines := []string{"Stories:"}
-	for _, st := range stories {
+	for _, st := range list {
 		lines = append(lines, fmt.Sprintf("- %s (%s, %d passages)", st.Title, st.ID, st.Passages))
 	}
 	dcSend(rpc, accID, chatID, strings.Join(lines, "\n"))

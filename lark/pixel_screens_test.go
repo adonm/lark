@@ -84,11 +84,7 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 		{ID: "lost_island", Title: "The Lost Island", Passage: "Harbor", Passages: 7, Color: pxMint},
 		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: pxPeach},
 	}
-	storyChoices := []storyChoice{
-		{Label: "Take the mossy path", Target: 1},
-		{Label: "Follow the lantern", Target: 2},
-		{Label: "Wait here", Target: 3},
-	}
+	storyChoices := []string{"Take the mossy path", "Follow the lantern", "Wait here"}
 	memories := []pixelMemoryItem{
 		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed."}`},
 		{Section: "Game saves", Key: "monsters", Value: `{"Mint":4,"Cake":0}`},
@@ -207,11 +203,7 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: pxPeach},
 		{ID: "moonlight_meadow", Title: "Moonlight Meadow", Passage: "Clearing", Passages: 4, Color: pxSky},
 	}
-	storyChoices := []storyChoice{
-		{Label: "Take the mossy path", Target: 1},
-		{Label: "Follow the lantern", Target: 2},
-		{Label: "Wait here", Target: 3},
-	}
+	storyChoices := []string{"Take the mossy path", "Follow the lantern", "Wait here"}
 	lostIslandText := "Once upon a time in a faraway land, there were people who always told tales about this island. All of them thought it was true, so they tried hunting for the Lost Island."
 	memories := []pixelMemoryItem{
 		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed and stories about old sailing ships."}`},
