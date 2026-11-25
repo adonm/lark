@@ -8,9 +8,9 @@ shim='\b(TODO|FIXME|HACK|XXX)\b|\bfor now\b|temporar(y|ily)[[:space:]]+(fix|hack
 status=0
 hits='' rc=0
 hits=$(grep -rnE \
-    --include='*.go' --include='*.js' --include='*.mjs' \
-    --include='*.sh' --include='*.py' --include='*.md' \
-    --exclude='lint-shims.sh' -- "$shim" lark config scripts) || rc=$?
+    --include='*.go' --include='*.ts' --include='*.js' --include='*.mjs' \
+    --include='*.sh' --include='*.py' --include='*.md' --exclude-dir=node_modules \
+    --exclude='lint-shims.sh' -- "$shim" lark brain scripts web) || rc=$?
 if ((rc > 1)); then
     exit "$rc"
 fi

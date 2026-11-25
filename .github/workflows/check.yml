@@ -32,39 +32,23 @@ jobs:
           cache-dependency-path: lark/go.sum
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: '24'
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: brain/package-lock.json
       - name: Install host check tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg gcc shellcheck
+      - name: Install brain dependencies
+        run: npm ci --prefix brain --no-audit --no-fund
       - name: Run offline checks
-        # Mirrors ./scripts/check.sh: shell, Node, Go vet and race tests, and
-        # the host C tests with ASan/UBSan. sherpa-onnx-go-linux supplies the
-        # CGO libraries and their RUNPATH; no Vulkan toolchain or GPU is needed.
+        # Mirrors ./scripts/check.sh: shell, TypeScript brain (typecheck and
+        # tests, including the cross-process edge/brain test), Python, Go vet
+        # and race tests, and the host C tests with ASan/UBSan.
         env:
           TTS_MODEL_DIR: ${{ runner.temp }}/no-kokoro-model-pack
           GOFLAGS: ''
         run: ./scripts/check.sh
-
-  e2e-stub:
-    name: Stub matrix
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: lark/go.mod
-          cache-dependency-path: lark/go.sum
-      - name: Install CGO toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc
-      # One isolated stub bridge and every non-hardware scenario; no models,
-      # GPU, Delta Chat account or installed service is needed.
-      - run: ./scripts/check.sh --e2e-stub
 
   remote-ui:
     name: Remote UI (Playwright)
@@ -76,7 +60,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: '24'
+          node-version: '26'
       - name: Install Playwright and Chromium
         run: |
           npm install --prefix "$RUNNER_TEMP/pw" --no-audit --no-fund playwright@1.65.1
@@ -85,7 +69,7 @@ jobs:
         env:
           LARK_PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
           NODE_PATH: ${{ runner.temp }}/pw/node_modules
-        run: node --test lark/web/remote-ui/remote.test.mjs
+        run: node --test web/remote-ui/remote.test.mjs
 
   firmware:
     name: Firmware build

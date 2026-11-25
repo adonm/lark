@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Operator CLI. Most commands talk to the running brain over its loopback HTTP
+# API; OTA and library downloads/builds run in the compiled edge.
+set -euo pipefail
+
+self=$(readlink -f -- "${BASH_SOURCE[0]}")
+repo=${LARK_REPO_DIR:-$(cd -- "$(dirname -- "$self")/.." && pwd)}
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+
+edge=${LARK_EDGE_BIN:-}
+if [[ -z $edge ]]; then
+    for candidate in "$data_home/lark/lark-edge" "$repo/lark-edge"; do
+        if [[ -x $candidate ]]; then edge=$candidate; break; fi
+    done
+fi
+if [[ -z $edge ]] && command -v lark-edge >/dev/null; then
+    edge=$(command -v lark-edge)
+fi
+need_edge() {
+    if [[ -z $edge ]]; then
+        printf 'lark: cannot find the lark-edge binary; run scripts/setup-host.sh or set LARK_EDGE_BIN\n' >&2
+        exit 1
+    fi
+}
+
+case ${1-} in
+    ota)
+        need_edge
+        shift
+        exec "$edge" ota "$@"
+        ;;
+    deploy)
+        shift
+        exec "$repo/scripts/setup-host.sh" "$@"
+        ;;
+    library)
+        for arg in "$@"; do
+            case $arg in
+                --build|--download)
+                    need_edge
+                    exec "$edge" library "$@"
+                    ;;
+            esac
+        done
+        ;;
+esac
+exec node "$repo/brain/src/cli.ts" "$@"

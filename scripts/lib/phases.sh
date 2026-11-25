@@ -8,18 +8,21 @@ host_cc=(gcc -std=c11 -Wall -Wextra -Werror -I firmware/main "-fsanitize=address
 
 phase_shell() {
     local script
-    for script in scripts/*.sh scripts/lib/*.sh; do
+    for script in scripts/*.sh scripts/lib/*.sh scripts/lark; do
         bash -n "$script"
     done
     if command -v shellcheck >/dev/null; then
-        shellcheck -x scripts/*.sh scripts/lib/*.sh
+        shellcheck -x scripts/*.sh scripts/lib/*.sh scripts/lark
     fi
     printf 'PASS shell checks\n'
 }
 
-phase_node() {
-    node --test config/opencode/*.test.mjs
-    node --check lark/web/remote/app.js
+phase_brain() {
+    # Typecheck first, then the whole suite. e2e.test.ts builds and runs the
+    # real Go edge in a separate process, so this covers the IPC seam too.
+    (cd brain && npm run --silent typecheck && node --test src/*.test.ts)
+    node --check web/remote/app.js
+    printf 'PASS brain typecheck and tests\n'
 }
 
 phase_python() { python3 -m unittest discover -s scripts/tests; }
@@ -34,11 +37,6 @@ phase_vet() {
 }
 
 phase_race() { (cd lark && "$GO_BIN" test -race -tags sqlite_fts5 ./...); }
-
-phase_live_compile() {
-    # Compile the live suite so build-tag drift cannot land unnoticed.
-    (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -run '^$' -count=1 .)
-}
 
 phase_parakeet_compile() {
     # The cgo bridge only builds where Parakeet was compiled, so tag-gated
@@ -60,7 +58,7 @@ phase_parakeet_compile() {
         cd lark || exit
         CGO_CFLAGS="\"-I$native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}" \
         CGO_LDFLAGS="\"-L$native/lib\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" \
-            "$GO_BIN" build -tags 'parakeet,sqlite_fts5' -o /dev/null .
+            "$GO_BIN" build -tags 'parakeet,sqlite_fts5' -o /dev/null ./cmd/lark-edge
     )
     printf 'PASS parakeet compile (%s)\n' "$native"
 }
@@ -104,4 +102,4 @@ phase_c_host() {
     done
 }
 
-phase_build() { (cd lark && "$GO_BIN" build -tags sqlite_fts5 ./...); }
+phase_build() { (cd lark && "$GO_BIN" build ./...); }

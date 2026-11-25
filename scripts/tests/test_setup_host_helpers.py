@@ -1,5 +1,6 @@
 """Tests for the Python helpers setup-host.sh calls."""
 
+import json
 import re
 import sys
 import tempfile
@@ -26,20 +27,21 @@ class LarkEnvTest(unittest.TestCase):
         self.assertIn("LARK_HOST=0.0.0.0\n", text)
         self.assertIn("LARK_CHATMAIL_RELAY=nine.testrun.org\n", text)
         self.assertNotIn("GGML_VK_VISIBLE_DEVICES", text)
+        self.assertNotIn("OPENCODE_SERVER_PASSWORD", text)
 
-    def test_existing_values_are_kept_and_settings_replaced_once(self):
+    def test_existing_values_are_kept_and_retired_settings_removed(self):
         self.path.write_text(
             "LARK_HOST=127.0.0.1\n"
             "LARK_TOKEN=abc\n"
+            "LARK_OPENCODE_URL=http://stale:1\n"
             "LARK_OPENCODE_PASSWORD=" + "a" * 64 + "\n"
-            "LARK_OPENCODE_URL=http://stale:1\n")
+            "OPENCODE_SERVER_PASSWORD=" + "a" * 64 + "\n")
         text = lark_env.write_env_file(self.path, "1")
         self.assertIn("LARK_HOST=127.0.0.1\n", text)
         self.assertIn("LARK_TOKEN=abc\n", text)
-        self.assertEqual(text.count("LARK_OPENCODE_PASSWORD="), 1)
-        self.assertIn("LARK_OPENCODE_PASSWORD=" + "a" * 64 + "\n", text)
-        self.assertEqual(text.count("LARK_OPENCODE_URL="), 1)
-        self.assertIn("LARK_OPENCODE_URL=http://127.0.0.1:49375\n", text)
+        self.assertNotIn("LARK_OPENCODE_URL", text)
+        self.assertNotIn("LARK_OPENCODE_PASSWORD", text)
+        self.assertNotIn("OPENCODE_SERVER_PASSWORD", text)
         self.assertIn("GGML_VK_VISIBLE_DEVICES=1\n", text)
 
 
@@ -51,31 +53,58 @@ class SystemdUnitsTest(unittest.TestCase):
             units.mkdir()
             repo = tmp / "repo"
             (repo / "lark").mkdir(parents=True)
-            for name in ("lark.service", "lark-opencode.service"):
+            for name in systemd_units.UNIT_NAMES:
                 (repo / "lark" / name).write_text(
                     (REPO / "lark" / name).read_text())
-            oc_root = tmp / "elsewhere" / "opencode"
+            data_home = tmp / "data home"
+            edge_bin = tmp / "bin" / "lark-edge"
+            node_bin = tmp / "bin" / "node"
             env_file = tmp / "custom.env"
             rendered = systemd_units.render_units(
-                repo, tmp / "data", tmp / "bin" / "lark", units,
-                tmp / "bin" / "opencode", env_file, oc_root)
+                repo, data_home, edge_bin, node_bin, units, env_file)
+            self.assertEqual(set(rendered), set(systemd_units.UNIT_NAMES))
             for name, text in rendered.items():
                 self.assertIsNone(re.search(r"@[A-Z_]+@", text), name)
                 self.assertEqual((units / name).read_text(), text)
                 self.assertEqual((units / name).stat().st_mode & 0o777, 0o644)
-            opencode = rendered["lark-opencode.service"]
-            self.assertIn(f'WorkingDirectory="{oc_root}/workspace"', opencode)
-            self.assertIn(f"EnvironmentFile={env_file}", opencode)
-            self.assertNotIn("%h/.local/share/lark/opencode", opencode)
+                self.assertIn(f"EnvironmentFile={env_file}", text)
+                self.assertIn(f'Environment="LARK_DATA_DIR={data_home}/lark"', text)
+            brain = rendered["lark-brain.service"]
+            self.assertIn("After=network-online.target lark-edge.service", brain)
+            self.assertIn("Wants=network-online.target lark-edge.service", brain)
+            self.assertIn(f'ExecStart="{node_bin}" "{repo}/brain/src/main.ts"', brain)
+            self.assertIn('Environment="MALLOC_ARENA_MAX=2"', brain)
+            edge = rendered["lark-edge.service"]
+            self.assertIn(f'ExecStart="{edge_bin}"', edge)
+            self.assertIn('Environment="MALLOC_ARENA_MAX=2"', edge)
 
 
 class ImportCredentialsTest(unittest.TestCase):
-    def test_reads_url_and_password(self):
-        url, password = import_credentials.lark_settings(
-            "# comment\nLARK_OPENCODE_URL=http://127.0.0.1:49375\n"
-            "LARK_OPENCODE_PASSWORD=" + "b" * 64 + "\n")
-        self.assertEqual(url, "http://127.0.0.1:49375")
-        self.assertEqual(password, "b" * 64)
+    def test_adds_missing_opencode_entry_and_keeps_existing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            source = tmp / "source.json"
+            destination = tmp / "lark" / "auth.json"
+            source.write_text(json.dumps({
+                "opencode": {"type": "oauth", "access": "new"},
+                "other": {"type": "api", "key": "ignored"},
+            }))
+            destination.parent.mkdir()
+            destination.write_text(json.dumps({
+                "opencode": {"type": "oauth", "access": "kept"},
+            }))
+            added = import_credentials.import_auth(source, destination)
+            self.assertEqual(added, 0)
+            stored = json.loads(destination.read_text())
+            self.assertEqual(stored["opencode"]["access"], "kept")
+            self.assertNotIn("other", stored)
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+            destination.unlink()
+            added = import_credentials.import_auth(source, destination)
+            self.assertEqual(added, 1)
+            stored = json.loads(destination.read_text())
+            self.assertEqual(stored, {"opencode": {"type": "oauth", "access": "new"}})
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

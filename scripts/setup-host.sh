@@ -7,15 +7,14 @@ config=${XDG_CONFIG_HOME:-$HOME/.config}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 data=$data_home/lark
 units=$config/systemd/user
-oc_root=$data/opencode
 env_file=$config/lark/lark.env
 pin_gpu=false
 models_only=false
 usage() {
     printf '%s\n' 'Usage: setup-host.sh [--gpu-index INDEX]' \
         '       setup-host.sh --models-only  # Kokoro and Silero; no service changes' \
-        'The local library provisions itself on server launch, choosing packs that fit the disk' \
-        'while keeping 20% of the volume free (see lark status and lark library --plan).' \
+        'The library planner keeps 20% of the data volume free (see lark status and' \
+        'lark library --plan); run lark library --download --build to provision it.' \
         'Run vulkaninfo --summary to find the intended Vulkan GPU index.'
 }
 while (($#)); do
@@ -40,7 +39,7 @@ if ! "$models_only"; then
     # shellcheck source=scripts/go-bin.sh
     source "$REPO_DIR/scripts/go-bin.sh"
     GO_BIN=$(resolve_go)
-    for cmd in gcc c++ cmake glslc ninja opencode python3 systemctl ffmpeg; do
+    for cmd in gcc c++ cmake glslc ninja node npm python3 systemctl ffmpeg; do
         command -v "$cmd" >/dev/null || { echo "Install $cmd before running setup." >&2; exit 1; }
     done
     # shellcheck source=scripts/lib/spirv.sh
@@ -157,7 +156,7 @@ install_deltachat_rpc() (
 )
 install_deltachat_rpc
 
-lark_bin="$data/lark"
+lark_bin="$data/lark-edge"
 build_tmp=$(mktemp "$lark_bin.XXXXXXXX")
 trap 'rm -f -- "$build_tmp"' EXIT
 # shellcheck source=scripts/build-lark.sh
@@ -166,30 +165,32 @@ lark_build "$build_tmp"
 mv -f -- "$build_tmp" "$lark_bin"
 trap - EXIT
 
-mkdir -p -- "$oc_root"/{config/opencode/agents,config/opencode/plugins,data/opencode,state,cache,workspace} \
-    "$config/lark" "$units"
-link_file() {
-    local source=$1 destination=$2
-    if [[ "$destination" -ef "$source" ]]; then
-        return
-    fi
-    if [[ -e "$destination" || -L "$destination" ]]; then
-        printf 'Move the existing %s aside before running setup.\n' "$destination" >&2
-        exit 1
-    fi
-    ln -s -- "$source" "$destination"
-}
-link_file "$REPO_DIR/agents/lark.md" "$oc_root/config/opencode/agents/lark.md"
-python3 "$REPO_DIR/scripts/setup-opencode-config.py" "$oc_root/config/opencode" "$lark_bin"
+(cd "$REPO_DIR/brain" && npm ci --no-audit --no-fund)
+
+mkdir -p -- "$units" "$config/lark"
+wrap="$data/lark"
+# Replace the v1 server binary (or a stale symlink) with the CLI wrapper.
+ln -sfn -- "$REPO_DIR/scripts/lark" "$wrap"
 python3 "$REPO_DIR/scripts/setup/lark_env.py" "$env_file" "$pin_gpu"
-python3 "$REPO_DIR/scripts/setup/systemd_units.py" "$REPO_DIR" "$data_home" "$lark_bin" \
-    "$units" "$(type -P opencode)" "$env_file" "$oc_root"
-systemctl --user daemon-reload
-systemctl --user enable lark-opencode.service lark.service
-systemctl --user restart lark-opencode.service lark.service
+node_bin=$(type -P node)
+python3 "$REPO_DIR/scripts/setup/systemd_units.py" "$REPO_DIR" "$data_home" \
+    "$lark_bin" "$node_bin" "$units" "$env_file"
 python3 "$REPO_DIR/scripts/setup/import_credentials.py" \
-    "$env_file" "$oc_root" "$(type -P opencode)"
+    "$data_home/opencode/auth.json" "$data/opencode/auth.json"
+systemctl --user daemon-reload
+retire_unit() {
+    local unit=$1
+    if [[ -e $units/$unit ]]; then
+        systemctl --user disable --now "$unit"
+        rm -f -- "$units/$unit"
+    fi
+}
+retire_unit lark.service
+retire_unit lark-opencode.service
+systemctl --user daemon-reload
+systemctl --user enable lark-edge.service lark-brain.service
+systemctl --user restart lark-edge.service lark-brain.service
 
 printf '%s\n' 'Default voices: Heart (af_heart); Mint uses Fable (bm_fable).'
-printf '%s\n' 'Lark MCP includes control for volume and sleep on connected devices.'
+printf '%s\n' 'lark-edge owns terminals and speech models; lark-brain owns companions, Delta Chat, and OpenCode.'
 printf 'Configure firmware/sdkconfig.local as shown in README.md. The Lark token is in %s.\n' "$env_file"

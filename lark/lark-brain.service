@@ -1,0 +1,20 @@
+[Unit]
+Description=Lark brain (voice companions, Delta Chat, remote controls)
+Wants=network-online.target lark-edge.service
+After=network-online.target lark-edge.service
+
+[Service]
+Environment="MALLOC_ARENA_MAX=2"
+EnvironmentFile=@ENV_FILE@
+Environment="LARK_DATA_DIR=@DATA_HOME@/lark"
+Environment="LARK_REPO_DIR=@REPO_DIR@"
+Environment="LARK_DC_RPC_BIN=@DATA_HOME@/lark/bin/deltachat-rpc-server"
+WorkingDirectory=@DATA_HOME@/lark
+ExecStart="@NODE_BIN@" "@REPO_DIR@/brain/src/main.ts"
+Restart=on-failure
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

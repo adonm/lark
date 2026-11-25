@@ -8,6 +8,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Retired when OpenCode became embedded in the brain process.
+RETIRED = {"LARK_OPENCODE_URL", "LARK_OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"}
+
 
 def write_env_file(path, pin_gpu):
     path = Path(path)
@@ -15,19 +18,14 @@ def write_env_file(path, pin_gpu):
         "LARK_HOST=0.0.0.0\nLARK_PORT=8765\nLARK_DEVICE_PORT=8766\n"
         f"LARK_TOKEN={secrets.token_hex(32)}\n"
     )
-    prior = re.findall(r"^LARK_OPENCODE_PASSWORD=([a-f0-9]{64})$", old, re.M)
-    password = prior[-1] if prior else secrets.token_hex(32)
-    settings = {
-        "LARK_OPENCODE_URL": "http://127.0.0.1:49375",
-        "LARK_OPENCODE_PASSWORD": password,
-        "OPENCODE_SERVER_PASSWORD": password,
-    }
+    settings = {}
     if not re.search(r"^LARK_CHATMAIL_RELAY=", old, re.M):
         settings["LARK_CHATMAIL_RELAY"] = "nine.testrun.org"
     if pin_gpu != "false":
         settings["GGML_VK_VISIBLE_DEVICES"] = pin_gpu
     kept = [line for line in old.splitlines(keepends=True)
-            if line.strip().partition("=")[0].rstrip() not in settings.keys()]
+            if line.strip().partition("=")[0].rstrip() not in settings.keys()
+            and line.strip().partition("=")[0].rstrip() not in RETIRED]
     text = "".join(kept)
     if text and not text.endswith("\n"):
         text += "\n"

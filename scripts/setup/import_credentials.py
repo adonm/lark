@@ -1,74 +1,56 @@
 #!/usr/bin/env python3
-"""Import Lark's provider credentials into the dedicated OpenCode server."""
+"""Copy OpenCode provider credentials into Lark's embedded server data."""
 
-import base64
 import json
 import os
-import re
-import subprocess
 import sys
-import time
-import urllib.request
+import tempfile
 from pathlib import Path
 
-
-def lark_settings(env_text):
-    """Return the OpenCode URL and password from the env file."""
-    settings = dict(re.findall(r"^\s*(LARK_OPENCODE_\w+)\s*=([^\n]*)", env_text, re.M))
-    return settings["LARK_OPENCODE_URL"], settings["LARK_OPENCODE_PASSWORD"]
+# The brain's default primary, fallback and deep models all use this provider.
+PROVIDERS = ("opencode",)
 
 
-def import_credentials(env_file, root, opencode):
-    root = Path(root)
-    url, password = lark_settings(Path(env_file).read_text())
-    auth = base64.b64encode(f"opencode:{password}".encode()).decode()
-    client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def import_auth(source, destination):
+    """Merge missing provider entries from source auth.json into destination.
 
-    def get(path):
-        request = urllib.request.Request(
-            f"{url}{path}", headers={"Authorization": f"Basic {auth}"})
-        with client.open(request, timeout=5) as response:
-            return json.load(response)
-
-    deadline = time.monotonic() + 10
-    while True:
-        try:
-            agent = get("/api/agent/lark")
-            break
-        except OSError:
-            if time.monotonic() >= deadline:
-                sys.exit("Dedicated OpenCode API did not become ready with Basic auth")
-            time.sleep(0.2)
-
+    Returns the number of providers added. Existing destination credentials are
+    never overwritten, so a user can re-authenticate Lark separately.
+    """
+    source, destination = Path(source), Path(destination)
+    if not source.is_file():
+        return 0
+    incoming = json.loads(source.read_text())
+    if not isinstance(incoming, dict):
+        raise ValueError("OpenCode auth.json is not an object")
+    existing = {}
+    if destination.is_file():
+        current = json.loads(destination.read_text())
+        if not isinstance(current, dict):
+            raise ValueError("Lark auth.json is not an object")
+        existing = current
+    added = [name for name in PROVIDERS
+             if name not in existing and name in incoming]
+    if not added:
+        if destination.is_file():
+            destination.chmod(0o600)
+        return 0
+    existing.update({name: incoming[name] for name in added})
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=destination.parent, prefix=".auth.")
     try:
-        primary = agent["data"]["model"]["providerID"]
-        target_config = Path(root, "config/opencode/opencode.jsonc").resolve()
-        router = next(p for entry in get("/api/config")
-                      if entry.get("path") and Path(entry["path"]).resolve() == target_config
-                      for p in entry["info"].get("plugins") or ()
-                      if isinstance(p, dict) and p.get("package") == "./lark-model-router")
-        fallback = router["options"]["fallback"].split("/", 1)[0]
-    except (OSError, KeyError, StopIteration, TypeError, ValueError) as err:
-        sys.exit(f"Could not read the Lark model settings from the dedicated OpenCode config: {err}")
-    for provider in sorted({primary, fallback}):
-        if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", provider):
-            sys.exit("Invalid Lark model provider")
-        marker = Path(root, "state", f"imported-provider-{provider}")
-        if not marker.exists():
-            try:
-                credentials = subprocess.run([opencode, "auth", "export", provider], check=True,
-                                             capture_output=True, timeout=20).stdout
-                if json.loads(credentials):
-                    subprocess.run([opencode, "--server", url, "auth", "import"], input=credentials,
-                                   env={**os.environ, "OPENCODE_SERVER_PASSWORD": password}, check=True,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-                    marker.touch()
-            except (OSError, ValueError, subprocess.SubprocessError):
-                sys.exit("Could not import the configured providers' OpenCode credentials")
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(existing, handle, indent=2)
+            handle.write("\n")
+        os.replace(temp, destination)
+    finally:
+        Path(temp).unlink(missing_ok=True)
+    return len(added)
 
 
 def main(argv):
-    import_credentials(*argv)
+    import_auth(*argv)
 
 
 if __name__ == "__main__":

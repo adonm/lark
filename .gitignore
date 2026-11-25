@@ -6,10 +6,3 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.log
-
-# Build outputs
-lark/lark
-
-# Real household voice captures stay local. Only synthetic TTS fixtures belong
-# in lark/qa/fixtures/voice/.
-/lark/qa/fixtures/local/

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared release build for `lark deploy` and scripts/setup-host.sh.
-# Sourcing this file defines lark_build; running it builds to OUTPUT.
+# Sourcing this file defines lark_build; running it builds the lark-edge binary
+# to OUTPUT. The TypeScript brain runs from the checkout via node.
 #
 # The Parakeet bridge build is cached in ~/.cache/lark/parakeet-native, so a
 # redeploy reuses the compiled native libraries instead of a fresh CMake build.
@@ -37,7 +38,7 @@ lark_build() {
         export CGO_LDFLAGS="\"-L$stt_stage/native/lib\" -Wl,-rpath,\$ORIGIN/lib${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
         "$GO_BIN" mod download github.com/k2-fsa/sherpa-onnx-go-linux
         "$GO_BIN" mod verify
-        "$GO_BIN" build -tags parakeet,sqlite_fts5 -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$output" .
+        "$GO_BIN" build -tags parakeet,sqlite_fts5 -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$output" ./cmd/lark-edge
         case $("$GO_BIN" env GOARCH) in
             amd64) native=x86_64-unknown-linux-gnu ;;
             arm64) native=aarch64-unknown-linux-gnu ;;

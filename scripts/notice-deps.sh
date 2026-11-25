@@ -5,7 +5,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../lark"
 
 template='{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}}{{end}}{{end}}'
-go list -deps -tags sqlite_fts5 -f "$template" . | sort -u |
+go list -deps -tags sqlite_fts5 -f "$template" ./cmd/lark-edge | sort -u |
     while read -r module version; do
         dir=$(go list -m -f '{{.Dir}}' "$module")
         license=unknown
