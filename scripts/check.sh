@@ -78,6 +78,7 @@ timeit python phase_python
 timeit vet phase_vet
 timeit go-race phase_race
 timeit go-live-compile phase_live_compile
+timeit parakeet-compile phase_parakeet_compile
 timeit c-host phase_c_host
 timeit hygiene phase_hygiene
 

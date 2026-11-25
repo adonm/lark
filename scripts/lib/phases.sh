@@ -40,6 +40,31 @@ phase_live_compile() {
     (cd lark && "$GO_BIN" test -tags=live,sqlite_fts5 -run '^$' -count=1 .)
 }
 
+phase_parakeet_compile() {
+    # The cgo bridge only builds where Parakeet was compiled, so tag-gated
+    # breakage otherwise waits for a deploy. Compile it when the cached native
+    # bridge (or LARK_PARAKEET_NATIVE) is present and skip cleanly elsewhere,
+    # keeping CI and hosts without Parakeet green.
+    local cache native
+    cache=${XDG_CACHE_HOME:-$HOME/.cache}/lark/parakeet-native/native
+    native=${LARK_PARAKEET_NATIVE:-}
+    if [[ -z $native && -d $cache ]]; then
+        native=$cache
+    fi
+    if [[ -z $native || ! -d $native/include || ! -d $native/lib ]]; then
+        printf 'SKIP parakeet compile (native bridge not built)\n'
+        return 0
+    fi
+    native=$(realpath -- "$native")
+    (
+        cd lark || exit
+        CGO_CFLAGS="\"-I$native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}" \
+        CGO_LDFLAGS="\"-L$native/lib\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" \
+            "$GO_BIN" build -tags 'parakeet,sqlite_fts5' -o /dev/null .
+    )
+    printf 'PASS parakeet compile (%s)\n' "$native"
+}
+
 phase_c_host() {
     "${host_cc[@]}" firmware/tests/vad_test.c firmware/main/vad.c -o "$host_tests/vad"
     "$host_tests/vad"
