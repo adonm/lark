@@ -75,6 +75,7 @@ func run() error {
 		return errors.New("set LARK_TOKEN to a nonempty ASCII token without whitespace")
 	}
 	settings := openCodeSettings(env("LARK_OPENCODE_AGENT", "lark"))
+	settings.fallback = configuredFallbackModel()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err

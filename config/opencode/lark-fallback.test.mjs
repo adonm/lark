@@ -2,13 +2,13 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import plugin from "./lark-fallback.js"
 
-const primary = { providerID: "opencode", id: "deepseek-v4.1-flash", variant: "low" }
-const backup = { providerID: "opencode", id: "glm-5.3-flash", variant: "low" }
+const primary = { providerID: "opencode", id: "claude-haiku-5-5", variant: "none" }
+const backup = { providerID: "opencode", id: "gemini-4-hydrogen", variant: "minimal" }
 const rateLimit = { status: 429, type: "provider.rate-limit" }
 const base = { sessionID: "ses_smoke", agent: "lark", kind: "primary", model: primary }
 const user = { id: "msg_user", type: "user", metadata: { larkSource: "typed" } }
 
-async function setup(initial = [user], model = primary, fallback = "opencode/glm-5.3-flash#low") {
+async function setup(initial = [user], model = primary, fallback = "opencode/gemini-4-hydrogen#minimal") {
   const hooks = new Map()
   const rows = [...initial]
   const settled = Promise.withResolvers()
@@ -61,7 +61,7 @@ test("routes a configured primary to a fallback with a nested model ID and varia
 })
 
 test("identical references and different providers do not retry as a fallback", async () => {
-  for (const fallback of ["opencode/deepseek-v4.1-flash#low", "external/backup"]) {
+  for (const fallback of ["opencode/claude-haiku-5-5#none", "external/backup"]) {
     const h = await setup([user], primary, fallback)
     await h.response(429)
     assert.deepEqual(await h.retry(rateLimit), { retry: true, delay: 2000 })

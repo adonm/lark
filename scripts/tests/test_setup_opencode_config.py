@@ -117,8 +117,24 @@ class SetupOpenCodeConfigTest(unittest.TestCase):
         }))
         self.run_installer()
         cfg = self.read()
-        self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/deepseek-v4.1-flash#low")
-        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/glm-5.3#high")
+        self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/claude-haiku-5-5#none")
+        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/gemini-4-hydrogen#high")
+        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gemini-4-hydrogen#minimal")
+
+    def test_previous_defaults_migrate(self):
+        self.config.write_text(json.dumps({
+            "agents": {
+                "lark": {"model": "opencode/deepseek-v4.1-flash#low"},
+                "deep": {"model": "opencode/glm-5.3#high"},
+            },
+            "plugins": [{"package": "./lark-model-router",
+                         "options": {"fallback": "opencode/glm-5.3-flash#low"}}],
+        }))
+        self.run_installer()
+        cfg = self.read()
+        self.assertEqual(cfg["agents"]["lark"]["model"], "opencode/claude-haiku-5-5#none")
+        self.assertEqual(cfg["agents"]["deep"]["model"], "opencode/gemini-4-hydrogen#high")
+        self.assertEqual(cfg["plugins"][0]["options"]["fallback"], "opencode/gemini-4-hydrogen#minimal")
 
     def test_invalid_jsonc_fails_loudly(self):
         self.config.write_text('{"plugins": [')

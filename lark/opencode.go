@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -79,6 +80,60 @@ type ocModel struct {
 
 var defaultSmartModel = ocModel{Provider: "opencode", ID: "gemini-4-hydrogen", Variant: "low"}
 
+// defaultFirstTokenStallTimeout bounds the initial wait for any text or tool
+// event. HTTP 200 turns that never emit a token would otherwise hang until the
+// whole turn timeout, and the HTTP-status fallback plugin cannot see them.
+const defaultFirstTokenStallTimeout = 8 * time.Second
+
+var defaultFallbackModel = ocModel{Provider: "opencode", ID: "gemini-4-hydrogen", Variant: "minimal"}
+
+var errFirstTokenStall = errors.New("primary model stalled before its first token")
+
+// parseOCModelRef parses "provider/model" or "provider/model#variant".
+func parseOCModelRef(spec string) (ocModel, bool) {
+	spec = strings.TrimSpace(spec)
+	provider, rest, ok := strings.Cut(spec, "/")
+	if !ok || provider == "" || rest == "" {
+		return ocModel{}, false
+	}
+	id, variant, _ := strings.Cut(rest, "#")
+	if id == "" {
+		return ocModel{}, false
+	}
+	return ocModel{Provider: provider, ID: id, Variant: variant}, true
+}
+
+// configuredFallbackModel reads the fallback from the generated OpenCode
+// config. A missing or custom config keeps the built-in default.
+func configuredFallbackModel() ocModel {
+	fallback := defaultFallbackModel
+	path := openCodeConfigPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fallback
+	}
+	var cfg struct {
+		Plugins []struct {
+			Package string         `json:"package"`
+			Options map[string]any `json:"options"`
+		} `json:"plugins"`
+	}
+	if json.Unmarshal([]byte(stripJSONComments(string(raw))), &cfg) != nil {
+		return fallback
+	}
+	for _, plugin := range cfg.Plugins {
+		if plugin.Package != "./lark-model-router" {
+			continue
+		}
+		if ref, ok := plugin.Options["fallback"].(string); ok {
+			if model, ok := parseOCModelRef(ref); ok {
+				return model
+			}
+		}
+	}
+	return fallback
+}
+
 type ocPermission struct {
 	Action   string `json:"action"`
 	Resource string `json:"resource"`
@@ -89,6 +144,9 @@ type ocSettings struct {
 	Agent       string         `json:"agent"`
 	Model       ocModel        `json:"model"`
 	Permissions []ocPermission `json:"permissions"`
+	// fallback is the model-router fallback, used only by the local
+	// first-token stall guard. It is never sent to OpenCode.
+	fallback ocModel
 }
 
 type openCode struct {
@@ -101,17 +159,20 @@ type openCode struct {
 	store    *sessionStore
 	turns    [64]chan struct{}
 
-	mu           sync.Mutex
-	sig          condSignal
-	active       map[string]context.CancelFunc
-	interrupts   map[string]bool
-	resets       map[string]*ocReset
-	verified     map[string]string
-	defaultModel ocModel
-	sessionModel map[string]ocModel
-	identityMu   sync.Mutex
-	flushHistory func(string)
-	contractWait time.Duration
+	mu            sync.Mutex
+	sig           condSignal
+	active        map[string]context.CancelFunc
+	interrupts    map[string]bool
+	resets        map[string]*ocReset
+	verified      map[string]string
+	defaultModel  ocModel
+	sessionModel  map[string]ocModel
+	fallbackModel ocModel
+	// firstTokenStall is the injected stall guard; zero uses the default.
+	firstTokenStall time.Duration
+	identityMu      sync.Mutex
+	flushHistory    func(string)
+	contractWait    time.Duration
 }
 
 type ocReset struct {
@@ -124,10 +185,11 @@ func newOpenCode(ctx context.Context, u upstream, db *larkDB, project string, se
 		store:      &sessionStore{db: db.DB, readDB: db.readDB()},
 		active:     make(map[string]context.CancelFunc),
 		interrupts: make(map[string]bool), resets: make(map[string]*ocReset),
-		verified:     make(map[string]string),
-		sessionModel: make(map[string]ocModel),
-		contractWait: contractWait,
-		feed:         eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
+		verified:      make(map[string]string),
+		sessionModel:  make(map[string]ocModel),
+		fallbackModel: settings.fallback,
+		contractWait:  contractWait,
+		feed:          eventFeed{bySession: make(map[string]map[chan ocEvent]struct{})}}
 	o.feed.onConfigChange = func() { o.invalidateVerified() }
 	for i := range o.turns {
 		o.turns[i] = make(chan struct{}, 1)

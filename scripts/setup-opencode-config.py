@@ -27,16 +27,18 @@ def put(path, content):
             Path(tmp.name).unlink(missing_ok=True)
 
 
-PRIMARY_MODEL = "opencode/deepseek-v4.1-flash#low"
-FALLBACK_MODEL = "opencode/glm-5.3-flash#low"
-DEEP_MODEL = "opencode/glm-5.3#high"
-# Earlier releases defaulted to the opencode-go gateway. Rewrite only an
-# untouched generated config so installs keep deliberate model selections.
-LEGACY_MODELS = {
-    "lark": "opencode-go/deepseek-v4.1-flash#low",
-    "deep": "opencode-go/glm-5.3#high",
-}
-LEGACY_FALLBACK = "opencode-go/glm-5.3-flash#low"
+PRIMARY_MODEL = "opencode/claude-haiku-5-5#none"
+FALLBACK_MODEL = "opencode/gemini-4-hydrogen#minimal"
+DEEP_MODEL = "opencode/gemini-4-hydrogen#high"
+# Earlier releases shipped these generated defaults. Rewrite only a config
+# whose three model references all match one set, so installs keep deliberate
+# model selections.
+LEGACY_DEFAULTS = [
+    ({"lark": "opencode-go/deepseek-v4.1-flash#low", "deep": "opencode-go/glm-5.3#high"},
+     "opencode-go/glm-5.3-flash#low"),
+    ({"lark": "opencode/deepseek-v4.1-flash#low", "deep": "opencode/glm-5.3#high"},
+     "opencode/glm-5.3-flash#low"),
+]
 DEEP_SYSTEM = (
     "Research and draft for a voice companion. Use the local library for grounded facts: "
     "search first, read bounded sections, never paste long text. Keep answers short and plain, "
@@ -130,7 +132,7 @@ def section(current, key, kind):
 
 
 def migrate(current):
-    """Move an untouched generated config off the retired gateway defaults."""
+    """Move an untouched generated config off retired defaults."""
     agents = current.get("agents")
     plugins = current.get("plugins")
     if not isinstance(agents, dict) or not isinstance(plugins, list):
@@ -143,10 +145,15 @@ def migrate(current):
             options = plugin.get("options")
             if isinstance(options, dict):
                 fallback = options.get("fallback")
-    if fallback != LEGACY_FALLBACK:
+    old_models = None
+    for models, legacy_fallback in LEGACY_DEFAULTS:
+        if fallback == legacy_fallback:
+            old_models = models
+            break
+    if old_models is None:
         return False
     if any(not isinstance(agents.get(name), dict) or agents[name].get("model") != model
-           for name, model in LEGACY_MODELS.items()):
+           for name, model in old_models.items()):
         return False
     agents["lark"]["model"] = PRIMARY_MODEL
     agents["deep"]["model"] = DEEP_MODEL

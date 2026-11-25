@@ -240,11 +240,11 @@ Edit the dedicated `~/.local/share/lark/opencode/config/opencode/opencode.jsonc`
 ```jsonc
 {
   "agents": {
-    "lark": { "model": "opencode/deepseek-v4.1-flash#low" },
-    "deep": { "model": "opencode/glm-5.3#high" }
+    "lark": { "model": "opencode/claude-haiku-5-5#none" },
+    "deep": { "model": "opencode/gemini-4-hydrogen#high" }
   },
   "plugins": [
-    { "package": "./lark-model-router", "options": { "fallback": "opencode/glm-5.3-flash#low" } },
+    { "package": "./lark-model-router", "options": { "fallback": "opencode/gemini-4-hydrogen#minimal" } },
     { "package": "./lark-context" }
   ]
 }

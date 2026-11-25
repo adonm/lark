@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"slices"
@@ -220,11 +221,11 @@ func finalReply(messages []ocMessage, promptID string) (string, ocMessage, error
 
 type streamedText struct {
 	sentenceExtractor
-	onFirst   func()
-	messageID string
-	byOrdinal map[int]*strings.Builder
-	ordinal   int
-	havePart  bool
+	onFirst    func()
+	messageID  string
+	byOrdinal  map[int]*strings.Builder
+	ordinal    int
+	havePart   bool
 	firstChunk bool
 }
 
@@ -342,12 +343,47 @@ func (p *turnProgress) handleEvent(event ocEvent) {
 	}
 }
 
+// runTurnStreamingWithModel runs one default-model turn and, when the primary
+// upstream accepts the prompt (HTTP 200) but emits no token for the stall
+// window, interrupts it and retries once on the configured fallback model.
 func (o *openCode) runTurnStreamingWithModel(ctx context.Context, sid, prompt string, model ocModel, stream turnStream, source string, onChat func(chatEntry)) (string, error) {
 	start := time.Now()
 	trace := traceFrom(ctx)
 	defer func() { trace.measure(diagLLMTotal, time.Since(start)) }()
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
+	reply, err := o.runTurnAttempt(ctx, sid, prompt, model, stream, source, onChat, true, model == (ocModel{}))
+	if !errors.Is(err, errFirstTokenStall) {
+		return reply, err
+	}
+	fallback := o.stallFallback()
+	if fallback == model {
+		return "", err
+	}
+	log.Printf("Lark primary model emitted no token in %s; retrying on %s/%s",
+		o.firstTokenTimeout(), fallback.Provider, fallback.ID)
+	return o.runTurnAttempt(ctx, sid, prompt, fallback, stream, source, onChat, false, false)
+}
+
+func (o *openCode) firstTokenTimeout() time.Duration {
+	if o.firstTokenStall > 0 {
+		return o.firstTokenStall
+	}
+	return defaultFirstTokenStallTimeout
+}
+
+func (o *openCode) stallFallback() ocModel {
+	if o.fallbackModel != (ocModel{}) {
+		return o.fallbackModel
+	}
+	return defaultFallbackModel
+}
+
+// runTurnAttempt submits one prompt. guard arms the initial first-token stall
+// timer; newUser records the user chat line only on the first attempt.
+func (o *openCode) runTurnAttempt(ctx context.Context, sid, prompt string, model ocModel, stream turnStream, source string, onChat func(chatEntry), newUser, guard bool) (string, error) {
+	start := time.Now()
+	trace := traceFrom(ctx)
 	events, unsubscribe := o.feed.subscribe(sid)
 	defer unsubscribe()
 	path := "/api/session/" + sid
@@ -376,7 +412,7 @@ func (o *openCode) runTurnStreamingWithModel(ctx context.Context, sid, prompt st
 	if result.ID == "" {
 		return "", o.invalid()
 	}
-	if onChat != nil {
+	if onChat != nil && newUser {
 		message := ocMessage{ID: result.ID, Type: "user", Text: prompt}
 		message.Time.Created = time.Now().UnixMilli()
 		onChat(message.chat(source))
@@ -450,11 +486,43 @@ func (o *openCode) runTurnStreamingWithModel(ctx context.Context, sid, prompt st
 	}
 	progress := &turnProgress{stream: stream, streamed: &streamed, trace: trace, start: start,
 		firstSentence: &firstSentence, markTool: markTool}
+	// A disconnected feed cannot observe deltas; read the final reply instead of
+	// mistaking silence for a stalled upstream.
+	var stall <-chan time.Time
+	var stallTimer *time.Timer
+	if guard && events != nil {
+		stallTimer = time.NewTimer(o.firstTokenTimeout())
+		stall = stallTimer.C
+	}
+	defer func() {
+		if stallTimer != nil {
+			stallTimer.Stop()
+		}
+	}()
+	sawProgress := false
+	stopStall := func() {
+		if stallTimer != nil {
+			stallTimer.Stop()
+			stallTimer, stall = nil, nil
+		}
+	}
 stream:
 	for events != nil {
 		select {
 		case <-ctx.Done():
 			return "", o.unavailable(ctx.Err())
+		case <-stall:
+			stall = nil
+			if sawProgress || usedTool {
+				continue
+			}
+			interruptCtx, cancelInterrupt := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			interruptErr := o.interrupt(interruptCtx, sid)
+			cancelInterrupt()
+			if interruptErr != nil {
+				return "", interruptErr
+			}
+			return "", errFirstTokenStall
 		case event, ok := <-events:
 			if !ok {
 				break stream
@@ -469,6 +537,10 @@ stream:
 				}
 				break stream
 			default:
+				if event.Type == "session.text.delta" || strings.HasPrefix(event.Type, "session.tool.") {
+					sawProgress = true
+					stopStall()
+				}
 				progress.handleEvent(event)
 			}
 		}

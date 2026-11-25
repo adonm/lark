@@ -418,6 +418,91 @@ func TestOpenCodeFinalReplyPaginatesToAdmittedPrompt(t *testing.T) {
 	}
 }
 
+func TestOpenCodeRetriesStalledPrimaryOnFallback(t *testing.T) {
+	t.Parallel()
+	const sid = "ses-first-token-stall"
+	const reply = "Hello from the fallback."
+	prompts := make(chan ocModel, 4)
+	events := make(chan ocEvent, 4)
+	interrupts := make(chan struct{}, 2)
+	var n atomic.Int32
+	o := testOpenCode(t, t.Context(), t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, ": connected\n\n")
+			flusher := w.(http.Flusher)
+			flusher.Flush()
+			for {
+				select {
+				case event := <-events:
+					body, _ := json.Marshal(event)
+					fmt.Fprintf(w, "data: %s\n\n", body)
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		case "/api/session/" + sid + "/prompt":
+			var in struct{ Model ocModel }
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Errorf("invalid prompt: %v", err)
+			}
+			prompts <- in.Model
+			index := n.Add(1)
+			sendJSON(w, 200, object{"data": object{"id": fmt.Sprintf("prompt-%d", index)}})
+		case "/api/session/" + sid + "/interrupt":
+			interrupts <- struct{}{}
+			w.WriteHeader(204)
+		case "/api/session/" + sid + "/message":
+			sendJSON(w, 200, object{"data": []object{
+				{"id": "answer", "type": "assistant", "finish": "stop", "content": []object{{"type": "text", "text": reply}}},
+				{"id": fmt.Sprintf("prompt-%d", n.Load()), "type": "user"},
+			}})
+		case "/api/experimental/session/" + sid + "/wait":
+			sendJSON(w, 200, object{})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	o.firstTokenStall = 60 * time.Millisecond
+	o.feed.sig.wait(t, func() bool {
+		o.feed.mu.Lock()
+		defer o.feed.mu.Unlock()
+		return o.feed.connected
+	})
+	type result struct {
+		reply string
+		err   error
+	}
+	done := make(chan result, 1)
+	userChats := 0
+	go func() {
+		got, err := o.runTurnStreamingWithModel(t.Context(), sid, "Hello", ocModel{}, turnStream{}, "", func(entry chatEntry) {
+			if entry.Role == "user" {
+				userChats++
+			}
+		})
+		done <- result{got, err}
+	}()
+	expectValue(t, prompts, ocModel{})
+	<-interrupts
+	expectValue(t, prompts, defaultFallbackModel)
+	events <- ocEvent{Type: "session.text.delta", Data: ocEventData{SessionID: sid, Delta: reply}}
+	events <- ocEvent{Type: "session.execution.succeeded", Data: ocEventData{SessionID: sid}}
+	select {
+	case got := <-done:
+		if got.err != nil || got.reply != reply {
+			t.Fatalf("reply %q, err %v", got.reply, got.err)
+		}
+	case <-time.After(testWait(t)):
+		t.Fatal("turn did not finish")
+	}
+	if userChats != 1 {
+		t.Fatalf("user chat rows = %d, want one", userChats)
+	}
+}
+
 func TestOpenCodeCancelAndReset(t *testing.T) {
 	t.Parallel()
 	for _, action := range []string{"cancel", "reset", "disconnect"} {
