@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"net/http"
 	"testing"
+
+	"lark/internal/audio"
 )
 
 func TestTerminalHitsRoute(t *testing.T) {
@@ -45,7 +47,7 @@ func TestTTSRoute(t *testing.T) {
 	t.Parallel()
 	b, base := wsHarness(t, nil)
 	b.worker = newSynthWorker(b.root, func() (speechEngine, error) {
-		return fakeSpeechEngine(func(_ string, _ voiceChoice, _ func() bool) ([]float32, int) {
+		return fakeSpeechEngine(func(_ string, _ audio.Voice, _ func() bool) ([]float32, int) {
 			return []float32{0.1, -0.1}, sampleRate
 		}), nil
 	})

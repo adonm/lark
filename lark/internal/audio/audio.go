@@ -1,4 +1,4 @@
-package main
+package audio
 
 import (
 	"encoding/binary"
@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	sampleRate = 16000
-	maxPCM     = 4 << 20
-	maxText    = 640
+	SampleRate = 16000
+	MaxPCM     = 4 << 20
+	MaxText    = 640
 )
 
 var (
@@ -21,15 +21,15 @@ var (
 	errInvalidPCM = errors.New("invalid synthesized audio")
 )
 
-func wavHeader(size int) (h [44]byte) {
+func WavHeader(size int) (h [44]byte) {
 	copy(h[:], "RIFF")
 	le.PutUint32(h[4:], uint32(36+size))
 	copy(h[8:], "WAVEfmt ")
 	le.PutUint32(h[16:], 16)
 	le.PutUint16(h[20:], 1)
 	le.PutUint16(h[22:], 1)
-	le.PutUint32(h[24:], sampleRate)
-	le.PutUint32(h[28:], sampleRate*2)
+	le.PutUint32(h[24:], SampleRate)
+	le.PutUint32(h[28:], SampleRate*2)
 	le.PutUint16(h[32:], 2)
 	le.PutUint16(h[34:], 16)
 	copy(h[36:], "data")
@@ -61,25 +61,25 @@ var sinc = func() (phases [2][2*sincRadius + 1]float32) {
 	return phases
 }()
 
-func synthPCM(raw []float32, rate int) ([]byte, error) {
-	pcm, _, err := synthPCMWithScratch(raw, rate, nil)
+func SynthPCM(raw []float32, rate int) ([]byte, error) {
+	pcm, _, err := SynthPCMWithScratch(raw, rate, nil)
 	return pcm, err
 }
 
-func synthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []float32, error) {
-	if len(raw) == 0 || (rate != kokoroRate && rate != sampleRate) {
+func SynthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []float32, error) {
+	if len(raw) == 0 || (rate != KokoroRate && rate != SampleRate) {
 		return nil, scratch, errInvalidPCM
 	}
 	n := len(raw)
 	count := n
-	if rate == kokoroRate {
+	if rate == KokoroRate {
 		count = (n*2 + 2) / 3
 	}
-	if count > maxPCM/2 {
+	if count > MaxPCM/2 {
 		return nil, scratch, errInvalidPCM
 	}
 	var input []float32
-	if rate == kokoroRate {
+	if rate == KokoroRate {
 		need := n + 2*sincRadius + 1
 		if cap(scratch) < need {
 			scratch = make([]float32, need)
@@ -96,7 +96,7 @@ func synthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []
 	const knee, headroom = 0.75, 0.8912509381337456 - 0.75
 	for i := range count {
 		var v float32
-		if rate == kokoroRate {
+		if rate == KokoroRate {
 			center := 3 * i / 2
 			samples := input[center : center+2*sincRadius+1]
 			weights := &sinc[i&1]
@@ -143,9 +143,9 @@ func NormalizeVoicePCM(pcm16k []byte) []byte {
 	return out
 }
 
-func alphaNum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
+func AlphaNum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
-func plainText(s string) string {
+func PlainText(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if strings.ContainsRune("*_`#", r) {
 			return -1
@@ -161,7 +161,7 @@ var (
 	initials    = regexp.MustCompile(`\b(?:[A-Z]\.)+$`)
 )
 
-func sentences(text string, final, boundary bool) (out []string) {
+func Sentences(text string, final, boundary bool) (out []string) {
 	start, clause := 0, 0
 	for _, loc := range sentenceEnd.FindAllStringIndex(text, -1) {
 		a, b := loc[0], loc[1]
@@ -176,7 +176,7 @@ func sentences(text string, final, boundary bool) (out []string) {
 		if text[a] != '.' {
 			count := 0
 			for _, r := range s {
-				if alphaNum(r) {
+				if AlphaNum(r) {
 					count++
 				}
 			}
@@ -193,20 +193,20 @@ func sentences(text string, final, boundary bool) (out []string) {
 	return out
 }
 
-func SplitSentences(text string) []string { return sentences(plainText(text), true, true) }
+func SplitSentences(text string) []string { return Sentences(PlainText(text), true, true) }
 
-type sentenceExtractor struct {
+type SentenceExtractor struct {
 	text              strings.Builder
 	start, clause     int
 	punct             rune
 	closers, space    bool
 	ticks, seen       int
 	utf8Tail          string
-	hasLetter, halted bool
-	firstChunk        bool
+	HasLetter, Halted bool
+	FirstChunk        bool
 }
 
-func (s *sentenceExtractor) boundary(out []string) []string {
+func (s *SentenceExtractor) boundary(out []string) []string {
 	if s.punct == 0 {
 		return out
 	}
@@ -225,14 +225,14 @@ func (s *sentenceExtractor) boundary(out []string) []string {
 		if s.start != 0 {
 			return out
 		}
-		if s.firstChunk {
+		if s.FirstChunk {
 			if len(strings.Fields(text[s.start:])) < 3 {
 				return out
 			}
 		} else {
 			n := 0
 			for _, r := range text[s.start:] {
-				if alphaNum(r) {
+				if AlphaNum(r) {
 					n++
 				}
 			}
@@ -249,7 +249,7 @@ func (s *sentenceExtractor) boundary(out []string) []string {
 	if punct != '.' {
 		n := 0
 		for _, r := range clause {
-			if alphaNum(r) {
+			if AlphaNum(r) {
 				n++
 			}
 		}
@@ -264,8 +264,8 @@ func (s *sentenceExtractor) boundary(out []string) []string {
 	return out
 }
 
-func (s *sentenceExtractor) flush() []string {
-	if s.halted || !s.hasLetter {
+func (s *SentenceExtractor) Flush() []string {
+	if s.Halted || !s.HasLetter {
 		return nil
 	}
 	rest := strings.TrimSpace(s.text.String()[s.start:])
@@ -278,8 +278,8 @@ func (s *sentenceExtractor) flush() []string {
 	return []string{rest}
 }
 
-func (s *sentenceExtractor) add(delta string) (out []string) {
-	if s.halted || delta == "" {
+func (s *SentenceExtractor) Add(delta string) (out []string) {
+	if s.Halted || delta == "" {
 		return nil
 	}
 	// Process only new bytes. An unfinished UTF-8 rune is the only input
@@ -299,7 +299,7 @@ func (s *sentenceExtractor) add(delta string) (out []string) {
 		if r == '`' {
 			s.ticks++
 			if s.ticks == 3 {
-				s.halted = true
+				s.Halted = true
 				return s.boundary(out)
 			}
 		} else {
@@ -310,7 +310,7 @@ func (s *sentenceExtractor) add(delta string) (out []string) {
 		}
 		if unicode.IsSpace(r) {
 			out = s.boundary(out)
-			if s.firstChunk && s.start == 0 && s.hasLetter && s.text.Len() > 0 {
+			if s.FirstChunk && s.start == 0 && s.HasLetter && s.text.Len() > 0 {
 				if len(strings.Fields(s.text.String())) >= 5 {
 					chunk := strings.TrimSpace(s.text.String())
 					if chunk != "" {
@@ -346,8 +346,8 @@ func (s *sentenceExtractor) add(delta string) (out []string) {
 			s.punct, s.closers = 0, false
 		}
 		s.text.WriteRune(r)
-		s.hasLetter = s.hasLetter || alphaNum(r)
+		s.HasLetter = s.HasLetter || AlphaNum(r)
 	}
-	s.halted = s.seen == capBytes
+	s.Halted = s.seen == capBytes
 	return out
 }

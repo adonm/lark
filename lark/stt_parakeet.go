@@ -2,65 +2,22 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"os"
-	"regexp"
-	"strings"
 	"time"
-	"unicode"
+
+	"lark/internal/audio"
 )
 
-const (
-	sttEngine      = "parakeet"
-	parakeetModel  = "parakeet-unified-en-0.6b-Q8_0.gguf"
-	parakeetSHA256 = "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795"
-)
+const sampleRate = audio.SampleRate
+const parakeetModel = audio.ParakeetModel
+const sttEngine = "parakeet"
+const smartTurnModel = audio.SmartTurnModel
 
-func checkParakeetModel(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return errors.New("Parakeet model missing; run scripts/setup-host.sh")
-	}
-	defer f.Close()
-	sum := sha256.New()
-	if _, err := io.Copy(sum, f); err != nil || hex.EncodeToString(sum.Sum(nil)) != parakeetSHA256 {
-		return errors.New("Parakeet model does not match the pinned GGUF")
-	}
-	return nil
-}
-
-type sttTiming struct {
-	queue time.Duration
-	run   time.Duration
-}
-
-type sttTimingKey struct{}
-type sttProbeKey struct{}
-
-func withSTTTiming(ctx context.Context) (context.Context, *sttTiming) {
-	t := &sttTiming{}
-	return context.WithValue(ctx, sttTimingKey{}, t), t
-}
-
-func sttTimingFrom(ctx context.Context) *sttTiming {
-	t, _ := ctx.Value(sttTimingKey{}).(*sttTiming)
-	return t
-}
-
-func withSTTProbe(ctx context.Context) context.Context {
-	return context.WithValue(ctx, sttProbeKey{}, true)
-}
-
-func isSTTProbe(ctx context.Context) bool {
-	v, _ := ctx.Value(sttProbeKey{}).(bool)
-	return v
-}
+var le = binary.LittleEndian
 
 // setSTT swaps the transcription backend. Tests change it mid-flight while
 // capture probes read it.
@@ -118,59 +75,4 @@ func (b *larkServer) probeSTT(r *http.Request) (object, error) {
 		return nil, problem(502, "STT probe transcription failed")
 	}
 	return object{"transcript": text, "stt_ms": time.Since(start).Milliseconds(), "clip_ms": len(pcm) * 1000 / (2 * sampleRate)}, nil
-}
-
-// Match Lark's WAV padding, then Hex's 1.5 s minimum and 400 ms
-// trailing silence for Unified EN. Already-16 kHz mono audio is not resampled.
-func parakeetSamples(pcm []byte) []float32 {
-	return parakeetSamplesInto(nil, pcm)
-}
-
-func parakeetSamplesInto(dst []float32, pcm []byte) []float32 {
-	const pad = sampleRate * 150 / 1000
-	start, tail := 0, 0
-	for _, b := range pcm {
-		if b != 0 {
-			start, tail = pad, pad
-			break
-		}
-	}
-	total := max(start+len(pcm)/2+tail, sampleRate*3/2) + sampleRate*400/1000
-	if cap(dst) < total {
-		dst = make([]float32, total)
-	} else {
-		dst = dst[:total]
-		clear(dst)
-	}
-	for i := range len(pcm) / 2 {
-		dst[start+i] = float32(int16(le.Uint16(pcm[2*i:]))) / 32768
-	}
-	return dst
-}
-
-// Hex strips these known subtitle hallucinations only at the very end.
-var parakeetCredit = func() *regexp.Regexp {
-	const sep = `[^\pL\pN]`
-	credits := []string{
-		"sous titrage société radio canada", "sous titrage st 501",
-		"sous titres réalisés par la communauté d amara org",
-		"sous titres par la communauté d amara org",
-		"subtitles by the amara org community", "untertitel der amara org community",
-	}
-	for i, text := range credits {
-		credits[i] = strings.ReplaceAll(text, " ", sep+"+")
-	}
-	return regexp.MustCompile(`(?i)(?:^|` + sep + `)(` + strings.Join(credits, "|") + `)` + sep + `*$`)
-}()
-
-func cleanParakeetText(text string) string {
-	for {
-		match := parakeetCredit.FindStringSubmatchIndex(text)
-		if match == nil {
-			return strings.TrimSpace(text)
-		}
-		text = strings.TrimRightFunc(text[:match[2]], func(r rune) bool {
-			return unicode.IsSpace(r) || strings.ContainsRune(",;:-–—", r)
-		})
-	}
 }

@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"lark/internal/library"
+
+	"lark/internal/audio"
 )
 
 type condSignal struct {
@@ -88,7 +90,7 @@ func run() error {
 	paths := modelPaths{
 		parakeet:  filepath.Join(local, "stt-models", parakeetModel),
 		vad:       filepath.Join(local, "stt-models", sileroModel),
-		smartTurn: filepath.Join(local, "stt-models", smartTurnModel),
+		smartTurn: filepath.Join(local, "stt-models", audio.SmartTurnModel),
 	}
 	stub := stubSetup(local)
 	ocURL, ocPassword := os.Getenv("LARK_OPENCODE_URL"), os.Getenv("LARK_OPENCODE_PASSWORD")
@@ -157,13 +159,17 @@ func run() error {
 	}
 	oc := newOpenCode(root, ocAPI, db, ocDir, settings)
 	oc.contract = contract
-	modelDir := ttsModelDir(local)
+	modelDir := audio.TTSModelDir(local)
 	models := newModelSet(started)
 	endpointConfig := &endpointSettings{newVAD: func() endpointVAD { return newSileroVAD(paths.vad) }}
 	openEngine := func() (speechEngine, error) {
-		return openKokoro(modelDir, min(kokoroThreads, runtime.GOMAXPROCS(0)))
+		engine, err := audio.OpenKokoro(modelDir, min(audio.KokoroThreads, runtime.GOMAXPROCS(0)))
+		if err != nil {
+			return nil, err
+		}
+		return kokoroEngine{engine}, nil
 	}
-	sttLabel, ttsLabel := sttEngine, kokoroEngine
+	sttLabel, ttsLabel := sttEngine, audio.KokoroEngine
 	var transcribe func(context.Context, []byte) (string, error)
 	if stub != nil {
 		transcribe = stub.stt
@@ -273,7 +279,7 @@ func startModels(b *larkServer, paths modelPaths, stub *stubConfig) <-chan struc
 		defer cancel()
 		_, _ = b.clips.getWith(ctx, b.worker.warm, b.voices.fallback, "Sent to everyone!")
 		b.clips.warmFillers(ctx, b.worker, b.voices.fallback)
-		for _, v := range voiceCatalog {
+		for _, v := range audio.Catalog {
 			_, _ = b.clips.getWith(ctx, b.worker.warm, v.ID, voicePreviewText(v.ID))
 		}
 		if list, err := b.allCompanions(ctx); err == nil {

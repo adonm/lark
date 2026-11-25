@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
 func TestTurnBench(t *testing.T) {
@@ -25,11 +27,12 @@ func TestTurnBench(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
-	engine, err := openKokoro(ttsModelDir(filepath.Join(data, "lark")), 4)
+	engine, err := audio.OpenKokoro(audio.TTSModelDir(filepath.Join(data, "lark")), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.close()
+	eng := kokoroEngine{engine}
+	defer engine.Close()
 
 	utterances := []struct {
 		name string
@@ -42,7 +45,7 @@ func TestTurnBench(t *testing.T) {
 	clips := make([][]byte, len(utterances))
 	silence := make([]byte, sampleRate*2*2500/1000) // 2.5 s trailing silence for endpointing
 	for i, u := range utterances {
-		pcm, err := synthesizePCM(t.Context(), engine, heartVoice, u.text)
+		pcm, err := synthesizePCM(t.Context(), eng, heartVoice, u.text)
 		if err != nil {
 			t.Fatalf("synthesize %q: %v", u.text, err)
 		}

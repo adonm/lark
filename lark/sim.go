@@ -26,6 +26,8 @@ import (
 	"github.com/pierrec/lz4/v4"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 type simBoardSpec struct {
@@ -415,7 +417,7 @@ func writeWAV16k(path string, pcm []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	hdr := wavHeader(len(pcm))
+	hdr := audio.WavHeader(len(pcm))
 	out := make([]byte, len(hdr)+len(pcm))
 	copy(out, hdr[:])
 	copy(out[len(hdr):], pcm)

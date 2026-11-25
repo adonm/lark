@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"lark/internal/audio"
 )
 
 // decision is what one endpoint evaluation wants to do with the open capture.
@@ -311,11 +313,11 @@ func (r *endpointRun) startProbe(at time.Duration) {
 	r.probeCh, r.probeCancel = result, cancel
 	go func(pcm []byte, probeAt, from time.Duration, audioLen int, windowed bool) {
 		start := time.Now()
-		sttCtx, timing := withSTTTiming(withSTTProbe(ctx))
+		sttCtx, timing := audio.WithTiming(audio.WithProbe(ctx))
 		text, err := r.decode(sttCtx, pcm)
 		result <- pauseTranscript{
 			at: probeAt, from: from, audioLen: audioLen, windowed: windowed,
-			text: text, err: err, stt: time.Since(start), sttQueue: timing.queue, sttRun: timing.run,
+			text: text, err: err, stt: time.Since(start), sttQueue: timing.Queue, sttRun: timing.Run,
 		}
 	}(clip, r.u.at(r.lastGateOpenLen), r.u.at(startOff), len(r.u.pcm), windowed)
 }
@@ -497,10 +499,10 @@ func (r *endpointRun) buildResult() captureResult {
 			result.text = r.cached.text
 		default:
 			start := time.Now()
-			sttCtx, timing := withSTTTiming(r.c.ctx)
+			sttCtx, timing := audio.WithTiming(r.c.ctx)
 			result.text, result.err = r.decode(sttCtx, result.pcm)
 			result.stt = time.Since(start)
-			result.sttQueue, result.sttRun = timing.queue, timing.run
+			result.sttQueue, result.sttRun = timing.Queue, timing.Run
 		}
 		if result.hasEnd {
 			result.endToCommit = r.c.commitAt.Sub(r.end)

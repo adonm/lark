@@ -15,6 +15,8 @@ import (
 	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+
+	"lark/internal/audio"
 )
 
 func TestSTTBakeoff(t *testing.T) {
@@ -27,7 +29,7 @@ func TestSTTBakeoff(t *testing.T) {
 		generateBakeoffAudio(t)
 		return
 	}
-	var audio [][]byte
+	var clips [][]byte
 	files, err := filepath.Glob(filepath.Join(os.Getenv("LARK_BAKEOFF_AUDIO"), "*.wav"))
 	if err != nil || len(files) == 0 {
 		t.Fatal("supply a directory of 16 kHz mono PCM WAV files")
@@ -41,7 +43,7 @@ func TestSTTBakeoff(t *testing.T) {
 		for _, v := range a.Samples {
 			pcm = le.AppendUint16(pcm, uint16(int16(v*32768)))
 		}
-		audio = append(audio, pcm)
+		clips = append(clips, pcm)
 	}
 	threads, _ := strconv.Atoi(env("LARK_BAKEOFF_THREADS", "8"))
 	model := os.Getenv("LARK_BAKEOFF_MODEL")
@@ -53,12 +55,12 @@ func TestSTTBakeoff(t *testing.T) {
 		transcribe = bakeoffSherpa(t, model, threads)
 	case "parakeet":
 		threads = 1
-		p, err := openParakeet(model)
+		p, err := audio.OpenParakeet(model)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(p.close)
-		transcribe = p.transcribe
+		t.Cleanup(p.Close)
+		transcribe = p.Transcribe
 	case "sherpa-stream":
 		recognizer := sherpa.NewOnlineRecognizer(&sherpa.OnlineRecognizerConfig{
 			FeatConfig: sherpa.FeatureConfig{SampleRate: sampleRate, FeatureDim: 80},
@@ -89,7 +91,7 @@ func TestSTTBakeoff(t *testing.T) {
 	if transcribe != nil {
 		ctx, stop := context.WithTimeout(t.Context(), 40*time.Second)
 		start := time.Now()
-		text, err := transcribe(ctx, audio[0])
+		text, err := transcribe(ctx, clips[0])
 		stop()
 		if err != nil || text == "" {
 			t.Fatalf("first read: missing transcript (%v)", err)
@@ -97,7 +99,7 @@ func TestSTTBakeoff(t *testing.T) {
 		t.Logf("init_ms=%d first_clip_ms=%d", init.Milliseconds(), time.Since(start).Milliseconds())
 	}
 	cpuStart := bakeoffCPU(t, pid)
-	for i, pcm := range audio {
+	for i, pcm := range clips {
 		ctx, stop := context.WithTimeout(t.Context(), 40*time.Second)
 		start := time.Now()
 		if transcribe != nil {
@@ -277,7 +279,7 @@ func generateBakeoffAudio(t *testing.T) {
 			}
 		}
 		path := filepath.Join(dir, fmt.Sprintf("fixture-%d.wav", i))
-		header := wavHeader(len(pcm))
+		header := audio.WavHeader(len(pcm))
 		if err := os.WriteFile(path, append(header[:], pcm...), 0600); err != nil {
 			t.Fatal(err)
 		}

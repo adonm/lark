@@ -10,6 +10,8 @@ import (
 	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+
+	"lark/internal/audio"
 )
 
 type replayClause struct {
@@ -107,15 +109,15 @@ func TestEndpointReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := os.Getenv("LARK_BAKEOFF_MODEL")
-	if err := checkParakeetModel(model); err != nil {
+	if err := audio.CheckParakeetModel(model); err != nil {
 		t.Fatal(err)
 	}
-	parakeet, err := openParakeet(model)
+	parakeet, err := audio.OpenParakeet(model)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(parakeet.close)
-	if _, err := parakeet.transcribe(t.Context(), make([]byte, sampleRate*2)); err != nil {
+	t.Cleanup(parakeet.Close)
+	if _, err := parakeet.Transcribe(t.Context(), make([]byte, sampleRate*2)); err != nil {
 		t.Fatal(err)
 	}
 	kokoro := os.Getenv("LARK_REPLAY_KOKORO")
@@ -245,7 +247,7 @@ func replaySpeak(t *testing.T, tts *sherpa.OfflineTts, text string, voice int) [
 	return pcm[start:end]
 }
 
-func replaySilero(t *testing.T, pcm []byte, path string, hybrid bool, stt *parakeetSTT) (int, int) {
+func replaySilero(t *testing.T, pcm []byte, path string, hybrid bool, stt *audio.STT) (int, int) {
 	t.Helper()
 	vad := newSileroVAD(path)
 	if vad == nil {
@@ -267,7 +269,7 @@ func replaySilero(t *testing.T, pcm []byte, path string, hybrid bool, stt *parak
 			lastProbeAt = at
 			windowed := i > endpointProbeWindow
 			startOff := max(0, i-endpointProbeWindow)
-			text, err := stt.transcribe(t.Context(), pcm[startOff:i])
+			text, err := stt.Transcribe(t.Context(), pcm[startOff:i])
 			if err != nil {
 				t.Fatal(err)
 			}

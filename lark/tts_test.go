@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
 func TestKokoroReplyBypassesQueuedWarmup(t *testing.T) {
@@ -21,7 +23,7 @@ func TestKokoroReplyBypassesQueuedWarmup(t *testing.T) {
 	started := make(chan string, 3)
 	release := make(chan struct{})
 	go w.run(ctx, func() (speechEngine, error) {
-		return fakeSpeechEngine(func(text string, _ voiceChoice, _ func() bool) ([]float32, int) {
+		return fakeSpeechEngine(func(text string, _ audio.Voice, _ func() bool) ([]float32, int) {
 			started <- text
 			if text == "first warm clip" {
 				select {
@@ -29,7 +31,7 @@ func TestKokoroReplyBypassesQueuedWarmup(t *testing.T) {
 				case <-ctx.Done():
 				}
 			}
-			return []float32{0, 0.2, 0}, kokoroRate
+			return []float32{0, 0.2, 0}, audio.KokoroRate
 		}), nil
 	})
 	request := func(text string) ttsRequest {
@@ -46,19 +48,19 @@ func TestKokoroReplyBypassesQueuedWarmup(t *testing.T) {
 
 func TestFirstChunkAndCachedOpener(t *testing.T) {
 	t.Parallel()
-	ex := sentenceExtractor{firstChunk: true}
+	ex := audio.SentenceExtractor{FirstChunk: true}
 	var got []string
 	for _, d := range []string{"Two plus ", "two is ", "four ", "right now."} {
-		got = append(got, ex.add(d)...)
+		got = append(got, ex.Add(d)...)
 	}
-	got = append(got, ex.flush()...)
+	got = append(got, ex.Flush()...)
 	if len(got) < 2 || got[0] != "Two plus two is four" {
 		t.Fatalf("expected 5-word first chunk, got %q", got)
 	}
 
-	ex2 := sentenceExtractor{firstChunk: true}
-	got2 := ex2.add("Good question, let me think about that.")
-	got2 = append(got2, ex2.flush()...)
+	ex2 := audio.SentenceExtractor{FirstChunk: true}
+	got2 := ex2.Add("Good question, let me think about that.")
+	got2 = append(got2, ex2.Flush()...)
 	if len(got2) < 2 || got2[0] != "Good question, let me think" {
 		t.Fatalf("expected first chunk split, got %q", got2)
 	}
@@ -297,12 +299,13 @@ func TestStreamPrefillAvoidsSentenceGaps(t *testing.T) {
 // First-audio cost of the playback prefill: synthesising until 1 s is buffered
 // instead of starting on the first sentence alone. Skips without the model.
 func BenchmarkTTSFirstAudioPrefill(b *testing.B) {
-	k, err := openKokoro(kokoroTestDir(b), 8)
+	k, err := audio.OpenKokoro(kokoroTestDir(b), 8)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer k.close()
-	voice := voiceCatalog[0]
+	defer k.Close()
+	eng := kokoroEngine{k}
+	voice := audio.Catalog[0]
 	first := "Ready? Here is my answer."
 	second := "It keeps going for a little while so the buffer fills before playback."
 	ctx := b.Context()
@@ -310,13 +313,13 @@ func BenchmarkTTSFirstAudioPrefill(b *testing.B) {
 	var firstTotal, prefillTotal time.Duration
 	for b.Loop() {
 		start := time.Now()
-		pcm, err := synthesizePCM(ctx, k, voice.ID, first)
+		pcm, err := synthesizePCM(ctx, eng, voice.ID, first)
 		if err != nil {
 			b.Fatal(err)
 		}
 		firstTotal += time.Since(start)
 		for len(pcm) < utteranceBytes(ttsPrefill) {
-			more, err := synthesizePCM(ctx, k, voice.ID, second)
+			more, err := synthesizePCM(ctx, eng, voice.ID, second)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -1,4 +1,4 @@
-package main
+package audio
 
 import (
 	"crypto/sha256"
@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	smartTurnModel  = "smart-turn-v3.2-cpu.onnx"
+	SmartTurnModel  = "smart-turn-v3.2-cpu.onnx"
 	smartTurnSHA256 = "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f"
 
 	smartTurnSampleRate = 16000
@@ -29,7 +29,7 @@ const (
 	smartTurnPad        = smartTurnNFFT / 2               // 200
 )
 
-func checkSmartTurnModel(path string) error {
+func CheckModel(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return errors.New("cannot read Smart Turn v3.2 model; run scripts/setup-host.sh")
@@ -76,7 +76,7 @@ func ensureORT() error {
 	return ortInitErr
 }
 
-type smartTurnEngine struct {
+type Engine struct {
 	mu      sync.Mutex
 	session *ort.DynamicAdvancedSession
 	inName  string
@@ -88,8 +88,8 @@ type smartTurnEngine struct {
 	mel     *whisperMel
 }
 
-func openSmartTurn(path string, threads int) (*smartTurnEngine, error) {
-	if err := checkSmartTurnModel(path); err != nil {
+func Open(path string, threads int) (*Engine, error) {
+	if err := CheckModel(path); err != nil {
 		return nil, err
 	}
 	if err := ensureORT(); err != nil {
@@ -132,7 +132,7 @@ func openSmartTurn(path string, threads int) (*smartTurnEngine, error) {
 		outTen.Destroy()
 		return nil, err
 	}
-	return &smartTurnEngine{
+	return &Engine{
 		session: sess,
 		inName:  inName,
 		outName: outName,
@@ -144,7 +144,7 @@ func openSmartTurn(path string, threads int) (*smartTurnEngine, error) {
 	}, nil
 }
 
-func (e *smartTurnEngine) close() {
+func (e *Engine) Close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.session != nil {
@@ -161,7 +161,7 @@ func (e *smartTurnEngine) close() {
 	}
 }
 
-func (e *smartTurnEngine) predictPCM16(pcm []byte) (float32, error) {
+func (e *Engine) PredictPCM16(pcm []byte) (float32, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.session == nil {
@@ -233,7 +233,7 @@ func melToHzSlaney(mel float64) float64 {
 	return 200.0 * mel / 3.0
 }
 
-func initSlaneyMelBank(out []float64, nMels, nFFT, sampleRate int, fMin, fMax float64) {
+func initSlaneyMelBank(out []float64, nMels, nFFT, SampleRate int, fMin, fMax float64) {
 	nBins := nFFT/2 + 1
 	melMin := hzToMelSlaney(fMin)
 	melMax := hzToMelSlaney(fMax)
@@ -244,7 +244,7 @@ func initSlaneyMelBank(out []float64, nMels, nFFT, sampleRate int, fMin, fMax fl
 	}
 	fftFreqs := make([]float64, nBins)
 	for i := range fftFreqs {
-		fftFreqs[i] = float64(i) * float64(sampleRate) / float64(nFFT)
+		fftFreqs[i] = float64(i) * float64(SampleRate) / float64(nFFT)
 	}
 	for m := range nMels {
 		fLeft, fCenter, fRight := pts[m], pts[m+1], pts[m+2]

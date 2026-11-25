@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lark/internal/audio"
 )
 
 const (
@@ -199,7 +201,7 @@ func writePrivateFile(path string, data []byte) error {
 }
 
 func writeCaptureWAV(path string, pcm []byte) error {
-	hdr := wavHeader(len(pcm))
+	hdr := audio.WavHeader(len(pcm))
 	out := make([]byte, len(hdr)+len(pcm))
 	copy(out, hdr[:])
 	copy(out[len(hdr):], pcm)

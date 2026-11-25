@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
@@ -255,7 +257,7 @@ func TestDiagnosticsTTSQueueDropsCanceledSpeechWithoutRestart(t *testing.T) {
 	defer cancel()
 	worker := newSynthWorker(root, func() (speechEngine, error) {
 		loads++
-		return fakeSpeechEngine(func(text string, _ voiceChoice, keepGoing func() bool) ([]float32, int) {
+		return fakeSpeechEngine(func(text string, _ audio.Voice, keepGoing func() bool) ([]float32, int) {
 			calls = append(calls, text)
 			if text == "Interrupt me" {
 				cancel()

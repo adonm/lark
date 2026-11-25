@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lark/internal/audio"
 )
 
 type ocEventData struct {
@@ -220,7 +222,7 @@ func finalReply(messages []ocMessage, promptID string) (string, ocMessage, error
 }
 
 type streamedText struct {
-	sentenceExtractor
+	audio.SentenceExtractor
 	onFirst    func()
 	messageID  string
 	byOrdinal  map[int]*strings.Builder
@@ -230,8 +232,8 @@ type streamedText struct {
 }
 
 func (t *streamedText) add(delta string) []string {
-	out := t.sentenceExtractor.add(delta)
-	if t.onFirst != nil && t.hasLetter {
+	out := t.SentenceExtractor.Add(delta)
+	if t.onFirst != nil && t.HasLetter {
 		t.onFirst()
 		t.onFirst = nil
 	}
@@ -248,7 +250,7 @@ func (t *streamedText) addEvent(event ocEvent) []string {
 	id := d.AssistantMessageID
 	if id != "" && id != t.messageID {
 		t.messageID = id
-		t.sentenceExtractor = sentenceExtractor{firstChunk: t.firstChunk}
+		t.SentenceExtractor = audio.SentenceExtractor{FirstChunk: t.firstChunk}
 		clear(t.byOrdinal)
 		t.havePart = false
 	}
@@ -260,8 +262,8 @@ func (t *streamedText) addEvent(event ocEvent) []string {
 		}
 		t.ordinal, t.havePart = d.Ordinal, true
 	case "session.text.delta":
-		if t.halted || t.havePart && d.Ordinal != t.ordinal {
-			t.halted = true
+		if t.Halted || t.havePart && d.Ordinal != t.ordinal {
+			t.Halted = true
 			return nil
 		}
 		if t.byOrdinal == nil {
@@ -283,7 +285,7 @@ func (t *streamedText) addEvent(event ocEvent) []string {
 		if tail, ok := strings.CutPrefix(d.Text, prior); ok && (!t.havePart || d.Ordinal == t.ordinal) {
 			return t.add(tail + "\n")
 		}
-		t.halted = true // The authoritative final message may differ from the deltas.
+		t.Halted = true // The authoritative final message may differ from the deltas.
 	}
 	return nil
 }
@@ -319,20 +321,20 @@ type turnProgress struct {
 func (p *turnProgress) handleEvent(event ocEvent) {
 	if strings.HasPrefix(event.Type, "session.tool.") {
 		if p.stream.sentence != nil {
-			for _, s := range p.streamed.flush() {
-				if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, alphaNum) {
+			for _, s := range p.streamed.Flush() {
+				if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, audio.AlphaNum) {
 					p.trace.measure(diagFirstSentence, time.Since(p.start))
 					*p.firstSentence = true
 				}
 				p.stream.sentence(s)
 			}
 		}
-		p.streamed.sentenceExtractor = sentenceExtractor{}
+		p.streamed.SentenceExtractor = audio.SentenceExtractor{}
 		p.markTool()
 	}
 	if p.stream.sentence != nil || p.trace != nil && (!*p.firstSentence || p.streamed.onFirst != nil) {
 		for _, s := range p.streamed.addEvent(event) {
-			if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, alphaNum) {
+			if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, audio.AlphaNum) {
 				p.trace.measure(diagFirstSentence, time.Since(p.start))
 				*p.firstSentence = true
 			}
@@ -448,7 +450,7 @@ func (o *openCode) runTurnAttempt(ctx context.Context, sid, prompt string, model
 			params.Set("cursor", next)
 		}
 		reply, final, err := finalReply(msgs, result.ID)
-		if trace != nil && !firstSentence && err == nil && strings.ContainsFunc(fenced.ReplaceAllString(reply, ""), alphaNum) {
+		if trace != nil && !firstSentence && err == nil && strings.ContainsFunc(fenced.ReplaceAllString(reply, ""), audio.AlphaNum) {
 			trace.measure(diagFirstSentence, time.Since(start))
 		}
 		if err == nil && !usedTool && stream.tool != nil {
@@ -480,7 +482,7 @@ func (o *openCode) runTurnAttempt(ctx context.Context, sid, prompt string, model
 		}
 		return reply, err
 	}
-	streamed := streamedText{sentenceExtractor: sentenceExtractor{firstChunk: stream.firstChunk}, firstChunk: stream.firstChunk}
+	streamed := streamedText{SentenceExtractor: audio.SentenceExtractor{FirstChunk: stream.firstChunk}, firstChunk: stream.firstChunk}
 	if trace != nil {
 		streamed.onFirst = func() { trace.measure(diagLLMFirst, time.Since(start)) }
 	}

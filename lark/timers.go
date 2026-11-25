@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 const (
@@ -531,7 +533,7 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	}
 	var pcm []byte
 	if !t.WakeAgent {
-		pcm, _ = synthesizeMelody(t.Notes)
+		pcm, _ = audio.SynthesizeMelody(t.Notes)
 	}
 	key, now := strings.ToLower(t.CompanionID), time.Now()
 	if !t.WakeAgent {

@@ -15,6 +15,8 @@ import (
 	"sync"
 
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
+
+	"lark/internal/audio"
 )
 
 // The e2e build replaces the three model-backed pieces of the bridge with
@@ -202,7 +204,7 @@ type stubEngine struct{}
 
 // generate returns 900 ms of a soft tone. Long enough that the Stop gesture
 // can land mid-playback, and instant to compute.
-func (stubEngine) generate(string, voiceChoice, func() bool) ([]float32, int) {
+func (stubEngine) generate(string, audio.Voice, func() bool) ([]float32, int) {
 	const n = sampleRate * 900 / 1000
 	out := make([]float32, n)
 	for i := range out {

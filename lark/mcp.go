@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"lark/internal/audio"
 )
 
 const (
@@ -244,9 +246,9 @@ var mcpTools = func() []object {
 		return object{"name": name, "description": description, "inputSchema": in}
 	}
 	notes := object{"anyOf": []object{text, array(text)}, "description": "PITCH:MS separated by spaces or an array, e.g. C5:150 E5:150"}
-	chimes := append(slices.Clone(basicChimes), slices.Sorted(maps.Keys(sfxPresets))...)
-	voices := make([]string, 0, len(voiceCatalog))
-	for _, voice := range voiceCatalog {
+	chimes := append(slices.Clone(basicChimes), slices.Sorted(maps.Keys(audio.SFXPresets))...)
+	voices := make([]string, 0, len(audio.Catalog))
+	for _, voice := range audio.Catalog {
 		voices = append(voices, voice.ID)
 	}
 	voice := enum(voices...)
@@ -480,7 +482,7 @@ func (b *larkServer) mcpEmit(ctx context.Context, args object) (object, error) {
 			}
 		} else if kind = str(raw); !validChime(kind) {
 			var err error
-			pcm, err = sfxPCM(kind)
+			pcm, err = audio.SFX(kind)
 			if err != nil {
 				return nil, fieldError(key, "unknown kind")
 			}

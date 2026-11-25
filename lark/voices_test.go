@@ -6,11 +6,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
-type fakeSpeechEngine func(string, voiceChoice, func() bool) ([]float32, int)
+type fakeSpeechEngine func(string, audio.Voice, func() bool) ([]float32, int)
 
-func (f fakeSpeechEngine) generate(text string, voice voiceChoice, keepGoing func() bool) ([]float32, int) {
+func (f fakeSpeechEngine) generate(text string, voice audio.Voice, keepGoing func() bool) ([]float32, int) {
 	return f(text, voice, keepGoing)
 }
 
@@ -28,7 +30,7 @@ func TestTTSVoiceSelection(t *testing.T) {
 		{"", "en-us", 3},
 	} {
 		const text = "Café"
-		engine := fakeSpeechEngine(func(got string, voice voiceChoice, keepGoing func() bool) ([]float32, int) {
+		engine := fakeSpeechEngine(func(got string, voice audio.Voice, keepGoing func() bool) ([]float32, int) {
 			if got != text || voice.SID != tt.sid || voice.Lang != tt.lang || !keepGoing() {
 				t.Errorf("voice %q reached engine as %q, %+v", tt.id, got, voice)
 			}
@@ -39,7 +41,7 @@ func TestTTSVoiceSelection(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"bf_emma", "bm_lewis", "unsupported"} {
-		engine := fakeSpeechEngine(func(string, voiceChoice, func() bool) ([]float32, int) {
+		engine := fakeSpeechEngine(func(string, audio.Voice, func() bool) ([]float32, int) {
 			t.Fatalf("unknown voice %q should not reach engine", bad)
 			return nil, 0
 		})
@@ -84,8 +86,8 @@ func TestUnknownStoredVoiceFallsBack(t *testing.T) {
 func TestMCPVoiceCatalog(t *testing.T) {
 	t.Parallel()
 	want := []string{heartVoice, fableVoice, lilyVoice, "bm_george", "af_bella", "am_puck", "bf_alice", "bf_isabella"}
-	if len(voiceCatalog) != len(want) {
-		t.Fatalf("got %d voice choices, want %d", len(voiceCatalog), len(want))
+	if len(audio.Catalog) != len(want) {
+		t.Fatalf("got %d voice choices, want %d", len(audio.Catalog), len(want))
 	}
 	fields := mcpInputSchema("patch")["properties"].(object)
 	schema := fields["companion"].(object)["properties"].(object)["voice"].(object)
@@ -195,7 +197,7 @@ func TestMenuVoicePicker(t *testing.T) {
 	c.tap(t, vx, vy, 0)
 	svg := waitSVG(t, b.hub, termID, "voice-af_heart")
 	for _, voice := range []int{1, 0} {
-		choice := voiceCatalog[voice]
+		choice := audio.Catalog[voice]
 		hits := b.hub.live(termID).state().svg.hits
 		var tx, ty int
 		found := false

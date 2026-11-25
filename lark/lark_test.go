@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 	"unicode"
+
+	"lark/internal/audio"
 )
 
 func TestTurnPromptIdentifiesDeviceAndInput(t *testing.T) {
@@ -151,26 +153,26 @@ func TestLocalTimeAcrossAgentSurfaces(t *testing.T) {
 func TestSentencesAndFence(t *testing.T) {
 	t.Parallel()
 	want := []string{"Whoa!", "Dr. Lee found a 3.2-inch shell.", "Ooh, awesome question! What made it spiral?"}
-	if got := SplitSentences("**Whoa!** Dr. Lee found a 3.2-inch shell. Ooh, awesome question! What made it spiral?"); !slices.Equal(got, want) {
+	if got := audio.SplitSentences("**Whoa!** Dr. Lee found a 3.2-inch shell. Ooh, awesome question! What made it spiral?"); !slices.Equal(got, want) {
 		t.Fatal(got)
 	}
-	var ex sentenceExtractor
+	var ex audio.SentenceExtractor
 	var clauses []string
 	for _, chunk := range []string{"Well, ", "short, ", "and now a much longer opening clause, ", "followed by more, ", "and the end."} {
-		clauses = append(clauses, ex.add(chunk)...)
+		clauses = append(clauses, ex.Add(chunk)...)
 	}
-	clauses = append(clauses, ex.flush()...)
+	clauses = append(clauses, ex.Flush()...)
 	wantStream := []string{"Well, short, and now a much longer opening clause,", "followed by more, and the end."}
 	if !slices.Equal(clauses, wantStream) {
-		t.Fatalf("sentenceExtractor clause flush = %q, want %q", clauses, wantStream)
+		t.Fatalf("audio.SentenceExtractor clause flush = %q, want %q", clauses, wantStream)
 	}
-	var s sentenceExtractor
+	var s audio.SentenceExtractor
 	var streamed []string
 	for _, delta := range []string{"**Whoa!** Dr. Lee found a 3.", "2-inch shell. ", "Ooh, awesome question!", " What made it spiral in circles?\n", "``", "`lark-screen", "\nNever say this. \n```", "Not eager even after fence. "} {
-		streamed = append(streamed, s.add(delta)...)
+		streamed = append(streamed, s.Add(delta)...)
 	}
 	want[2] = "Ooh, awesome question! What made it spiral in circles?"
-	if !s.halted || !slices.Equal(streamed, want) {
+	if !s.Halted || !slices.Equal(streamed, want) {
 		t.Fatal(streamed)
 	}
 }
@@ -186,12 +188,12 @@ func TestSentenceExtractorFragmentation(t *testing.T) {
 	} {
 		raw, _, fence := strings.Cut(text, "```")
 		unmarked := strings.NewReplacer("*", "", "_", "", "`", "", "#", "").Replace(raw)
-		want := sentences(plainText(raw), false, fence || unmarked != strings.TrimRightFunc(unmarked, unicode.IsSpace))
+		want := audio.Sentences(audio.PlainText(raw), false, fence || unmarked != strings.TrimRightFunc(unmarked, unicode.IsSpace))
 		for size := 1; size <= len(text); size++ {
-			var extractor sentenceExtractor
+			var extractor audio.SentenceExtractor
 			var got []string
 			for i := 0; i < len(text); i += size {
-				got = append(got, extractor.add(text[i:min(i+size, len(text))])...)
+				got = append(got, extractor.Add(text[i:min(i+size, len(text))])...)
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("%q in %d-byte chunks: got %q, want %q", text, size, got, want)
@@ -206,9 +208,9 @@ func BenchmarkSentenceExtractor(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.SetBytes(int64(len(text)))
 			for b.Loop() {
-				var extractor sentenceExtractor
+				var extractor audio.SentenceExtractor
 				for i := 0; i < len(text); i += size {
-					extractor.add(text[i:min(i+size, len(text))])
+					extractor.Add(text[i:min(i+size, len(text))])
 				}
 			}
 		})
@@ -233,18 +235,18 @@ func TestAudioDSP(t *testing.T) {
 		}
 		return math.Sqrt(sum / float64(len(pcm)/2))
 	}
-	pcm, err := synthPCM(sineFloats(24000, 1000, .25), 24000)
+	pcm, err := audio.SynthPCM(sineFloats(24000, 1000, .25), 24000)
 	if err != nil || len(pcm) != 32000 || math.Abs(rms(pcm)-10426) > 100 {
 		t.Fatalf("resampler passband: %d bytes, error %v", len(pcm), err)
 	}
-	alias, err := synthPCM(sineFloats(24000, 10000, .25), 24000)
+	alias, err := audio.SynthPCM(sineFloats(24000, 10000, .25), 24000)
 	if err != nil || rms(alias[64:len(alias)-64]) > 110 {
 		t.Fatalf("resampler aliasing: %v", err)
 	}
 	loud := bytes.Repeat([]byte{0x80, 0x3e}, 60)
 	quiet := bytes.Repeat([]byte{64, 0}, 120)
-	normalized := int16(le.Uint16(NormalizeVoicePCM(loud)))
-	if normalized < 25000 || normalized > 26100 || !bytes.Equal(NormalizeVoicePCM(quiet), quiet) {
+	normalized := int16(le.Uint16(audio.NormalizeVoicePCM(loud)))
+	if normalized < 25000 || normalized > 26100 || !bytes.Equal(audio.NormalizeVoicePCM(quiet), quiet) {
 		t.Fatal("bad normalization or noise-floor guard")
 	}
 
@@ -253,7 +255,7 @@ func TestAudioDSP(t *testing.T) {
 func BenchmarkSincOneSecond(b *testing.B) {
 	raw := sineFloats(24000, 1000, .25)
 	for b.Loop() {
-		_, _ = synthPCM(raw, 24000)
+		_, _ = audio.SynthPCM(raw, 24000)
 	}
 }
 

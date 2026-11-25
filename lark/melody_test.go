@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+
+	"lark/internal/audio"
 )
 
 func TestSynthesizeMelody(t *testing.T) {
 	t.Parallel()
 	notes := []string{"C5:120", "R:80", "F#4:120", "Bb4:120", "880:60"}
-	pcm, err := synthesizeMelody(notes)
+	pcm, err := audio.SynthesizeMelody(notes)
 	if err != nil || len(pcm) != sampleRate {
 		t.Fatalf("got %d bytes: %v", len(pcm), err)
 	}
@@ -28,7 +30,7 @@ func TestSynthesizeMelody(t *testing.T) {
 	}
 	for _, bad := range [][]string{nil, make([]string, 33), {"H4:100"}, {"D7:100"}, {"99:100"}, {"NaN:100"},
 		{"C5:29"}, {"R:2001"}, {"R:2000", "R:2000", "R:2000", "R:30"}} {
-		if _, err := synthesizeMelody(bad); err == nil {
+		if _, err := audio.SynthesizeMelody(bad); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
 	}
@@ -41,7 +43,7 @@ func TestTerminalMelody(t *testing.T) {
 	c := testConnectWS(t, base, "unit", false)
 	c.hello(t, "vocat-0001", "Cake")
 	notes := []string{"C5:120", "R:80"}
-	pcm, _ := synthesizeMelody(notes)
+	pcm, _ := audio.SynthesizeMelody(notes)
 	check := func() {
 		t.Helper()
 		start := c.until(t, func(f protocolFrame) bool {

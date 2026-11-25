@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
 const kokoroSample = "Come along, little fox, and let's look for the stars."
@@ -21,7 +23,7 @@ func kokoroTestDir(t testing.TB) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := ttsModelDir(filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "lark"))
+	dir := audio.TTSModelDir(filepath.Join(env("XDG_DATA_HOME", filepath.Join(home, ".local/share")), "lark"))
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		t.Skip("Kokoro model pack is not installed")
 	} else if err != nil {
@@ -32,17 +34,18 @@ func kokoroTestDir(t testing.TB) string {
 
 func TestKokoroReal(t *testing.T) {
 	t.Parallel()
-	k, err := openKokoro(kokoroTestDir(t), kokoroThreads)
+	k, err := audio.OpenKokoro(kokoroTestDir(t), audio.KokoroThreads)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer k.close()
+	defer k.Close()
+	eng := kokoroEngine{k}
 
 	var heard [][]byte
-	for _, voice := range voiceCatalog {
+	for _, voice := range audio.Catalog {
 		t.Run(voice.Name, func(t *testing.T) {
 			start := time.Now()
-			pcm, err := synthesizePCM(t.Context(), k, voice.ID, kokoroSample)
+			pcm, err := synthesizePCM(t.Context(), eng, voice.ID, kokoroSample)
 			elapsed := time.Since(start).Seconds()
 			seconds := float64(len(pcm)) / (2 * sampleRate)
 			if err != nil || seconds < 1 || seconds > 8 {
@@ -71,16 +74,16 @@ func TestKokoroReal(t *testing.T) {
 	t.Run("EnglishAccents", func(t *testing.T) {
 		const text = "The little otter took a bath after dancing in the park."
 		voice := voiceByID(heartVoice)
-		us, rate := k.generate(text, voice, func() bool { return true })
+		us, rate := k.Generate(text, voice, func() bool { return true })
 		voice.Lang = "en-gb"
-		gb, gbRate := k.generate(text, voice, func() bool { return true })
-		if rate != kokoroRate || gbRate != kokoroRate || len(us) == 0 || len(gb) == 0 {
+		gb, gbRate := k.Generate(text, voice, func() bool { return true })
+		if rate != audio.KokoroRate || gbRate != audio.KokoroRate || len(us) == 0 || len(gb) == 0 {
 			t.Fatal("missing English audio")
 		}
 		if len(us) == len(gb) {
 			t.Fatal("the accent-sensitive fixture had the same duration in both accents")
 		}
-		t.Logf("same speaker: US %.2fs, UK %.2fs", float64(len(us))/kokoroRate, float64(len(gb))/kokoroRate)
+		t.Logf("same speaker: US %.2fs, UK %.2fs", float64(len(us))/audio.KokoroRate, float64(len(gb))/audio.KokoroRate)
 	})
 
 	for _, fixture := range []struct{ name, text string }{
@@ -91,7 +94,7 @@ func TestKokoroReal(t *testing.T) {
 			voice := voiceByID(heartVoice)
 			chunks := 0
 			fullStart := time.Now()
-			full, _ := k.generate(fixture.text, voice, func() bool { chunks++; return true })
+			full, _ := k.Generate(fixture.text, voice, func() bool { chunks++; return true })
 			fullTime := time.Since(fullStart)
 			if chunks < 2 {
 				t.Fatalf("cancellation fixture must span native batches, got %d", chunks)
@@ -99,8 +102,8 @@ func TestKokoroReal(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			stoppedAt, canceledChunks := 0, 0
-			engine := fakeSpeechEngine(func(text string, voice voiceChoice, keepGoing func() bool) ([]float32, int) {
-				samples, rate := k.generate(text, voice, func() bool {
+			engine := fakeSpeechEngine(func(text string, voice audio.Voice, keepGoing func() bool) ([]float32, int) {
+				samples, rate := k.Generate(text, voice, func() bool {
 					canceledChunks++
 					cancel()
 					return keepGoing()
@@ -122,20 +125,21 @@ func BenchmarkKokoroThreads(b *testing.B) {
 	dir := kokoroTestDir(b)
 	for _, threads := range []int{4, 6, 8, 12} {
 		b.Run(fmt.Sprint(threads), func(b *testing.B) {
-			k, err := openKokoro(dir, threads)
+			k, err := audio.OpenKokoro(dir, threads)
 			if err != nil {
 				b.Fatal(err)
 			}
-			defer k.close()
-			for _, voice := range voiceCatalog {
+			defer k.Close()
+			eng := kokoroEngine{k}
+			for _, voice := range audio.Catalog {
 				b.Run(voice.Name, func(b *testing.B) {
 					ctx := b.Context()
-					if _, err := synthesizePCM(ctx, k, voice.ID, kokoroSample); err != nil {
+					if _, err := synthesizePCM(ctx, eng, voice.ID, kokoroSample); err != nil {
 						b.Fatal(err)
 					}
 					total := 0
 					for b.Loop() {
-						pcm, err := synthesizePCM(ctx, k, voice.ID, kokoroSample)
+						pcm, err := synthesizePCM(ctx, eng, voice.ID, kokoroSample)
 						if err != nil {
 							b.Fatal(err)
 						}

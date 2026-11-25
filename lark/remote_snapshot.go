@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/audio"
 )
 
 func (b *larkServer) serveRemoteEvents(w http.ResponseWriter, r *http.Request, companionID string) {
@@ -192,7 +194,7 @@ func (b *larkServer) remoteSnapshot(ctx context.Context, companionID string, por
 	}
 
 	voices := []object{}
-	for _, v := range voiceCatalog {
+	for _, v := range audio.Catalog {
 		voices = append(voices, object{"id": v.ID, "name": v.Name})
 	}
 	return object{"companion": comp, "terminals": terminals, "stories": stories, "voices": voices}

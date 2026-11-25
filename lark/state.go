@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"lark/internal/audio"
 )
 
 var (
@@ -23,38 +25,12 @@ var (
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 const (
-	lilyVoice  = "bf_lily"
-	fableVoice = "bm_fable"
-	heartVoice = "af_heart"
+	lilyVoice  = audio.LilyVoice
+	fableVoice = audio.FableVoice
+	heartVoice = audio.HeartVoice
 )
 
-type voiceChoice struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Lang string `json:"lang"`
-	SID  int    `json:"-"`
-}
-
-// SIDs match the speaker2id metadata in kokoro-multi-lang-v1_0/model.onnx.
-var voiceCatalog = [...]voiceChoice{
-	{heartVoice, "Heart", "en-us", 3},
-	{fableVoice, "Fable", "en-gb", 25},
-	{lilyVoice, "Lily", "en-gb", 23},
-	{"bm_george", "George", "en-gb", 26},
-	{"af_bella", "Bella", "en-us", 2},
-	{"am_puck", "Puck", "en-us", 18},
-	{"bf_alice", "Alice", "en-gb", 20},
-	{"bf_isabella", "Isabella", "en-gb", 22},
-}
-
-func voiceByID(id string) voiceChoice {
-	for _, voice := range voiceCatalog {
-		if voice.ID == id {
-			return voice
-		}
-	}
-	return voiceChoice{}
-}
+func voiceByID(id string) audio.Voice { return audio.ByID(id) }
 
 func voiceName(id string) string { return voiceByID(id).Name }
 

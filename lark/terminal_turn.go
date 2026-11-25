@@ -11,6 +11,8 @@ import (
 	"lark/internal/stories"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 const (
@@ -272,7 +274,7 @@ func (h *terminalHub) micChunkPCM(c *terminalClient, prefix byte, pcm []byte) {
 		mu.Unlock()
 		return
 	}
-	room := (maxPCM - len(rec.pcm)) &^ 1
+	room := (audio.MaxPCM - len(rec.pcm)) &^ 1
 	n := min(len(pcm), room)
 	rec.pcm = append(rec.pcm, pcm[:n]...)
 	full := n == room
@@ -290,7 +292,7 @@ func (h *terminalHub) captureLimit(d *terminalSession, now time.Time) {
 	}
 	mu := rec.lock()
 	mu.Lock()
-	full := len(rec.pcm) >= maxPCM
+	full := len(rec.pcm) >= audio.MaxPCM
 	mu.Unlock()
 	if full {
 		h.stopRecordingAtLimit(d, now)
@@ -1139,7 +1141,7 @@ func (h *terminalHub) deliverNotice(ctx context.Context, n terminalNotice) []not
 					stream.append(intro)
 				}
 			}
-			stream.append(NormalizeVoicePCM(n.pcm))
+			stream.append(audio.NormalizeVoicePCM(n.pcm))
 			stream.finish(nil)
 			q.stream = stream
 		}
@@ -1225,7 +1227,7 @@ func (h *terminalHub) speakNotice(stream *AudioStream, voice, introText, text st
 			stream.append(intro)
 		}
 	}
-	for _, s := range SplitSentences(text) {
+	for _, s := range audio.SplitSentences(text) {
 		pcm, err := w.synthesize(ctx, voice, s)
 		if err != nil || !stream.append(pcm) {
 			stream.finish(errTTS)

@@ -1,6 +1,6 @@
 //go:build linux && parakeet
 
-package main
+package audio
 
 /*
 #cgo LDFLAGS: -ltranscribe -lggml -lggml-cpu -lggml-vulkan -lggml-base -lstdc++ -lm -lpthread -ldl -lvulkan
@@ -32,7 +32,7 @@ type sttJob struct {
 	res    chan sttResult
 }
 
-type parakeetSTT struct {
+type STT struct {
 	model   *C.struct_transcribe_model
 	session *C.struct_transcribe_session
 	commits chan sttJob
@@ -42,7 +42,7 @@ type parakeetSTT struct {
 	scratch []float32
 }
 
-func openParakeet(path string) (*parakeetSTT, error) {
+func OpenParakeet(path string) (*STT, error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 	var params C.struct_transcribe_model_load_params
@@ -68,20 +68,20 @@ func openParakeet(path string) (*parakeetSTT, error) {
 		return nil, err
 	}
 	log.Printf("Parakeet Vulkan selected %s (%s)", C.GoString(info.description), C.GoString(info.name))
-	p := &parakeetSTT{
+	p := &STT{
 		model:   model,
 		session: session,
 		commits: make(chan sttJob, 16),
 		probes:  make(chan sttJob, 16),
 		quit:    make(chan struct{}),
 		done:    make(chan struct{}),
-		scratch: make([]float32, 0, sampleRate*15),
+		scratch: make([]float32, 0, SampleRate*15),
 	}
 	go p.worker()
 	return p, nil
 }
 
-func (p *parakeetSTT) worker() {
+func (p *STT) worker() {
 	defer close(p.done)
 	for {
 		var job sttJob
@@ -101,7 +101,7 @@ func (p *parakeetSTT) worker() {
 	}
 }
 
-func (p *parakeetSTT) runJob(job sttJob) {
+func (p *STT) runJob(job sttJob) {
 	if err := job.ctx.Err(); err != nil {
 		job.res <- sttResult{err: err}
 		return
@@ -118,8 +118,8 @@ func (p *parakeetSTT) runJob(job sttJob) {
 	run.timestamps = C.TRANSCRIBE_TIMESTAMPS_NONE
 	status := C.transcribe_run(p.session, (*C.float)(unsafe.Pointer(&p.scratch[0])), C.int(len(p.scratch)), &run)
 	if job.timing != nil {
-		job.timing.queue = queueDur
-		job.timing.run = time.Since(runStart)
+		job.timing.Queue = queueDur
+		job.timing.Run = time.Since(runStart)
 	}
 	if err := job.ctx.Err(); err != nil {
 		job.res <- sttResult{err: err}
@@ -133,7 +133,7 @@ func (p *parakeetSTT) runJob(job sttJob) {
 	job.res <- sttResult{text: cleanParakeetText(text)}
 }
 
-func (p *parakeetSTT) close() {
+func (p *STT) Close() {
 	select {
 	case <-p.quit:
 		return
@@ -151,7 +151,7 @@ func (p *parakeetSTT) close() {
 	}
 }
 
-func (p *parakeetSTT) transcribe(ctx context.Context, pcm []byte) (string, error) {
+func (p *STT) Transcribe(ctx context.Context, pcm []byte) (string, error) {
 	if len(pcm) < 2 {
 		return "", nil
 	}
@@ -159,11 +159,11 @@ func (p *parakeetSTT) transcribe(ctx context.Context, pcm []byte) (string, error
 		ctx:    ctx,
 		pcm:    pcm,
 		at:     time.Now(),
-		timing: sttTimingFrom(ctx),
+		timing: timingFrom(ctx),
 		res:    make(chan sttResult, 1),
 	}
 	q := p.commits
-	if isSTTProbe(ctx) {
+	if isProbe(ctx) {
 		q = p.probes
 	}
 	select {

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
@@ -301,7 +303,7 @@ func screenSource(r renderRequest, hits []pixel.HitBox) string {
 			}
 		}
 		if r.drawer == pixel.DrawerVoice {
-			for _, v := range voiceCatalog {
+			for _, v := range audio.Catalog {
 				srcParts = append(srcParts, v.Name)
 			}
 		}

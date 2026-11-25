@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lark/internal/audio"
 )
 
 // modelPaths are resolved once at startup; the files themselves are checked
@@ -102,14 +104,14 @@ func (b *larkServer) loadVAD(ctx context.Context, path string) {
 }
 
 func (b *larkServer) loadParakeet(ctx context.Context, path string) {
-	if err := checkParakeetModel(path); err != nil {
+	if err := audio.CheckParakeetModel(path); err != nil {
 		if ctx.Err() == nil {
 			b.models.stt.setError(err)
 			log.Printf("Lark speech-to-text unavailable: %v", err)
 		}
 		return
 	}
-	parakeet, err := openParakeet(path)
+	parakeet, err := audio.OpenParakeet(path)
 	if err != nil {
 		if ctx.Err() == nil {
 			b.models.stt.setError(err)
@@ -119,14 +121,14 @@ func (b *larkServer) loadParakeet(ctx context.Context, path string) {
 	}
 	// One real transcribe validates the Vulkan backend; a load that cannot
 	// decode must never be reported ready.
-	if _, err := parakeet.transcribe(ctx, make([]byte, sampleRate*2)); err != nil {
+	if _, err := parakeet.Transcribe(ctx, make([]byte, sampleRate*2)); err != nil {
 		if ctx.Err() == nil {
 			b.models.stt.setError(err)
 			log.Printf("Lark speech-to-text unavailable: %v", err)
 		}
 		return
 	}
-	b.setSTT(parakeet.transcribe)
+	b.setSTT(parakeet.Transcribe)
 	b.models.stt.setReady()
 	if ctx.Err() == nil {
 		log.Print("Lark speech-to-text ready (Parakeet, in-process Vulkan)")
@@ -134,12 +136,12 @@ func (b *larkServer) loadParakeet(ctx context.Context, path string) {
 	go func() {
 		<-ctx.Done()
 		b.setSTT(nil)
-		parakeet.close()
+		parakeet.Close()
 	}()
 }
 
 func (b *larkServer) loadSmartTurn(ctx context.Context, path string) {
-	smartTurn, err := openSmartTurn(path, min(4, runtime.GOMAXPROCS(0)))
+	smartTurn, err := audio.Open(path, min(4, runtime.GOMAXPROCS(0)))
 	if err != nil {
 		if ctx.Err() == nil {
 			b.models.smartTurn.setError(err)
@@ -147,7 +149,7 @@ func (b *larkServer) loadSmartTurn(ctx context.Context, path string) {
 		}
 		return
 	}
-	b.endpoint.setSmartTurn(smartTurn.predictPCM16)
+	b.endpoint.setSmartTurn(smartTurn.PredictPCM16)
 	b.models.smartTurn.setReady()
 	if ctx.Err() == nil {
 		log.Print("Lark semantic endpoint ready (Smart Turn v3.2)")
@@ -155,6 +157,6 @@ func (b *larkServer) loadSmartTurn(ctx context.Context, path string) {
 	go func() {
 		<-ctx.Done()
 		b.endpoint.setSmartTurn(nil)
-		smartTurn.close()
+		smartTurn.Close()
 	}()
 }

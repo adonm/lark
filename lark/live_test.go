@@ -25,6 +25,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
 const liveVoicePrompt = "What is a right triangle? Please explain in four complete sentences."
@@ -144,7 +146,7 @@ func liveHealthy(t *testing.T, c liveClient) {
 			t.Fatalf("unhealthy live backend %s", k)
 		}
 	}
-	if health["tts_engine"] != kokoroEngine {
+	if health["tts_engine"] != audio.KokoroEngine {
 		t.Fatal("TTS engine metadata mismatch")
 	}
 	if health["stt_engine"] != sttEngine {

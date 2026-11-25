@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
 func TestSmartTurnAccuracyAndLatency(t *testing.T) {
@@ -17,19 +19,19 @@ func TestSmartTurnAccuracyAndLatency(t *testing.T) {
 	}
 	data := env("XDG_DATA_HOME", filepath.Join(home, ".local/share"))
 	modelPath := filepath.Join(data, "lark", "stt-models", smartTurnModel)
-	kokoroDir := filepath.Join(data, "lark", "tts-models", kokoroPack)
+	kokoroDir := filepath.Join(data, "lark", "tts-models", audio.KokoroPack)
 
-	eng, err := openSmartTurn(modelPath, 4)
+	eng, err := audio.Open(modelPath, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.close()
+	defer eng.Close()
 
-	k, err := openKokoro(kokoroDir, 4)
+	k, err := audio.OpenKokoro(kokoroDir, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer k.close()
+	defer k.Close()
 
 	type sample struct {
 		label    string
@@ -77,7 +79,7 @@ func TestSmartTurnAccuracyAndLatency(t *testing.T) {
 	}
 	var results []result
 	for _, tc := range cases {
-		f32, _ := k.generate(tc.text, voiceCatalog[0], func() bool { return true })
+		f32, _ := k.Generate(tc.text, audio.Catalog[0], func() bool { return true })
 		if len(f32) == 0 {
 			t.Fatalf("kokoro failed for %q", tc.text)
 		}
@@ -102,7 +104,7 @@ func TestSmartTurnAccuracyAndLatency(t *testing.T) {
 		}
 		pcm = append(pcm[:end], silenceTail...)
 		start := time.Now()
-		prob, err := eng.predictPCM16(pcm)
+		prob, err := eng.PredictPCM16(pcm)
 		dur := time.Since(start)
 		if err != nil {
 			t.Fatal(err)

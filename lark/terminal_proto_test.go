@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 type testNativeClient struct {
@@ -446,7 +448,7 @@ func BenchmarkNativeUDPHandle(b *testing.B) {
 	}
 	d := &terminalSession{
 		key:       "lark-udpbench",
-		recording: deviceCapture{phase: captureOpen, started: time.Now(), pcm: make([]byte, 0, maxPCM)},
+		recording: deviceCapture{phase: captureOpen, started: time.Now(), pcm: make([]byte, 0, audio.MaxPCM)},
 		client:    &terminalClient{native: nc, ctx: b.Context()},
 	}
 	d.client.terminal.Store(d)

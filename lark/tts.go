@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"lark/internal/audio"
 )
 
 const ttsWait = 30 * time.Second
@@ -43,7 +45,7 @@ type synthWorker struct {
 }
 
 type speechEngine interface {
-	generate(text string, voice voiceChoice, keepGoing func() bool) ([]float32, int)
+	generate(text string, voice audio.Voice, keepGoing func() bool) ([]float32, int)
 	close()
 }
 
@@ -78,7 +80,7 @@ func synthesizePCMWithScratch(ctx context.Context, engine speechEngine, id, text
 		return nil, scratch, err
 	}
 	resampleStart := time.Now()
-	pcm, scratch, err := synthPCMWithScratch(samples, rate, scratch)
+	pcm, scratch, err := audio.SynthPCMWithScratch(samples, rate, scratch)
 	traceFrom(ctx).measure(diagResample, time.Since(resampleStart))
 	return pcm, scratch, err
 }
@@ -95,7 +97,7 @@ func (w *synthWorker) run(ctx context.Context, open func() (speechEngine, error)
 	w.ready.Store(true)
 	w.state.setReady()
 	defer w.ready.Store(false)
-	scratch := make([]float32, 0, kokoroRate*10)
+	scratch := make([]float32, 0, audio.KokoroRate*10)
 	for ctx.Err() == nil {
 		req, ok := w.next(ctx)
 		if !ok {
@@ -427,7 +429,7 @@ func (s *AudioStream) finishLocked(err error) func() {
 func (s *AudioStream) append(pcm []byte) bool {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
-	if s.done || len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > maxPCM-s.size {
+	if s.done || len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > audio.MaxPCM-s.size {
 		return false
 	}
 	if len(s.chunks) == 0 {
@@ -448,7 +450,7 @@ func (s *AudioStream) appendSilence(n int) bool {
 	}
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
-	if s.done || n > maxPCM-s.size {
+	if s.done || n > audio.MaxPCM-s.size {
 		return false
 	}
 	if len(s.chunks) == 0 {
@@ -635,9 +637,9 @@ func (c *audioCache) ServeAudio(w http.ResponseWriter, r *http.Request, id strin
 }
 
 func spokenText(text string) (string, error) {
-	text = plainText(text)
-	if runeLen(text) > maxText || !strings.ContainsFunc(text, alphaNum) {
-		return "", problem(400, fmt.Sprintf("Expected spoken text of 1–%d characters", maxText))
+	text = audio.PlainText(text)
+	if runeLen(text) > audio.MaxText || !strings.ContainsFunc(text, audio.AlphaNum) {
+		return "", problem(400, fmt.Sprintf("Expected spoken text of 1–%d characters", audio.MaxText))
 	}
 	return text, nil
 }
@@ -671,7 +673,7 @@ func splitCachedOpener(clips *speechClips, voice, text string) (pcm []byte, rest
 }
 
 func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorker, clips *speechClips, voice string, onFirst func(*AudioStream)) *speechTurn {
-	t := &speechTurn{stream: newAudioStream(), cancel: cancel, queue: make(chan speechItem, maxText)}
+	t := &speechTurn{stream: newAudioStream(), cancel: cancel, queue: make(chan speechItem, audio.MaxText)}
 	go func() {
 		defer cancel()
 		first := true
@@ -736,9 +738,9 @@ func newSpeechTurn(ctx context.Context, cancel context.CancelFunc, w *synthWorke
 }
 
 func (t *speechTurn) send(s string) {
-	// At most maxText printable characters can be accepted, so send never waits on TTS.
+	// At most audio.MaxText printable characters can be accepted, so send never waits on TTS.
 	n := runeLen(s)
-	if n == 0 || t.length+n > maxText {
+	if n == 0 || t.length+n > audio.MaxText {
 		return
 	}
 	if t.length == 0 {

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"lark/internal/audio"
 )
 
 const (
@@ -57,7 +59,7 @@ func truncate(s string, n int) string {
 func shortText(v any, limit int, plain bool) string {
 	s := str(v)
 	if plain {
-		s = plainText(s)
+		s = audio.PlainText(s)
 	}
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {

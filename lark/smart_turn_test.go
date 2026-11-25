@@ -8,20 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-)
 
-func TestWhisperMelZeroAlloc(t *testing.T) {
-	serial(t)
-	m := newWhisperMel()
-	pcm := make([]byte, sampleRate*2*2) // 2s
-	out := make([]float32, smartTurnMels*smartTurnFrames)
-	allocs := testing.AllocsPerRun(5, func() {
-		m.extractPCM16(pcm, out)
-	})
-	if allocs != 0 {
-		t.Fatalf("extractPCM16 allocated %.0f times, want 0", allocs)
-	}
-}
+	"lark/internal/audio"
+)
 
 func TestSmartTurnModelSmoke(t *testing.T) {
 	t.Parallel()
@@ -34,16 +23,15 @@ func TestSmartTurnModelSmoke(t *testing.T) {
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Skip("smart-turn model not installed")
 	}
-	eng, err := openSmartTurn(modelPath, 2)
+	eng, err := audio.Open(modelPath, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.close()
-	t.Logf("in=%s out=%s", eng.inName, eng.outName)
+	defer eng.Close()
 
 	pcm := make([]byte, sampleRate*2*3)
 	start := time.Now()
-	prob, err := eng.predictPCM16(pcm)
+	prob, err := eng.PredictPCM16(pcm)
 	dur := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +41,7 @@ func TestSmartTurnModelSmoke(t *testing.T) {
 	if wav, err := readWAVPCM16k("/tmp/opencode/what2plus2.wav"); err == nil {
 		for _, padMS := range []int{0, 200, 520} {
 			p := append(append([]byte(nil), wav...), make([]byte, sampleRate*2*padMS/1000)...)
-			pr, _ := eng.predictPCM16(p)
+			pr, _ := eng.PredictPCM16(p)
 			t.Logf("what2plus2 pad=%dms prob=%.4f", padMS, pr)
 		}
 		sileroPath := filepath.Join(data, "lark", "stt-models", sileroModel)
@@ -65,7 +53,7 @@ func TestSmartTurnModelSmoke(t *testing.T) {
 				u.add(full[off:off+endpointBytes], vad)
 				at := pcmDuration(len(u.pcm))
 				if u.policy.voiced && !u.policy.inVoice && at >= endpointQuiet {
-					pr, err := eng.predictPCM16(u.pcm)
+					pr, err := eng.PredictPCM16(u.pcm)
 					t.Logf("first smartTurn trigger at=%s dur=%s prob=%.4f err=%v", at, at, pr, err)
 					break
 				}

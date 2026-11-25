@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lark/internal/audio"
 )
 
 // After a restart the MCP catalog refresh runs in the background. The first
@@ -123,7 +125,7 @@ func TestTTSWorkerIsAvailableWhileLoading(t *testing.T) {
 	state := newModelState("Kokoro", time.Now())
 	worker := newSynthWorkerWithState(root, state, func() (speechEngine, error) {
 		<-loaded
-		return fakeSpeechEngine(func(string, voiceChoice, func() bool) ([]float32, int) {
+		return fakeSpeechEngine(func(string, audio.Voice, func() bool) ([]float32, int) {
 			return []float32{0.25}, sampleRate
 		}), nil
 	})

@@ -1,4 +1,4 @@
-package main
+package audio
 
 import (
 	"fmt"
@@ -10,19 +10,19 @@ import (
 )
 
 const (
-	kokoroPack    = "kokoro-multi-lang-v1_0"
-	kokoroEngine  = "sherpa-onnx-kokoro"
-	kokoroThreads = 8
-	kokoroRate    = 24000
+	KokoroPack    = "kokoro-multi-lang-v1_0"
+	KokoroEngine  = "sherpa-onnx-kokoro"
+	KokoroThreads = 8
+	KokoroRate    = 24000
 )
 
-func ttsModelDir(local string) string {
-	return env("TTS_MODEL_DIR", filepath.Join(local, "tts-models", kokoroPack))
+func TTSModelDir(local string) string {
+	return env("TTS_MODEL_DIR", filepath.Join(local, "tts-models", KokoroPack))
 }
 
-type sherpaKokoro struct{ tts *sherpa_onnx.OfflineTts }
+type Kokoro struct{ tts *sherpa_onnx.OfflineTts }
 
-func openKokoro(dir string, threads int) (*sherpaKokoro, error) {
+func OpenKokoro(dir string, threads int) (*Kokoro, error) {
 	model := sherpa_onnx.OfflineTtsKokoroModelConfig{
 		Model: filepath.Join(dir, "model.onnx"), Voices: filepath.Join(dir, "voices.bin"),
 		Tokens: filepath.Join(dir, "tokens.txt"), DataDir: filepath.Join(dir, "espeak-ng-data"),
@@ -42,14 +42,14 @@ func openKokoro(dir string, threads int) (*sherpaKokoro, error) {
 	if tts == nil {
 		return nil, fmt.Errorf("could not load Kokoro model from %s", dir)
 	}
-	if rate := tts.SampleRate(); rate != kokoroRate {
+	if rate := tts.SampleRate(); rate != KokoroRate {
 		sherpa_onnx.DeleteOfflineTts(tts)
-		return nil, fmt.Errorf("Kokoro model sample rate is %d Hz, want %d Hz", rate, kokoroRate)
+		return nil, fmt.Errorf("Kokoro model sample rate is %d Hz, want %d Hz", rate, KokoroRate)
 	}
-	return &sherpaKokoro{tts}, nil
+	return &Kokoro{tts}, nil
 }
 
-func (k *sherpaKokoro) generate(text string, voice voiceChoice, keepGoing func() bool) ([]float32, int) {
+func (k *Kokoro) Generate(text string, voice Voice, keepGoing func() bool) ([]float32, int) {
 	lang := voice.Lang
 	if lang == "en-gb" {
 		// The model pack's British eSpeak voice is the file lang/gmw/en.
@@ -68,7 +68,7 @@ func (k *sherpaKokoro) generate(text string, voice voiceChoice, keepGoing func()
 		var chunk string
 		chunk, text = splitKokoroText(text)
 		audio := k.tts.GenerateWithConfig(chunk, &config, callback)
-		if audio == nil || len(audio.Samples) == 0 || audio.SampleRate != kokoroRate {
+		if audio == nil || len(audio.Samples) == 0 || audio.SampleRate != KokoroRate {
 			return nil, 0
 		}
 		if samples == nil {
@@ -77,7 +77,7 @@ func (k *sherpaKokoro) generate(text string, voice voiceChoice, keepGoing func()
 			samples = append(samples, audio.Samples...)
 		}
 	}
-	return samples, kokoroRate
+	return samples, KokoroRate
 }
 
 // Native callbacks cannot preempt a single ONNX inference. Break long sentences
@@ -101,4 +101,4 @@ func splitKokoroText(text string) (chunk, rest string) {
 	return text[:split], text[split+1:]
 }
 
-func (k *sherpaKokoro) close() { sherpa_onnx.DeleteOfflineTts(k.tts) }
+func (k *Kokoro) Close() { sherpa_onnx.DeleteOfflineTts(k.tts) }

@@ -16,6 +16,8 @@ import (
 	"lark/internal/stories"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 // handleProto hands one inbound frame to the session actor. The payload aliases
@@ -380,6 +382,13 @@ func (h *terminalHub) selectAndPreviewVoice(d *terminalSession, voiceID string) 
 	}()
 }
 
+func (h *terminalHub) playPCM(d *terminalSession, pcm []byte) bool {
+	stream := newAudioStream()
+	stream.append(pcm)
+	stream.finish(nil)
+	return h.play(d, stream).Err() == nil
+}
+
 func (h *terminalHub) playPCMNow(d *terminalSession, pcm []byte) bool {
 	stream := newAudioStream()
 	stream.append(pcm)
@@ -510,8 +519,8 @@ func (h *terminalHub) renderPixelDrawer(spec pixel.Spec, r renderRequest, narrat
 		img, hits, acts := pixel.RenderVolumeWithHits(spec, r.vol, r.menuPage, th)
 		return img, hits, acts, nil
 	case pixel.DrawerVoice:
-		voices := make([]pixel.Tile, 0, len(voiceCatalog))
-		for _, v := range voiceCatalog {
+		voices := make([]pixel.Tile, 0, len(audio.Catalog))
+		for _, v := range audio.Catalog {
 			voices = append(voices, pixel.Tile{ID: v.ID, Label: v.Name})
 		}
 		img, hits, acts := pixel.RenderVoiceWithHits(spec, voices, r.voice, r.menuPage, th)

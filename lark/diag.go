@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"lark/internal/audio"
 )
 
 type diagMetric int
@@ -380,13 +382,13 @@ func (d *diagnostics) toolError(companion, message string) {
 
 func (b *larkServer) transcribe(ctx context.Context, pcm []byte) (string, error) {
 	start := time.Now()
-	sttCtx, timing := withSTTTiming(ctx)
+	sttCtx, timing := audio.WithTiming(ctx)
 	text, err := b.decodeClip(sttCtx, pcm)
 	trace := traceFrom(ctx)
 	trace.measure(diagSTT, time.Since(start))
-	if timing.run > 0 || timing.queue > 0 {
-		trace.measure(diagSTTQueue, timing.queue)
-		trace.measure(diagSTTRun, timing.run)
+	if timing.Run > 0 || timing.Queue > 0 {
+		trace.measure(diagSTTQueue, timing.Queue)
+		trace.measure(diagSTTRun, timing.Run)
 	}
 	return text, err
 }
@@ -718,7 +720,7 @@ func (b *larkServer) sampleDiagnostics(start time.Time, path string) func() {
 				Uptime: int64(now.Sub(start) / time.Second), DB: fileBytes(path) + fileBytes(path+"-wal"),
 			}, Host: sampleHost(&cpu)}
 			if b.worker != nil {
-				report.TTS = diagTTS{kokoroEngine, b.worker.ready.Load()}
+				report.TTS = diagTTS{audio.KokoroEngine, b.worker.ready.Load()}
 				report.Services.TTS = report.TTS.Ready
 			}
 			if b.oc != nil && b.oc.config != nil {

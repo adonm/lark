@@ -22,6 +22,8 @@ import (
 	"lark/internal/library"
 
 	"lark/internal/pixel"
+
+	"lark/internal/audio"
 )
 
 func (s *testWS) helloV2(t *testing.T, id, cat string) protocolFrame {
@@ -447,12 +449,12 @@ func TestTerminalRecordingLimits(t *testing.T) {
 	}{
 		{"timeout with PCM", make([]byte, 640), true},
 		{"timeout without PCM", nil, true},
-		{"exact PCM cap", bytes.Repeat([]byte{12, 0}, maxPCM/2), false},
-		{"cross PCM cap", append(bytes.Repeat([]byte{12, 0}, (maxPCM-2)/2), 15, 0, 16, 0), false},
+		{"exact PCM cap", bytes.Repeat([]byte{12, 0}, audio.MaxPCM/2), false},
+		{"cross PCM cap", append(bytes.Repeat([]byte{12, 0}, (audio.MaxPCM-2)/2), 15, 0, 16, 0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			pcm := tc.pcm[:min(len(tc.pcm), maxPCM)]
+			pcm := tc.pcm[:min(len(tc.pcm), audio.MaxPCM)]
 			sttCalled := make(chan struct{}, 1)
 			b, base := wsHarness(t, func(b *larkServer, dir string) {
 				b.setSTT(func(_ context.Context, got []byte) (string, error) {

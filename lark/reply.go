@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lark/internal/audio"
 )
 
 type delivery struct {
@@ -519,8 +521,8 @@ func (b *larkServer) generateReply(ctx, audioBase context.Context, sender compan
 	var stream *AudioStream
 	clean, speechErr := spokenText(reply)
 	if !options.textOnly && speechErr == nil && (eager != nil || b.worker != nil && b.worker.available()) {
-		ex := sentenceExtractor{firstChunk: true}
-		final := append(ex.add(clean), ex.flush()...)
+		ex := audio.SentenceExtractor{FirstChunk: true}
+		final := append(ex.Add(clean), ex.Flush()...)
 		if eager == nil || !eager.completeAfter(preToolCount, final) {
 			drop(false) // Publishing its replacement invalidates the old generation.
 			ttsStart = time.Now()

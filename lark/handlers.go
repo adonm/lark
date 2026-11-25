@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"lark/internal/library"
+
+	"lark/internal/audio"
 )
 
 type larkServer struct {
@@ -267,7 +269,7 @@ func (b *larkServer) ttsAPI(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return problem(503, err.Error())
 	}
-	hdr := wavHeader(len(pcm))
+	hdr := audio.WavHeader(len(pcm))
 	out := make([]byte, len(hdr)+len(pcm))
 	copy(out, hdr[:])
 	copy(out[len(hdr):], pcm)
@@ -306,7 +308,7 @@ func (b *larkServer) route(w http.ResponseWriter, r *http.Request, path string) 
 			if ready {
 				engine = b.ttsLabel
 				if engine == "" {
-					engine = kokoroEngine
+					engine = audio.KokoroEngine
 				}
 			}
 			sttName := b.sttLabel
