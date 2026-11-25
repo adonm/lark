@@ -231,26 +231,27 @@ func (b *larkServer) beginCapture(companionID string, seconds int) (*captureRun,
 	}
 	span := time.Duration(seconds) * time.Second
 	now := time.Now()
-	b.hub.mu.Lock()
-	d := b.hub.voiceOwner(companionID)
+	d := b.hub.ownerOf(companionID)
 	if d == nil {
-		b.hub.mu.Unlock()
 		return nil, problem(409, "No listening device available for this companion")
 	}
-	if d.recording.active() {
-		b.hub.mu.Unlock()
-		return nil, problem(409, "A capture is already running for this companion")
+	var c *endpointCapture
+	reason := ""
+	d.update(func(d *terminalSession) {
+		switch {
+		case d.recording.active():
+			reason = "A capture is already running for this companion"
+		case d.busy || d.queuedVoice != nil || d.ttsStarted || d.awaitAck:
+			reason = "The companion is busy; try again when the turn ends"
+		case !b.hub.startCaptureWindow(d, now, span):
+			reason = "This device cannot stream microphone audio"
+		default:
+			c = d.recording.endpoint
+		}
+	})
+	if reason != "" {
+		return nil, problem(409, reason)
 	}
-	if d.busy || d.queuedVoice != nil || d.ttsStarted || d.awaitAck {
-		b.hub.mu.Unlock()
-		return nil, problem(409, "The companion is busy; try again when the turn ends")
-	}
-	if !b.hub.startCaptureWindow(d, now, span) {
-		b.hub.mu.Unlock()
-		return nil, problem(409, "This device cannot stream microphone audio")
-	}
-	c := d.recording.endpoint
-	b.hub.mu.Unlock()
 	if c == nil {
 		return nil, problem(409, "No listening device available for this companion")
 	}

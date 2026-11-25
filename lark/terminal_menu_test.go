@@ -217,19 +217,15 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetListen == 0
 			})
 			dev.until(t, isDisplay)
-			b.hub.mu.Lock()
-			d := b.hub.terminals[tc.termID]
-			rec := d.recording.active()
-			drawer := d.drawer
-			b.hub.mu.Unlock()
+			d := b.hub.live(tc.termID)
+			st := d.state()
+			rec, drawer := st.recording.active(), st.drawer
 			if !rec || drawer != "" {
 				t.Fatalf("home tap: recording=%v drawer=%q, want true and empty", rec, drawer)
 			}
 
 			// Cancel recording to return to Home.
-			b.hub.mu.Lock()
-			b.hub.recordingControl(d, time.Now(), true)
-			b.hub.mu.Unlock()
+			updateTerm(t, d, func(d *terminalSession) { b.hub.recordingControl(d, time.Now(), true) })
 			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
@@ -244,10 +240,8 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 			}
 			dev.tap(t, (btn.Min.X+btn.Max.X)/2, (btn.Min.Y+btn.Max.Y)/2, revIdle)
 			waitSVG(t, b.hub, tc.termID, "menu-intercom")
-			b.hub.mu.Lock()
-			rec = d.recording.active()
-			drawer = d.drawer
-			b.hub.mu.Unlock()
+			st = d.state()
+			rec, drawer = st.recording.active(), st.drawer
 			if rec || drawer != drawerMenu {
 				t.Fatalf("menu tap: recording=%v drawer=%q, want false and %q", rec, drawer, drawerMenu)
 			}
@@ -265,21 +259,18 @@ func TestIntercomMenuPagingRoundScreen(t *testing.T) {
 	p2 := testConnectWS(t, base, "unit", false)
 	p2.helloV2(t, "vocat-peer2", "George")
 
-	b.hub.mu.Lock()
-	d := b.hub.terminals["vocat-intercom-page"]
-	d.drawer = drawerIntercom
-	d.menuPage = 1
-	b.hub.render(d, time.Now(), false)
-	b.hub.mu.Unlock()
+	d := b.hub.live("vocat-intercom-page")
+	updateTerm(t, d, func(d *terminalSession) {
+		d.drawer = drawerIntercom
+		d.menuPage = 1
+		b.hub.render(d, time.Now(), false)
+	})
 
 	svg := waitSVG(t, b.hub, "vocat-intercom-page", "peer-mint")
 	if !strings.Contains(svg, "peer-mint") {
 		t.Fatalf("expected peer-mint on page 1 of round intercom menu, got %s", svg)
 	}
-	b.hub.mu.Lock()
-	page := d.menuPage
-	b.hub.mu.Unlock()
-	if page != 1 {
+	if page := d.state().menuPage; page != 1 {
 		t.Fatalf("d.menuPage = %d, want 1", page)
 	}
 }
@@ -291,11 +282,9 @@ func TestOpenStoryEntersStartPassage(t *testing.T) {
 	dev.helloV2(t, "vocat-story-open", "Cake")
 
 	twee := ":: StoryTitle\nTest Owl\n\n:: Start\nOnce upon a time.\n[[Fly->End]]\n\n:: End {\"end\":true}\nThe end.\n"
-	b.hub.mu.Lock()
-	d := b.hub.terminals["vocat-story-open"]
+	d := b.hub.live("vocat-story-open")
 	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, false)
-	sess := d.story
-	b.hub.mu.Unlock()
+	sess := waitTerm(t, d, func(st terminalState) bool { return st.story != nil }).story
 
 	if sess == nil || sess.text != "Once upon a time." || len(sess.choices) != 1 {
 		t.Fatalf("openStory did not enter start passage: %+v", sess)
@@ -310,10 +299,9 @@ func storyTTSHits(t *testing.T, twee string, narrate bool) (*atomic.Int32, *term
 	const termID = "vocat-story-voice"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.helloV2(t, termID, "Cake")
-	b.hub.mu.Lock()
-	d := b.hub.terminals[termID]
+	d := b.hub.live(termID)
 	b.hub.openStory(d, savedStory{ID: "test-owl", Title: "Test Owl", Twee: twee}, narrate)
-	b.hub.mu.Unlock()
+	waitTerm(t, d, func(st terminalState) bool { return st.story != nil })
 	return requests, d, b, b.worker
 }
 
@@ -324,16 +312,12 @@ func TestOpenStoryFromMenuIsSilent(t *testing.T) {
 	if n := requests.Load(); n != 0 {
 		t.Fatalf("opening a story from the menu synthesized %d TTS clips, want silence", n)
 	}
-	b.hub.mu.Lock()
-	target := d.story.choices[0].Target
-	b.hub.advanceStoryPassage(d, target, false)
-	b.hub.mu.Unlock()
+	target := waitTerm(t, d, func(st terminalState) bool { return st.story != nil }).story.choices[0].Target
+	updateTerm(t, d, func(d *terminalSession) { b.hub.advanceStoryPassage(d, target, false) })
 	if n := requests.Load(); n != 0 {
 		t.Fatalf("tapping a story choice synthesized %d TTS clips, want silence", n)
 	}
-	b.hub.mu.Lock()
-	b.hub.advanceStoryPassage(d, target, true)
-	b.hub.mu.Unlock()
+	updateTerm(t, d, func(d *terminalSession) { b.hub.advanceStoryPassage(d, target, true) })
 	waitTTSRequest(t, worker)
 	if requests.Load() == 0 {
 		t.Fatal("a voice story choice did not narrate the next passage")
@@ -374,14 +358,12 @@ func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
 	dev.tap(t, vx, vy, 0)
 	waitSVG(t, b.hub, termID, "voice-bm_fable")
 
-	b.hub.mu.Lock()
 	var x, y int
-	for _, h := range b.hub.terminals[termID].svg.hits {
+	for _, h := range b.hub.live(termID).state().svg.hits {
 		if h.id == "voice-bm_fable" {
 			x, y = (h.x1+h.x2)/2, (h.y1+h.y2)/2
 		}
 	}
-	b.hub.mu.Unlock()
 	if x == 0 && y == 0 {
 		t.Fatal("voice-bm_fable hit not found")
 	}

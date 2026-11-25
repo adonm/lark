@@ -127,14 +127,11 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			return nil, problem(503, "Pairing unavailable")
 		}
 		id = strings.ToLower(id)
-		b.hub.mu.Lock()
-		d := b.hub.terminals[id]
-		if d == nil || !b.hub.active(d) || d.companionID == "" {
-			b.hub.mu.Unlock()
+		d := b.hub.live(id)
+		if d == nil || d.companionID.get() == "" {
 			return nil, problem(409, "Terminal not connected to a companion")
 		}
-		compID, compName, geom := d.companionID, d.companion.Name, d.screen
-		b.hub.mu.Unlock()
+		compID, compName, geom := d.companionID.get(), d.companion.Name, d.screen
 		invite, err := b.dc.pairInvite(compID)
 		if err != nil {
 			return nil, problem(502, err.Error())
@@ -147,8 +144,10 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		if err != nil {
 			return nil, problem(502, err.Error())
 		}
-		b.hub.mu.Lock()
-		if d = b.hub.terminals[id]; b.hub.active(d) && d.companionID == compID {
+		d.update(func(d *terminalSession) {
+			if !b.hub.active(d) || d.companionID.get() != compID {
+				return
+			}
 			now := time.Now()
 			b.hub.wake(d, now)
 			d.drawer = drawerPair
@@ -156,8 +155,7 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			d.menuData = &menuContent{invite: invite}
 			b.hub.pushPower(d, 100, true)
 			b.hub.render(d, now, false)
-		}
-		b.hub.mu.Unlock()
+		})
 		sendBytes(w, 200, "image/png", pngBytes)
 		return nil, nil
 	}
@@ -169,32 +167,31 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		if !terminalIDRE.MatchString(id) {
 			return nil, problem(400, "Invalid terminal ID")
 		}
-		b.hub.mu.Lock()
-		defer b.hub.mu.Unlock()
-		d := b.hub.terminals[id]
-		if d == nil || !b.hub.active(d) {
+		d := b.hub.live(id)
+		if d == nil {
 			return nil, problem(404, "Terminal not connected")
 		}
+		st := d.state()
 		screen := "home"
 		switch {
-		case d.asleep:
+		case st.asleep:
 			screen = "sleep"
-		case d.drawer != "":
-			screen = d.drawer
-		case d.card != nil:
+		case st.drawer != "":
+			screen = st.drawer
+		case st.card != nil:
 			screen = "card"
-		case d.view != nil:
+		case st.view != nil:
 			screen = "view"
 		}
 		state := "idle"
 		switch {
-		case d.asleep:
+		case st.asleep:
 			state = "sleeping"
-		case d.recording.active():
+		case st.recording.active():
 			state = "listening"
-		case d.pose.mood == "listening" || d.pose.mood == "thinking" || d.pose.mood == "speaking":
-			state = d.pose.mood
-		case d.busy:
+		case st.pose.mood == "listening" || st.pose.mood == "thinking" || st.pose.mood == "speaking":
+			state = st.pose.mood
+		case st.busy:
 			state = "thinking"
 		}
 		w, h := d.screen.width, d.screen.height
@@ -211,9 +208,9 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			X2     int    `json:"x2"`
 			Y2     int    `json:"y2"`
 		}
-		hits := make([]hitEntry, 0, len(d.svg.hits))
-		for _, hb := range d.svg.hits {
-			act := d.scene.actions[hb.id]
+		hits := make([]hitEntry, 0, len(st.svg.hits))
+		for _, hb := range st.svg.hits {
+			act := st.scene.actions[hb.id]
 			hits = append(hits, hitEntry{
 				ID:     hb.id,
 				Label:  hb.label,
@@ -229,7 +226,7 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			"terminal_id": d.id,
 			"screen":      screen,
 			"state":       state,
-			"rev":         d.nativeRev,
+			"rev":         st.nativeRev,
 			"width":       w,
 			"height":      h,
 			"hits":        hits,

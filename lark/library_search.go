@@ -780,12 +780,10 @@ func (b *larkServer) libraryImportSourceArgs(ctx context.Context, source, ref st
 	companionID := strings.ToLower(strings.TrimSpace(str(args["companion_id"])))
 	opened := false
 	if openOn && companionID != "" && b.hub != nil {
-		b.hub.mu.Lock()
-		for _, d := range b.hub.terminalsFor(companionID) {
+		for _, d := range b.hub.liveFor(companionID) {
 			b.hub.openStory(d, saved, false)
 			opened = true
 		}
-		b.hub.mu.Unlock()
 	}
 	return object{"ok": true, "id": saved.ID, "title": saved.Title, "author": saved.Author,
 		"passages": saved.Passages, "start": cs.Passages[cs.Start].Name, "source": source, "ref": ref,

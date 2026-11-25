@@ -200,30 +200,29 @@ func (b *larkServer) companionLiveState(companionID string) string {
 	if b == nil || b.hub == nil {
 		return "offline"
 	}
-	b.hub.mu.Lock()
-	defer b.hub.mu.Unlock()
-	terms := b.hub.terminalsFor(companionID)
+	terms := b.hub.liveFor(companionID)
 	if len(terms) == 0 {
 		return "offline"
 	}
-	best := b.hub.voiceOwner(companionID)
+	best := b.hub.ownerOf(companionID)
 	if best == nil {
 		best = terms[0]
 	}
+	st := best.state()
 	switch {
-	case best.asleep:
+	case st.asleep:
 		return "sleeping"
-	case best.recording.active():
+	case st.recording.active():
 		return "listening"
-	case best.ttsStarted || best.awaitAck:
+	case st.ttsStarted || st.awaitAck:
 		return "speaking"
-	case best.busy:
+	case st.busy:
 		return "thinking"
-	case best.pose.mood == "listening" || best.pose.mood == "thinking" || best.pose.mood == "speaking" || best.pose.mood == "sleepy":
-		if best.pose.mood == "sleepy" {
+	case st.pose.mood == "listening" || st.pose.mood == "thinking" || st.pose.mood == "speaking" || st.pose.mood == "sleepy":
+		if st.pose.mood == "sleepy" {
 			return "sleeping"
 		}
-		return best.pose.mood
+		return st.pose.mood
 	default:
 		return "idle"
 	}

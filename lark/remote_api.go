@@ -300,27 +300,17 @@ func (b *larkServer) previewVoiceOnCompanion(companionID, voiceID string) {
 		return
 	}
 	h := b.hub
-	previewText := voicePreviewText(voiceID)
-	h.mu.Lock()
-	var targets []*terminalSession
-	for _, d := range h.terminalsFor(companionID) {
-		if h.active(d) {
-			targets = append(targets, d)
-		}
-	}
+	targets := h.liveFor(companionID)
 	if len(targets) == 0 {
-		h.mu.Unlock()
 		return
 	}
+	previewText := voicePreviewText(voiceID)
 	if pcm := b.clips.peek(voiceID, previewText); len(pcm) > 0 {
 		for _, d := range targets {
 			h.playPCM(d, pcm)
 		}
-		h.mu.Unlock()
 		return
 	}
-	h.mu.Unlock()
-
 	if w := b.worker; w != nil && w.ready.Load() {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), ttsWait)
@@ -329,23 +319,17 @@ func (b *larkServer) previewVoiceOnCompanion(companionID, voiceID string) {
 			if err != nil || len(pcm) == 0 {
 				return
 			}
-			h.mu.Lock()
-			for _, d := range h.terminalsFor(companionID) {
-				if h.active(d) && b.voiceFor(companionID) == voiceID {
+			for _, d := range h.liveFor(companionID) {
+				if b.voiceFor(companionID) == voiceID {
 					h.playPCM(d, pcm)
 				}
 			}
-			h.mu.Unlock()
 		}()
 		return
 	}
-	h.mu.Lock()
 	for _, d := range targets {
-		if h.active(d) {
-			h.chime(d, "tap")
-		}
+		h.chime(d, "tap")
 	}
-	h.mu.Unlock()
 }
 
 func (b *larkServer) clearStoryProgress(ctx context.Context, companionID, storyID string) error {

@@ -158,13 +158,11 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 	binary.LittleEndian.PutUint32(st[8:12], 65536)
 	binary.LittleEndian.PutUint32(st[12:16], 320)
 	board.sendProto(t, msgTelemetry, st[:])
-	b.hub.mu.Lock()
-	device := b.hub.terminals[id]
+	device := b.hub.live(id)
 	sentAt := time.Now().Add(-12 * time.Millisecond)
 	device.client.pingMu.Lock()
 	device.client.pingSentAt = sentAt
 	device.client.pingMu.Unlock()
-	b.hub.mu.Unlock()
 	board.sendProto(t, msgPong, []byte{1, 2, 3, 4})
 	board.barrier(t)
 	if device.client.pingRTT() != nil {
@@ -374,23 +372,21 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
 	cancelled := make(chan bool, 1)
-	b.hub.mu.Lock()
-	d := b.hub.terminals[id]
+	d := b.hub.live(id)
 	now := time.Now()
-	b.hub.startTurn(d, now, false, "typed", func(ctx context.Context, _ uint64) {
-		<-ctx.Done()
-		cancelled <- true
+	updateTerm(t, d, func(d *terminalSession) {
+		b.hub.startTurn(d, now, false, "typed", func(ctx context.Context, _ uint64) {
+			<-ctx.Done()
+			cancelled <- true
+		})
+		b.hub.pointer(d, "tap", 180, 180, 0, now)
 	})
-	// The rasterizer cannot commit the thinking frame while the hub lock is held.
-	b.hub.pointer(d, "tap", 180, 180, 0, now)
-	b.hub.mu.Unlock()
 	waitSVG(t, b.hub, id, "stop")
 
 	stillThinking := func(taps int) {
 		t.Helper()
-		b.hub.mu.Lock()
-		busy, count := d.busy, d.stopTaps
-		b.hub.mu.Unlock()
+		st := d.state()
+		busy, count := st.busy, st.stopTaps
 		if !busy || count != taps {
 			t.Fatalf("want ongoing turn with %d Stop taps, busy=%t taps=%d", taps, busy, count)
 		}
@@ -420,10 +416,10 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	tap("Tap 1×", 2)
 	// Age the tap window instead of sleeping through it; the next tap must
 	// start a fresh sequence. Rendering applies the expiry synchronously.
-	b.hub.mu.Lock()
-	d.stopTapAt = now.Add(-stopTapWindow - time.Second)
-	b.hub.render(d, time.Now(), false)
-	b.hub.mu.Unlock()
+	updateTerm(t, d, func(d *terminalSession) {
+		d.stopTapAt = now.Add(-stopTapWindow - time.Second)
+		b.hub.render(d, time.Now(), false)
+	})
 	stillThinking(0)
 	tap("Tap 2×", 1)
 	tap("Tap 1×", 2)
@@ -435,9 +431,8 @@ func TestThinkingStopRequiresThreeTaps(t *testing.T) {
 	waitSVG(t, b.hub, id, `data-id="listen"`)
 	expectValue(t, cancelled, true)
 	expectValue(t, interrupts, "/api/session/ses-stop/interrupt")
-	b.hub.mu.Lock()
-	defer b.hub.mu.Unlock()
-	if d.busy || d.stopTaps != 0 || !d.stopTapAt.IsZero() {
+	st := d.state()
+	if st.busy || st.stopTaps != 0 || !st.stopTapAt.IsZero() {
 		t.Fatal("Stop did not clear the turn and confirmation state")
 	}
 }
@@ -451,22 +446,21 @@ func TestSpeakingStopAbortsPlaybackWithoutUpstreamInterrupt(t *testing.T) {
 
 	stream := newAudioStream()
 	stream.append([]byte{1, 0})
-	b.hub.mu.Lock()
-	d := b.hub.terminals[id]
-	b.hub.startTurn(d, time.Now(), false, "typed", func(ctx context.Context, _ uint64) { <-ctx.Done() })
-	turn := d.turn
-	b.hub.mu.Unlock()
+	d := b.hub.live(id)
+	updateTerm(t, d, func(d *terminalSession) {
+		b.hub.startTurn(d, time.Now(), false, "typed", func(ctx context.Context, _ uint64) { <-ctx.Done() })
+	})
+	turn := d.state().turn
 	waitSVG(t, b.hub, id, "stop")
 	dev.tap(t, 180, 290, 0)
 	dev.barrier(t)
-	b.hub.mu.Lock()
-	playback := b.hub.play(d, stream)
-	b.hub.mu.Unlock()
+	var playback context.Context
+	updateTerm(t, d, func(d *terminalSession) { playback = b.hub.playTraced(d, stream, nil, time.Time{}) })
 	dev.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 1 && p[0] == ttsOpStart
 	})
-	b.hub.finishTurn(d, turn, nil, nil)
+	updateTerm(t, d, func(d *terminalSession) { b.hub.finishTurn(d, turn, nil, nil) })
 	waitSVG(t, b.hub, id, "stop")
 	dev.tap(t, 180, 180, 0)
 	dev.barrier(t)

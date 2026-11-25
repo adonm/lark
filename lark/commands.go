@@ -69,14 +69,11 @@ func (b *larkServer) applyTerminal(ctx context.Context, terminalID string, set t
 		return terminalUpdate{}, problem(503, "Terminal hub unavailable")
 	}
 	update := terminalUpdate{TerminalID: id}
-	h.mu.Lock()
-	d := h.terminals[id]
-	if d == nil || !h.active(d) {
+	d := h.live(id)
+	if d == nil {
 		if set.Sleep != nil {
-			h.mu.Unlock()
 			return terminalUpdate{}, problem(409, "Terminal is not connected")
 		}
-		h.mu.Unlock()
 		level := h.b.volumePref(id)
 		if set.Volume != nil {
 			level = *set.Volume
@@ -90,21 +87,24 @@ func (b *larkServer) applyTerminal(ctx context.Context, terminalID string, set t
 		update.Volume = level
 		return update, nil
 	}
-	update.TerminalID, update.CompanionID = d.id, d.companionID
+	update.TerminalID, update.CompanionID = d.id, d.companionID.get()
 	if set.Volume != nil {
 		if err := h.setVolume(ctx, d, *set.Volume, ""); err != nil {
-			h.mu.Unlock()
 			return terminalUpdate{}, err
 		}
 	}
-	if set.Sleep != nil {
-		now := time.Now()
-		d.last = now
-		h.setSleeping(d, *set.Sleep)
-		h.render(d, now, false)
-	}
-	update.Volume, update.Sleeping = d.vol, d.asleep
-	h.mu.Unlock()
+	var sleeping bool
+	var volume int
+	d.update(func(d *terminalSession) {
+		if set.Sleep != nil {
+			now := time.Now()
+			d.last = now
+			h.setSleeping(d, *set.Sleep)
+			h.render(d, now, false)
+		}
+		sleeping, volume = d.asleep, d.vol
+	})
+	update.Volume, update.Sleeping = volume, sleeping
 	return update, nil
 }
 
@@ -164,12 +164,8 @@ func (b *larkServer) showStory(companionID string, st savedStory) {
 	if b.hub == nil {
 		return
 	}
-	b.hub.mu.Lock()
-	defer b.hub.mu.Unlock()
-	for _, d := range b.hub.terminalsFor(companionID) {
-		if b.hub.active(d) {
-			b.hub.openStory(d, st, false)
-		}
+	for _, d := range b.hub.liveFor(companionID) {
+		b.hub.openStory(d, st, false)
 	}
 }
 

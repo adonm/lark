@@ -271,12 +271,7 @@ func (r *endpointRun) stop(d decision) {
 			r.d.id, d, r.listen, at, r.u.policy.lastVoicedAt, at-r.u.policy.lastVoicedAt,
 			r.u.policy.wordCount, r.u.policy.speechSpan(), r.u.policy.gate.floor, r.u.policy.speechRMS)
 	}
-	r.hub.mu.Lock()
-	// Don't stop on an old decision while more speech is queued.
-	if r.hub.active(r.d) && r.d.recording.endpoint == r.c && r.d.recording.phase == captureOpen && len(r.c.packets) == 0 {
-		r.hub.recordingControl(r.d, time.Now(), d.discards())
-	}
-	r.hub.mu.Unlock()
+	r.d.post(terminalEvent{kind: evEndpointStop, now: time.Now(), endpoint: terminalEndpoint{c: r.c, discards: d.discards()}})
 }
 
 // tick starts the background checks that can make the next decision better.

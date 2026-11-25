@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
+
 	"log"
 	"strings"
 	"time"
@@ -39,78 +39,6 @@ func recordTarget(s string) (string, bool) {
 
 func (d *terminalSession) noticeBusy() bool {
 	return d.busy || d.recording.active() || d.queuedVoice != nil || d.stopAudio != nil || d.awaitAck
-}
-
-// turnPhase is the turn lifecycle the boolean flags imply. busy, ttsStarted and
-// awaitAck remain the source of truth for behaviour; the phase only makes the
-// expected order explicit and turns an invalid order into a logged (and in
-// tests, returned) error.
-type turnPhase uint8
-
-const (
-	turnIdle     turnPhase = iota
-	turnRunning            // a prompt is in flight: busy
-	turnSpeaking           // reply audio is playing or awaiting the board's ack
-)
-
-func (p turnPhase) String() string {
-	switch p {
-	case turnIdle:
-		return "idle"
-	case turnRunning:
-		return "running"
-	case turnSpeaking:
-		return "speaking"
-	}
-	return "unknown"
-}
-
-func turnTransitionAllowed(from, to turnPhase) bool {
-	if from == to {
-		// Settling an already-correct phase is not a transition.
-		return to != turnRunning
-	}
-	switch from {
-	case turnIdle:
-		return to == turnRunning || to == turnSpeaking
-	case turnRunning:
-		return to == turnIdle || to == turnSpeaking
-	case turnSpeaking:
-		return to == turnIdle || to == turnRunning
-	}
-	return false
-}
-
-// transitionTurn reports an illegal order instead of silently accepting it.
-func (d *terminalSession) transitionTurn(to turnPhase) error {
-	from := d.turnPhase
-	if !turnTransitionAllowed(from, to) {
-		return fmt.Errorf("terminal %s: illegal turn transition %v -> %v", d.id, from, to)
-	}
-	d.turnPhase = to
-	return nil
-}
-
-func (d *terminalSession) setTurnPhase(to turnPhase) {
-	if err := d.transitionTurn(to); err != nil {
-		log.Print(err)
-	}
-}
-
-// settleTurnPhase picks the phase the flags already describe.
-func (d *terminalSession) settleTurnPhase() {
-	var to turnPhase
-	switch {
-	case d.ttsStarted || d.awaitAck:
-		to = turnSpeaking
-	case d.busy:
-		to = turnRunning
-	default:
-		to = turnIdle
-	}
-	if d.turnPhase != to {
-		d.setTurnPhase(to)
-	}
 }
 
 func (h *terminalHub) bridgeEndpoint(d *terminalSession) bool {
@@ -153,12 +81,12 @@ func (h *terminalHub) startRecording(d *terminalSession, target string, now time
 		h.pushRecStart(d, target, bridgeEndpoint, false)
 	}
 	h.takeVoiceOwnership(d)
-	h.setCompanionStatus(d.companionID, statusListening)
+	h.setCompanionStatus(d.companionID.get(), statusListening)
 	h.render(d, now, false)
 }
 
 func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bool {
-	if !h.active(d) || !d.companion.Listening || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+	if !h.active(d) || !d.companion.Listening || !h.voiceOwnerIs(d) || !h.bridgeEndpoint(d) {
 		return false
 	}
 	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck || d.drawer != "" {
@@ -177,7 +105,7 @@ func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bo
 	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
-	h.setCompanionStatus(d.companionID, statusListening)
+	h.setCompanionStatus(d.companionID.get(), statusListening)
 	h.render(d, now, false)
 	return true
 }
@@ -186,7 +114,7 @@ func (h *terminalHub) startListeningWindow(d *terminalSession, now time.Time) bo
 // owner. It uses the normal listening REC_CTRL path, records for the full
 // span regardless of VAD, and never sends a turn.
 func (h *terminalHub) startCaptureWindow(d *terminalSession, now time.Time, span time.Duration) bool {
-	if !h.active(d) || h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+	if !h.active(d) || !h.voiceOwnerIs(d) || !h.bridgeEndpoint(d) {
 		return false
 	}
 	if d.busy || d.recording.active() || d.queuedVoice != nil || d.ttsStarted || d.awaitAck {
@@ -203,14 +131,14 @@ func (h *terminalHub) startCaptureWindow(d *terminalSession, now time.Time, span
 	d.recording.session = d.recSession
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
-	h.setCompanionStatus(d.companionID, statusListening)
+	h.setCompanionStatus(d.companionID.get(), statusListening)
 	h.render(d, now, false)
 	return true
 }
 
 func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) bool {
 	if !h.active(d) || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 ||
-		h.voiceOwner(d.companionID) != d || !h.bridgeEndpoint(d) {
+		!h.voiceOwnerIs(d) || !h.bridgeEndpoint(d) {
 		return false
 	}
 	if d.busy || d.recording.active() || d.queuedVoice != nil || len(d.queuedNotices) > 0 || d.ttsStarted || d.awaitAck {
@@ -228,30 +156,30 @@ func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) 
 	h.b.diag.listen.windows.Add(1)
 	h.startEndpoint(d)
 	h.pushRecStart(d, "", true, true)
-	h.setCompanionStatus(d.companionID, statusListening)
+	h.setCompanionStatus(d.companionID.get(), statusListening)
 	h.render(d, now, false)
 	return true
 }
 
 func (h *terminalHub) tryStoryVoiceChoice(d *terminalSession, turnID uint64, text string) bool {
-	h.mu.Lock()
-	if !h.active(d) || d.turn != turnID || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
-		h.mu.Unlock()
-		return false
-	}
-	idx, ok := matchStoryChoice(text, d.story.choices)
-	if !ok {
-		h.mu.Unlock()
-		return false
-	}
-	target := d.story.choices[idx].Target
-	d.busy = false
-	d.setTurnPhase(turnIdle)
-	d.turn = 0
-	h.setCompanionStatus(d.companionID, statusIdle)
-	h.advanceStoryPassage(d, target, true)
-	h.mu.Unlock()
-	return true
+	handled := false
+	d.update(func(d *terminalSession) {
+		if !h.active(d) || d.turn != turnID || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
+			return
+		}
+		idx, ok := matchStoryChoice(text, d.story.choices)
+		if !ok {
+			return
+		}
+		target := d.story.choices[idx].Target
+		d.busy = false
+		d.syncMode()
+		d.turn = 0
+		h.setCompanionStatus(d.companionID.get(), statusIdle)
+		h.advanceStoryPassage(d, target, true)
+		handled = true
+	})
+	return handled
 }
 
 func (h *terminalHub) stopListeningWindow(d *terminalSession, now time.Time) {
@@ -281,16 +209,26 @@ func (h *terminalHub) recordingControl(d *terminalSession, now time.Time, cancel
 	h.pushRecStop(d, "", false)
 	// Keep accepting DMA packets until the board's rec_end. The timer is
 	// tied to this stop request, so it cannot end a subsequent recording.
-	var timer *time.Timer
-	timer = time.AfterFunc(recStopWait, func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if h.active(d) && c.stopTimer == timer {
-			c.suppressLateStart()
-			h.endRecording(d, "", false, time.Now())
+	d.recStop++
+	stopID := d.recStop
+	timer := time.AfterFunc(recStopWait, func() {
+		now := time.Now()
+		if d.actor == nil {
+			// Unit tests drive bare sessions without an actor.
+			h.captureStopTimer(d, stopID, now)
+			return
 		}
+		d.post(terminalEvent{kind: evRecTimer, now: now, recTimer: terminalRecTimer{id: stopID}})
 	})
 	c.stopTimer = timer
+}
+
+func (h *terminalHub) captureStopTimer(d *terminalSession, stopID uint64, now time.Time) {
+	c := &d.recording
+	if h.active(d) && c.stopTimer != nil && d.recStop == stopID {
+		c.suppressLateStart()
+		h.endRecording(d, "", false, now)
+	}
 }
 
 func (h *terminalHub) dispatchRTPPCM(c *terminalClient, pt uint8, pcm []byte) {
@@ -307,35 +245,51 @@ func (h *terminalHub) micChunkPCM(c *terminalClient, prefix byte, pcm []byte) {
 		if len(pcm) <= 2*pcmPacket && ep.push(pcm, time.Now()) {
 			return
 		}
-		h.mu.Lock()
-		d := c.terminal
-		if d != nil && h.active(d) && d.recording.endpoint == ep {
-			h.recordingControl(d, time.Now(), true)
+		d := c.terminal.Load()
+		if d != nil {
+			d.update(func(d *terminalSession) {
+				if h.active(d) && d.recording.endpoint == ep {
+					h.recordingControl(d, time.Now(), true)
+				}
+			})
 		}
-		h.mu.Unlock()
 		return
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	d := c.terminal
-	if d == nil || !h.active(d) {
+	d := c.terminal.Load()
+	if d == nil {
 		return
 	}
+	// Legacy in-band capture: append into the session's preallocated buffer on
+	// the read loop (allocation-free), then let the actor react at the cap.
 	rec := &d.recording
-	if !rec.open() {
-		return
-	}
-	if ep := rec.endpoint; ep != nil {
-		if len(pcm) > 2*pcmPacket || !ep.push(pcm, time.Now()) {
-			h.recordingControl(d, time.Now(), true)
-		}
+	mu := rec.lock()
+	mu.Lock()
+	if !rec.accepting.load() {
+		mu.Unlock()
 		return
 	}
 	room := (maxPCM - len(rec.pcm)) &^ 1
 	n := min(len(pcm), room)
 	rec.pcm = append(rec.pcm, pcm[:n]...)
-	if n == room {
-		h.stopRecordingAtLimit(d, time.Now())
+	full := n == room
+	mu.Unlock()
+	if full {
+		d.post(terminalEvent{kind: evCapturePCM, now: time.Now()})
+	}
+}
+
+// captureLimit runs when the raw capture buffer reached its cap.
+func (h *terminalHub) captureLimit(d *terminalSession, now time.Time) {
+	rec := &d.recording
+	if !h.active(d) || !rec.open() || rec.endpoint != nil {
+		return
+	}
+	mu := rec.lock()
+	mu.Lock()
+	full := len(rec.pcm) >= maxPCM
+	mu.Unlock()
+	if full {
+		h.stopRecordingAtLimit(d, now)
 	}
 }
 
@@ -349,7 +303,15 @@ func (h *terminalHub) endRecording(d *terminalSession, reqTarget string, cancell
 		h.finishEndpoint(d, now)
 		return
 	}
-	pcm, target := d.recording.pcm, d.recording.target
+	// Stop accepting audio before taking the buffer so a late DMA packet
+	// cannot land in the turn that is about to start.
+	d.recording.accepting.store(false)
+	mu := d.recording.lock()
+	mu.Lock()
+	pcm := d.recording.pcm
+	d.recording.pcm = nil
+	mu.Unlock()
+	target := d.recording.target
 	if requested, ok := recordTarget(reqTarget); ok && requested != "" {
 		target = requested
 	}
@@ -358,9 +320,9 @@ func (h *terminalHub) endRecording(d *terminalSession, reqTarget string, cancell
 		if cancelled {
 			h.pushChime(d, "cancel")
 		}
-		h.setCompanionStatus(d.companionID, statusIdle)
+		h.setCompanionStatus(d.companionID.get(), statusIdle)
 		h.wake(d, now)
-		if !h.maybeStartNoticeLocked(d, now) {
+		if !h.maybeStartNotice(d, now) {
 			h.render(d, now, false)
 		}
 		return
@@ -371,18 +333,24 @@ func (h *terminalHub) endRecording(d *terminalSession, reqTarget string, cancell
 }
 
 func (h *terminalHub) interruptTurn(d *terminalSession, reason string) {
-	if d.busy && h.b.oc != nil && d.companionID != "" {
-		log.Printf("terminal interrupt companion=%s reason=%s", d.companionID, reason)
-		h.b.oc.interruptDevice(d.companionID)
+	if d.busy && h.b.oc != nil && d.companionID.get() != "" {
+		companionID := d.companionID.get()
+		// Interrupting OpenCode is a network call; the actor keeps running.
+		go func() {
+			log.Printf("terminal interrupt companion=%s reason=%s", companionID, reason)
+			h.b.oc.interruptDevice(companionID)
+		}()
 	}
 }
 
+// cancelTurn runs in the session actor.
 func (h *terminalHub) cancelTurn(d *terminalSession, reason string) {
 	h.interruptTurn(d, reason)
 	h.cancelLocalTurn(d)
 }
 
 func (h *terminalHub) cancelLocalTurn(d *terminalSession) {
+	defer d.syncMode()
 	if c := d.queuedVoice; c != nil {
 		d.queuedVoice = nil
 		c.cancel()
@@ -390,7 +358,7 @@ func (h *terminalHub) cancelLocalTurn(d *terminalSession) {
 	d.turn++
 	d.trace = nil
 	d.busy = false
-	d.setTurnPhase(turnIdle)
+	d.syncMode()
 	d.resetStopTaps()
 	d.agentSetScene = false
 	if d.cancel != nil {
@@ -401,7 +369,7 @@ func (h *terminalHub) cancelLocalTurn(d *terminalSession) {
 }
 
 func (h *terminalHub) startTurn(d *terminalSession, now time.Time, keepView bool, source string, run func(context.Context, uint64)) bool {
-	if d.companionID == "" {
+	if d.companionID.get() == "" {
 		return false
 	}
 	h.cancelTurn(d, "superseded")
@@ -421,15 +389,15 @@ func (h *terminalHub) beginTurn(d *terminalSession, now time.Time, keepView bool
 		d.view = nil
 	}
 	ctx, cancel := context.WithTimeout(d.client.ctx, turnTimeout)
-	ctx = h.b.traceTurn(ctx, d.companionID, d.companion.Name, source, now)
+	ctx = h.b.traceTurn(ctx, d.companionID.get(), d.companion.Name, source, now)
 	d.trace = traceFrom(ctx)
 	id := d.turn
 	d.cancel, d.busy = cancel, true
-	d.setTurnPhase(turnRunning)
+	d.syncMode()
 	if !keepView {
 		h.pushChime(d, "think")
 	}
-	h.setCompanionStatus(d.companionID, statusThinking)
+	h.setCompanionStatus(d.companionID.get(), statusThinking)
 	h.render(d, now, false)
 	go run(ctx, id)
 }
@@ -444,16 +412,12 @@ type turnAudio struct {
 }
 
 func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView, audio *AudioStream) {
-	h.mu.Lock()
-	defer func() {
-		h.mu.Unlock()
-		h.sig.notify()
-	}()
+	defer d.syncMode()
+	defer h.sig.notify()
 	if !h.active(d) || d.turn != id {
 		return
 	}
 	d.busy = false
-	d.settleTurnPhase()
 	d.finished++
 	now := time.Now()
 	d.last = now
@@ -470,7 +434,7 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 	if view != nil || audio != nil {
 		// A visible reply grants follow-ups now; spoken replies refresh the
 		// grace again when their playback completes.
-		h.freeFollowUpsLocked(d, now)
+		h.freeFollowUpsNow(d, now)
 	}
 	if view != nil && !d.agentSetScene {
 		if d.stopAudio != nil || d.awaitAck {
@@ -491,17 +455,17 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 	}
 	if !d.ttsStarted && !d.awaitAck && d.stopAudio == nil && d.replyAudio == nil {
 		if d.queuedVoice != nil {
-			h.setCompanionStatus(d.companionID, statusThinking)
-		} else if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
-			h.setCompanionStatus(d.companionID, statusDone)
+			h.setCompanionStatus(d.companionID.get(), statusThinking)
+		} else if st, ok := h.statusState(d.companionID.get()); !ok || st.state != statusError {
+			h.setCompanionStatus(d.companionID.get(), statusDone)
 		}
 	}
-	if h.maybeStartNoticeLocked(d, now) {
+	if h.maybeStartNotice(d, now) {
 		d.trace = nil
 		return
 	}
 	if !d.ttsStarted && !d.awaitAck && d.stopAudio == nil && d.replyAudio == nil {
-		if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
+		if st, ok := h.statusState(d.companionID.get()); !ok || st.state != statusError {
 			if h.startListeningWindow(d, now) {
 				d.trace = nil
 				return
@@ -513,40 +477,51 @@ func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView,
 }
 
 func (h *terminalHub) turnError(d *terminalSession, id uint64, message string) {
-	d.trace.fail()
-	h.mu.Lock()
-	if h.active(d) && d.turn == id {
-		h.setCompanionStatus(d.companionID, statusError)
+	d.post(terminalEvent{kind: evTurnError, now: time.Now(), turnErr: terminalTurnError{id: id, message: message}})
+}
+
+func (h *terminalHub) turnFailed(d *terminalSession, id uint64, message string) {
+	if d.turn == id && d.trace != nil {
+		d.trace.fail()
 	}
-	h.mu.Unlock()
+	if h.active(d) && d.turn == id {
+		h.setCompanionStatus(d.companionID.get(), statusError)
+	}
 	view := noticeScene("Try again", message)
 	h.finishTurn(d, id, &view, nil)
 }
 
+// stopCompanionTurn asks the session actor to stop a turn in flight.
 func (h *terminalHub) stopCompanionTurn(d *terminalSession) {
+	d.post(terminalEvent{kind: evStopTurn, now: time.Now()})
+}
+
+func (h *terminalHub) stopCompanionTurns(ids ...string) {
+	for _, id := range ids {
+		for _, d := range h.liveFor(id) {
+			h.stopCompanionTurn(d)
+		}
+	}
+}
+
+func (h *terminalHub) stopTurnNow(d *terminalSession, now time.Time) {
 	h.cancelLocalTurn(d)
 	h.stopPlayback(d, true)
 	if d.recording.active() {
 		h.pushRecStop(d, d.recording.target, false)
 		d.recording.clear()
 	}
+	h.render(d, now, false)
 }
 
-func (h *terminalHub) stopCompanionTurns(ids ...string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	now := time.Now()
-	for _, id := range ids {
-		for _, d := range h.terminalsFor(id) {
-			h.stopCompanionTurn(d)
-			h.render(d, now, false)
-		}
-	}
+// finishTurnAsync posts a completion from a turn goroutine.
+func (h *terminalHub) finishTurnAsync(d *terminalSession, id uint64, view *sceneView, audio *AudioStream) {
+	d.update(func(d *terminalSession) { h.finishTurn(d, id, view, audio) })
 }
 
 func (h *terminalHub) runVoice(ctx context.Context, d *terminalSession, id uint64, target string, pcm []byte) {
 	if target != "" {
-		sender := h.b.companionFor(d.companionID)
+		sender := h.b.companionFor(d.companionID.get())
 		others, err := h.peerSnapshot(sender.ID)
 		if err != nil {
 			h.turnError(d, id, "Could not find nearby companions.")
@@ -576,7 +551,7 @@ func (h *terminalHub) runVoice(ctx context.Context, d *terminalSession, id uint6
 				h.caption(receipts, sender, transcript)
 				ids := make([]string, 0, len(receipts))
 				for _, r := range receipts {
-					ids = append(ids, r.terminal.companionID)
+					ids = append(ids, r.terminal.companionID.get())
 				}
 				h.b.recordIntercom(sender, ids, transcript)
 			}()
@@ -590,7 +565,7 @@ func (h *terminalHub) runVoice(ctx context.Context, d *terminalSession, id uint6
 		return
 	}
 	if text == "" {
-		h.finishTurn(d, id, nil, nil)
+		h.finishTurnAsync(d, id, nil, nil)
 		return
 	}
 	if h.tryStoryVoiceChoice(d, id, text) {
@@ -611,16 +586,16 @@ func (h *terminalHub) runTurnChannel(ctx context.Context, d *terminalSession, id
 			}
 		}()
 	}
-	if d.companionID == "" {
+	if d.companionID.get() == "" {
 		h.turnError(d, id, "This terminal is not attached to a companion.")
 		return
 	}
-	sender := h.b.companionFor(d.companionID)
+	sender := h.b.companionFor(d.companionID.get())
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, sender.ID, sender.Name, source, time.Now())
 	}
 	if ctx.Err() != nil {
-		h.finishTurn(d, id, nil, nil)
+		h.finishTurnAsync(d, id, nil, nil)
 		return
 	}
 	others, direct, err := h.b.intercomIntent(sender.ID, text)
@@ -642,7 +617,9 @@ func (h *terminalHub) runTurnChannel(ctx context.Context, d *terminalSession, id
 	// model fails or the child interrupts playback.
 	h.consumeReply(d, ch.reply)
 	gen, err := h.b.generateReply(ctx, ctx, sender, text, turnOptions{source: source, channel: ch, spec: ch.spec,
-		publish: func(stream *AudioStream, start time.Time) { h.publish(d, id, ctx, stream, start) }})
+		publish: func(stream *AudioStream, start time.Time) {
+			d.update(func(d *terminalSession) { h.publish(d, id, ctx, stream, start) })
+		}})
 	if err != nil {
 		h.turnError(d, id, "Could not finish that turn.")
 		return
@@ -653,7 +630,7 @@ func (h *terminalHub) runTurnChannel(ctx context.Context, d *terminalSession, id
 		v := noticeScene("Answer", shortText(gen.reply, maxMessage, true))
 		view = &v
 	}
-	h.finishTurn(d, id, view, gen.audio)
+	h.finishTurnAsync(d, id, view, gen.audio)
 }
 
 // deliverDeviceReply sends a spoken reply back to the Delta Chat chat whose
@@ -675,11 +652,11 @@ func (h *terminalHub) consumeReply(d *terminalSession, reply *turnReply) {
 	if reply == nil {
 		return
 	}
-	h.mu.Lock()
-	if d.reply == reply {
-		d.clearReply()
-	}
-	h.mu.Unlock()
+	d.update(func(d *terminalSession) {
+		if d.reply == reply {
+			d.clearReply()
+		}
+	})
 }
 
 // dropStaleReply clears a read-out armed while this capture was already open:
@@ -689,15 +666,15 @@ func (h *terminalHub) dropStaleReply(d *terminalSession, capturedAt time.Time) {
 	if capturedAt.IsZero() {
 		return
 	}
-	h.mu.Lock()
-	if d.reply != nil && capturedAt.Before(d.replySpoken) {
-		d.clearReply()
-	}
-	h.mu.Unlock()
+	d.update(func(d *terminalSession) {
+		if d.reply != nil && capturedAt.Before(d.replySpoken) {
+			d.clearReply()
+		}
+	})
 }
 
 func (h *terminalHub) sendIntercom(ctx context.Context, d *terminalSession, id uint64, others []companionTarget, target, text string) {
-	sender := h.b.companionFor(d.companionID)
+	sender := h.b.companionFor(d.companionID.get())
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, sender.ID, sender.Name, "intercom", time.Now())
 	}
@@ -730,27 +707,27 @@ func (h *terminalHub) confirm(ctx context.Context, d *terminalSession, id uint64
 // nameRequired reports whether a new listening turn must contain the
 // companion's name. The 10 s grace starts when the previous reply finished.
 func (h *terminalHub) nameRequired(d *terminalSession, now time.Time) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return !d.nameFreeUntil.IsZero() && now.After(d.nameFreeUntil)
+	st := d.state()
+	return !st.nameFreeUntil.IsZero() && now.After(st.nameFreeUntil)
 }
 
 func (h *terminalHub) replyNotCaught(ctx context.Context, d *terminalSession, id uint64) {
 	h.b.diag.listen.didntCatch.Add(1)
-	h.freeFollowUps(d, time.Now())
+	d.update(func(d *terminalSession) { h.freeFollowUpsNow(d, time.Now()) })
 	w := h.b.worker
 	if w == nil || !w.ready.Load() {
-		h.finishTurn(d, id, nil, nil)
+		d.update(func(d *terminalSession) { h.finishTurn(d, id, nil, nil) })
 		return
 	}
-	text := notCaughtLines[int(d.finished)%len(notCaughtLines)]
+	st := d.state()
+	text := notCaughtLines[int(st.finished)%len(notCaughtLines)]
 	start := time.Now()
 	if traceFrom(ctx) == nil {
-		ctx = h.b.traceTurn(ctx, d.companionID, d.companion.Name, "voice", start)
+		ctx = h.b.traceTurn(ctx, d.companionID.get(), h.b.companionFor(d.companionID.get()).Name, "voice", start)
 	}
-	voice := h.b.voiceFor(d.companionID)
+	voice := h.b.voiceFor(d.companionID.get())
 	stream := newAudioStream()
-	h.publish(d, id, ctx, stream, start)
+	d.update(func(d *terminalSession) { h.publish(d, id, ctx, stream, start) })
 	pcm := h.b.clips.peek(voice, text)
 	if pcm == nil {
 		pcm, _ = w.synthesize(ctx, voice, text)
@@ -760,19 +737,19 @@ func (h *terminalHub) replyNotCaught(ctx context.Context, d *terminalSession, id
 	} else {
 		stream.finish(nil)
 	}
-	h.finishTurn(d, id, nil, nil)
+	d.update(func(d *terminalSession) { h.finishTurn(d, id, nil, nil) })
 }
 
 func (h *terminalHub) sayTurn(ctx context.Context, d *terminalSession, id uint64, text string, view *sceneView) {
 	start := time.Now()
 	if traceFrom(ctx) == nil {
-		ctx = h.b.traceTurn(ctx, d.companionID, d.companion.Name, "tap", start)
+		ctx = h.b.traceTurn(ctx, d.companionID.get(), h.b.companionFor(d.companionID.get()).Name, "tap", start)
 	}
 	w := h.b.worker
 	if w != nil && w.ready.Load() {
 		stream := newAudioStream()
-		h.publish(d, id, ctx, stream, start)
-		voice := h.b.voiceFor(d.companionID)
+		d.update(func(d *terminalSession) { h.publish(d, id, ctx, stream, start) })
+		voice := h.b.voiceFor(d.companionID.get())
 		pcm := h.b.clips.peek(voice, text)
 		if pcm == nil {
 			clean, err := spokenText(text)
@@ -786,12 +763,11 @@ func (h *terminalHub) sayTurn(ctx context.Context, d *terminalSession, id uint64
 			stream.finish(nil)
 		}
 	}
-	h.finishTurn(d, id, view, nil)
+	d.update(func(d *terminalSession) { h.finishTurn(d, id, view, nil) })
 }
 
+// publish runs in the session actor.
 func (h *terminalHub) publish(d *terminalSession, id uint64, ctx context.Context, stream *AudioStream, start time.Time) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	if !h.active(d) || d.turn != id || ctx.Err() != nil {
 		return
 	}
@@ -806,10 +782,22 @@ func (h *terminalHub) publish(d *terminalSession, id uint64, ctx context.Context
 	d.replyAudio = &turnAudio{stream: stream, turn: id}
 }
 
+// play starts playback from outside the actor.
 func (h *terminalHub) play(d *terminalSession, stream *AudioStream) context.Context {
-	return h.playTraced(d, stream, nil, time.Time{})
+	var playback context.Context
+	d.update(func(d *terminalSession) {
+		playback = h.playTraced(d, stream, nil, time.Time{})
+	})
+	if playback == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+	return playback
 }
 
+// playTraced starts playback and returns its cancel context. The caller is the
+// session actor.
 func (h *terminalHub) playTraced(d *terminalSession, stream *AudioStream, trace *turnTrace, ttsStart time.Time) context.Context {
 	ctx, cancel := context.WithCancel(d.client.ctx)
 	h.stopPlayback(d, true)
@@ -818,37 +806,37 @@ func (h *terminalHub) playTraced(d *terminalSession, stream *AudioStream, trace 
 	go func() {
 		defer cancel()
 		err := h.streamPlayback(ctx, d, id, stream, trace, ttsStart)
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if !h.active(d) || d.audio != id {
-			return
-		}
-		d.stopAudio = nil
-		if err != nil {
-			a := d.replyAudio
-			h.stopPlayback(d, true)
-			if a != nil && d.turn == a.turn && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-				if a.answer == nil && d.busy {
-					a.failed = true
-					d.replyAudio = a
-				} else if a.answer != nil && !d.agentSetScene {
-					d.pending = a.answer
-				}
+		d.update(func(d *terminalSession) {
+			if !h.active(d) || d.audio != id {
+				return
 			}
-			h.playbackDone(d, time.Now(), true)
-		} else {
-			d.replyAudio = nil
-			d.ttsStarted = false
-			d.settleTurnPhase()
-		}
-		if !d.busy && d.cancel != nil {
-			d.cancel()
-			d.cancel = nil
-		}
-		now := time.Now()
-		if !h.maybeStartVoice(d, now) {
-			h.maybeStartNoticeLocked(d, now)
-		}
+			d.stopAudio = nil
+			if err != nil {
+				a := d.replyAudio
+				h.stopPlayback(d, true)
+				if a != nil && d.turn == a.turn && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+					if a.answer == nil && d.busy {
+						a.failed = true
+						d.replyAudio = a
+					} else if a.answer != nil && !d.agentSetScene {
+						d.pending = a.answer
+					}
+				}
+				h.playbackDone(d, time.Now(), true)
+			} else {
+				d.replyAudio = nil
+				d.ttsStarted = false
+				d.syncMode()
+			}
+			if !d.busy && d.cancel != nil {
+				d.cancel()
+				d.cancel = nil
+			}
+			now := time.Now()
+			if !h.maybeStartVoice(d, now) {
+				h.maybeStartNotice(d, now)
+			}
+		})
 	}()
 	return ctx
 }
@@ -881,33 +869,45 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 				return err
 			}
 			stream.traceFirst(trace, ttsStart)
-			h.mu.Lock()
-			for h.active(d) && d.audio == id && ctx.Err() == nil && d.recording.endpoint != nil {
-				listening := d.recording.endpoint.listening
-				h.mu.Unlock()
+			// A listening window still open must finish before the reply speaks
+			// into it; the window closes its own capture when it ends.
+			for {
+				var listening <-chan struct{}
+				d.update(func(d *terminalSession) {
+					if h.active(d) && d.audio == id && ctx.Err() == nil && d.recording.endpoint != nil {
+						listening = d.recording.endpoint.listening
+					}
+				})
+				if listening == nil {
+					break
+				}
 				select {
 				case <-listening:
 				case <-ctx.Done():
 					return ctx.Err()
 				}
-				h.mu.Lock()
 			}
-			if !h.active(d) || d.audio != id || ctx.Err() != nil {
-				h.mu.Unlock()
+			started := false
+			d.update(func(d *terminalSession) {
+				if !h.active(d) || d.audio != id || ctx.Err() != nil {
+					return
+				}
+				d.ttsStarted = true
+				d.syncMode()
+				h.setCompanionStatus(d.companionID.get(), statusSpeaking)
+				started = true
+			})
+			if !started {
 				return context.Canceled
 			}
-			d.ttsStarted = true
-			d.setTurnPhase(turnSpeaking)
-			h.setCompanionStatus(d.companionID, statusSpeaking)
-			h.mu.Unlock()
 			if !control("start") {
 				return context.Canceled
 			}
-			h.mu.Lock()
-			if h.active(d) && d.audio == id {
-				h.render(d, time.Now(), false)
-			}
-			h.mu.Unlock()
+			d.update(func(d *terminalSession) {
+				if h.active(d) && d.audio == id {
+					h.render(d, time.Now(), false)
+				}
+			})
 		}
 		for len(pcm) > 0 {
 			n := min(pcmPacket, len(pcm))
@@ -935,18 +935,25 @@ func (h *terminalHub) streamPlayback(ctx context.Context, d *terminalSession, id
 			pcm = pcm[n:]
 		}
 	}
-	h.mu.Lock()
-	if !h.active(d) || d.audio != id || ctx.Err() != nil {
-		h.mu.Unlock()
+	status := 0 // 0 cancelled, 1 no audio, 2 awaiting ack
+	d.update(func(d *terminalSession) {
+		if !h.active(d) || d.audio != id || ctx.Err() != nil {
+			return
+		}
+		if until.IsZero() {
+			status = 1
+			return
+		}
+		// A fast client can acknowledge as soon as the end frame is queued.
+		d.audioUntil, d.awaitAck, d.ackClient = until, true, d.client
+		status = 2
+	})
+	switch status {
+	case 0:
 		return context.Canceled
-	}
-	if until.IsZero() {
-		h.mu.Unlock()
+	case 1:
 		return errTTS
 	}
-	// A fast client can acknowledge as soon as the end frame is queued.
-	d.audioUntil, d.awaitAck, d.ackClient = until, true, d.client
-	h.mu.Unlock()
 	if !control("end") {
 		return context.Canceled
 	}
@@ -964,26 +971,26 @@ func (h *terminalHub) stopPlayback(d *terminalSession, notify bool) {
 	d.ttsStarted, d.awaitAck, d.ackClient = false, false, nil
 	d.replyAudio = nil
 	d.audio++
-	d.settleTurnPhase()
+	d.syncMode()
 }
 
 func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bool) {
 	if !aborted {
-		h.freeFollowUpsLocked(d, now)
+		h.freeFollowUpsNow(d, now)
 		d.armReplyTTL(now)
 	}
 	d.awaitAck, d.ackClient = false, nil
-	d.settleTurnPhase()
+	d.syncMode()
 	if d.pending != nil {
 		d.view, d.pending = d.pending, nil
 	}
 	d.last = now
 	if !d.busy {
-		if st, ok := h.companionStatuses[d.companionID]; !ok || st.state != statusError {
-			h.setCompanionStatus(d.companionID, statusDone)
+		if st, ok := h.statusState(d.companionID.get()); !ok || st.state != statusError {
+			h.setCompanionStatus(d.companionID.get(), statusDone)
 		}
 	}
-	if h.maybeStartVoice(d, now) || h.maybeStartNoticeLocked(d, now) {
+	if h.maybeStartVoice(d, now) || h.maybeStartNotice(d, now) {
 		return
 	}
 	if !aborted && h.startStoryChoiceListen(d, now) {
@@ -996,15 +1003,13 @@ func (h *terminalHub) playbackDone(d *terminalSession, now time.Time, aborted bo
 }
 
 // A spoken reply buys free follow-ups without the companion's name.
-// freeFollowUps refreshes the no-name window. The turn goroutine and the
-// playback handler both call it, so it takes the hub lock itself.
+// freeFollowUps refreshes the no-name window from outside the actor.
 func (h *terminalHub) freeFollowUps(d *terminalSession, now time.Time) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.freeFollowUpsLocked(d, now)
+	d.update(func(d *terminalSession) { h.freeFollowUpsNow(d, now) })
 }
 
-func (h *terminalHub) freeFollowUpsLocked(d *terminalSession, now time.Time) {
+// freeFollowUpsNow runs in the session actor.
+func (h *terminalHub) freeFollowUpsNow(d *terminalSession, now time.Time) {
 	d.nameFreeUntil = now.Add(followUpGrace)
 }
 
@@ -1033,14 +1038,16 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 }
 
 type queuedNotice struct {
-	view   *sceneView
-	chime  string
-	voice  string
-	intro  string
-	text   string
-	stream *AudioStream
-	reply  *turnReply
-	trace  *turnTrace
+	ctx     context.Context
+	fromPCM bool
+	view    *sceneView
+	chime   string
+	voice   string
+	intro   string
+	text    string
+	stream  *AudioStream
+	reply   *turnReply
+	trace   *turnTrace
 }
 
 type terminalNotice struct {
@@ -1100,81 +1107,70 @@ func (h *terminalHub) deliverNotice(ctx context.Context, n terminalNotice) []not
 		v := (intercomCard{companion: n.sender.Name, reply: n.cardReply, text: text}).scene()
 		view = &v
 	}
-	var pcmStream *AudioStream
-	if n.pcm != nil {
-		pcmStream = newAudioStream()
-		if n.intro != "" {
-			if intro := h.b.clips.peek(n.voice, n.intro); intro != nil && len(intro)+len(n.pcm) <= maxPeerPCM {
-				pcmStream.append(intro)
-			}
-		}
-		pcmStream.append(NormalizeVoicePCM(n.pcm))
-		pcmStream.finish(nil)
-	}
-
-	h.mu.Lock()
-	if ctx.Err() != nil {
-		h.mu.Unlock()
-		return nil
-	}
-	now := time.Now()
 	var targets []*terminalSession
 	seen := make(map[*terminalSession]bool)
 	for _, id := range n.recipientIDs {
-		for _, d := range h.terminalsFor(id) {
-			if h.active(d) && !seen[d] {
+		for _, d := range h.liveFor(id) {
+			if !seen[d] {
 				seen[d] = true
 				targets = append(targets, d)
 			}
 		}
 	}
-	if len(targets) == 0 {
-		h.mu.Unlock()
+	if len(targets) == 0 || ctx.Err() != nil {
 		return nil
 	}
-	var immediateStream *AudioStream
-	if pcmStream == nil && (speakText != "" || n.intro != "") {
-		immediateStream = newAudioStream()
-	}
 	receipts := make([]noticeReceipt, 0, len(targets))
-	startedImmediate := false
 	for _, d := range targets {
-		stream := pcmStream
-		if stream == nil {
-			stream = immediateStream
-		}
 		q := queuedNotice{
-			view:   view,
-			chime:  n.chime,
-			voice:  n.voice,
-			intro:  n.intro,
-			text:   speakText,
-			stream: stream,
-			reply:  n.reply,
-			trace:  n.trace,
+			view: view, chime: n.chime, voice: n.voice, intro: n.intro,
+			text: speakText, reply: n.reply, trace: n.trace, ctx: ctx, fromPCM: n.pcm != nil,
 		}
-		if d.noticeBusy() {
-			// Queued notices synthesize their own stream when drained so they don't race or expire.
-			if pcmStream == nil {
-				q.stream = nil
+		if n.pcm != nil {
+			// Each terminal plays its own copy: two actors must not consume one
+			// stream concurrently.
+			stream := newAudioStream()
+			if n.intro != "" {
+				if intro := h.b.clips.peek(n.voice, n.intro); intro != nil && len(intro)+len(n.pcm) <= maxPeerPCM {
+					stream.append(intro)
+				}
 			}
-			d.queuedNotices = append(d.queuedNotices, q)
-		} else {
-			h.deliverNoticeNowLocked(d, now, q)
-			if stream == immediateStream && immediateStream != nil {
-				startedImmediate = true
-			}
+			stream.append(NormalizeVoicePCM(n.pcm))
+			stream.finish(nil)
+			q.stream = stream
+		}
+		ack := make(chan struct{})
+		if d.post(terminalEvent{kind: evNotice, now: time.Now(), queued: q, done: ack}) {
+			<-ack
 		}
 		receipts = append(receipts, noticeReceipt{d, view})
-	}
-	h.mu.Unlock()
-	if startedImmediate {
-		go h.speakNotice(immediateStream, n.voice, n.intro, speakText)
 	}
 	return receipts
 }
 
-func (h *terminalHub) deliverNoticeNowLocked(d *terminalSession, now time.Time, q queuedNotice) {
+// deliverNoticeEvents runs in the session actor.
+func (h *terminalHub) deliverNoticeEvent(d *terminalSession, q queuedNotice, now time.Time) {
+	if !h.active(d) || q.ctx != nil && q.ctx.Err() != nil {
+		return
+	}
+	if d.noticeBusy() {
+		// Queued notices synthesize their own stream when drained so they don't race or expire.
+		if q.fromPCM == false {
+			q.stream = nil
+		}
+		d.queuedNotices = append(d.queuedNotices, q)
+		return
+	}
+	if q.stream == nil && (q.text != "" || q.intro != "") {
+		q.stream = newAudioStream()
+		h.deliverNoticeNow(d, now, q)
+		go h.speakNotice(q.stream, q.voice, q.intro, q.text)
+		return
+	}
+	h.deliverNoticeNow(d, now, q)
+}
+
+func (h *terminalHub) deliverNoticeNow(d *terminalSession, now time.Time, q queuedNotice) {
 	d.drawer, d.pending = "", nil
 	d.reply = q.reply
 	if q.reply != nil {
@@ -1192,15 +1188,11 @@ func (h *terminalHub) deliverNoticeNowLocked(d *terminalSession, now time.Time, 
 		h.pushChime(d, q.chime)
 	}
 	if q.stream != nil && d.client.ctx.Err() == nil {
-		if q.trace != nil {
-			h.playTraced(d, q.stream, q.trace, time.Time{})
-		} else {
-			h.play(d, q.stream)
-		}
+		h.playTraced(d, q.stream, q.trace, time.Time{})
 	}
 }
 
-func (h *terminalHub) maybeStartNoticeLocked(d *terminalSession, now time.Time) bool {
+func (h *terminalHub) maybeStartNotice(d *terminalSession, now time.Time) bool {
 	if len(d.queuedNotices) == 0 || d.noticeBusy() || !h.active(d) {
 		return false
 	}
@@ -1208,11 +1200,11 @@ func (h *terminalHub) maybeStartNoticeLocked(d *terminalSession, now time.Time) 
 	d.queuedNotices = d.queuedNotices[1:]
 	if q.stream == nil && (q.text != "" || q.intro != "") {
 		q.stream = newAudioStream()
-		h.deliverNoticeNowLocked(d, now, q)
+		h.deliverNoticeNow(d, now, q)
 		go h.speakNotice(q.stream, q.voice, q.intro, q.text)
 		return true
 	}
-	h.deliverNoticeNowLocked(d, now, q)
+	h.deliverNoticeNow(d, now, q)
 	return true
 }
 
@@ -1244,28 +1236,34 @@ func (h *terminalHub) caption(receipts []noticeReceipt, sender companionState, t
 		return
 	}
 	view := (intercomCard{companion: sender.Name, text: shortText(text, maxMessage, true)}).scene()
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	for _, r := range receipts {
-		if d := r.terminal; h.active(d) {
-			switch {
-			case d.card == r.view:
-				d.card = &view
-			case d.view == r.view:
-				d.view = &view
-			default:
-				continue
-			}
-			h.render(d, time.Now(), false)
-		}
+		d := r.terminal
+		d.post(terminalEvent{kind: evCaption, now: time.Now(),
+			caption: terminalCaption{view: &view, oldView: r.view}})
 	}
+}
+
+// captionEvent runs in the session actor.
+func (h *terminalHub) captionEvent(d *terminalSession, c terminalCaption, now time.Time) {
+	if !h.active(d) {
+		return
+	}
+	switch {
+	case d.card == c.oldView:
+		d.card = c.view
+	case d.view == c.oldView:
+		d.view = c.view
+	default:
+		return
+	}
+	h.render(d, now, false)
 }
 
 func (b *larkServer) deliver(ctx context.Context, sender companionState, recipients []companionTarget, text string, raw []byte) delivery {
 	sent := make(map[string]bool, len(recipients))
 	if b.hub != nil {
 		for _, r := range b.hub.deliverOnline(ctx, sender, recipients, b.voiceFor(sender.ID), text, raw) {
-			sent[r.terminal.companionID] = true
+			sent[r.terminal.companionID.get()] = true
 		}
 	}
 	out := delivery{sent: []string{}, delivered: []string{}, failed: []string{}}
@@ -1303,7 +1301,7 @@ func (h *terminalHub) speakLocalAfter(d *terminalSession, text string, prefix []
 	worker := h.b.worker
 	if worker == nil || !worker.ready.Load() {
 		if len(prefix) != 0 {
-			h.playPCM(d, prefix)
+			h.playTraced(d, audioStreamFrom(prefix), nil, time.Time{})
 		}
 		return
 	}
@@ -1314,7 +1312,7 @@ func (h *terminalHub) speakLocalAfter(d *terminalSession, text string, prefix []
 	start := time.Now()
 	var trace *turnTrace
 	if h.b != nil {
-		trace = traceFrom(h.b.traceTurn(d.client.ctx, d.companionID, d.companion.Name, "tap", start))
+		trace = traceFrom(h.b.traceTurn(d.client.ctx, d.companionID.get(), d.companion.Name, "tap", start))
 	}
 	stream := newAudioStream()
 	if len(prefix) != 0 {

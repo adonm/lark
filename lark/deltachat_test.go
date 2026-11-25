@@ -135,10 +135,7 @@ func TestDeltaChatPairMenuRendersQRAndUnpairRemovesContact(t *testing.T) {
 	if !strings.Contains(pairSrc, "pair-close") {
 		t.Fatalf("expected pair drawer, got %q", pairSrc)
 	}
-	b.hub.mu.Lock()
-	d := b.hub.terminals["vocat-33d8"]
-	hasBlack := d != nil && slices.Contains(d.svg.fb, uint16(0x0000))
-	b.hub.mu.Unlock()
+	hasBlack := slices.Contains(b.hub.live("vocat-33d8").state().svg.fb, uint16(0x0000))
 	if !hasBlack {
 		t.Fatal("Pair QR rendered without any black QR pixels")
 	}
@@ -419,26 +416,26 @@ func TestDeltaChatMessageQueuedDuringVoiceTurn(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-0003", "greg")
 
-	b.hub.mu.Lock()
-	term := b.hub.terminals["box3-0003"]
+	term := b.hub.live("box3-0003")
 	turnDone := make(chan struct{})
-	b.hub.startTurn(term, time.Now(), false, "voice", func(_ context.Context, id uint64) {
-		defer close(turnDone)
-		stub.mu.Lock()
-		stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
-		stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
-		stub.msgs[greg.DCAccountID][2] = deltachat.Message{Id: 2, ChatId: 200, FromId: 10, Text: "Bedtime soon", ViewType: deltachat.ViewtypeText}
-		stub.mu.Unlock()
+	updateTerm(t, term, func(term *terminalSession) {
+		b.hub.startTurn(term, time.Now(), false, "voice", func(_ context.Context, id uint64) {
+			defer close(turnDone)
+			stub.mu.Lock()
+			stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
+			stub.chats[greg.DCAccountID][200] = deltachat.BasicChat{Id: 200, ChatType: deltachat.ChatTypeSingle}
+			stub.msgs[greg.DCAccountID][2] = deltachat.Message{Id: 2, ChatId: 200, FromId: 10, Text: "Bedtime soon", ViewType: deltachat.ViewtypeText}
+			stub.mu.Unlock()
 
-		b.dc.handleMessage(t.Context(), greg.DCAccountID, 2)
-		select {
-		case got := <-ttsCh:
-			t.Fatalf("TTS started during active voice turn: %q", got)
-		default:
-		}
-		b.hub.finishTurn(term, id, nil, nil)
+			b.dc.handleMessage(t.Context(), greg.DCAccountID, 2)
+			select {
+			case got := <-ttsCh:
+				t.Fatalf("TTS started during active voice turn: %q", got)
+			default:
+			}
+			b.hub.finishTurnAsync(term, id, nil, nil)
+		})
 	})
-	b.hub.mu.Unlock()
 	<-turnDone
 
 	select {
@@ -517,14 +514,14 @@ func TestHouseholdVoiceLoopTellMumOK(t *testing.T) {
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-0005", "greg")
 
-	b.hub.mu.Lock()
-	term := b.hub.terminals["box3-0005"]
+	term := b.hub.live("box3-0005")
 	done := make(chan struct{})
-	b.hub.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
-		defer close(done)
-		b.hub.runTurn(ctx, term, id, "tell Mum OK", "voice", nil)
+	updateTerm(t, term, func(term *terminalSession) {
+		b.hub.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
+			defer close(done)
+			b.hub.runTurn(ctx, term, id, "tell Mum OK", "voice", nil)
+		})
 	})
-	b.hub.mu.Unlock()
 	<-done
 
 	stub.mu.Lock()
@@ -663,9 +660,7 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 	}
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, "box3-0006", "greg")
-	b.hub.mu.Lock()
-	term := b.hub.terminals["box3-0006"]
-	b.hub.mu.Unlock()
+	term := b.hub.live("box3-0006")
 
 	stub.mu.Lock()
 	stub.contacts[greg.DCAccountID][10] = deltachat.Contact{Id: 10, DisplayName: "Mum", Address: "mum@example.org", IsVerified: true}
@@ -680,13 +675,13 @@ func TestOverlappingRemoteAndLocalTurnsRouteReplies(t *testing.T) {
 	}()
 	<-firstStarted
 
-	b.hub.mu.Lock()
 	localDone := make(chan struct{})
-	b.hub.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
-		defer close(localDone)
-		b.hub.runTurn(ctx, term, id, "Local question", "voice", nil)
+	updateTerm(t, term, func(term *terminalSession) {
+		b.hub.startTurn(term, time.Now(), false, "voice", func(ctx context.Context, id uint64) {
+			defer close(localDone)
+			b.hub.runTurn(ctx, term, id, "Local question", "voice", nil)
+		})
 	})
-	b.hub.mu.Unlock()
 
 	// Release the serialized DC turn; local turn must run second and get its own reply.
 	close(releaseFirst)

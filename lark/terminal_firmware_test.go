@@ -15,16 +15,13 @@ func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
 
 	d.recStart(t, "")
 	waitSVG(t, b.hub, id, "rec-send")
-	b.hub.mu.Lock()
-	rev = b.hub.terminals[id].nativeRev
-	b.hub.mu.Unlock()
+	dev := b.hub.live(id)
+	rev = dev.state().nativeRev
 
 	d.tap(t, 247, 290, rev-1)
 	d.barrier(t)
-	b.hub.mu.Lock()
-	stillActive := b.hub.terminals[id].recording.active()
-	rev = b.hub.terminals[id].nativeRev
-	b.hub.mu.Unlock()
+	st := dev.state()
+	stillActive, rev := st.recording.active(), st.nativeRev
 	if !stillActive {
 		t.Fatal("stale revision stopped recording")
 	}
@@ -57,11 +54,11 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 	const id = "vocat-0002"
 	_, idleRev, _ := decodeDisplay(t, d.helloHardware(t, id, "", capPointerRev|capBridgeEndpoint|capDrag))
 
-	b.hub.mu.Lock()
-	dev := b.hub.terminals[id]
-	dev.busy = true
-	b.hub.render(dev, time.Now(), false)
-	b.hub.mu.Unlock()
+	dev := b.hub.live(id)
+	updateTerm(t, dev, func(d *terminalSession) {
+		d.busy = true
+		b.hub.render(d, time.Now(), false)
+	})
 	d.until(t, func(f protocolFrame) bool {
 		if !isDisplay(f) {
 			return false

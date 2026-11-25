@@ -12,6 +12,7 @@ import (
 )
 
 func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
+	d.syncMode()
 	switch d.drawer {
 	case drawerStories, drawerMemories, drawerPair, drawerUnpair:
 	default:
@@ -65,15 +66,16 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 		case drawerIntercom:
 			var choices []menuPeer
 			seen := make(map[string]bool)
-			for _, other := range h.terminals {
-				if other.companionID == "" || other.companionID == d.companionID || !h.active(other) {
+			for _, other := range h.liveAll() {
+				cid := other.companionID.get()
+				if cid == "" || cid == d.companionID.get() {
 					continue
 				}
-				if seen[other.companionID] {
+				if seen[cid] {
 					continue
 				}
-				seen[other.companionID] = true
-				choices = append(choices, menuPeer{other.companionID, other.companion.Name})
+				seen[cid] = true
+				choices = append(choices, menuPeer{cid, h.b.companionFor(cid).Name})
 			}
 			slices.SortFunc(choices, func(a, b menuPeer) int { return strings.Compare(a.id, b.id) })
 			choices = append([]menuPeer{{"all", "Everyone"}}, choices...)
@@ -107,72 +109,101 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 	d.renderGen++
 	d.renderNext = &r
 	if !d.rendering {
-		d.rendering = true
-		go h.renderFrames(d)
+		h.startFrameJob(d)
 	}
 }
 
-// A terminal has one frame builder and one replaceable pending request. A dirty
-// rectangle is always based on the last frame committed to that terminal's queue.
-func (h *terminalHub) renderFrames(d *terminalSession) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for d.renderNext != nil && h.active(d) {
-		in := frameInput{
-			req:        *d.renderNext,
-			prev:       d.svg,
-			gen:        d.renderGen,
-			rev:        d.rev + 1,
-			wantRGB:    d.displayFormats&dispRGB565 != 0,
-			codecs:     d.frameCodecs,
-			oldScene:   d.scene,
-			pointerRev: d.caps.PointerRev,
-			geometry:   d.screen,
-		}
-		if in.geometry.width == 0 || in.geometry.height == 0 {
-			in.geometry = roundScreen
-		}
-		d.renderNext = nil
-		h.mu.Unlock()
-
-		screen, view, err := h.buildFrame(d, in.req, in.geometry)
-		in.screen, in.req.view = screen, view
-		in.native, in.rawBytes, in.render, in.send = encodeFrame(d, in)
-
-		h.mu.Lock()
-		if !h.active(d) || d.renderGen != in.gen {
-			continue
-		}
-		if err != nil {
-			log.Printf("Lark screen: %v", err)
-			continue
-		}
-		h.commitFrame(d, in)
+func (h *terminalHub) startFrameJob(d *terminalSession) {
+	if d.frames == nil || d.renderNext == nil {
+		d.rendering, d.renderNext = false, nil
+		return
 	}
-	d.rendering, d.renderNext = false, nil
+	job := frameJob{
+		req:        *d.renderNext,
+		prev:       d.svg,
+		gen:        d.renderGen,
+		rev:        d.rev.load() + 1,
+		wantRGB:    d.displayFormats&dispRGB565 != 0,
+		codecs:     d.frameCodecs,
+		oldScene:   d.scene,
+		pointerRev: d.caps.PointerRev,
+		geometry:   d.screen,
+	}
+	if job.geometry.width == 0 || job.geometry.height == 0 {
+		job.geometry = roundScreen
+	}
+	d.renderNext = nil
+	d.rendering = true
+	d.frames.jobs <- job
 }
 
-// frameInput is everything one render pass needs after the hub lock is dropped.
-type frameInput struct {
+// frameJob is everything one render pass needs after the actor lets go.
+type frameJob struct {
 	req        renderRequest
 	prev       svgScreen
-	screen     svgScreen
 	gen        uint64
 	rev        uint64
 	geometry   screenGeometry
 	oldScene   sceneView
-	native     protocolFrame
-	rawBytes   int
-	render     time.Duration
 	wantRGB    bool
-	send       bool
 	pointerRev bool
 	codecs     uint8
 }
 
+// frameWorker owns the frame builder and its scratch buffers for one terminal.
+// It never touches session state; results go back to the actor as events.
+type frameWorker struct {
+	d       *terminalSession
+	jobs    chan frameJob
+	quit    chan struct{}
+	done    chan struct{}
+	scratch []uint16
+	encoder frameEncoder
+}
+
+func newFrameWorker(h *terminalHub, d *terminalSession) *frameWorker {
+	w := &frameWorker{d: d, jobs: make(chan frameJob, 1), quit: make(chan struct{}), done: make(chan struct{})}
+	go w.run(h)
+	return w
+}
+
+func (w *frameWorker) run(h *terminalHub) {
+	defer close(w.done)
+	for {
+		select {
+		case <-w.quit:
+			return
+		case job := <-w.jobs:
+			screen, view, err := h.buildFrame(w, job)
+			native, raw, render, send := encodeFrame(w, job, screen, view)
+			w.d.post(terminalEvent{kind: evFrameBuilt, now: time.Now(), frame: terminalFrameBuilt{
+				job: job, screen: screen, view: view, err: err, native: native, raw: raw, render: render, send: send,
+			}})
+		}
+	}
+}
+
+func (w *frameWorker) close() {
+	close(w.quit)
+	<-w.done
+}
+
+// handleFrameBuilt commits one built frame, then starts the newest pending
+// request. The caller is the session actor.
+func (h *terminalHub) handleFrameBuilt(d *terminalSession, fb terminalFrameBuilt) {
+	if fb.err != nil {
+		log.Printf("Lark screen: %v", fb.err)
+	} else if h.active(d) && d.renderGen == fb.job.gen {
+		h.commitFrame(d, fb)
+	}
+	d.rendering = false
+	h.startFrameJob(d)
+}
+
 // buildFrame draws the requested scene and packs it into RGB565. It runs
 // without the hub lock; portraits and assets are cached separately.
-func (h *terminalHub) buildFrame(d *terminalSession, r renderRequest, geometry screenGeometry) (svgScreen, sceneView, error) {
+func (h *terminalHub) buildFrame(w *frameWorker, job frameJob) (svgScreen, sceneView, error) {
+	r, geometry := job.req, job.geometry
 	spec := pixelSpecForGeometry(geometry)
 	bg, poses, th := h.companionAssets(r.companion)
 	var img *image.RGBA
@@ -226,10 +257,17 @@ func (h *terminalHub) buildFrame(d *terminalSession, r renderRequest, geometry s
 	b := img.Bounds()
 	dw, dh := b.Dx(), b.Dy()
 	var fb []uint16
-	if cap(d.scratchFB) >= dw*dh {
-		fb = d.scratchFB[:dw*dh]
+	if cap(w.scratch) >= dw*dh {
+		fb = w.scratch[:dw*dh]
 	} else {
 		fb = make([]uint16, dw*dh)
+	}
+	// Reuse the buffer of the frame *before* prev on the next pass. Reusing
+	// prev itself would make the diff compare a buffer with itself.
+	if len(job.prev.fb) == dw*dh {
+		w.scratch = job.prev.fb
+	} else {
+		w.scratch = nil
 	}
 	for y := range dh {
 		for x := range dw {
@@ -316,60 +354,58 @@ func screenSource(r renderRequest, hits []hitBox) string {
 
 // encodeFrame diffs against the last committed frame and encodes only when the
 // rectangle, grade, or interaction targets changed. It runs without the lock.
-func encodeFrame(d *terminalSession, in frameInput) (protocolFrame, int, time.Duration, bool) {
+func encodeFrame(w *frameWorker, job frameJob, screen svgScreen, view sceneView) (protocolFrame, int, time.Duration, bool) {
 	var native protocolFrame
 	var rawBytes int
-	fbChanged := !slices.Equal(in.prev.fb, in.screen.fb)
-	interactionChanged := in.pointerRev && in.wantRGB &&
-		(!maps.Equal(in.req.view.actions, in.oldScene.actions) || !slices.Equal(in.screen.hits, in.prev.hits))
-	if in.screen.fb == nil || !in.wantRGB {
+	fbChanged := !slices.Equal(job.prev.fb, screen.fb)
+	interactionChanged := job.pointerRev && job.wantRGB &&
+		(!maps.Equal(view.actions, job.oldScene.actions) || !slices.Equal(screen.hits, job.prev.hits))
+	if screen.fb == nil || !job.wantRGB {
 		return native, rawBytes, 0, false
 	}
-	if !(in.req.full || fbChanged || in.screen.grade != in.prev.grade || interactionChanged) {
+	if !(job.req.full || fbChanged || screen.grade != job.prev.grade || interactionChanged) {
 		return native, rawBytes, 0, false
 	}
 	start := time.Now()
-	rect := dirtyRect(in.prev.fb, in.screen.fb, in.geometry)
-	if rect.Empty() && (interactionChanged || in.req.full) {
+	rect := dirtyRect(job.prev.fb, screen.fb, job.geometry)
+	if rect.Empty() && (interactionChanged || job.req.full) {
 		rect = image.Rect(0, 0, 1, 1)
 	}
 	if !rect.Empty() {
-		frameCodecs := in.codecs
-		fullScene := in.prev.fb == nil || in.req.full || in.screen.grade != in.prev.grade
-		if !fullScene || in.req.drawer != "" || in.req.view.title != "" || in.req.view.heading != "" || in.req.view.text != "" {
+		frameCodecs := job.codecs
+		fullScene := job.prev.fb == nil || job.req.full || screen.grade != job.prev.grade
+		if !fullScene || job.req.drawer != "" || view.title != "" || view.heading != "" || view.text != "" {
 			frameCodecs &^= codecBitJPEG
 		}
-		native = d.encoder.encodeWithCodecs(in.screen.fb, nil, rect, in.rev, in.geometry.width, frameCodecs)
+		native = w.encoder.encodeWithCodecs(screen.fb, nil, rect, job.rev, job.geometry.width, frameCodecs)
 		rawBytes = 12 + rect.Dx()*rect.Dy()*2
 	}
 	return native, rawBytes, time.Since(start), true
 }
 
-// commitFrame publishes the built frame. The caller holds the hub lock.
-func (h *terminalHub) commitFrame(d *terminalSession, in frameInput) {
-	if in.prev.fb != nil && len(in.prev.fb) == d.screen.width*d.screen.height {
-		d.scratchFB = in.prev.fb
-	}
-	d.scene, d.svg = in.req.view, in.screen
+// commitFrame publishes the built frame. The caller is the session actor.
+func (h *terminalHub) commitFrame(d *terminalSession, fb terminalFrameBuilt) {
+	in := fb.job
+	d.scene, d.svg = fb.view, fb.screen
 	h.sig.notify()
-	if in.native.data() == nil {
+	if fb.native.data() == nil {
 		if d.announcing {
 			h.announce(d)
 		}
 		return
 	}
-	d.rev = in.rev
-	d.client.enqueueProto(msgFrame, in.native.data())
+	d.rev.store(in.rev)
+	d.client.enqueueProto(msgFrame, fb.native.data())
 	d.nativeRev = uint16(in.rev)
-	hk := pointerKey(in.screen.hits, in.req.view.actions)
+	hk := pointerKey(fb.screen.hits, fb.view.actions)
 	if !d.hasActionRev || hk != d.actionHitsKey {
 		d.actionHitsKey = hk
 		d.actionRev = d.nativeRev
 		d.hasActionRev = true
 	}
-	in.req.trace.measure(diagRender, in.render)
+	in.req.trace.measure(diagRender, fb.render)
 	codec := "RGB565"
-	switch in.native.data()[9] {
+	switch fb.native.data()[9] {
 	case frameCodecRLE565:
 		codec = "RLE565"
 	case frameCodecJPEG:
@@ -377,7 +413,7 @@ func (h *terminalHub) commitFrame(d *terminalSession, in frameInput) {
 	case frameCodecLZ4:
 		codec = "LZ4"
 	}
-	h.trackFrame(d, in.render, len(in.native.data()), in.rawBytes, codec)
+	h.trackFrame(d, fb.render, len(fb.native.data()), fb.raw, codec)
 	if d.announcing {
 		h.announce(d)
 	}

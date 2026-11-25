@@ -134,9 +134,8 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
 	start := func() {
-		b.hub.mu.Lock()
-		b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-		b.hub.mu.Unlock()
+		term0 := b.hub.live(id)
+		updateTerm(t, term0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 		d.recStart(t, "")
 		waitSVG(t, b.hub, id, "rec-send")
 	}
@@ -185,9 +184,7 @@ func TestEndpointWebSendCancelAndAuto(t *testing.T) {
 	}
 	appendPCM(frame)
 	d.barrier(t)
-	b.hub.mu.Lock()
-	stillListening := b.hub.terminals[id].recording.phase == captureOpen
-	b.hub.mu.Unlock()
+	stillListening := b.hub.live(id).state().recording.phase == captureOpen
 	if !stillListening {
 		t.Fatal("bridge stopped before the continuation")
 	}
@@ -251,9 +248,8 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(id)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.recStart(t, "")
 	waitSVG(t, b.hub, id, "rec-send")
 	var seq uint16
@@ -271,9 +267,7 @@ func TestEndpointSpeculatesWithoutClosingMicAndReusesLatestPause(t *testing.T) {
 		appendPCM(quiet)
 	}
 	expectValue(t, first, struct{}{})
-	b.hub.mu.Lock()
-	stillListening := b.hub.terminals[id].recording.phase == captureOpen
-	b.hub.mu.Unlock()
+	stillListening := b.hub.live(id).state().recording.phase == captureOpen
 	if !stillListening {
 		t.Fatal("speculation changed the mic state")
 	}
@@ -323,9 +317,8 @@ func TestEndpointHardwareNegotiation(t *testing.T) {
 				caps |= capBridgeEndpoint
 			}
 			d.helloHardware(t, "vocat-ep00", "", caps)
-			b.hub.mu.Lock()
-			b.hub.startRecording(b.hub.terminals["vocat-ep00"], "", time.Now(), true)
-			b.hub.mu.Unlock()
+			term0 := b.hub.live("vocat-ep00")
+			updateTerm(t, term0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 			f := d.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
@@ -344,10 +337,8 @@ func TestTargetedRecordingKeepsLegacyEndpoint(t *testing.T) {
 	const id = "vocat-ep01"
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "", capBridgeEndpoint|capDrag)
-	b.hub.mu.Lock()
-	dev := b.hub.terminals[id]
-	b.hub.startRecording(dev, "all", time.Now(), true)
-	b.hub.mu.Unlock()
+	dev := b.hub.live(id)
+	updateTerm(t, dev, func(term *terminalSession) { b.hub.startRecording(term, "all", time.Now(), true) })
 	start := d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "all")(f) && len(p) >= 2 && p[0] == recOpStart
@@ -366,19 +357,16 @@ func TestEndpointHoldsUnpublishedPCMUntilMicCloses(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(id)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.recStart(t, "")
 	waitSVG(t, b.hub, id, "rec-send")
 	d.barrier(t)
 	stream := newAudioStream()
 	stream.append([]byte{8, 0, 9, 0})
 	stream.finish(nil)
-	b.hub.mu.Lock()
-	dev := b.hub.terminals[id]
+	dev := b.hub.live(id)
 	b.hub.play(dev, stream)
-	b.hub.mu.Unlock()
 	d.recEnd(t, "", true)
 	cleared := false
 	d.until(t, func(f protocolFrame) bool {
@@ -399,16 +387,19 @@ func TestStopDiscardsQueuedEndpoint(t *testing.T) {
 	const id = "vocat-e024"
 	d := testConnectWS(t, base, "unit", false)
 	d.hello(t, id, "")
-	b.hub.mu.Lock()
-	dev := b.hub.terminals[id]
-	ctx, cancel := context.WithCancel(dev.client.ctx)
-	dev.busy = true
-	dev.queuedVoice = &endpointCapture{ctx: ctx, cancel: cancel}
-	for range 3 {
-		b.hub.tapStop(dev, time.Now())
-	}
-	busy, queued := dev.busy, dev.queuedVoice
-	b.hub.mu.Unlock()
+	dev := b.hub.live(id)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	updateTerm(t, dev, func(d *terminalSession) {
+		ctx, cancel = context.WithCancel(d.client.ctx)
+		d.busy = true
+		d.queuedVoice = &endpointCapture{ctx: ctx, cancel: cancel}
+		for range 3 {
+			b.hub.tapStop(d, time.Now())
+		}
+	})
+	st := dev.state()
+	busy, queued := st.busy, st.queuedVoice
 	if ctx.Err() == nil || busy || queued != nil {
 		t.Fatal("explicit Stop did not discard both the active and queued turns")
 	}
@@ -461,15 +452,14 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 	}
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capBridgeEndpoint|capDrag)
-	b.hub.mu.Lock()
-	b.hub.startTurn(b.hub.terminals[id], time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
-		b.hub.runTurn(ctx, b.hub.terminals[id], turn, "Draw a dragon", "voice", nil)
+	d0 := b.hub.live(id)
+	updateTerm(t, d0, func(d *terminalSession) {
+		b.hub.startTurn(d, time.Now(), false, "voice", func(ctx context.Context, turn uint64) {
+			b.hub.runTurn(ctx, d, turn, "Draw a dragon", "voice", nil)
+		})
 	})
-	b.hub.mu.Unlock()
 	expectValue(t, prompts, "Draw a dragon")
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart && p[1]&recTargetBridgeE != 0
@@ -491,11 +481,7 @@ func TestEndpointQueuesWhileOpenCodeOwnsTurn(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone)
 	})
-	b.hub.sig.wait(t, func() bool {
-		b.hub.mu.Lock()
-		defer b.hub.mu.Unlock()
-		return !b.hub.terminals[id].busy
-	})
+	b.hub.sig.wait(t, func() bool { return !b.hub.live(id).state().busy })
 	if count.Load() != 2 {
 		t.Fatal("prompt was replayed")
 	}
@@ -677,15 +663,10 @@ func TestRecordingSessionsGateAcksAndEnds(t *testing.T) {
 	const id = "vocat-e022"
 	d := testConnectWS(t, base, "unit", false)
 	d.helloHardware(t, id, "echo", capDrag)
-	phase := func() capturePhase {
-		b.hub.mu.Lock()
-		defer b.hub.mu.Unlock()
-		return b.hub.terminals[id].recording.phase
-	}
+	phase := func() capturePhase { return b.hub.live(id).state().recording.phase }
 	start := func() {
-		b.hub.mu.Lock()
-		b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-		b.hub.mu.Unlock()
+		term0 := b.hub.live(id)
+		updateTerm(t, term0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 		if got := phase(); got != captureRequested {
 			t.Fatalf("phase after request = %v, want captureRequested", got)
 		}

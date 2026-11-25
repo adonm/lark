@@ -97,10 +97,8 @@ func dcSent(stub *stubDCRPC) []stubDCSent {
 func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText string) {
 	t.Helper()
 	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
-	b.hub.mu.Lock()
-	d := b.hub.terminals[termID]
-	b.hub.startRecording(d, "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(termID)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
@@ -119,18 +117,18 @@ func tapUtterance(t *testing.T, hw *testWS, b *larkServer, termID, sttText strin
 // baseline must be taken before the trigger, not inside the wait.
 func turnMark(t *testing.T, b *larkServer, termID string) uint64 {
 	t.Helper()
-	b.hub.mu.Lock()
-	defer b.hub.mu.Unlock()
-	return b.hub.terminals[termID].finished
+	return b.hub.live(termID).state().finished
 }
 
 func waitTurnDone(t *testing.T, b *larkServer, termID string, before uint64) {
 	t.Helper()
 	b.hub.sig.wait(t, func() bool {
-		b.hub.mu.Lock()
-		defer b.hub.mu.Unlock()
-		d := b.hub.terminals[termID]
-		return d != nil && d.finished > before && !d.busy
+		d := b.hub.live(termID)
+		if d == nil {
+			return false
+		}
+		st := d.state()
+		return st.finished > before && !st.busy
 	})
 }
 
@@ -358,24 +356,21 @@ func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
 	addDCHuman(stub, greg.DCAccountID, 10, 200, "Mum", "mum@example.org")
 	hw := testConnectWS(t, base, "unit", false)
 	hw.helloHardware(t, "box3-card", "greg", capDrag|capBridgeEndpoint)
+	d := b.hub.live("box3-card")
 
 	b.sayOnCompanion(t.Context(), "greg", "Mum", 200, "Dinner is ready")
-	b.hub.mu.Lock()
-	d := b.hub.terminals["box3-card"]
+	st := d.state()
 	target := ""
-	if d.view != nil {
-		target = d.view.actions["reply"].value
+	if st.view != nil {
+		target = st.view.actions["reply"].value
 	}
-	b.hub.mu.Unlock()
 	if target != "mum" {
 		t.Fatalf("card reply target = %q, want mum", target)
 	}
 	ackNotice(t, hw)
 
 	b.setSTT(func(context.Context, []byte) (string, error) { return "See you at six", nil })
-	b.hub.mu.Lock()
-	b.hub.startRecording(d, target, time.Now(), true)
-	b.hub.mu.Unlock()
+	updateTerm(t, d, func(term *terminalSession) { b.hub.startRecording(term, target, time.Now(), true) })
 	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
@@ -416,11 +411,9 @@ loop:
 func spokeIntercom(t *testing.T, hw *testWS, b *larkServer, termID, target, sttText string) uint64 {
 	t.Helper()
 	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
-	b.hub.mu.Lock()
-	d := b.hub.terminals[termID]
-	mark := d.finished
-	b.hub.startRecording(d, target, time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(termID)
+	mark := d0.state().finished
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, target, time.Now(), true) })
 	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart

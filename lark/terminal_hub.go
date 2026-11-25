@@ -44,12 +44,14 @@ type terminalTelemetry struct {
 }
 
 type terminalSession struct {
+	actor          *terminalActor
+	mode           terminalMode
 	client         *terminalClient
 	id             string
 	key            string
 	kind           string // "hardware"
 	protoKind      uint8
-	companionID    string
+	companionID    atomicString
 	ip             string
 	port           int
 	lastSeen       int64
@@ -70,8 +72,7 @@ type terminalSession struct {
 	telemetry      terminalTelemetry
 	frame          *diagFrame
 	svg            svgScreen
-	scratchFB      []uint16
-	encoder        frameEncoder
+	frames         *frameWorker
 	renderGen      uint64
 	rendering      bool
 	renderNext     *renderRequest
@@ -87,7 +88,7 @@ type terminalSession struct {
 	story         *storySession
 	storyPage     int
 	statsAt       time.Time
-	rev           uint64
+	rev           atomicUint64
 	nativeRev     uint16
 	actionRev     uint16
 	hasActionRev  bool
@@ -104,6 +105,7 @@ type terminalSession struct {
 
 	recording     deviceCapture
 	recSession    uint16
+	recStop       uint64
 	queuedVoice   *endpointCapture
 	queuedNotices []queuedNotice
 	turn          uint64
@@ -111,7 +113,6 @@ type terminalSession struct {
 	trace         *turnTrace
 	cancel        context.CancelFunc
 	busy          bool
-	turnPhase     turnPhase
 	stopTaps      int
 	stopTapAt     time.Time
 	agentSetScene bool
@@ -139,10 +140,19 @@ func (b *larkServer) peerSnapshot(sender string) ([]companionTarget, error) {
 	return b.companionTargets(sender)
 }
 
+// broadcastPeers refreshes every open intercom list. Each session decides in
+// its own actor whether it is showing one.
 func (h *terminalHub) broadcastPeers() {
+	h.mu.Lock()
+	h.broadcastPeersLocked()
+	h.mu.Unlock()
+}
+
+func (h *terminalHub) broadcastPeersLocked() {
+	now := time.Now()
 	for _, d := range h.terminals {
-		if d.drawer == "intercom" || d.card.hasIntercom() || d.view.hasIntercom() {
-			h.render(d, time.Now(), false)
+		if h.activeLocked(d) {
+			d.post(terminalEvent{kind: evPeerRefresh, now: now})
 		}
 	}
 }
@@ -154,21 +164,13 @@ func (h *terminalHub) companionChanged(id string, companion companionState) {
 
 func (h *terminalHub) publishCompanion(id string, companion companionState, clearView bool) {
 	key := strings.ToLower(id)
-	now := time.Now()
-	for _, d := range h.terminalsFor(key) {
-		d.companion = companion
-		d.voice = companion.Voice
-		if !h.b.voices.allowed(d.voice) {
-			d.voice = h.b.voices.defaultFor(d.voiceTheme())
-		}
-		if clearView {
-			h.clearView(d)
-			d.agentSetScene = d.busy
-		}
-		if !companion.Listening && d.recording.active() && d.recording.listen {
-			h.stopListeningWindow(d, now)
-		}
-		h.render(d, now, true)
+	voice := companion.Voice
+	if !h.b.voices.allowed(voice) {
+		voice = h.b.voices.defaultFor(companionTheme(companion.Name))
+	}
+	for _, d := range h.liveFor(key) {
+		d.post(terminalEvent{kind: evCompanion, now: time.Now(),
+			companion: terminalCompanion{companion: companion, voice: voice, clearView: clearView}})
 	}
 	h.broadcastPeers()
 }
@@ -245,20 +247,28 @@ func (h *terminalHub) registerHardwareTerminal(termID, hintName, ip string, port
 	return t, nil
 }
 
+// sendSnapshotState runs in the session actor.
 func (h *terminalHub) sendSnapshotState(d *terminalSession) {
 	c := d.client
-	if d.companionID != "" {
-		if st, ok := h.companionStatuses[d.companionID]; ok {
-			c.enqueueProto(msgStatus, encodeStatus(st.state))
-		} else {
-			c.enqueueProto(msgStatus, encodeStatus(statusIdle))
+	if d.companionID.get() != "" {
+		st, ok := h.statusState(d.companionID.get())
+		if !ok {
+			st.state = statusIdle
 		}
-		if owner := h.voiceOwner(d.companionID); owner != nil {
-			c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(d.companionID, owner.id))
+		c.enqueueProto(msgStatus, encodeStatus(st.state))
+		if owner := h.ownerOf(d.companionID.get()); owner != nil {
+			c.enqueueProto(msgVoiceOwner, encodeVoiceOwner(d.companionID.get(), owner.id))
 		}
 	}
 	h.pushVolume(d, false, true)
 	h.pushPower(d, d.brightness(), true)
+}
+
+// ownerOf reads the current voice owner for a companion.
+func (h *terminalHub) ownerOf(companionID string) *terminalSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.voiceOwner(companionID)
 }
 
 func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.Time) bool {
@@ -299,9 +309,14 @@ func (h *terminalHub) handleHello(c *terminalClient, ev terminalHello, now time.
 	}
 
 	d := h.newHardwareSession(c, rec, ev, screen, board, dispFmt, frameCodecs, now)
+	d.startActor(h)
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.attachHardwareLocked(c, d, now)
+	old, ok := h.attachHardwareLocked(c, d, now)
+	h.mu.Unlock()
+	if old != nil {
+		old.closeWith("reconnect")
+	}
+	return ok
 }
 
 // helloDisplay resolves and validates the advertised display capabilities.
@@ -346,7 +361,7 @@ func (h *terminalHub) newHardwareSession(c *terminalClient, rec terminalRecord, 
 		key:            rec.ID,
 		kind:           "hardware",
 		protoKind:      ev.kind,
-		companionID:    rec.CompanionID,
+		companionID:    atomicStr(rec.CompanionID),
 		ip:             rec.IP,
 		port:           rec.Port,
 		lastSeen:       rec.LastSeen,
@@ -363,8 +378,8 @@ func (h *terminalHub) newHardwareSession(c *terminalClient, rec terminalRecord, 
 		resumeToken:    newResumeToken(),
 		hasResumeToken: true,
 	}
-	if d.companionID != "" {
-		d.companion = h.b.companionFor(d.companionID)
+	if d.companionID.get() != "" {
+		d.companion = h.b.companionFor(d.companionID.get())
 	} else {
 		d.companion = blankCompanion()
 	}
@@ -375,21 +390,21 @@ func (h *terminalHub) newHardwareSession(c *terminalClient, rec terminalRecord, 
 }
 
 // attachHardwareLocked installs a registered session, replacing a reconnect.
-// The caller holds the hub lock.
-func (h *terminalHub) attachHardwareLocked(c *terminalClient, d *terminalSession, now time.Time) bool {
+// The caller holds the hub lock; the replaced session is returned so its actor
+// can be stopped after the lock is released.
+func (h *terminalHub) attachHardwareLocked(c *terminalClient, d *terminalSession, now time.Time) (*terminalSession, bool) {
 	if h.closed || c.ctx.Err() != nil {
-		return false
+		return nil, false
 	}
-	if old := h.terminals[d.key]; old != nil {
+	var old *terminalSession
+	if old = h.terminals[d.key]; old != nil {
 		old.client.cancel()
-		old.recording.clear()
-		h.cancelTurn(old, "reconnect")
-		h.stopPlayback(old, true)
-		d.rev = old.rev
+		d.rev.store(old.rev.load())
 	}
-	h.terminals[d.key], c.terminal = d, d
-	if d.companionID != "" && h.voiceOwners[d.companionID] == "" {
-		h.voiceOwners[d.companionID] = d.id
+	h.terminals[d.key] = d
+	c.terminal.Store(d)
+	if d.companionID.get() != "" && h.voiceOwners[d.companionID.get()] == "" {
+		h.voiceOwners[d.companionID.get()] = d.id
 	}
 	var wFlags uint8
 	if h.bridgeEndpoint(d) {
@@ -401,12 +416,13 @@ func (h *terminalHub) attachHardwareLocked(c *terminalClient, d *terminalSession
 		udpPort = c.native.server.udpPort
 		ssrc = c.native.ssrc
 	}
-	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID))
-	h.render(d, now, true)
-	if d.companionID != "" && h.b.oc != nil {
-		go h.b.oc.prewarm(c.ctx, d.companion)
+	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID.get()))
+	companion := d.companion
+	d.post(terminalEvent{kind: evRender, now: now, render: terminalRender{full: true}})
+	if d.companionID.get() != "" && h.b.oc != nil {
+		go h.b.oc.prewarm(c.ctx, companion)
 	}
-	return true
+	return old, true
 }
 
 func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time.Time) bool {
@@ -415,13 +431,14 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 		return false
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed || c.ctx.Err() != nil {
+		h.mu.Unlock()
 		return false
 	}
 	h.pruneResumes(now)
 	entry, ok := h.resumes[r.resumeToken]
 	if !ok || !strings.EqualFold(entry.terminalID, strings.TrimSpace(r.terminalID)) {
+		h.mu.Unlock()
 		c.enqueueProto(msgReject, encodeReject(rejectUnknownTerminal, "resume token expired or unknown"))
 		return false
 	}
@@ -437,7 +454,7 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 		key:            entry.terminalID,
 		kind:           "hardware",
 		protoKind:      termKindHardware,
-		companionID:    compID,
+		companionID:    atomicStr(compID),
 		ip:             rec.IP,
 		port:           rec.Port,
 		lastSeen:       now.Unix(),
@@ -454,28 +471,28 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 		resumeToken:    newResumeToken(),
 		hasResumeToken: true,
 	}
-	if d.companionID != "" {
-		d.companion = h.b.companionFor(d.companionID)
+	if d.companionID.get() != "" {
+		d.companion = h.b.companionFor(d.companionID.get())
 	} else {
 		d.companion = blankCompanion()
 	}
 	d.voice = h.b.voices.resolve(d.companion.Voice, d.voiceTheme())
 	d.vol = h.b.volumePref(d.key)
 	d.telemetry.HasBattery = new(d.caps.Battery)
+	d.startActor(h)
 
-	if old := h.terminals[d.key]; old != nil {
+	old := h.terminals[d.key]
+	if old != nil {
 		old.client.cancel()
-		old.recording.clear()
-		h.cancelTurn(old, "reconnect")
-		h.stopPlayback(old, true)
-		d.rev = old.rev
+		d.rev.store(old.rev.load())
 	}
-	h.terminals[d.key], c.terminal = d, d
-	if d.companionID != "" {
+	h.terminals[d.key] = d
+	c.terminal.Store(d)
+	if d.companionID.get() != "" {
 		if entry.hadVoiceOwner {
-			h.voiceOwners[d.companionID] = d.id
-		} else if h.voiceOwners[d.companionID] == "" {
-			h.voiceOwners[d.companionID] = d.id
+			h.voiceOwners[d.companionID.get()] = d.id
+		} else if h.voiceOwners[d.companionID.get()] == "" {
+			h.voiceOwners[d.companionID.get()] = d.id
 		}
 	}
 	var wFlags uint8
@@ -488,10 +505,15 @@ func (h *terminalHub) handleResume(c *terminalClient, r terminalResume, now time
 		udpPort = c.native.server.udpPort
 		ssrc = c.native.ssrc
 	}
-	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID))
-	h.render(d, now, true)
-	if d.companionID != "" && h.b.oc != nil {
-		go h.b.oc.prewarm(c.ctx, d.companion)
+	c.enqueueProto(msgWelcome, encodeWelcome(wFlags, udpPort, ssrc, protoMaxPayload, resumeWindowMS, d.resumeToken, d.id, d.companionID.get()))
+	companion := d.companion
+	d.post(terminalEvent{kind: evRender, now: now, render: terminalRender{full: true}})
+	h.mu.Unlock()
+	if old != nil {
+		old.closeWith("reconnect")
+	}
+	if d.companionID.get() != "" && h.b.oc != nil {
+		go h.b.oc.prewarm(c.ctx, companion)
 	}
 	return true
 }
@@ -503,16 +525,23 @@ func (h *terminalHub) speakingCompanion() string {
 		return ""
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	found := ""
+	terms := make([]*terminalSession, 0, len(h.terminals))
 	for _, d := range h.terminals {
-		if d.companionID == "" || !h.active(d) || !d.busy && !d.recording.active() {
+		if h.activeLocked(d) {
+			terms = append(terms, d)
+		}
+	}
+	h.mu.Unlock()
+	found := ""
+	for _, d := range terms {
+		st := d.state()
+		if d.companionID.get() == "" || !st.busy && !st.recording.active() {
 			continue
 		}
-		if found != "" && !strings.EqualFold(found, d.companionID) {
+		if found != "" && !strings.EqualFold(found, d.companionID.get()) {
 			return ""
 		}
-		found = d.companionID
+		found = d.companionID.get()
 	}
 	return found
 }
@@ -610,49 +639,68 @@ type renderRequest struct {
 	trace        *turnTrace
 }
 
+// openStory starts opening a story from outside the actor. Twee parsing, saved
+// progress, and the background load run in the caller goroutine; the session
+// commit runs in its actor.
 func (h *terminalHub) openStory(d *terminalSession, st savedStory, narrate bool) {
-	cs, err := parseTwee(st.Twee)
-	if err != nil {
-		return
-	}
-	sess := &storySession{
-		id:         st.ID,
-		title:      cs.Title,
-		compiled:   cs,
-		passageIdx: -1,
-		flags:      cs.flagsSlice(nil),
-	}
-	page := 0
-	entered := false
-	if h.b != nil && h.b.db != nil && d.companionID != "" {
-		if prog, ok, perr := h.b.getStoryProgress(d.client.ctx, d.companionID, st.ID); perr == nil && ok {
-			if idx, exists := cs.ByName[prog.Passage]; exists {
-				sess.flags = cs.flagsSlice(prog.Flags)
-				sess.enterPassage(idx, false)
-				page = prog.Page
-				entered = true
+	d.post(terminalEvent{kind: evStoryOpen, now: time.Now(), story: terminalStory{st: st, narrate: narrate}})
+}
+
+func (h *terminalHub) openStoryEvent(d *terminalSession, st savedStory, narrate bool) {
+	go func() {
+		cs, err := parseTwee(st.Twee)
+		if err != nil {
+			return
+		}
+		sess := &storySession{
+			id:         st.ID,
+			title:      cs.Title,
+			compiled:   cs,
+			passageIdx: -1,
+			flags:      cs.flagsSlice(nil),
+		}
+		page := 0
+		entered := false
+		if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
+			if prog, ok, perr := h.b.getStoryProgress(d.client.ctx, d.companionID.get(), st.ID); perr == nil && ok {
+				if idx, exists := cs.ByName[prog.Passage]; exists {
+					sess.flags = cs.flagsSlice(prog.Flags)
+					sess.enterPassage(idx, false)
+					page = prog.Page
+					entered = true
+				}
 			}
 		}
-	}
-	if !entered {
-		sess.enterPassage(cs.Start, true)
-	}
-	if sess.bg != "" && h.b != nil {
-		if img := h.b.loadStoryBG(st.ID, sess.currentPassageName(), sess.bg); img != nil {
-			sess.bgImg = img
-		} else {
-			h.b.ensureStoryBGAsync(d, st.ID, sess.currentPassageName(), sess.bg)
+		if !entered {
+			sess.enterPassage(cs.Start, true)
 		}
-	}
-	d.drawer = drawerStoryReader
-	d.story = sess
-	d.storyPage = page
-	now := time.Now()
-	h.stopPlayback(d, true)
-	if narrate && sess.text != "" {
-		h.speakLocal(d, sess.text)
-	}
-	h.render(d, now, false)
+		if sess.bg != "" && h.b != nil {
+			if img := h.b.loadStoryBG(st.ID, sess.currentPassageName(), sess.bg); img != nil {
+				sess.bgImg = img
+			} else {
+				h.b.ensureStoryBGAsync(d, st.ID, sess.currentPassageName(), sess.bg)
+			}
+		}
+		d.update(func(d *terminalSession) {
+			if !h.active(d) {
+				return
+			}
+			d.drawer = drawerStoryReader
+			d.story = sess
+			d.storyPage = page
+			now := time.Now()
+			h.stopPlayback(d, true)
+			if narrate && sess.text != "" {
+				h.speakLocal(d, sess.text)
+			}
+			h.render(d, now, false)
+		})
+	}()
+}
+
+func (h *terminalHub) postStoryBG(d *terminalSession, storyID, passage string, img *image.RGBA) {
+	d.post(terminalEvent{kind: evStoryBG, now: time.Now(),
+		story: terminalStory{storyID: storyID, passage: passage, bg: img}})
 }
 
 func (h *terminalHub) advanceStoryPassage(d *terminalSession, targetIdx int, narrate bool) {
@@ -669,9 +717,9 @@ func (h *terminalHub) advanceStoryPassage(d *terminalSession, targetIdx int, nar
 			h.b.ensureStoryBGAsync(d, sess.id, sess.currentPassageName(), sess.bg)
 		}
 	}
-	if h.b != nil && h.b.db != nil && d.companionID != "" {
+	if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
 		prog := storyProgress{
-			CompanionID: d.companionID,
+			CompanionID: d.companionID.get(),
 			StoryID:     sess.id,
 			Passage:     sess.currentPassageName(),
 			Page:        0,
@@ -698,6 +746,7 @@ func (h *terminalHub) setSleeping(d *terminalSession, asleep bool) {
 		d.asleep = asleep
 		h.pushPower(d, d.brightness(), true)
 	}
+	d.syncMode()
 }
 
 func (d *terminalSession) brightness() int {
@@ -720,47 +769,30 @@ func (h *terminalHub) animate(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			now := time.Now()
 			h.mu.Lock()
 			if h.closed {
 				h.mu.Unlock()
 				return
 			}
-			now := time.Now()
 			checkGrade := h.atmosphere && !now.Before(nextGrade)
 			if checkGrade {
 				nextGrade = now.Truncate(30 * time.Minute).Add(30 * time.Minute)
 			}
+			targets := make([]*terminalSession, 0, len(h.terminals))
 			for _, d := range h.terminals {
-				if !h.active(d) {
-					continue
-				}
-				turnActive := d.recording.active() || d.busy || d.ttsStarted || d.awaitAck
-				if checkGrade && !turnActive && !(d.asleep && d.caps.PanelSleep) &&
-					d.svg.grade != h.frameGrade(d, now) {
-					h.render(d, now, false)
-				}
-				switch {
-				case d.recording.active() && !d.recording.listen && d.recording.stopTimer == nil && now.Sub(d.recording.started) > captureFailsafe:
-					h.stopRecordingAtLimit(d, now)
-				case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(ttsAckFallback)) &&
-					(!losslessTTSAcks(d.firmware) || d.ackClient != d.client):
-					h.playbackDone(d, now, false)
-				case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
-					h.setSleeping(d, true)
-					h.render(d, now, false)
-				case d.asleep && d.caps.PanelSleep:
-					// The battery board's panel is off; skip idle updates.
-				case d.drawer == "stats" && !d.asleep && !turnActive && now.Sub(d.statsAt) >= diagInterval:
-					h.render(d, now, false)
-				case d.stopTapsExpired(now):
-					h.render(d, now, false)
+				if h.activeLocked(d) {
+					targets = append(targets, d)
 				}
 			}
 			if now.Sub(sincePeers) > peerRefreshEvery {
-				h.broadcastPeers()
+				h.broadcastPeersLocked()
 				sincePeers = now
 			}
 			h.mu.Unlock()
+			for _, d := range targets {
+				d.post(terminalEvent{kind: evTick, now: now, tick: terminalTick{checkGrade}})
+			}
 		}
 	}
 }
@@ -792,19 +824,18 @@ func (h *terminalHub) companionTerminals(companionID string) []object {
 	if h == nil {
 		return nil
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	var out []object
-	for _, d := range h.terminalsFor(companionID) {
+	for _, d := range h.liveFor(companionID) {
+		st := d.state()
 		entry := object{
 			"id":     d.id,
 			"name":   d.id,
 			"online": true,
-			"volume": d.vol,
+			"volume": st.vol,
 		}
-		if d.caps.Battery && d.pct >= 0 {
-			entry["battery_pct"] = d.pct
-			entry["charging"] = d.charging
+		if d.caps.Battery && st.pct >= 0 {
+			entry["battery_pct"] = st.pct
+			entry["charging"] = st.charging
 		}
 		out = append(out, entry)
 	}
@@ -816,10 +847,8 @@ func (b *larkServer) setCompanionTerminalVolume(ctx context.Context, companionID
 		return problem(503, "Terminal hub unavailable")
 	}
 	h := b.hub
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	d := h.terminals[strings.ToLower(terminalID)]
-	if d == nil || !h.active(d) || d.companionID != companionID {
+	d := h.live(terminalID)
+	if d == nil || d.companionID.get() != companionID {
 		return problem(404, "Terminal not attached or offline")
 	}
 	return h.setVolume(ctx, d, level, "")
@@ -831,50 +860,49 @@ func (h *terminalHub) saveVoice(id, voice string) error {
 	if err := h.b.voices.save(id, voice); err != nil {
 		return err
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	now := time.Now()
-	for _, d := range h.terminalsFor(id) {
-		d.voice = voice
-		d.companion.Voice = voice
-		if d.drawer != "" {
-			h.render(d, now, false)
-		}
+	for _, d := range h.liveFor(id) {
+		d.post(terminalEvent{kind: evVoice, now: now, voice: voice})
 	}
 	return nil
 }
 
 // Takes and returns with h.mu held. Serialize writes without blocking the hub.
+// setVolume resolves the requested level and persists it. The preference write
+// runs here, outside the actor; the session actor applies the value and renders.
 func (h *terminalHub) setVolume(ctx context.Context, d *terminalSession, level int, action string) error {
-	h.mu.Unlock()
 	h.settingsMu.Lock()
 	defer h.settingsMu.Unlock()
-	h.mu.Lock()
+	st := d.state()
 	if !h.active(d) {
 		return problem(409, "Terminal is not connected")
 	}
 	switch action {
 	case "vol-minus":
-		level = max(0, d.vol-10)
+		level = max(0, st.vol-10)
 	case "vol-plus":
-		level = min(100, d.vol+10)
+		level = min(100, st.vol+10)
 	}
 	if level < 0 {
-		level = d.vol
+		level = st.vol
 	}
-	h.mu.Unlock()
-	err := h.b.saveVolumePref(ctx, d.key, level)
-	h.mu.Lock()
-	if err != nil {
+	if err := h.b.saveVolumePref(ctx, d.key, level); err != nil {
 		return err
 	}
-	if !h.active(d) {
+	applied := false
+	d.update(func(d *terminalSession) {
+		if !h.active(d) {
+			return
+		}
+		applied = true
+		d.vol = level
+		h.pushVolume(d, true, true)
+		now := time.Now()
+		d.meter = now.Add(1800 * time.Millisecond)
+		h.render(d, now, false)
+	})
+	if !applied {
 		return problem(409, "Device disconnected while saving volume")
 	}
-	d.vol = level
-	h.pushVolume(d, true, true)
-	now := time.Now()
-	d.meter = now.Add(1800 * time.Millisecond)
-	h.render(d, now, false)
 	return nil
 }

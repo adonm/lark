@@ -649,9 +649,7 @@ func (b *larkServer) applyPortrait(ctx context.Context, id string, spec portrait
 	updated := b.companionFor(id)
 	if b.hub != nil {
 		b.hub.invalidateAssets(current.PortraitID)
-		b.hub.mu.Lock()
 		b.hub.companionChanged(id, updated)
-		b.hub.mu.Unlock()
 	}
 	b.companionMu.Unlock()
 	if current.PortraitID != "" {

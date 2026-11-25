@@ -747,12 +747,6 @@ func (b *larkServer) ensureStoryBGAsync(d *terminalSession, storyID, passageName
 		if b.hub == nil || d == nil {
 			return
 		}
-		b.hub.mu.Lock()
-		if b.hub.active(d) && d.drawer == drawerStoryReader && d.story != nil &&
-			d.story.id == storyID && d.story.currentPassageName() == passageName {
-			d.story.bgImg = norm
-			b.hub.render(d, time.Now(), false)
-		}
-		b.hub.mu.Unlock()
+		b.hub.postStoryBG(d, storyID, passageName, norm)
 	}()
 }

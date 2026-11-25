@@ -327,36 +327,35 @@ func (h *terminalHub) terminalStatus(entry object, id string, full bool) {
 	entry["mode"] = "offline"
 	entry["battery_pct"], entry["volume"], entry["scene_rev"] = nil, nil, uint64(0)
 	entry["sleeping"] = false
-	h.mu.Lock()
-	if d := h.terminals[key]; d != nil && h.active(d) {
-		entry["online"], entry["mode"] = true, d.pose.mood
-		entry["volume"], entry["scene_rev"], entry["firmware"] = d.vol, d.rev, d.firmware
-		entry["caps"] = d.caps
-		entry["sleeping"] = d.asleep
-		if d.story != nil {
-			entry["story"] = d.story.title
-		}
-		if d.board != "" {
-			entry["board"], entry["shape"], entry["width"], entry["height"] = d.board, d.screen.shape, d.screen.width, d.screen.height
-		}
-		if d.caps.Battery && d.pct >= 0 {
-			entry["battery_pct"] = d.pct
-		}
-		if full {
-			entry["charging"], entry["has_battery"] = d.telemetry.Charge, d.telemetry.HasBattery
-			entry["wifi_rssi"], entry["cpu_pct"] = d.telemetry.WiFi, d.telemetry.CPU
-			title := d.scene.title
-			if title == "" {
-				title = "Companion"
-			}
-			entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev, "hit_ids": screenHitIDs(d.svg)}
-			entry["width"], entry["height"] = d.screen.width, d.screen.height
-		}
-		h.mu.Unlock()
+	d := h.live(key)
+	if d == nil {
+		entry["volume"] = h.b.volumePref(id)
 		return
 	}
-	h.mu.Unlock()
-	entry["volume"] = h.b.volumePref(id)
+	st := d.state()
+	entry["online"], entry["mode"] = true, st.pose.mood
+	entry["volume"], entry["scene_rev"], entry["firmware"] = st.vol, d.rev.load(), d.firmware
+	entry["caps"] = d.caps
+	entry["sleeping"] = st.asleep
+	if st.story != nil {
+		entry["story"] = st.story.title
+	}
+	if d.board != "" {
+		entry["board"], entry["shape"], entry["width"], entry["height"] = d.board, d.screen.shape, d.screen.width, d.screen.height
+	}
+	if d.caps.Battery && st.pct >= 0 {
+		entry["battery_pct"] = st.pct
+	}
+	if full {
+		entry["charging"], entry["has_battery"] = st.telemetry.Charge, st.telemetry.HasBattery
+		entry["wifi_rssi"], entry["cpu_pct"] = st.telemetry.WiFi, st.telemetry.CPU
+		title := st.scene.title
+		if title == "" {
+			title = "Companion"
+		}
+		entry["screen"] = object{"title": title, "shape": d.screen.shape, "rev": d.rev.load(), "hit_ids": screenHitIDs(st.svg)}
+		entry["width"], entry["height"] = d.screen.width, d.screen.height
+	}
 }
 
 func mcpUint(args object, key string) (*uint64, error) {
@@ -579,6 +578,12 @@ func deliveryReceipt(action, id, reason string) object {
 }
 
 func (h *terminalHub) signalTarget(companionID string) (*terminalSession, string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.signalTargetLocked(companionID)
+}
+
+func (h *terminalHub) signalTargetLocked(companionID string) (*terminalSession, string) {
 	d := h.voiceOwner(companionID)
 	if d == nil {
 		return nil, "not_connected"
@@ -636,8 +641,6 @@ func (b *larkServer) emitSignal(id, action, kind string, pcm []byte) ([]object, 
 	}
 	receipts := make([]object, 0, len(ids))
 	h := b.hub
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	for _, id := range ids {
 		d, reason := h.signalTarget(id)
 		if d != nil && !h.playSignal(d, kind, pcm) {
@@ -696,9 +699,7 @@ func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []ob
 		if !slices.Contains(out.sent, p.ID) {
 			reason = "not_connected"
 			if h := b.hub; h != nil {
-				h.mu.Lock()
 				_, reason = h.signalTarget(p.ID)
-				h.mu.Unlock()
 				if reason == "" {
 					reason = "queue_unavailable"
 				}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"time"
 )
 
@@ -15,9 +16,13 @@ const (
 	captureStoppingOpen
 )
 
-// Owned by the hub lock. Stopping still accepts PCM after the board has
-// acknowledged rec_start.
+// Owned by the session actor. Stopping still accepts PCM after the board has
+// acknowledged rec_start. The raw PCM buffer is the one exception: UDP audio
+// arrives on the read loop and appends into the preallocated buffer under
+// pcmMu so the fast path stays allocation-free.
 type deviceCapture struct {
+	pcmMu       *sync.Mutex
+	accepting   atomicBool
 	phase       capturePhase
 	session     uint16 // rec_start session this capture was requested with
 	started     time.Time
@@ -38,12 +43,33 @@ func (c *deviceCapture) open() bool {
 	return c.phase == captureOpen || c.phase == captureStoppingOpen
 }
 
+// init allocates the producer-side primitives before the actor starts, so the
+// UDP read loop never races their first assignment.
+func (c *deviceCapture) init() {
+	if c.pcmMu == nil {
+		c.pcmMu = new(sync.Mutex)
+	}
+	c.accepting.store(false)
+}
+
+func (c *deviceCapture) lock() *sync.Mutex {
+	if c.pcmMu == nil {
+		c.pcmMu = new(sync.Mutex)
+	}
+	return c.pcmMu
+}
+
 func (c *deviceCapture) start(now time.Time, target string, request bool) {
+	mu := c.lock()
 	c.phase = captureOpen
 	if request {
 		c.phase = captureRequested
 	}
-	c.started, c.target, c.pcm, c.ignoreStart = now, target, nil, false
+	mu.Lock()
+	c.pcm = nil
+	mu.Unlock()
+	c.accepting.store(true)
+	c.started, c.target, c.ignoreStart = now, target, false
 	c.nameGate = false
 	c.session = 0
 }
@@ -98,7 +124,13 @@ func (c *deviceCapture) clear() {
 		c.stopTimer.Stop()
 		c.stopTimer = nil
 	}
-	c.phase, c.started, c.target, c.pcm = captureIdle, time.Time{}, "", nil
+	c.accepting.store(false)
+	if mu := c.pcmMu; mu != nil {
+		mu.Lock()
+		c.pcm = nil
+		mu.Unlock()
+	}
+	c.phase, c.started, c.target = captureIdle, time.Time{}, ""
 	c.listen, c.listenUntil, c.listenSpan, c.debug, c.nameGate = false, time.Time{}, 0, false, false
 	c.session = 0
 }

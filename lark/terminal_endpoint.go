@@ -168,25 +168,35 @@ func (h *terminalHub) startEndpoint(d *terminalSession) {
 		limitBytes:  utteranceBytes(limit),
 		started:     time.Now(),
 		reply:       reply,
-		companionID: d.companionID,
+		companionID: d.companionID.get(),
 	}
 	d.recording.endpoint = c
 	d.client.activeCapture.Store(c)
 	c.deadline = time.AfterFunc(limit, func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if h.active(d) && d.recording.endpoint == c {
-			if c.listen {
-				h.b.diag.listen.closeCap.Add(1)
-			}
-			if c.debug {
-				h.finishEndpoint(d, time.Now())
-				return
-			}
-			h.recordingControl(d, time.Now(), c.listen)
-		}
+		d.post(terminalEvent{kind: evEndpointDeadline, now: time.Now(), endpoint: terminalEndpoint{c: c}})
 	})
 	go h.captureEndpoint(d, c)
+}
+
+func (h *terminalHub) endpointDeadline(d *terminalSession, c *endpointCapture, now time.Time) {
+	if !h.active(d) || d.recording.endpoint != c {
+		return
+	}
+	if c.listen {
+		h.b.diag.listen.closeCap.Add(1)
+	}
+	if c.debug {
+		h.finishEndpoint(d, now)
+		return
+	}
+	h.recordingControl(d, now, c.listen)
+}
+
+func (h *terminalHub) endpointStop(d *terminalSession, c *endpointCapture, discards bool, now time.Time) {
+	// Don't stop on an old decision while more speech is queued.
+	if h.active(d) && d.recording.endpoint == c && d.recording.phase == captureOpen && len(c.packets) == 0 {
+		h.recordingControl(d, now, discards)
+	}
 }
 
 func (h *terminalHub) captureEndpoint(d *terminalSession, c *endpointCapture) {
@@ -246,7 +256,7 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 			return
 		}
 		if len(result.pcm) == 0 {
-			h.finishTurn(d, id, nil, nil)
+			h.finishTurnAsync(d, id, nil, nil)
 			return
 		}
 		trace := traceFrom(ctx)
@@ -267,18 +277,18 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 			words, _, _ := inspectTranscript(result.text)
 			h.b.diag.listen.speech.Add(1)
 			h.b.diag.addSegment(diagSegment{
-				TS: time.Now().UnixMilli(), Terminal: d.id, Companion: d.companionID,
+				TS: time.Now().UnixMilli(), Terminal: d.id, Companion: d.companionID.get(),
 				DurationMS: result.audio.Milliseconds(), SpeechMS: result.speech.Milliseconds(),
 				TextLen: len(result.text), Words: words,
 			})
 		}
 		if result.nameGate && h.nameRequired(d, result.speechAt) {
-			rest, named := splitName(result.text, d.companion.Name)
+			rest, named := splitName(result.text, h.b.companionFor(d.companionID.get()).Name)
 			if !named {
 				// Background chatter after the follow-up grace period is
 				// ignored without a spoken reply.
 				h.b.diag.listen.nameRequired.Add(1)
-				h.finishTurn(d, id, nil, nil)
+				h.finishTurnAsync(d, id, nil, nil)
 				return
 			}
 			result.text = rest
@@ -295,7 +305,7 @@ func (h *terminalHub) maybeStartVoice(d *terminalSession, now time.Time) bool {
 				h.replyNotCaught(ctx, d, id)
 				return
 			}
-			h.finishTurn(d, id, nil, nil)
+			h.finishTurnAsync(d, id, nil, nil)
 			return
 		}
 		h.b.diag.listen.committed.Add(1)

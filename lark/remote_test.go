@@ -558,13 +558,11 @@ func TestRemoteVolumeStoryOpenAndRevoke(t *testing.T) {
 	if res["ok"] != true {
 		t.Fatalf("story open failed: %+v", res)
 	}
-	b.hub.mu.Lock()
-	d := b.hub.terminals["vocat-r001"]
-	opened := d != nil && d.drawer == drawerStoryReader
-	b.hub.mu.Unlock()
-	if !opened {
-		t.Fatal("story did not open on the attached terminal")
+	d := b.hub.live("vocat-r001")
+	if d == nil {
+		t.Fatal("terminal missing")
 	}
+	waitTerm(t, d, func(st terminalState) bool { return st.drawer == drawerStoryReader })
 
 	remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/revoke", object{}, 200)
 	if len(b.remote.tokens) != 0 {

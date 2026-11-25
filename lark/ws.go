@@ -42,7 +42,7 @@ type terminalClient struct {
 	native        *nativeClient
 	ctx           context.Context
 	cancel        context.CancelFunc
-	terminal      *terminalSession
+	terminal      atomic.Pointer[terminalSession]
 	activeCapture atomic.Pointer[endpointCapture]
 	pingMu        sync.Mutex
 	pingSentAt    time.Time
@@ -133,6 +133,18 @@ func (h *terminalHub) shutdown() {
 	}
 	h.mu.Unlock()
 	h.conns.Wait()
+	// Clients normally detach themselves and stop their actor; sweep anything
+	// that was attached without a live connection so no goroutine leaks.
+	h.mu.Lock()
+	var rest []*terminalSession
+	for _, d := range h.terminals {
+		rest = append(rest, d)
+	}
+	clear(h.terminals)
+	h.mu.Unlock()
+	for _, d := range rest {
+		d.close()
+	}
 }
 
 func (c *terminalClient) remoteAddr() net.Addr {
@@ -231,11 +243,66 @@ func (h *terminalHub) pushPower(d *terminalSession, brightness int, mirror bool)
 }
 
 func (h *terminalHub) pushVolume(d *terminalSession, persist, mirror bool) {
-	h.pushProto(d, msgVolume, encodeVolumeMsg(d.vol, persist, d.id, d.companionID), mirror)
+	h.pushProto(d, msgVolume, encodeVolumeMsg(d.vol, persist, d.id, d.companionID.get()), mirror)
 }
 
-func (h *terminalHub) active(d *terminalSession) bool {
+// activeLocked checks attachment. The caller holds the hub lock.
+func (h *terminalHub) activeLocked(d *terminalSession) bool {
 	return d != nil && !h.closed && h.terminals[d.key] == d && d.client.ctx.Err() == nil
+}
+
+// active checks attachment from outside the registry lock (session actors and
+// request handlers).
+func (h *terminalHub) active(d *terminalSession) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.activeLocked(d)
+}
+
+// live returns an attached session by ID, or nil.
+func (h *terminalHub) live(id string) *terminalSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	d := h.terminals[strings.ToLower(id)]
+	if !h.activeLocked(d) {
+		return nil
+	}
+	return d
+}
+
+// liveAll snapshots every attached session.
+func (h *terminalHub) liveAll() []*terminalSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]*terminalSession, 0, len(h.terminals))
+	for _, d := range h.terminals {
+		if h.activeLocked(d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// liveFor snapshots the attached sessions of one companion.
+func (h *terminalHub) liveFor(companionID string) []*terminalSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.terminalsFor(companionID)
+}
+
+// voiceOwnerIs reports whether d currently owns its companion's voice.
+func (h *terminalHub) voiceOwnerIs(d *terminalSession) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.activeLocked(d) && d.companionID.get() != "" && h.voiceOwner(d.companionID.get()) == d
+}
+
+// statusState reads one companion's published status under the hub lock.
+func (h *terminalHub) statusState(companionID string) (companionStatusState, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st, ok := h.companionStatuses[companionID]
+	return st, ok
 }
 
 func (h *terminalHub) terminalsFor(companionID string) []*terminalSession {
@@ -245,7 +312,7 @@ func (h *terminalHub) terminalsFor(companionID string) []*terminalSession {
 	}
 	var out []*terminalSession
 	for _, t := range h.terminals {
-		if h.active(t) && t.companionID == cid {
+		if h.activeLocked(t) && t.companionID.get() == cid {
 			out = append(out, t)
 		}
 	}
@@ -258,7 +325,7 @@ func (h *terminalHub) voiceOwner(companionID string) *terminalSession {
 		return nil
 	}
 	if ownerID := h.voiceOwners[cid]; ownerID != "" {
-		if t := h.terminals[ownerID]; h.active(t) && t.companionID == cid {
+		if t := h.terminals[ownerID]; h.activeLocked(t) && t.companionID.get() == cid {
 			return t
 		}
 	}
@@ -288,17 +355,22 @@ func (h *terminalHub) broadcastVoiceOwner(companionID, terminalID string) {
 }
 
 func (h *terminalHub) takeVoiceOwnership(d *terminalSession) {
-	if d == nil || d.companionID == "" {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if d == nil || d.companionID.get() == "" || h.voiceOwners[d.companionID.get()] == d.id {
 		return
 	}
-	if h.voiceOwners[d.companionID] == d.id {
-		return
-	}
-	h.voiceOwners[d.companionID] = d.id
-	h.broadcastVoiceOwner(d.companionID, d.id)
+	h.voiceOwners[d.companionID.get()] = d.id
+	h.broadcastVoiceOwner(d.companionID.get(), d.id)
 }
 
 func (h *terminalHub) fallbackVoiceOwnership(companionID, excludeID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fallbackVoiceOwnershipLocked(companionID, excludeID)
+}
+
+func (h *terminalHub) fallbackVoiceOwnershipLocked(companionID, excludeID string) {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return
@@ -321,6 +393,12 @@ func (h *terminalHub) fallbackVoiceOwnership(companionID, excludeID string) {
 }
 
 func (h *terminalHub) setCompanionStatus(companionID string, state uint8) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.setCompanionStatusLocked(companionID, state)
+}
+
+func (h *terminalHub) setCompanionStatusLocked(companionID string, state uint8) {
 	cid := strings.ToLower(companionID)
 	if cid == "" {
 		return
@@ -333,11 +411,11 @@ func (h *terminalHub) setCompanionStatus(companionID string, state uint8) {
 }
 
 func (h *terminalHub) clearDoneOrErrorStatus(d *terminalSession) {
-	if d == nil || d.companionID == "" {
+	if d == nil || d.companionID.get() == "" {
 		return
 	}
-	if st, ok := h.companionStatuses[d.companionID]; ok && (st.state == statusDone || st.state == statusError) {
-		h.setCompanionStatus(d.companionID, statusIdle)
+	if st, ok := h.statusState(d.companionID.get()); ok && (st.state == statusDone || st.state == statusError) {
+		h.setCompanionStatus(d.companionID.get(), statusIdle)
 	}
 }
 
@@ -357,12 +435,12 @@ func (h *terminalHub) pruneResumes(now time.Time) {
 
 func (h *terminalHub) teardownTerminal(d *terminalSession) {
 	now := time.Now()
-	wasOwner := d.companionID != "" && h.voiceOwners[d.companionID] == d.id
+	wasOwner := d.companionID.get() != "" && h.voiceOwners[d.companionID.get()] == d.id
 	if d.hasResumeToken {
 		h.pruneResumes(now)
 		h.resumes[d.resumeToken] = &resumeEntry{
 			terminalID:     d.id,
-			companionID:    d.companionID,
+			companionID:    d.companionID.get(),
 			kind:           d.protoKind,
 			board:          d.board,
 			firmware:       d.firmware,
@@ -375,72 +453,78 @@ func (h *terminalHub) teardownTerminal(d *terminalSession) {
 		}
 	}
 	delete(h.terminals, d.key)
-	d.recording.clear()
-	h.cancelTurn(d, "disconnect")
-	h.stopPlayback(d, false)
 	if wasOwner {
-		h.fallbackVoiceOwnership(d.companionID, d.id)
+		h.fallbackVoiceOwnershipLocked(d.companionID.get(), d.id)
 	}
-	h.broadcastPeers()
+	h.broadcastPeersLocked()
 	h.sig.notify()
 }
 
 func (h *terminalHub) detach(c *terminalClient) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	delete(h.clients, c)
-	if d := c.terminal; d != nil && h.terminals[d.key] == d {
+	var d *terminalSession
+	if d = c.terminal.Load(); d != nil && h.terminals[d.key] == d {
 		h.teardownTerminal(d)
+	} else {
+		d = nil
+	}
+	h.mu.Unlock()
+	if d != nil {
+		d.close()
 	}
 }
 
 func (h *terminalHub) disconnectTerminal(id string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if d := h.terminals[strings.ToLower(id)]; d != nil {
+	d := h.terminals[strings.ToLower(id)]
+	if d != nil {
 		d.client.cancel()
 		h.teardownTerminal(d)
+	}
+	h.mu.Unlock()
+	if d != nil {
+		d.close()
 	}
 }
 
 func (h *terminalHub) attachTerminal(termID, compID string) {
 	termID = strings.ToLower(termID)
 	compID = strings.ToLower(compID)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	d := h.terminals[termID]
-	if d == nil || !h.active(d) {
-		h.broadcastPeers()
-		return
-	}
-	if d.companionID == compID {
-		return
-	}
-	oldComp := d.companionID
-	wasOwner := oldComp != "" && h.voiceOwners[oldComp] == d.id
-	d.recording.clear()
-	h.cancelTurn(d, "reassigned")
-	h.stopPlayback(d, true)
-	if wasOwner {
-		h.fallbackVoiceOwnership(oldComp, d.id)
-	}
-	d.companionID = compID
+	var companion companionState
+	var voice string
 	if compID != "" {
-		d.companion = h.b.companionFor(compID)
-		d.voice = h.b.voices.resolve(d.companion.Voice, companionTheme(d.companion.Name))
-		if h.voiceOwners[compID] == "" {
-			h.voiceOwners[compID] = d.id
-		}
-		if h.b.oc != nil {
-			go h.b.oc.prewarm(d.client.ctx, d.companion)
-		}
+		companion = h.b.companionFor(compID)
+		voice = h.b.voices.resolve(companion.Voice, companionTheme(companion.Name))
 	} else {
-		d.companion = blankCompanion()
-		d.voice = h.b.voices.defaultFor("")
+		companion = blankCompanion()
+		voice = h.b.voices.defaultFor("")
 	}
-	h.clearView(d)
-	now := time.Now()
-	h.render(d, now, true)
-	h.sendSnapshotState(d)
-	h.broadcastPeers()
+	h.mu.Lock()
+	d := h.terminals[termID]
+	if d == nil || !h.activeLocked(d) {
+		h.broadcastPeersLocked()
+		h.mu.Unlock()
+		return
+	}
+	if d.companionID.get() == compID {
+		h.mu.Unlock()
+		return
+	}
+	oldComp := d.companionID.get()
+	wasOwner := oldComp != "" && h.voiceOwners[oldComp] == d.id
+	d.companionID.set(compID)
+	if compID != "" && h.voiceOwners[compID] == "" {
+		h.voiceOwners[compID] = d.id
+	}
+	if wasOwner {
+		h.fallbackVoiceOwnershipLocked(oldComp, d.id)
+	}
+	h.broadcastPeersLocked()
+	h.mu.Unlock()
+	d.post(terminalEvent{kind: evAttach, now: time.Now(),
+		attach: terminalAttach{companion: companion, voice: voice}})
+	if compID != "" && h.b.oc != nil {
+		go h.b.oc.prewarm(d.client.ctx, companion)
+	}
 }

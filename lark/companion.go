@@ -413,9 +413,7 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		}
 		c, err := b.changeCompanionPrepared(ctx, id, op, args)
 		if b.hub != nil && err == nil && op != "get" {
-			b.hub.mu.Lock()
 			b.hub.companionChanged(id, c)
-			b.hub.mu.Unlock()
 		}
 		return c, err
 	}()
@@ -601,9 +599,7 @@ func (b *larkServer) createCompanion(ctx context.Context, obj object) (companion
 		return companionState{}, problem(502, "Cannot create companion")
 	}
 	if b.hub != nil {
-		b.hub.mu.Lock()
 		b.hub.broadcastPeers()
-		b.hub.mu.Unlock()
 	}
 	if b.dc != nil && b.dc.ready.Load() {
 		if accID, err := b.dc.ensureCompanion(ctx, c); err == nil && accID != 0 {
@@ -685,9 +681,7 @@ func (b *larkServer) deleteCompanion(ctx context.Context, id string) error {
 		}
 	}
 	if b.hub != nil {
-		b.hub.mu.Lock()
 		b.hub.broadcastPeers()
-		b.hub.mu.Unlock()
 	}
 	return nil
 }

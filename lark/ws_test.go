@@ -282,14 +282,12 @@ func waitSVG(t *testing.T, h *terminalHub, termID, sample string) string {
 	t.Helper()
 	deadline := time.Now().Add(testWait(t))
 	for time.Now().Before(deadline) {
-		h.mu.Lock()
-		d := h.terminals[strings.ToLower(termID)]
-		if d != nil && strings.Contains(d.svg.source, sample) {
-			got := d.svg.source
-			h.mu.Unlock()
-			return got
+		d := h.live(termID)
+		if d != nil {
+			if src := d.state().svg.source; strings.Contains(src, sample) {
+				return src
+			}
 		}
-		h.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %q on %s", sample, termID)
@@ -484,9 +482,10 @@ func TestTerminalRecordingLimits(t *testing.T) {
 			if tc.timeout {
 				// Wait for the server to consume the PCM before aging the recording.
 				dev.barrier(t)
-				b.hub.mu.Lock()
-				b.hub.terminals[id].recording.started = time.Now().Add(-91 * time.Second)
-				b.hub.mu.Unlock()
+				d := b.hub.live(id)
+				updateTerm(t, d, func(d *terminalSession) {
+					d.recording.started = time.Now().Add(-91 * time.Second)
+				})
 			}
 			dev.until(t, func(f protocolFrame) bool {
 				p := framePayload(f)
@@ -509,10 +508,9 @@ func TestTerminalRecordingLimits(t *testing.T) {
 					t.Fatal("captured PCM was not transcribed")
 				}
 			}
-			b.hub.mu.Lock()
-			d := b.hub.terminals[id]
-			cleared := !d.recording.active() && len(d.recording.pcm) == 0 && !d.busy && d.view == nil
-			b.hub.mu.Unlock()
+			d := b.hub.live(id)
+			st := d.state()
+			cleared := !st.recording.active() && st.recordingPCM == 0 && !st.busy && st.view == nil
 			if !cleared {
 				t.Fatal("an empty transcript must leave the device idle with no error card")
 			}
@@ -553,10 +551,9 @@ func TestTerminalHardwareSendWaitsForFinalPCM(t *testing.T) {
 				p := framePayload(f)
 				return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpStop
 			})
-			b.hub.mu.Lock()
-			d := b.hub.terminals[id]
-			stopping := d.recording.phase == captureStoppingOpen && d.recording.stopTimer != nil && bytes.Equal(d.recording.pcm, first) && !d.busy
-			b.hub.mu.Unlock()
+			d := b.hub.live(id)
+			st := d.state()
+			stopping := st.recording.phase == captureStoppingOpen && st.recording.stopTimer != nil && bytes.Equal(st.recording.pcm, first) && !st.busy
 			if !stopping {
 				t.Fatal("Send finalized before it could receive the final DMA packet")
 			}
@@ -572,9 +569,8 @@ func TestTerminalHardwareSendWaitsForFinalPCM(t *testing.T) {
 			case <-time.After(testWait(t)):
 				t.Fatal("recording was not finalized")
 			}
-			b.hub.mu.Lock()
-			cleared := !d.recording.active() && d.recording.stopTimer == nil && len(d.recording.pcm) == 0
-			b.hub.mu.Unlock()
+			st = d.state()
+			cleared := !st.recording.active() && st.recording.stopTimer == nil && st.recordingPCM == 0
 			if !cleared {
 				t.Fatal("recording did not clear its stop timer and PCM")
 			}
@@ -588,24 +584,23 @@ func TestTerminalHardwareSendFailsafeDeadline(t *testing.T) {
 		b := &larkServer{root: t.Context()}
 		c := &terminalClient{ctx: t.Context()}
 		d := &terminalSession{client: c, key: "vocat-noac", id: "vocat-noac", kind: "hardware", screen: roundScreen, companion: blankCompanion()}
-		d.recording.start(time.Now(), "", false)
 		h := &terminalHub{b: b, terminals: map[string]*terminalSession{d.key: d}}
-		h.mu.Lock()
-		h.recordingControl(d, time.Now(), false)
-		h.mu.Unlock()
+		d.startActor(h)
+		defer d.close()
+		updateTerm(t, d, func(d *terminalSession) {
+			d.recording.start(time.Now(), "", false)
+			h.recordingControl(d, time.Now(), false)
+		})
 		time.Sleep(449 * time.Millisecond)
 		synctest.Wait()
-		h.mu.Lock()
-		waiting := d.recording.phase == captureStoppingOpen
-		h.mu.Unlock()
+		waiting := (d.state().recording.phase) == captureStoppingOpen
 		if !waiting {
 			t.Fatal("fail-safe fired before 450 ms")
 		}
 		time.Sleep(time.Millisecond)
 		synctest.Wait()
-		h.mu.Lock()
-		done := !d.recording.active() && d.recording.stopTimer == nil
-		h.mu.Unlock()
+		st := d.state()
+		done := !st.recording.active() && st.recording.stopTimer == nil
 		if !done {
 			t.Fatal("fail-safe did not clear recording at 450 ms")
 		}
@@ -815,16 +810,13 @@ func TestTerminalPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	const id = "vocat-abrt"
 	dev := testConnectWS(t, base, "unit", false)
 	dev.hello(t, id, "Cake")
+	d := b.hub.live(id)
 	play := func() uint64 {
 		stream := newAudioStream()
 		stream.append(bytes.Repeat([]byte{12, 0}, 800))
 		stream.finish(nil)
-		b.hub.mu.Lock()
-		d := b.hub.terminals[id]
 		b.hub.play(d, stream)
-		audio := d.audio
-		b.hub.mu.Unlock()
-		return audio
+		return d.state().audio
 	}
 	first := play()
 	dev.until(t, func(f protocolFrame) bool {
@@ -852,11 +844,7 @@ func TestTerminalPlaybackAbortIgnoresOldACKs(t *testing.T) {
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, first))
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(true, first))
 	dev.barrier(t)
-	awaiting := func() bool {
-		b.hub.mu.Lock()
-		defer b.hub.mu.Unlock()
-		return b.hub.terminals[id].awaitAck
-	}
+	awaiting := func() bool { return d.state().awaitAck }
 	if !awaiting() {
 		t.Fatal("aborted stream ACK cleared replacement playback")
 	}
@@ -1024,10 +1012,8 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	})
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	dev.barrier(t)
-	b.hub.mu.Lock()
-	d := b.hub.terminals["vocat-a000"]
-	settled := !d.busy && !d.awaitAck && d.scene.title == ""
-	b.hub.mu.Unlock()
+	st := b.hub.live("vocat-a000").state()
+	settled := !st.busy && !st.awaitAck && st.scene.title == ""
 	if !settled {
 		t.Fatal("device did not settle after tts_ack")
 	}

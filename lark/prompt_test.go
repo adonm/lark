@@ -14,10 +14,8 @@ func TestTurnPromptListsOwnOnlineHardwareTerminal(t *testing.T) {
 	b, base := wsHarness(t, nil)
 	own := testConnectWS(t, base, "unit", false)
 	own.helloHardware(t, "vocat-33d8", "Cake", capBattery|capDrag)
-	b.hub.mu.Lock()
-	d := b.hub.terminals["vocat-33d8"]
-	d.pct, d.vol, d.asleep = 87, 42, true
-	b.hub.mu.Unlock()
+	d := b.hub.live("vocat-33d8")
+	updateTerm(t, d, func(d *terminalSession) { d.pct, d.vol, d.asleep = 87, 42, true })
 
 	if err := b.terminals.save("sim-cleanup", terminalRecord{
 		ID: "sim-cleanup", Kind: "hardware", CompanionID: "cake", IP: "127.0.0.1",

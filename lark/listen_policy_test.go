@@ -41,9 +41,9 @@ func TestSplitNameToleratesSpeechNearMisses(t *testing.T) {
 
 func openTestListeningWindow(t *testing.T, b *larkServer, termID string) {
 	t.Helper()
-	b.hub.mu.Lock()
-	ok := b.hub.startListeningWindow(b.hub.terminals[termID], time.Now())
-	b.hub.mu.Unlock()
+	term0 := b.hub.live(termID)
+	ok := false
+	updateTerm(t, term0, func(d *terminalSession) { ok = b.hub.startListeningWindow(d, time.Now()) })
 	if !ok {
 		t.Fatal("listening window did not open")
 	}
@@ -105,9 +105,7 @@ func TestListenNameRequiredAfterPause(t *testing.T) {
 	b, base, prompts := listenHarness(t, func(string) string { return "Okay." })
 	hw, _ := setupListenTerminal(t, b, base, "box3-name", "Cake", true)
 	b.setSTT(func(context.Context, []byte) (string, error) { return "tell me a story", nil })
-	b.hub.mu.Lock()
-	b.hub.terminals["box3-name"].nameFreeUntil = time.Now().Add(-time.Second)
-	b.hub.mu.Unlock()
+	updateTerm(t, b.hub.live("box3-name"), func(d *terminalSession) { d.nameFreeUntil = time.Now().Add(-time.Second) })
 
 	openTestListeningWindow(t, b, "box3-name")
 	hw.until(t, isListenRecStart)
@@ -159,9 +157,7 @@ func TestListenNamePresentButUnusableSaysDidntCatch(t *testing.T) {
 		term := fmt.Sprintf("box3-nu%d", i)
 		hw, _ := setupListenTerminal(t, b, base, term, "Cake", true)
 		b.setSTT(func(context.Context, []byte) (string, error) { return stt, nil })
-		b.hub.mu.Lock()
-		b.hub.terminals[term].nameFreeUntil = time.Now().Add(-time.Second)
-		b.hub.mu.Unlock()
+		updateTerm(t, b.hub.live(term), func(d *terminalSession) { d.nameFreeUntil = time.Now().Add(-time.Second) })
 		openTestListeningWindow(t, b, term)
 		hw.until(t, isListenRecStart)
 		hw.recStart(t, "")
@@ -194,8 +190,10 @@ func TestListenNamePresentButUnusableSaysDidntCatch(t *testing.T) {
 // hub lock; the clock must not be written without it. Run with -race.
 func TestFollowUpGraceConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	h := &terminalHub{}
+	h := &terminalHub{b: &larkServer{root: context.Background()}}
 	d := &terminalSession{}
+	d.startActor(h)
+	defer d.close()
 	now := time.Now()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -211,7 +209,7 @@ func TestFollowUpGraceConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 	// Refreshing an existing grace must move it forward, not keep the first.
-	d.nameFreeUntil = now
+	d.update(func(d *terminalSession) { d.nameFreeUntil = now })
 	h.freeFollowUps(d, now.Add(time.Second))
 	if got := d.nameFreeUntil; !got.Equal(now.Add(time.Second + followUpGrace)) {
 		t.Fatalf("nameFreeUntil = %v, want a refreshed %v", got, now.Add(time.Second+followUpGrace))
@@ -223,7 +221,7 @@ func TestFollowUpGraceConcurrentAccess(t *testing.T) {
 func TestSilentReplyGrantsNoFollowUpGrace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	d := &terminalSession{key: "t", turn: 1, client: &terminalClient{ctx: ctx}, companionID: "c"}
+	d := &terminalSession{key: "t", turn: 1, client: &terminalClient{ctx: ctx}, companionID: atomicStr("c")}
 	h := &terminalHub{terminals: map[string]*terminalSession{"t": d}, companionStatuses: map[string]companionStatusState{}, voiceOwners: map[string]string{}, b: &larkServer{root: ctx}}
 	expired := time.Now().Add(-time.Minute)
 	d.nameFreeUntil = expired

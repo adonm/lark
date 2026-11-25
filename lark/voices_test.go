@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeSpeechEngine func(string, voiceChoice, func() bool) ([]float32, int)
@@ -195,9 +196,7 @@ func TestMenuVoicePicker(t *testing.T) {
 	svg := waitSVG(t, b.hub, termID, "voice-af_heart")
 	for _, voice := range []int{1, 0} {
 		choice := voiceCatalog[voice]
-		b.hub.mu.Lock()
-		hits := b.hub.terminals[termID].svg.hits
-		b.hub.mu.Unlock()
+		hits := b.hub.live(termID).state().svg.hits
 		var tx, ty int
 		found := false
 		for _, h := range hits {
@@ -212,8 +211,13 @@ func TestMenuVoicePicker(t *testing.T) {
 		c.tap(t, tx, ty, 0)
 		c.barrier(t)
 		waitSVG(t, b.hub, termID, "voice")
-		if reloaded := companionVoiceStore(b.db, heartVoice); reloaded.get(id, "cake") != choice.ID {
-			t.Errorf("voice picker did not persist %s", choice.ID)
+		deadline := time.Now().Add(testWait(t))
+		for companionVoiceStore(b.db, heartVoice).get(id, "cake") != choice.ID {
+			if time.Now().After(deadline) {
+				t.Errorf("voice picker did not persist %s", choice.ID)
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	bx, by, ok := hitCenter(svg, "menu-back")

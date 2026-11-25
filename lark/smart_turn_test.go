@@ -140,9 +140,8 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	// 1. Complete (>= threshold): commits after smartTurnPause (~200ms) + vadTail.
 	prob.Store(1)
 	calls.Store(0)
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(id)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.recStart(t, "")
 	d.barrier(t)
 	waitSVG(t, b.hub, id, "rec-send")
@@ -160,9 +159,8 @@ func TestSmartTurnEndpointPolicy(t *testing.T) {
 	smart.wait(t, func() bool { return inflight.Load() == 0 })
 	prob.Store(2)
 	calls.Store(0)
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 = b.hub.live(id)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.recStart(t, "")
 	d.barrier(t)
 	waitSVG(t, b.hub, id, "rec-send")
@@ -253,9 +251,8 @@ func TestEndpointNoisySilenceAndIncompleteCap(t *testing.T) {
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(id)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.recStart(t, "")
 	d.barrier(t)
 	waitSVG(t, b.hub, id, "rec-send")
@@ -314,9 +311,9 @@ func TestEndpointListenWindowNoisySilenceAutoCommits(t *testing.T) {
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 
-	b.hub.mu.Lock()
-	ok := b.hub.startListeningWindow(b.hub.terminals[id], time.Now())
-	b.hub.mu.Unlock()
+	term0 := b.hub.live(id)
+	ok := false
+	updateTerm(t, term0, func(d *terminalSession) { ok = b.hub.startListeningWindow(d, time.Now()) })
 	if !ok {
 		t.Fatal("startListeningWindow returned false")
 	}
@@ -403,18 +400,15 @@ func TestEndpointIncompleteTrailingWaitsForCap(t *testing.T) {
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && (p[4] == statusIdle || p[4] == statusDone || p[4] == statusError)
 	}
 
-	b.hub.mu.Lock()
-	b.hub.startRecording(b.hub.terminals[id], "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(id)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	d.recStart(t, "")
 	d.barrier(t)
 	waitSVG(t, b.hub, id, "rec-send")
 	appendPCM(bytes.Repeat(voiced, 15))
 	appendPCM(bytes.Repeat(silent, 25)) // 500ms > endpointQuiet (400ms), < endpointCap (1200ms)
 	d.barrier(t)
-	b.hub.mu.Lock()
-	stillOpen := b.hub.terminals[id].recording.phase == captureOpen
-	b.hub.mu.Unlock()
+	stillOpen := b.hub.live(id).state().recording.phase == captureOpen
 	if !stillOpen {
 		t.Fatal("committed early despite trailing 'and'")
 	}

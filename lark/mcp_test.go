@@ -210,17 +210,14 @@ func TestMCPPatchDefaultsToSpeakingCompanion(t *testing.T) {
 	hw := testConnectWS(t, base, "unit", false)
 	hw.hello(t, termID, "Cake")
 
-	b.hub.mu.Lock()
-	b.hub.terminals[termID].busy = true
-	b.hub.mu.Unlock()
+	term0 := b.hub.live(termID)
+	updateTerm(t, term0, func(d *terminalSession) { d.busy = true })
 	patched := toolTest(t, base, "patch", object{"terminal": object{"volume": 33}}, false)["terminal"].(object)
 	if patched["terminal_id"] != termID || patched["volume"] != json.Number("33") {
 		t.Fatalf("patch did not default to the speaking companion's terminal: %+v", patched)
 	}
 
-	b.hub.mu.Lock()
-	b.hub.terminals[termID].busy = false
-	b.hub.mu.Unlock()
+	updateTerm(t, term0, func(d *terminalSession) { d.busy = false })
 	out := toolTest(t, base, "patch", object{"terminal": object{"volume": 10}}, true)
 	if text := str(out["error"]); !strings.Contains(text, "companion_id: required") {
 		t.Fatalf("missing companion error = %q", text)
@@ -251,9 +248,7 @@ func TestMCPStateSlices(t *testing.T) {
 	st[5] = 24
 	board.sendProto(t, msgTelemetry, st[:])
 	board.barrier(t)
-	b.hub.mu.Lock()
-	wifiOK := b.hub.terminals[termID].telemetry.WiFi != nil
-	b.hub.mu.Unlock()
+	wifiOK := b.hub.live(termID).state().telemetry.WiFi != nil
 	if !wifiOK {
 		t.Fatal("missing telemetry wifi")
 	}
@@ -339,11 +334,11 @@ func TestMCPControl(t *testing.T) {
 	if !strings.Contains(str(missingErr["error"]), "companion_id") {
 		t.Fatalf("expected companion_id error when omitted, got %v", missingErr)
 	}
-	b.hub.mu.Lock()
-	d := b.hub.terminals[termID]
-	b.hub.startTurn(d, time.Now(), false, "typed", func(context.Context, uint64) {})
-	turn := d.turn
-	b.hub.mu.Unlock()
+	d := b.hub.live(termID)
+	updateTerm(t, d, func(d *terminalSession) {
+		b.hub.startTurn(d, time.Now(), false, "typed", func(context.Context, uint64) {})
+	})
+	turn := d.state().turn
 	out := patchControl(t, base, id, object{"volume": 0, "sleep": true})
 	if out["terminal_id"] != termID || out["volume"] != json.Number("0") || out["sleeping"] != true {
 		t.Fatal(out)
@@ -358,7 +353,7 @@ func TestMCPControl(t *testing.T) {
 			return hasProto(msgPower, "")(f) && len(p) >= 1 && p[0] == 12
 		})
 	}
-	b.hub.finishTurn(d, turn, nil, nil)
+	updateTerm(t, d, func(d *terminalSession) { b.hub.finishTurn(d, turn, nil, nil) })
 	checkStatus := func(mode, volume string) {
 		t.Helper()
 		me := stateMe(t, base, id)

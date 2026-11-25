@@ -25,9 +25,7 @@ func TestPingIntervalFollowsSleep(t *testing.T) {
 		t.Fatalf("terminal rejected: %q", reject)
 	}
 
-	b.hub.mu.Lock()
-	d := b.hub.terminals[id]
-	b.hub.mu.Unlock()
+	d := b.hub.live(id)
 	if d == nil || d.client.native == nil {
 		t.Fatal("terminal did not register a native client")
 	}
@@ -36,15 +34,11 @@ func TestPingIntervalFollowsSleep(t *testing.T) {
 	if got := nc.pingInterval(); got != pingAwake {
 		t.Fatalf("awake ping interval = %v, want %v", got, pingAwake)
 	}
-	b.hub.mu.Lock()
-	b.hub.setSleeping(d, true)
-	b.hub.mu.Unlock()
+	updateTerm(t, d, func(d *terminalSession) { b.hub.setSleeping(d, true) })
 	if got := nc.pingInterval(); got != pingAsleep {
 		t.Fatalf("sleeping ping interval = %v, want %v", got, pingAsleep)
 	}
-	b.hub.mu.Lock()
-	b.hub.setSleeping(d, false)
-	b.hub.mu.Unlock()
+	updateTerm(t, d, func(d *terminalSession) { b.hub.setSleeping(d, false) })
 	if got := nc.pingInterval(); got != pingAwake {
 		t.Fatalf("woken ping interval = %v, want %v", got, pingAwake)
 	}

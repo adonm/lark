@@ -531,7 +531,6 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 	if !t.WakeAgent {
 		pcm, _ = synthesizeMelody(t.Notes)
 	}
-	h.mu.Lock()
 	key, now := strings.ToLower(t.CompanionID), time.Now()
 	if !t.WakeAgent {
 		defer func() {
@@ -540,49 +539,58 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 			b.chat(t.CompanionID, entry, true)
 		}()
 	}
-	d := h.voiceOwner(key)
+	d := h.ownerOf(key)
 	if d != nil {
 		if t.WakeAgent {
 			completed := make(chan struct{})
-			started := h.startTurn(d, now, true, "timer", func(turnCtx context.Context, id uint64) {
-				defer close(completed)
-				turnCtx, cancel := context.WithCancel(turnCtx)
-				defer cancel()
-				stop := context.AfterFunc(ctx, cancel)
-				defer stop()
-				h.runTurn(turnCtx, d, id, "Timer fired: "+message, "timer", nil)
-			})
-			h.mu.Unlock()
+			started := false
+			ack := make(chan struct{})
+			d.post(terminalEvent{kind: evStartTurn, now: now, done: ack, startTurn: terminalStartTurn{
+				keepView: true, source: "timer", started: &started,
+				run: func(turnCtx context.Context, id uint64) {
+					defer close(completed)
+					turnCtx, cancel := context.WithCancel(turnCtx)
+					defer cancel()
+					stop := context.AfterFunc(ctx, cancel)
+					defer stop()
+					h.runTurn(turnCtx, d, id, "Timer fired: "+message, "timer", nil)
+				}}})
+			<-ack
 			if started {
 				<-completed
 			}
 			return
 		}
-		h.wake(d, now)
-		if len(pcm) != 0 && t.Say == "" {
-			h.playPCM(d, pcm)
-		} else if len(pcm) == 0 {
-			h.chime(d, t.Chime)
-		}
 		view := timerScene(message)
-		for _, td := range h.terminalsFor(key) {
-			td.card, td.drawer = &view, ""
-			h.render(td, now, false)
+		d.update(func(d *terminalSession) {
+			h.wake(d, now)
+			if len(pcm) != 0 && t.Say == "" {
+				h.playTraced(d, audioStreamFrom(pcm), nil, time.Time{})
+			} else if len(pcm) == 0 {
+				h.chime(d, t.Chime)
+			}
+			d.card, d.drawer = &view, ""
+			h.render(d, now, false)
+			if t.Say != "" {
+				h.speakLocalAfter(d, t.Say, pcm)
+			}
+		})
+		for _, td := range h.liveFor(key) {
+			if td == d {
+				continue
+			}
+			td.update(func(td *terminalSession) {
+				td.card, td.drawer = &view, ""
+				h.render(td, now, false)
+			})
 		}
-		if t.Say != "" {
-			h.speakLocalAfter(d, t.Say, pcm)
-		}
-		h.mu.Unlock()
 		return
 	}
 	if t.WakeAgent && b.oc != nil {
-		h.mu.Unlock()
 		ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 		defer cancel()
 		_, _ = b.generateReply(ctx, ctx, who, "Timer fired: "+message, turnOptions{source: "timer"})
-		return
 	}
-	h.mu.Unlock()
 }
 
 func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (object, error) {

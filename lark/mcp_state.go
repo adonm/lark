@@ -143,16 +143,11 @@ func (b *larkServer) mcpCompanionState(ctx context.Context, out object, id strin
 			}
 			termList := []object{}
 			if b.hub != nil {
-				b.hub.mu.Lock()
-				compTerminals := b.hub.terminalsFor(c.ID)
-				best := b.hub.voiceOwner(c.ID)
 				mode, sleeping := "offline", false
-				for _, t := range compTerminals {
-					if t == best {
-						mode, sleeping = t.pose.mood, t.asleep
-					}
+				if best := b.hub.ownerOf(c.ID); best != nil {
+					st := best.state()
+					mode, sleeping = st.pose.mood, st.asleep
 				}
-				b.hub.mu.Unlock()
 				compObj["mode"] = mode
 				compObj["sleeping"] = sleeping
 			}
@@ -304,11 +299,9 @@ func (b *larkServer) patchTerminal(ctx context.Context, companionID string, args
 			return nil, fieldError("companion_id", "required; pass the companion ID from the turn header")
 		}
 		if b.hub != nil {
-			b.hub.mu.Lock()
-			if t := b.hub.voiceOwner(companionID); t != nil {
+			if t := b.hub.ownerOf(companionID); t != nil {
 				termID = t.id
 			}
-			b.hub.mu.Unlock()
 		}
 		if termID == "" {
 			terms, _ := b.terminalsForCompanion(companionID)

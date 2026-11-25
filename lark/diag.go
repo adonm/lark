@@ -537,11 +537,12 @@ type diagTerminal struct {
 }
 
 func (d *terminalSession) diagTerminal() diagTerminal {
-	s := d.telemetry
-	s.Volume = new(d.vol)
-	return diagTerminal{ID: d.id, CompanionID: d.companionID, Character: d.companion.Name, Kind: d.kind, Board: d.board,
-		Firmware: d.firmware, Mode: d.pose.mood, RTT: d.client.pingRTT(),
-		Frame: d.frame, terminalTelemetry: s}
+	st := d.state()
+	s := st.telemetry
+	s.Volume = new(st.vol)
+	return diagTerminal{ID: d.id, CompanionID: d.companionID.get(), Character: st.companion.Name, Kind: d.kind, Board: d.board,
+		Firmware: d.firmware, Mode: st.pose.mood, RTT: d.client.pingRTT(),
+		Frame: st.frame, terminalTelemetry: s}
 }
 
 func (h *terminalHub) diagTerminals() []diagTerminal {
@@ -555,19 +556,15 @@ func (h *terminalHub) diagTerminals() []diagTerminal {
 		}
 		outMap[id] = diagTerminal{ID: t.ID, CompanionID: t.CompanionID, Character: name, Kind: t.Kind, Mode: "offline"}
 	}
-	h.mu.Lock()
-	for id, d := range h.terminals {
-		if h.active(d) {
-			term := d.diagTerminal()
-			term.NoteEndpoint = "client"
-			if h.bridgeEndpoint(d) {
-				term.NoteEndpoint = "bridge"
-			}
-			term.OTABundle = term.Board == "esp-box-3" && boxOTA || term.Board == "esp-vocat" && roundOTA
-			outMap[id] = term
+	for _, d := range h.liveAll() {
+		term := d.diagTerminal()
+		term.NoteEndpoint = "client"
+		if h.bridgeEndpoint(d) {
+			term.NoteEndpoint = "bridge"
 		}
+		term.OTABundle = term.Board == "esp-box-3" && boxOTA || term.Board == "esp-vocat" && roundOTA
+		outMap[d.id] = term
 	}
-	h.mu.Unlock()
 	out := make([]diagTerminal, 0, len(outMap))
 	for _, d := range outMap {
 		out = append(out, d)

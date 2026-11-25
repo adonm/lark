@@ -14,16 +14,20 @@ import (
 	"time"
 )
 
+// handleProto hands one inbound frame to the session actor. The payload aliases
+// the connection's read buffer, which the loop reuses, so it is copied here.
 func (h *terminalHub) handleProto(c *terminalClient, msgType uint8, payload []byte) {
-	h.mu.Lock()
-	if h.closed || c.ctx.Err() != nil {
-		h.mu.Unlock()
+	d := c.terminal.Load()
+	if d == nil || c.ctx.Err() != nil {
 		return
 	}
-	now := time.Now()
-	defer h.mu.Unlock()
-	d := c.terminal
-	if d == nil || !h.active(d) {
+	d.post(terminalEvent{kind: evProto, now: time.Now(),
+		proto: terminalProto{msgType: msgType, payload: append([]byte(nil), payload...)}})
+}
+
+// handleProtoEvent runs in the session actor with the hub lock held.
+func (h *terminalHub) handleProtoEvent(d *terminalSession, msgType uint8, payload []byte, now time.Time) {
+	if !h.active(d) {
 		return
 	}
 
@@ -50,9 +54,9 @@ func (h *terminalHub) handleProto(c *terminalClient, msgType uint8, payload []by
 		}
 		h.clearDoneOrErrorStatus(d)
 		if tgt, ok := recordTarget(target); ok {
-			if c.terminal == d {
-				h.takeVoiceOwnership(d)
-			}
+			// The event is addressed to this session; active() above rejected a
+			// connection that a reconnect already replaced.
+			h.takeVoiceOwnership(d)
 			if d.recording.acceptsStart() {
 				if d.recording.active() {
 					// An acknowledgement only belongs to the session this
@@ -194,9 +198,9 @@ func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Ti
 		if d.drawer == drawerStoryReader && d.story != nil {
 			h.stopPlayback(d, true)
 			d.storyPage = d.menuPage
-			if h.b != nil && h.b.db != nil && d.companionID != "" {
+			if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
 				prog := storyProgress{
-					CompanionID: d.companionID,
+					CompanionID: d.companionID.get(),
 					StoryID:     d.story.id,
 					Passage:     d.story.currentPassageName(),
 					Page:        d.storyPage,
@@ -268,9 +272,15 @@ func (h *terminalHub) pointerVolume(d *terminalSession, a sceneAction) {
 			op = "vol-minus"
 		}
 	}
-	if err := h.setVolume(d.client.ctx, d, 0, op); err != nil && h.active(d) {
-		h.setCompanionStatus(d.companionID, statusError)
-	}
+	go func() {
+		if err := h.setVolume(d.client.ctx, d, 0, op); err != nil {
+			d.update(func(d *terminalSession) {
+				if h.active(d) {
+					h.setCompanionStatus(d.companionID.get(), statusError)
+				}
+			})
+		}
+	}()
 }
 
 func (h *terminalHub) pointerTurnControl(d *terminalSession, key string, a sceneAction, now time.Time) {
@@ -314,47 +324,63 @@ func (h *terminalHub) pointerScene(d *terminalSession, a sceneAction, now time.T
 
 func (h *terminalHub) pointerUnpair(d *terminalSession, a sceneAction) {
 	cid, err := strconv.ParseUint(a.value, 10, 32)
-	if err == nil && cid > 0 && h.b.dc != nil && d.companionID != "" {
-		compID := d.companionID
-		h.mu.Unlock()
-		_ = h.b.dc.unpairContact(compID, uint32(cid))
-		h.mu.Lock()
-		if h.active(d) && d.drawer == drawerUnpair {
-			h.chime(d, "tap")
-			h.loadMenu(d)
-		}
+	if err != nil || cid == 0 || h.b.dc == nil || d.companionID.get() == "" {
+		return
 	}
+	compID := d.companionID.get()
+	go func() {
+		_ = h.b.dc.unpairContact(compID, uint32(cid))
+		d.update(func(d *terminalSession) {
+			if h.active(d) && d.drawer == drawerUnpair {
+				h.chime(d, "tap")
+				h.loadMenu(d)
+			}
+		})
+	}()
 }
 
 func (h *terminalHub) selectAndPreviewVoice(d *terminalSession, voiceID string) {
-	h.mu.Unlock()
-	err := h.saveVoice(d.companionID, voiceID)
-	h.mu.Lock()
-	if err != nil || !h.active(d) {
-		return
-	}
-	previewText := voicePreviewText(voiceID)
-	if pcm := h.b.clips.peek(voiceID, previewText); len(pcm) > 0 {
-		h.playPCM(d, pcm)
-		return
-	}
-	if w := h.b.worker; w != nil && w.ready.Load() {
-		go func() {
+	companionID := d.companionID.get()
+	go func() {
+		if err := h.saveVoice(companionID, voiceID); err != nil {
+			return
+		}
+		previewText := voicePreviewText(voiceID)
+		if pcm := h.b.clips.peek(voiceID, previewText); len(pcm) > 0 {
+			d.update(func(d *terminalSession) {
+				if h.active(d) && d.voice == voiceID {
+					h.playPCMNow(d, pcm)
+				}
+			})
+			return
+		}
+		if w := h.b.worker; w != nil && w.ready.Load() {
 			ctx, cancel := context.WithTimeout(d.client.ctx, ttsWait)
 			defer cancel()
 			pcm, err := h.b.clips.get(ctx, w, voiceID, previewText)
 			if err != nil || len(pcm) == 0 {
 				return
 			}
-			h.mu.Lock()
-			if h.active(d) && d.voice == voiceID {
-				h.playPCM(d, pcm)
+			d.update(func(d *terminalSession) {
+				if h.active(d) && d.voice == voiceID {
+					h.playPCMNow(d, pcm)
+				}
+			})
+			return
+		}
+		d.update(func(d *terminalSession) {
+			if h.active(d) {
+				h.chime(d, "tap")
 			}
-			h.mu.Unlock()
-		}()
-		return
-	}
-	h.chime(d, "tap")
+		})
+	}()
+}
+
+func (h *terminalHub) playPCMNow(d *terminalSession, pcm []byte) bool {
+	stream := newAudioStream()
+	stream.append(pcm)
+	stream.finish(nil)
+	return h.playTraced(d, stream, nil, time.Time{}).Err() == nil
 }
 
 func (d *terminalSession) acceptPointerRevision(action string, rev *uint16) bool {
@@ -426,7 +452,7 @@ func (h *terminalHub) leaveScene(d *terminalSession, now time.Time, reason strin
 	h.stopPlayback(d, true)
 	h.clearView(d)
 	if !d.recording.active() {
-		h.setCompanionStatus(d.companionID, statusIdle)
+		h.setCompanionStatus(d.companionID.get(), statusIdle)
 	}
 	h.render(d, now, true)
 }
@@ -587,18 +613,27 @@ func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, 
 	}
 }
 
-// The placeholder identifies this request even if another client moves the menu while SQL runs.
+// loadMenu shows a placeholder, reads the menu off the actor, then posts the
+// result. The placeholder identifies this request even if another client moves
+// the menu while SQL runs.
 func (h *terminalHub) loadMenu(d *terminalSession) {
-	drawer, id, name := d.drawer, d.companionID, d.companion.Name
+	drawer, id, name := d.drawer, d.companionID.get(), d.companion.Name
 	pending := &menuContent{notice: "Loading…"}
 	d.menuData = pending
-	h.mu.Unlock()
-	menu, err := h.b.readMenu(d.client.ctx, drawer, id, name)
-	h.mu.Lock()
-	if !h.active(d) || d.drawer != drawer || d.menuData != pending {
+	ctx := d.client.ctx
+	go func() {
+		menu, err := h.b.readMenu(ctx, drawer, id, name)
+		d.post(terminalEvent{kind: evMenuLoaded, now: time.Now(),
+			menu: terminalMenu{drawer: drawer, pending: pending, menu: menu, err: err}})
+	}()
+}
+
+func (h *terminalHub) menuLoaded(d *terminalSession, m terminalMenu, now time.Time) {
+	if !h.active(d) || d.drawer != m.drawer || d.menuData != m.pending {
 		return
 	}
-	if err != nil {
+	menu := m.menu
+	if m.err != nil {
 		menu = menuContent{notice: "Menu unavailable"}
 	}
 	perPage := 2
@@ -606,7 +641,7 @@ func (h *terminalHub) loadMenu(d *terminalSession) {
 		perPage = 3
 	}
 	count, pageSize := len(menu.rows), perPage
-	switch drawer {
+	switch m.drawer {
 	case drawerStories:
 		count = len(menu.stories)
 	case drawerMemories:
@@ -616,7 +651,7 @@ func (h *terminalHub) loadMenu(d *terminalSession) {
 	}
 	d.menuData = &menu
 	d.menuPage = clampMenuPage(d.menuPage, count, pageSize)
-	h.render(d, time.Now(), false)
+	h.render(d, now, false)
 }
 
 func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (menuContent, error) {

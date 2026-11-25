@@ -412,14 +412,9 @@ func (b *larkServer) startNewCompanionSession(ctx context.Context, id string, ar
 			return err
 		}
 		if b.hub != nil {
-			b.hub.mu.Lock()
-			defer b.hub.mu.Unlock()
-			for _, t := range b.hub.terminalsFor(id) {
-				b.hub.stopCompanionTurn(t)
-			}
+			b.hub.stopCompanionTurns(id)
 			b.hub.companionChanged(id, companion)
 		}
 		return nil
 	})
 }
-

@@ -105,12 +105,12 @@ func TestListenWindowNoiseOnlyClosesWithoutTurn(t *testing.T) {
 		n := sttCalls.Add(1)
 		return fmt.Sprintf("hallucinated words number %d", n), nil
 	})
-	b.hub.mu.Lock()
-	if !b.hub.startListeningWindow(b.hub.terminals["box3-noise"], time.Now()) {
-		b.hub.mu.Unlock()
+	term0 := b.hub.live("box3-noise")
+	opened := false
+	updateTerm(t, term0, func(d *terminalSession) { opened = b.hub.startListeningWindow(d, time.Now()) })
+	if !opened {
 		t.Fatal("listening window did not open")
 	}
-	b.hub.mu.Unlock()
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 
@@ -151,12 +151,12 @@ func TestListenSpeechThenNoiseCommitsOnce(t *testing.T) {
 		n := calls.Add(1)
 		return fmt.Sprintf("invented words keep arriving number %d", n), nil
 	})
-	b.hub.mu.Lock()
-	if !b.hub.startListeningWindow(b.hub.terminals["box3-churn"], time.Now()) {
-		b.hub.mu.Unlock()
+	term0 := b.hub.live("box3-churn")
+	opened := false
+	updateTerm(t, term0, func(d *terminalSession) { opened = b.hub.startListeningWindow(d, time.Now()) })
+	if !opened {
 		t.Fatal("listening window did not open")
 	}
-	b.hub.mu.Unlock()
 	hw.until(t, isListenRecStart)
 	hw.recStart(t, "")
 

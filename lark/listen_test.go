@@ -133,10 +133,8 @@ func sendTestUtterance(t *testing.T, hw *testWS) {
 func sendSpeechAndWaitTTS(t *testing.T, hw *testWS, b *larkServer, termID, sttText string) uint64 {
 	t.Helper()
 	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
-	b.hub.mu.Lock()
-	d := b.hub.terminals[termID]
-	b.hub.startRecording(d, "", time.Now(), true)
-	b.hub.mu.Unlock()
+	d0 := b.hub.live(termID)
+	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
@@ -167,10 +165,8 @@ func TestListenModeOffDoesNotOpenWindow(t *testing.T) {
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-off", "Hi Greg")
 	hw.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 	hw.barrier(t)
-	b.hub.mu.Lock()
-	d := b.hub.terminals["box3-off"]
-	active := d != nil && d.recording.active()
-	b.hub.mu.Unlock()
+	d := b.hub.live("box3-off")
+	active := d != nil && recordingActive(d)
 	if active {
 		t.Fatal("listening window opened when listening is off")
 	}
@@ -182,10 +178,7 @@ func TestListenModeOpensAfterPlaybackAckAndRearms(t *testing.T) {
 	hw, _ := setupListenTerminal(t, b, base, "box3-on", "Greg", true)
 	audioID := sendSpeechAndWaitTTS(t, hw, b, "box3-on", "Hi Greg")
 
-	b.hub.mu.Lock()
-	d := b.hub.terminals["box3-on"]
-	beforeAck := d.recording.active()
-	b.hub.mu.Unlock()
+	beforeAck := recordingActive(b.hub.live("box3-on"))
 	if beforeAck {
 		t.Fatal("listening window opened before playback ack")
 	}
@@ -250,11 +243,8 @@ func TestListenModeTapEndsWindowWithoutMenu(t *testing.T) {
 		p := framePayload(f)
 		return hasProto(msgRecCtrl, "")(f) && len(p) >= 1 && p[0] == recOpCancel
 	})
-	b.hub.mu.Lock()
-	d := b.hub.terminals["box3-tap"]
-	drawer := d.drawer
-	active := d.recording.active()
-	b.hub.mu.Unlock()
+	st := b.hub.live("box3-tap").state()
+	drawer, active := st.drawer, st.recording.active()
 	if active || drawer != "" {
 		t.Fatalf("tap should end window without opening menu: active=%v drawer=%q", active, drawer)
 	}
@@ -361,10 +351,8 @@ func TestListenModeSilentReplyProducesNoTTS(t *testing.T) {
 
 	// Re-arms directly without any TTS_CTRL start/end.
 	hw.until(t, isListenRecStart)
-	b.hub.mu.Lock()
-	d := b.hub.terminals["box3-silrep"]
-	hasView := d.view != nil || d.card != nil
-	b.hub.mu.Unlock()
+	st := b.hub.live("box3-silrep").state()
+	hasView := st.view != nil || st.card != nil
 	if hasView {
 		t.Fatal("silent reply should not show a card")
 	}
@@ -387,9 +375,7 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 	hw1.sendProto(t, msgTTSAck, encodeTTSAck(false, audioID))
 
 	hw1.until(t, isListenRecStart)
-	b.hub.mu.Lock()
-	otherActive := b.hub.terminals["vocat-other"].recording.active()
-	b.hub.mu.Unlock()
+	otherActive := recordingActive(b.hub.live("vocat-other"))
 	if otherActive {
 		t.Fatal("listening window opened on non-voice-owner terminal")
 	}

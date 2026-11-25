@@ -196,20 +196,20 @@ func TestNativeProtoControlAndMessages(t *testing.T) {
 	}
 
 	// Test TTS control + PCM + ACK, power, and volume
-	b.hub.mu.Lock()
-	dev := b.hub.terminals["lark-nat2"]
-	if dev == nil || dev.telemetry.Battery == nil || *dev.telemetry.Battery != 88 || *dev.telemetry.WiFi != -52 {
-		b.hub.mu.Unlock()
+	dev := b.hub.live("lark-nat2")
+	tst := dev.state()
+	if dev == nil || tst.telemetry.Battery == nil || *tst.telemetry.Battery != 88 || *tst.telemetry.WiFi != -52 {
 		t.Fatal("MSG_TELEMETRY was not applied")
 	}
-	b.hub.setSleeping(dev, true)
-	b.hub.pushVolume(dev, true, false)
+	updateTerm(t, dev, func(d *terminalSession) {
+		b.hub.setSleeping(d, true)
+		b.hub.pushVolume(d, true, false)
+	})
 	stream := newAudioStream()
 	pcm := bytes.Repeat([]byte{0x12, 0x34}, 320)
 	stream.append(pcm)
 	stream.finish(nil)
 	b.hub.play(dev, stream)
-	b.hub.mu.Unlock()
 
 	pwr := nc.readUntil(msgPower)
 	if len(pwr) != 1 || pwr[0] != 12 {
@@ -301,8 +301,7 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 	defer ds.shutdown()
 	_, _ = dialNativeDevice(t, ds, "lark-udprace", "unit", capBridgeEndpoint)
 
-	b.hub.mu.Lock()
-	d := b.hub.terminals["lark-udprace"]
+	d := b.hub.live("lark-udprace")
 	free := make(chan int, 16)
 	for i := range 16 {
 		free <- i
@@ -316,10 +315,13 @@ func TestNativeUDPEndpointCopyRace(t *testing.T) {
 		listening: make(chan struct{}),
 		deadline:  time.NewTimer(time.Minute),
 	}
-	d.recording.phase = captureOpen
-	d.recording.endpoint = ep
+	updateTerm(t, d, func(d *terminalSession) {
+		d.recording.phase = captureOpen
+		d.recording.endpoint = ep
+	})
+	d.client.activeCapture.Store(ep)
+	defer d.client.activeCapture.Store(nil)
 	ssrc := d.client.native.ssrc
-	b.hub.mu.Unlock()
 
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
 	pkt := make([]byte, rtpPacketBytes)
@@ -357,12 +359,12 @@ func TestNativeUDPZeroAlloc(t *testing.T) {
 	nc, _ := dialNativeDevice(t, ds, "lark-udpalloc", "unit", 0)
 	nc.readUntil(msgFrame)
 
-	b.hub.mu.Lock()
-	d := b.hub.terminals["lark-udpalloc"]
-	d.recording.phase = captureOpen
-	d.recording.pcm = make([]byte, 0, 128*rtpPCMBytes)
+	d := b.hub.live("lark-udpalloc")
+	updateTerm(t, d, func(d *terminalSession) {
+		d.recording.start(time.Now(), "", false)
+		d.recording.pcm = make([]byte, 0, 128*rtpPCMBytes)
+	})
 	ssrc := d.client.native.ssrc
-	b.hub.mu.Unlock()
 
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
 	pkt := make([]byte, rtpPacketBytes)
@@ -394,8 +396,7 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 	for i := range endpointRingSlots {
 		free <- i
 	}
-	b.hub.mu.Lock()
-	d := b.hub.terminals["lark-epalloc"]
+	d := b.hub.live("lark-epalloc")
 	ep := &endpointCapture{
 		cancel:    func() {},
 		owner:     d.client,
@@ -405,11 +406,12 @@ func TestEndpointCaptureZeroAlloc(t *testing.T) {
 		listening: make(chan struct{}),
 		deadline:  time.NewTimer(time.Minute),
 	}
-	d.recording.phase = captureOpen
-	d.recording.endpoint = ep
+	updateTerm(t, d, func(d *terminalSession) {
+		d.recording.phase = captureOpen
+		d.recording.endpoint = ep
+	})
 	d.client.activeCapture.Store(ep)
 	ssrc := d.client.native.ssrc
-	b.hub.mu.Unlock()
 	defer d.client.activeCapture.Store(nil)
 
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
@@ -445,7 +447,7 @@ func BenchmarkNativeUDPHandle(b *testing.B) {
 		recording: deviceCapture{phase: captureOpen, started: time.Now(), pcm: make([]byte, 0, maxPCM)},
 		client:    &terminalClient{native: nc, ctx: b.Context()},
 	}
-	d.client.terminal = d
+	d.client.terminal.Store(d)
 	nc.client = d.client
 	h.terminals["lark-udpbench"] = d
 	ds.peers[ssrc] = nc

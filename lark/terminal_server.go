@@ -453,10 +453,8 @@ func (nc *nativeClient) pingInterval() time.Duration {
 	if nc.hub == nil || nc.client == nil {
 		return pingAwake
 	}
-	nc.hub.mu.Lock()
-	d := nc.client.terminal
-	asleep := d != nil && d.asleep
-	nc.hub.mu.Unlock()
+	d := nc.client.terminal.Load()
+	asleep := d != nil && d.state().asleep
 	if asleep {
 		return pingAsleep
 	}
