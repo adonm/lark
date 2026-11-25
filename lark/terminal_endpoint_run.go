@@ -445,9 +445,11 @@ func (r *endpointRun) abortSpec() {
 
 // pauseCoversSpeech reports whether the cached probe clip already holds all
 // gated speech, so the commit can reuse its transcript instead of decoding.
+// The clip must fit inside one probe window: a longer clip's latest probe saw
+// only its tail, and its words are not the whole utterance.
 func (r *endpointRun) pauseCoversSpeech() bool {
 	return r.cached.err == nil && r.cached.text != "" && !r.cached.windowed &&
-		r.lastGateOpenLen <= r.cached.audioLen
+		len(r.u.pcm) <= endpointProbeWindow && r.lastGateOpenLen <= r.cached.audioLen
 }
 
 // pauseCoversListenWindow is the listening-mode variant: a probe of a window
@@ -494,7 +496,9 @@ func (r *endpointRun) buildResult() captureResult {
 	if len(result.pcm) != 0 && (!r.listen || r.u.policy.voiced) && r.c.ctx.Err() == nil {
 		switch {
 		case r.pauseCoversSpeech():
-			result.text, result.stt, result.sttQueue, result.sttRun = r.cached.text, r.cached.stt, r.cached.sttQueue, r.cached.sttRun
+			// The probe already transcribed the whole clip; the commit spends no
+			// STT time. Its own cost belongs to endpointing, not this turn.
+			result.text = r.cached.text
 		case r.pauseCoversListenWindow():
 			result.text = r.cached.text
 		default:

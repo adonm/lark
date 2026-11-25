@@ -219,6 +219,78 @@ func TestEndpointRunDiscardNoise(t *testing.T) {
 	}
 }
 
+// A commit reuses the last pause probe only when that probe decoded the whole
+// utterance, so a fresh short clip never pays for a second Parakeet pass.
+func TestEndpointCommitReusesFreshProbeTranscript(t *testing.T) {
+	t.Parallel()
+	r, calls := probingEndpointRun()
+	pcm := nonSilentPCM(sampleRate * 2) // one second, inside the probe window
+	r.u.pcm = pcm
+	r.cached = pauseTranscript{audioLen: len(pcm), text: "what time is it"}
+	r.lastGateOpenLen = len(pcm)
+
+	result := r.buildResult()
+	if *calls != 0 {
+		t.Fatalf("post-commit decode calls = %d, want the cached probe transcript", *calls)
+	}
+	if result.text != "what time is it" {
+		t.Fatalf("transcript = %q, want the probe transcript", result.text)
+	}
+	if result.stt != 0 {
+		t.Fatalf("post-commit STT = %v, want 0 on a reused probe", result.stt)
+	}
+}
+
+// Voiced audio after the probe is missing from its clip, so the commit must
+// decode the full utterance instead of trusting the shorter transcript.
+func TestEndpointCommitDecodesSpeechAfterProbe(t *testing.T) {
+	t.Parallel()
+	r, calls := probingEndpointRun()
+	pcm := nonSilentPCM(sampleRate * 2)
+	r.u.pcm = pcm
+	r.cached = pauseTranscript{audioLen: len(pcm) - 320, text: "what time"}
+	r.lastGateOpenLen = len(pcm)
+
+	result := r.buildResult()
+	if *calls != 1 || result.text != "fresh" {
+		t.Fatalf("decode calls = %d, transcript = %q; want one full decode", *calls, result.text)
+	}
+}
+
+// A clip longer than one probe window was only partially seen by any probe,
+// even when no new voiced audio followed the last one.
+func TestEndpointCommitDecodesLongUtterance(t *testing.T) {
+	t.Parallel()
+	r, calls := probingEndpointRun()
+	pcm := nonSilentPCM(endpointProbeWindow + endpointBytes)
+	r.u.pcm = pcm
+	r.cached = pauseTranscript{audioLen: len(pcm), text: "a long story"}
+	r.lastGateOpenLen = len(pcm)
+
+	result := r.buildResult()
+	if *calls != 1 || result.text != "fresh" {
+		t.Fatalf("decode calls = %d, transcript = %q; want one full decode", *calls, result.text)
+	}
+}
+
+// nonSilentPCM is a durable clip: clip() drops an all-zero buffer, which is
+// an empty capture rather than speech.
+func nonSilentPCM(n int) []byte {
+	return bytes.Repeat([]byte{0xE8, 0x03}, n/2)
+}
+
+// probingEndpointRun counts the commit's decode calls. A probe run's hub is
+// nil, so diagnostics stay untouched.
+func probingEndpointRun() (*endpointRun, *int) {
+	r := testEndpointRun(false)
+	calls := new(int)
+	r.decode = func(context.Context, []byte) (string, error) {
+		*calls = *calls + 1
+		return "fresh", nil
+	}
+	return r, calls
+}
+
 // The commit may reuse a probe transcript only when no gated audio followed it.
 func TestEndpointRunClosingPauseGuard(t *testing.T) {
 	t.Parallel()
@@ -240,6 +312,12 @@ func TestEndpointRunClosingPauseGuard(t *testing.T) {
 	r.cached = pauseTranscript{audioLen: 320, text: ""}
 	if r.pauseCoversSpeech() {
 		t.Fatal("empty probe text was reused")
+	}
+	r.cached = pauseTranscript{audioLen: 320, text: "hello world"}
+	r.u.pcm = nonSilentPCM(endpointProbeWindow + endpointBytes)
+	r.lastGateOpenLen = 320
+	if r.pauseCoversSpeech() {
+		t.Fatal("probe of a longer utterance's tail was reused")
 	}
 }
 

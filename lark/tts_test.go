@@ -296,6 +296,25 @@ func TestStreamPrefillAvoidsSentenceGaps(t *testing.T) {
 	}
 }
 
+// A one-sentence answer is already finished before playback asks for its first
+// chunk. The prefill wait must observe that and return at once instead of
+// holding TTS_CTRL start for the 250 ms cap reserved for still-warming streams.
+func TestStreamPrefillStartsImmediatelyOnShortFinishedReply(t *testing.T) {
+	t.Parallel()
+	stream := newAudioStream()
+	if !stream.append(make([]byte, sampleRate*2*350/1000)) { // "Four!" is ~0.35 s
+		t.Fatal("stream rejected the short reply")
+	}
+	stream.finish(nil)
+	start := time.Now()
+	if err := stream.waitBytes(t.Context(), utteranceBytes(ttsPrefill), ttsPrefillMax); err != nil {
+		t.Fatalf("prefill: %v", err)
+	}
+	if waited := time.Since(start); waited > ttsPrefillMax/2 {
+		t.Fatalf("finished short reply waited %v for prefill; want under %v", waited, ttsPrefillMax/2)
+	}
+}
+
 // First-audio cost of the playback prefill: synthesising until 1 s is buffered
 // instead of starting on the first sentence alone. Skips without the model.
 func BenchmarkTTSFirstAudioPrefill(b *testing.B) {
