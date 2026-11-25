@@ -1,0 +1,483 @@
+package edge
+
+import (
+	"bufio"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"lark/internal/proto"
+)
+
+type outMsg struct {
+	msgType uint8
+	payload []byte
+}
+
+// nativeConn is one TCP session. Its write loop owns the socket; all other
+// goroutines talk to it through the three priority queues.
+type nativeConn struct {
+	t        *Terminal
+	conn     net.Conn
+	remoteIP netip.Addr
+	ssrc     uint32
+
+	ctrlOut chan outMsg
+	pcmOut  chan outMsg
+
+	frameMu      sync.Mutex
+	pendingFrame *outMsg
+	frameNotify  chan struct{}
+	txSeq        uint16
+
+	rtp   atomic.Uint32 // high 16 bits: seen flag; low 16: last sequence
+	drops atomic.Uint64
+
+	closed  atomic.Bool
+	writeWG sync.WaitGroup
+}
+
+func (c *nativeConn) enqueueCtrl(msgType uint8, payload []byte) bool {
+	if c.closed.Load() {
+		return false
+	}
+	select {
+	case c.ctrlOut <- outMsg{msgType, payload}:
+		return true
+	default:
+		c.drops.Add(1)
+		return false
+	}
+}
+
+func (c *nativeConn) enqueuePCM(payload []byte) bool {
+	if c.closed.Load() {
+		return false
+	}
+	select {
+	case c.pcmOut <- outMsg{proto.MsgTTSPCM, payload}:
+		return true
+	default:
+		c.drops.Add(1)
+		return false
+	}
+}
+
+func (c *nativeConn) enqueueFrame(payload []byte) {
+	if c.closed.Load() {
+		return
+	}
+	c.frameMu.Lock()
+	c.pendingFrame = &outMsg{proto.MsgFrame, payload}
+	c.frameMu.Unlock()
+	select {
+	case c.frameNotify <- struct{}{}:
+	default:
+	}
+}
+
+func (c *nativeConn) takeFrame() (outMsg, bool) {
+	c.frameMu.Lock()
+	defer c.frameMu.Unlock()
+	if c.pendingFrame == nil {
+		return outMsg{}, false
+	}
+	msg := *c.pendingFrame
+	c.pendingFrame = nil
+	return msg, true
+}
+
+func (c *nativeConn) nextMsg() (outMsg, bool, bool) {
+	select {
+	case msg := <-c.ctrlOut:
+		return msg, false, true
+	default:
+	}
+	select {
+	case msg := <-c.pcmOut:
+		return msg, true, true
+	default:
+	}
+	if msg, ok := c.takeFrame(); ok {
+		return msg, false, true
+	}
+	return outMsg{}, false, false
+}
+
+func (c *nativeConn) writePacket(msgType uint8, payload []byte) bool {
+	var hdr [proto.ProtoHeaderSize]byte
+	hdr[0] = proto.ProtoMagic
+	hdr[1] = msgType
+	binary.LittleEndian.PutUint16(hdr[2:4], c.txSeq)
+	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(payload)))
+	c.txSeq++
+	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	bufs := net.Buffers{hdr[:], payload}
+	_, err := bufs.WriteTo(c.conn)
+	return err == nil
+}
+
+func (c *nativeConn) writeLoop() {
+	defer c.writeWG.Done()
+	defer c.close()
+	ping := time.NewTimer(c.t.pingInterval())
+	defer ping.Stop()
+	for {
+		if c.t.isClosed() {
+			return
+		}
+		if msg, isPCM, ok := c.nextMsg(); ok {
+			if !c.writePacket(msg.msgType, msg.payload) {
+				return
+			}
+			if isPCM {
+				if frame, ok := c.takeFrame(); ok && !c.writePacket(frame.msgType, frame.payload) {
+					return
+				}
+			}
+			continue
+		}
+		select {
+		case <-c.t.done:
+			return
+		case msg := <-c.ctrlOut:
+			if !c.writePacket(msg.msgType, msg.payload) {
+				return
+			}
+		case msg := <-c.pcmOut:
+			if !c.writePacket(msg.msgType, msg.payload) {
+				return
+			}
+		case <-c.frameNotify:
+		case <-ping.C:
+			var ts [4]byte
+			binary.LittleEndian.PutUint32(ts[:], uint32(time.Now().UnixMilli()))
+			if !c.writePacket(proto.MsgPing, ts[:]) {
+				return
+			}
+			ping.Reset(c.t.pingInterval())
+		}
+	}
+}
+
+func (c *nativeConn) close() {
+	if c.closed.Swap(true) {
+		return
+	}
+	_ = c.conn.Close()
+	c.t.detach(c)
+}
+
+type terminalServer struct {
+	e   *Edge
+	tcp net.Listener
+	udp *net.UDPConn
+
+	peers sync.Map // uint32 SSRC -> *Terminal; lock-free RTP lookup
+
+	closed  atomic.Bool
+	wg      sync.WaitGroup
+	udpPort uint16
+}
+
+func newTerminalServer(e *Edge, addr string) (*terminalServer, error) {
+	tcp, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	tcpAddr := tcp.Addr().(*net.TCPAddr)
+	port := tcpAddr.Port
+	// With an ephemeral TCP port the kernel's UDP pick is independent; port 0
+	// lets the OS choose a second ephemeral number.
+	if tcpAddr.Port == 0 || tcpAddr.Port != 8766 {
+		port = 0
+	}
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: tcpAddr.IP, Zone: tcpAddr.Zone, Port: port})
+	if err != nil {
+		_ = tcp.Close()
+		return nil, err
+	}
+	_ = udp.SetReadBuffer(256 << 10)
+	_ = udp.SetWriteBuffer(256 << 10)
+	s := &terminalServer{
+		e: e, tcp: tcp, udp: udp,
+		udpPort: uint16(udp.LocalAddr().(*net.UDPAddr).Port),
+	}
+	return s, nil
+}
+
+func (s *terminalServer) start() {
+	s.wg.Add(2)
+	go s.acceptLoop()
+	go s.udpLoop()
+}
+
+func (s *terminalServer) close() {
+	if s.closed.Swap(true) {
+		return
+	}
+	_ = s.tcp.Close()
+	_ = s.udp.Close()
+	s.peers.Range(func(_, v any) bool {
+		v.(*Terminal).close()
+		return true
+	})
+	s.wg.Wait()
+}
+
+func (s *terminalServer) acceptLoop() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.tcp.Accept()
+		if err != nil {
+			if s.closed.Load() || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			continue
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.serve(conn)
+		}()
+	}
+}
+
+func tuneTCP(conn net.Conn) {
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(15 * time.Second)
+		_ = tc.SetReadBuffer(128 << 10)
+		_ = tc.SetWriteBuffer(128 << 10)
+	}
+}
+
+func (s *terminalServer) serve(conn net.Conn) {
+	defer conn.Close()
+	tuneTCP(conn)
+	br := bufio.NewReaderSize(conn, 16<<10)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	msgType, _, payload, err := proto.ReadFrame(br)
+	if err != nil {
+		return
+	}
+	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	remoteIP, err := netip.ParseAddr(host)
+	if err != nil {
+		return
+	}
+	remoteIP = remoteIP.Unmap()
+
+	var t *Terminal
+	var isResume bool
+	switch msgType {
+	case proto.MsgHello:
+		hello, ok := proto.DecodeTerminalHello(payload)
+		if !ok {
+			writeReject(conn, proto.RejectBadCaps, "invalid hello")
+			return
+		}
+		if hello.ProtoVersion != proto.ProtoVersion1 {
+			writeReject(conn, proto.RejectBadVersion, "protocol version mismatch")
+			return
+		}
+		if s.e.cfg.Token == "" || subtle.ConstantTimeCompare([]byte(hello.Token), []byte(s.e.cfg.Token)) != 1 {
+			writeReject(conn, proto.RejectBadToken, "invalid token")
+			return
+		}
+		t = s.newTerminal(hello, remoteIP)
+	case proto.MsgResume:
+		resume, ok := proto.DecodeTerminalResume(payload)
+		if !ok {
+			writeReject(conn, proto.RejectUnknownTerminal, "invalid resume")
+			return
+		}
+		if resume.ProtoVersion != proto.ProtoVersion1 {
+			writeReject(conn, proto.RejectBadVersion, "protocol version mismatch")
+			return
+		}
+		t = s.e.Terminal(resume.TerminalID)
+		if t == nil {
+			writeReject(conn, proto.RejectUnknownTerminal, "unknown terminal")
+			return
+		}
+		isResume = true
+	default:
+		writeReject(conn, proto.RejectBadVersion, "expected hello or resume")
+		return
+	}
+
+	ssrc := randomSSRC()
+	nc := &nativeConn{
+		t: t, conn: conn, remoteIP: remoteIP, ssrc: ssrc,
+		ctrlOut:     make(chan outMsg, 64),
+		pcmOut:      make(chan outMsg, 192),
+		frameNotify: make(chan struct{}, 1),
+	}
+	if !isResume {
+		t.mu.Lock()
+		t.ip = remoteIP.String()
+		t.ssrc = ssrc
+		t.mu.Unlock()
+		if !s.e.register(t) {
+			writeReject(conn, proto.RejectOccupied, "terminal already connected")
+			return
+		}
+		t.start(nc, s)
+		s.addPeer(ssrc, t)
+		_ = nc.writePacket(proto.MsgWelcome, t.welcomePayload(s.udpPort))
+		nc.t.touch()
+		s.e.emit("terminal.connected", t.connectedEvent())
+	} else {
+		t.mu.Lock()
+		old := t.ssrc
+		t.ip = remoteIP.String()
+		t.ssrc = ssrc
+		t.mu.Unlock()
+		if old != 0 {
+			s.dropPeer(old)
+		}
+		s.addPeer(ssrc, t)
+		t.attach(nc)
+		_ = nc.writePacket(proto.MsgWelcome, t.welcomePayload(s.udpPort))
+	}
+
+	nc.writeWG.Add(1)
+	go nc.writeLoop()
+
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
+		msgType, _, payload, err := proto.ReadFrame(br)
+		if err != nil || t.isClosed() {
+			nc.close()
+			return
+		}
+		t.touch()
+		s.handleTCP(t, nc, msgType, payload)
+	}
+}
+
+func (s *terminalServer) addPeer(ssrc uint32, t *Terminal) { s.peers.Store(ssrc, t) }
+
+func (s *terminalServer) dropPeer(ssrc uint32) { s.peers.Delete(ssrc) }
+
+func (s *terminalServer) handleTCP(t *Terminal, nc *nativeConn, msgType uint8, payload []byte) {
+	switch msgType {
+	case proto.MsgPing:
+		if len(payload) == 4 {
+			nc.enqueueCtrl(proto.MsgPong, payload)
+		}
+	case proto.MsgPong:
+		// Liveness only; the read deadline is the real keepalive.
+	case proto.MsgTelemetry:
+		if m, ok := proto.DecodeProtoTelemetry(payload); ok {
+			t.telemetry(m)
+		}
+	case proto.MsgPointer:
+		if m, ok := proto.DecodeProtoPointer(payload); ok {
+			t.pointer(m)
+		}
+	case proto.MsgRecStart:
+		if m, ok := proto.DecodeProtoRecStart(payload); ok {
+			t.event(evRecStart, func(ev *termEvent) { ev.start = m })
+		}
+	case proto.MsgRecEnd:
+		if m, ok := proto.DecodeProtoRecEnd(payload); ok {
+			t.event(evRecEnd, func(ev *termEvent) { ev.end = m })
+		}
+	case proto.MsgTTSAck:
+		if m, ok := proto.DecodeProtoTTSAck(payload); ok {
+			t.event(evTTSAck, func(ev *termEvent) { ev.ack = m })
+		}
+	default:
+		// Unknown device messages are ignored forward-compatibly.
+	}
+}
+
+func (s *terminalServer) udpLoop() {
+	defer s.wg.Done()
+	buf := make([]byte, 1500)
+	for {
+		n, remote, err := s.udp.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			if s.closed.Load() || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			continue
+		}
+		s.handleUDP(buf[:n], remote)
+	}
+}
+
+// handleUDP is the RTP hot path. It performs no allocation: the RTP header is
+// parsed in place and the PCM is copied into a preallocated capture slot.
+func (s *terminalServer) handleUDP(pkt []byte, remote netip.AddrPort) {
+	if len(pkt) < proto.RtpHeaderSize+2 {
+		return
+	}
+	if pkt[0] != proto.RtpVersionByte || pkt[1] != proto.RtpPTRecPCM {
+		return
+	}
+	ssrc := binary.BigEndian.Uint32(pkt[8:12])
+	seq := binary.BigEndian.Uint16(pkt[2:4])
+	v, ok := s.peers.Load(ssrc)
+	if !ok {
+		return
+	}
+	t := v.(*Terminal)
+	nc := t.native()
+	if nc == nil || remote.Addr().Unmap() != nc.remoteIP {
+		return
+	}
+	if !nc.acceptRTP(seq) {
+		return
+	}
+	t.ingestRTP(pkt[proto.RtpHeaderSize:], time.Now())
+}
+
+// acceptRTP is lock-free: one atomic word holds the seen flag and the last
+// accepted sequence. Reordering and duplicates are dropped without a mutex.
+func (c *nativeConn) acceptRTP(seq uint16) bool {
+	for {
+		old := c.rtp.Load()
+		if old>>16 != 0 && int16(seq-uint16(old)) <= 0 {
+			c.drops.Add(1)
+			return false
+		}
+		if c.rtp.CompareAndSwap(old, 1<<16|uint32(seq)) {
+			return true
+		}
+	}
+}
+
+func writeReject(conn net.Conn, reason uint8, msg string) {
+	p := proto.ProtoReject{Reason: reason, Message: msg}.Encode()
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, _ = conn.Write(proto.Pack(proto.MsgReject, 0, p))
+}
+
+func randomSSRC() uint32 {
+	var b [4]byte
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			return 1
+		}
+		if v := binary.BigEndian.Uint32(b[:]); v != 0 {
+			return v
+		}
+	}
+}
+
+func randomToken() [proto.ResumeTokenLen]byte {
+	var token [proto.ResumeTokenLen]byte
+	_, _ = io.ReadFull(rand.Reader, token[:])
+	return token
+}
