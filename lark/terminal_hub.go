@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 const (
@@ -79,10 +81,11 @@ type terminalSession struct {
 	rendering      bool
 	renderNext     *renderRequest
 
-	scene         sceneView
-	view          *sceneView
-	pending       *sceneView
-	card          *sceneView
+	scene         pixel.Scene
+	sceneMenu     *menuContent
+	view          *pixel.Scene
+	pending       *pixel.Scene
+	card          *pixel.Scene
 	drawer        string
 	menuPage      int
 	homePage      int
@@ -620,16 +623,17 @@ func (d *terminalSession) voiceTheme() string {
 }
 
 type renderRequest struct {
-	view         sceneView
+	view         pixel.Scene
+	menu         *menuContent
 	companion    *companionState
 	pose         companionPose
-	grade        gradeKey
+	grade        pixel.GradeKey
 	drawer       string
 	menuPage     int
 	vol          int
 	voice        string
-	peers        []menuPeer
-	statsRows    []menuRow
+	peers        []pixel.Peer
+	statsRows    []pixel.Row
 	storyTitle   string
 	storyText    string
 	storyChoices []stories.Choice
@@ -687,7 +691,7 @@ func (h *terminalHub) openStoryEvent(d *terminalSession, st stories.Saved, narra
 			if !h.active(d) {
 				return
 			}
-			d.drawer = drawerStoryReader
+			d.drawer = pixel.DrawerStoryReader
 			d.story = sess
 			d.storyPage = page
 			now := time.Now()
@@ -752,7 +756,7 @@ func (h *terminalHub) setSleeping(d *terminalSession, asleep bool) {
 }
 
 func (d *terminalSession) brightness() int {
-	if d.drawer == drawerPair {
+	if d.drawer == pixel.DrawerPair {
 		return 100
 	}
 	if d.asleep {

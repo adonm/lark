@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 func (b *larkServer) saveStory(ctx context.Context, id, twee, author string, createOnly bool) (stories.Saved, *stories.Story, error) {
@@ -456,14 +458,14 @@ func (b *larkServer) ensureStoryBGAsync(d *terminalSession, storyID, passageName
 		if err != nil {
 			return
 		}
-		norm, err := normalizeBackground(img, pixelSpecBox3.logicalW, pixelSpecBox3.logicalH)
+		norm, err := pixel.NormalizeBackground(img, pixel.SpecBox3.LogicalW, pixel.SpecBox3.LogicalH)
 		if err != nil {
 			return
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return
 		}
-		if err := writePortraitPNG(filepath.Dir(dst), filepath.Base(dst), norm); err != nil {
+		if err := pixel.WritePNG(filepath.Dir(dst), filepath.Base(dst), norm); err != nil {
 			return
 		}
 		if b.hub == nil || d == nil {

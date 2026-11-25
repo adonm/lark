@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 type testNativeClient struct {
@@ -158,7 +160,7 @@ func TestNativeProtoHandshakeAndBadToken(t *testing.T) {
 		t.Fatalf("expected valid MSG_FRAME, got len=%d", len(frame))
 	}
 	codec := frame[9]
-	if codec != frameCodecRaw && codec != frameCodecRLE565 && codec != frameCodecJPEG && codec != frameCodecLZ4 {
+	if codec != pixel.FrameCodecRaw && codec != pixel.FrameCodecRLE565 && codec != pixel.FrameCodecJPEG && codec != pixel.FrameCodecLZ4 {
 		t.Fatalf("unexpected frame codec %d", codec)
 	}
 }

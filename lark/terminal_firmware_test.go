@@ -4,6 +4,8 @@ import (
 	"image"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func TestNativeTapRequiresCurrentFrameRevision(t *testing.T) {
@@ -103,12 +105,12 @@ func TestAcceptPointerRevisionAllowsAnimationFrames(t *testing.T) {
 // peer. The revision must move with the action value, not just the geometry.
 func TestPointerRevisionTracksActionValues(t *testing.T) {
 	t.Parallel()
-	hits := []hitBox{{id: "close", x1: 0, y1: 0, x2: 99, y2: 49}, {id: "reply", x1: 100, y1: 0, x2: 199, y2: 49}}
-	first := pointerKey(hits, map[string]sceneAction{
-		"close": {"close-card", ""}, "reply": {"reply", "mint"},
+	hits := []pixel.HitBox{{ID: "close", X1: 0, Y1: 0, X2: 99, Y2: 49}, {ID: "reply", X1: 100, Y1: 0, X2: 199, Y2: 49}}
+	first := pointerKey(hits, map[string]pixel.Action{
+		"close": {Kind: "close-card", Value: ""}, "reply": {Kind: "reply", Value: "mint"},
 	})
-	second := pointerKey(hits, map[string]sceneAction{
-		"close": {"close-card", ""}, "reply": {"reply", "cake"},
+	second := pointerKey(hits, map[string]pixel.Action{
+		"close": {Kind: "close-card", Value: ""}, "reply": {Kind: "reply", Value: "cake"},
 	})
 	if first == second {
 		t.Fatal("same rectangles with a different reply target share a pointer revision")

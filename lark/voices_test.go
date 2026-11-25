@@ -200,8 +200,8 @@ func TestMenuVoicePicker(t *testing.T) {
 		var tx, ty int
 		found := false
 		for _, h := range hits {
-			if h.id == "voice-"+choice.ID {
-				tx, ty, found = (h.x1+h.x2)/2, (h.y1+h.y2)/2, true
+			if h.ID == "voice-"+choice.ID {
+				tx, ty, found = (h.X1+h.X2)/2, (h.Y1+h.Y2)/2, true
 				break
 			}
 		}

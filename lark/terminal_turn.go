@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 const (
@@ -139,7 +141,7 @@ func (h *terminalHub) startCaptureWindow(d *terminalSession, now time.Time, span
 }
 
 func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) bool {
-	if !h.active(d) || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 ||
+	if !h.active(d) || d.drawer != pixel.DrawerStoryReader || d.story == nil || len(d.story.choices) == 0 ||
 		!h.voiceOwnerIs(d) || !h.bridgeEndpoint(d) {
 		return false
 	}
@@ -166,7 +168,7 @@ func (h *terminalHub) startStoryChoiceListen(d *terminalSession, now time.Time) 
 func (h *terminalHub) tryStoryVoiceChoice(d *terminalSession, turnID uint64, text string) bool {
 	handled := false
 	d.update(func(d *terminalSession) {
-		if !h.active(d) || d.turn != turnID || d.drawer != drawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
+		if !h.active(d) || d.turn != turnID || d.drawer != pixel.DrawerStoryReader || d.story == nil || len(d.story.choices) == 0 {
 			return
 		}
 		idx, ok := stories.MatchChoice(text, d.story.choices)
@@ -409,11 +411,11 @@ func (h *terminalHub) beginTurn(d *terminalSession, now time.Time, keepView bool
 type turnAudio struct {
 	stream *AudioStream
 	turn   uint64
-	answer *sceneView
+	answer *pixel.Scene
 	failed bool
 }
 
-func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *sceneView, audio *AudioStream) {
+func (h *terminalHub) finishTurn(d *terminalSession, id uint64, view *pixel.Scene, audio *AudioStream) {
 	defer d.syncMode()
 	defer h.sig.notify()
 	if !h.active(d) || d.turn != id {
@@ -489,7 +491,7 @@ func (h *terminalHub) turnFailed(d *terminalSession, id uint64, message string) 
 	if h.active(d) && d.turn == id {
 		h.setCompanionStatus(d.companionID.get(), statusError)
 	}
-	view := noticeScene("Try again", message)
+	view := pixel.NoticeScene("Try again", message)
 	h.finishTurn(d, id, &view, nil)
 }
 
@@ -517,7 +519,7 @@ func (h *terminalHub) stopTurnNow(d *terminalSession, now time.Time) {
 }
 
 // finishTurnAsync posts a completion from a turn goroutine.
-func (h *terminalHub) finishTurnAsync(d *terminalSession, id uint64, view *sceneView, audio *AudioStream) {
+func (h *terminalHub) finishTurnAsync(d *terminalSession, id uint64, view *pixel.Scene, audio *AudioStream) {
 	d.update(func(d *terminalSession) { h.finishTurn(d, id, view, audio) })
 }
 
@@ -627,9 +629,9 @@ func (h *terminalHub) runTurnChannel(ctx context.Context, d *terminalSession, id
 		return
 	}
 	h.deliverDeviceReply(ctx, ch.reply, gen)
-	var view *sceneView
+	var view *pixel.Scene
 	if gen.reply != "" && ctx.Err() == nil {
-		v := noticeScene("Answer", shortText(gen.reply, maxMessage, true))
+		v := pixel.NoticeScene("Answer", shortText(gen.reply, maxMessage, true))
 		view = &v
 	}
 	h.finishTurnAsync(d, id, view, gen.audio)
@@ -699,7 +701,7 @@ func (h *terminalHub) sendIntercom(ctx context.Context, d *terminalSession, id u
 
 func (h *terminalHub) confirm(ctx context.Context, d *terminalSession, id uint64, target string, recipients []companionTarget, sent, partial bool) {
 	title, reply := intercomConfirmation(target, recipients, sent, partial)
-	view := noticeScene(title, reply)
+	view := pixel.NoticeScene(title, reply)
 	h.sayTurn(ctx, d, id, reply, &view)
 }
 
@@ -742,7 +744,7 @@ func (h *terminalHub) replyNotCaught(ctx context.Context, d *terminalSession, id
 	d.update(func(d *terminalSession) { h.finishTurn(d, id, nil, nil) })
 }
 
-func (h *terminalHub) sayTurn(ctx context.Context, d *terminalSession, id uint64, text string, view *sceneView) {
+func (h *terminalHub) sayTurn(ctx context.Context, d *terminalSession, id uint64, text string, view *pixel.Scene) {
 	start := time.Now()
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, d.companionID.get(), h.b.companionFor(d.companionID.get()).Name, "tap", start)
@@ -1017,7 +1019,7 @@ func (h *terminalHub) freeFollowUpsNow(d *terminalSession, now time.Time) {
 
 type noticeReceipt struct {
 	terminal *terminalSession
-	view     *sceneView
+	view     *pixel.Scene
 }
 
 func (b *larkServer) intercomTargets(others []companionTarget, target string) []companionTarget {
@@ -1042,7 +1044,7 @@ func (b *larkServer) intercomTargets(others []companionTarget, target string) []
 type queuedNotice struct {
 	ctx     context.Context
 	fromPCM bool
-	view    *sceneView
+	view    *pixel.Scene
 	chime   string
 	voice   string
 	intro   string
@@ -1104,9 +1106,9 @@ func (h *terminalHub) deliverNotice(ctx context.Context, n terminalNotice) []not
 	}
 	text := shortText(n.text, maxMessage, true)
 	speakText := shortText(n.speakText, maxMessage, true)
-	var view *sceneView
+	var view *pixel.Scene
 	if n.showCard {
-		v := (intercomCard{companion: n.sender.Name, reply: n.cardReply, text: text}).scene()
+		v := (pixel.IntercomCard{Companion: n.sender.Name, Reply: n.cardReply, Text: text}).Scene()
 		view = &v
 	}
 	var targets []*terminalSession
@@ -1237,7 +1239,7 @@ func (h *terminalHub) caption(receipts []noticeReceipt, sender companionState, t
 	if len(receipts) == 0 || text == "" {
 		return
 	}
-	view := (intercomCard{companion: sender.Name, text: shortText(text, maxMessage, true)}).scene()
+	view := (pixel.IntercomCard{Companion: sender.Name, Text: shortText(text, maxMessage, true)}).Scene()
 	for _, r := range receipts {
 		d := r.terminal
 		d.post(terminalEvent{kind: evCaption, now: time.Now(),

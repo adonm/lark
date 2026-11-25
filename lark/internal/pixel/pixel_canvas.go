@@ -1,4 +1,4 @@
-package main
+package pixel
 
 import (
 	"image"
@@ -9,45 +9,45 @@ import (
 	"lark/fonts/dogica"
 )
 
-type pixelDisplaySpec struct {
+type Spec struct {
 	name           string
-	logicalW       int
-	logicalH       int
-	artScale       int
-	bodyTextScale  int
-	titleTextScale int
-	safe           image.Rectangle
-	round          bool
+	LogicalW       int
+	LogicalH       int
+	ArtScale       int
+	BodyTextScale  int
+	TitleTextScale int
+	Safe           image.Rectangle
+	Round          bool
 }
 
 var (
-	pixelSpecVoCat = pixelDisplaySpec{
+	SpecVoCat = Spec{
 		name:           "vocat",
-		logicalW:       120,
-		logicalH:       120,
-		artScale:       3,
-		bodyTextScale:  2,
-		titleTextScale: 3,
-		safe:           image.Rect(18, 18, 102, 102),
-		round:          true,
+		LogicalW:       120,
+		LogicalH:       120,
+		ArtScale:       3,
+		BodyTextScale:  2,
+		TitleTextScale: 3,
+		Safe:           image.Rect(18, 18, 102, 102),
+		Round:          true,
 	}
-	pixelSpecBox3 = pixelDisplaySpec{
+	SpecBox3 = Spec{
 		name:           "box3",
-		logicalW:       160,
-		logicalH:       120,
-		artScale:       2,
-		bodyTextScale:  2,
-		titleTextScale: 2,
-		safe:           image.Rect(4, 4, 156, 116),
-		round:          false,
+		LogicalW:       160,
+		LogicalH:       120,
+		ArtScale:       2,
+		BodyTextScale:  2,
+		TitleTextScale: 2,
+		Safe:           image.Rect(4, 4, 156, 116),
+		Round:          false,
 	}
 )
 
-func pixelSpecForGeometry(g screenGeometry) pixelDisplaySpec {
-	if g.shape == "rect" || g.width != g.height {
-		return pixelSpecBox3
+func SpecForGeometry(width, height int, shape string) Spec {
+	if shape == "rect" || width != height {
+		return SpecBox3
 	}
-	return pixelSpecVoCat
+	return SpecVoCat
 }
 
 // Layout principles (floristry):
@@ -215,8 +215,8 @@ func (c *pixelCanvas) blitSprite(x, y int, rows []string, pal map[string]imageco
 	}
 }
 
-func (c *pixelCanvas) applyLUT(grade gradeKey) {
-	if grade == gradeDay {
+func (c *pixelCanvas) applyLUT(grade GradeKey) {
+	if grade == GradeDay {
 		return
 	}
 	lut := &atmosphereLUTs[grade]
@@ -246,7 +246,7 @@ func acquirePixelImage(w, h int) *image.RGBA {
 	return image.NewRGBA(image.Rect(0, 0, w, h))
 }
 
-func releasePixelImage(img *image.RGBA) {
+func ReleaseImage(img *image.RGBA) {
 	if img != nil {
 		pixelImagePool.Put(img)
 	}

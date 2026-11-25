@@ -12,6 +12,8 @@ import (
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
+
+	"lark/internal/pixel"
 )
 
 func decodeQRFromPNG(path string) (string, error) {
@@ -128,7 +130,7 @@ func (q *qaDCClient) close() {
 func TestDecodeQRFromPairPNG(t *testing.T) {
 	t.Parallel()
 	const wantQR = "https://i.delta.chat/#0123456789ABCDEF0123456789ABCDEF&a=qa%40example.org&n=Cake"
-	img, err := renderPixelPair(pixelSpecForGeometry(roundScreen), "Cake", wantQR)
+	img, err := pixel.RenderPair(pixel.SpecForGeometry(360, 360, "round"), "Cake", wantQR)
 	if err != nil {
 		t.Fatal(err)
 	}

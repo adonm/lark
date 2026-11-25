@@ -1,4 +1,4 @@
-package main
+package pixel
 
 import (
 	"image"
@@ -75,15 +75,15 @@ func TestPixelTextWrapAndEllipsis(t *testing.T) {
 
 func TestPortraitQuantizationMax32Colors(t *testing.T) {
 	t.Parallel()
-	sheet := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))
+	sheet := image.NewRGBA(image.Rect(0, 0, SheetSide, SheetSide))
 	bg := imagecolor.RGBA{240, 235, 250, 255}
-	for y := range portraitSheetSide {
-		for x := range portraitSheetSide {
+	for y := range SheetSide {
+		for x := range SheetSide {
 			sheet.SetRGBA(x, y, bg)
 		}
 	}
 	// Draw 4 distinct-gradient silhouettes in the 4 quadrants (> 1000 unique colors).
-	const side = portraitSheetSide / 2
+	const side = SheetSide / 2
 	for q := range 4 {
 		qx, qy := (q%2)*side, (q/2)*side
 		for y := 100; y < 400; y++ {
@@ -100,9 +100,9 @@ func TestPortraitQuantizationMax32Colors(t *testing.T) {
 			}
 		}
 	}
-	poses, err := normalizePortraitSheet(sheet, pixelPortraitHeight)
+	poses, err := NormalizePortraitSheet(sheet, PortraitHeight)
 	if err != nil {
-		t.Fatalf("normalizePortraitSheet: %v", err)
+		t.Fatalf("NormalizePortraitSheet: %v", err)
 	}
 	unique := map[imagecolor.RGBA]struct{}{}
 	for i, p := range poses {
@@ -110,8 +110,8 @@ func TestPortraitQuantizationMax32Colors(t *testing.T) {
 			t.Fatalf("pose %d is nil", i)
 		}
 		b := p.Bounds()
-		if b.Dy() > pixelPortraitHeight {
-			t.Fatalf("pose %d height %d > %d", i, b.Dy(), pixelPortraitHeight)
+		if b.Dy() > PortraitHeight {
+			t.Fatalf("pose %d height %d > %d", i, b.Dy(), PortraitHeight)
 		}
 		for y := b.Min.Y; y < b.Max.Y; y++ {
 			for x := b.Min.X; x < b.Max.X; x++ {

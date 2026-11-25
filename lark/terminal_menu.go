@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 // handleProto hands one inbound frame to the session actor. The payload aliases
@@ -120,8 +122,8 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 	if inside {
 		key = hitID(d.svg.hits, x, y)
 	}
-	a := d.scene.actions[key]
-	if !d.acceptPointerRevision(a.kind, &rev) {
+	a := d.scene.Actions[key]
+	if !d.acceptPointerRevision(a.Kind, &rev) {
 		return
 	}
 	if evName == "drag" || evName == "up" {
@@ -131,8 +133,8 @@ func (h *terminalHub) pointer(d *terminalSession, evName string, x, y int, rev u
 }
 
 // pointerAction dispatches by scene family so each family reads on its own.
-func (h *terminalHub) pointerAction(d *terminalSession, key string, a sceneAction, now time.Time) {
-	switch a.kind {
+func (h *terminalHub) pointerAction(d *terminalSession, key string, a pixel.Action, now time.Time) {
+	switch a.Kind {
 	case "menu", "menu-open", "menu-back", "menu-page":
 		h.pointerMenu(d, a, now)
 	case "story-open", "story-choice":
@@ -142,7 +144,7 @@ func (h *terminalHub) pointerAction(d *terminalSession, key string, a sceneActio
 	case "volume-step", "vol-minus", "vol-plus":
 		h.pointerVolume(d, a)
 	case "voice-set", "voice-select":
-		h.selectAndPreviewVoice(d, a.value)
+		h.selectAndPreviewVoice(d, a.Value)
 	case "intercom-to", "listen", "reply", "rec-cancel", "rec-send", "rec-continue", "stop":
 		h.pointerTurnControl(d, key, a, now)
 	case "close-card", "close-view", "stop-turn", "companion", "dismiss":
@@ -152,35 +154,35 @@ func (h *terminalHub) pointerAction(d *terminalSession, key string, a sceneActio
 	}
 }
 
-func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Time) {
-	if a.kind == "menu" {
+func (h *terminalHub) pointerMenu(d *terminalSession, a pixel.Action, now time.Time) {
+	if a.Kind == "menu" {
 		h.chime(d, "tap")
-		d.drawer, d.card, d.pending = drawerMenu, nil, nil
+		d.drawer, d.card, d.pending = pixel.DrawerMenu, nil, nil
 		d.menuPage = 0
 		d.view = nil
 		h.render(d, now, false)
 		return
 	}
-	if d.drawer != drawerMenu && d.drawer != drawerMore && d.drawer != drawerVolume && d.drawer != drawerVoice &&
-		d.drawer != drawerIntercom && d.drawer != drawerStats && d.drawer != drawerStoryReader &&
-		d.scene.menu != d.menuData {
+	if d.drawer != pixel.DrawerMenu && d.drawer != pixel.DrawerMore && d.drawer != pixel.DrawerVolume && d.drawer != pixel.DrawerVoice &&
+		d.drawer != pixel.DrawerIntercom && d.drawer != pixel.DrawerStats && d.drawer != pixel.DrawerStoryReader &&
+		d.sceneMenu != d.menuData {
 		return
 	}
 	h.chime(d, "tap")
-	wasPair := d.drawer == drawerPair
-	switch a.kind {
+	wasPair := d.drawer == pixel.DrawerPair
+	switch a.Kind {
 	case "menu-open":
-		if d.drawer == drawerMenu {
+		if d.drawer == pixel.DrawerMenu {
 			d.homePage = d.menuPage
 		}
-		d.drawer, d.menuPage = a.value, 0
-		if d.drawer == drawerPair {
+		d.drawer, d.menuPage = a.Value, 0
+		if d.drawer == pixel.DrawerPair {
 			h.pushPower(d, 100, true)
 		}
 	case "menu-back":
-		if d.drawer == drawerStoryReader {
+		if d.drawer == pixel.DrawerStoryReader {
 			h.stopPlayback(d, true)
-			d.drawer, d.menuPage = drawerStories, 0
+			d.drawer, d.menuPage = pixel.DrawerStories, 0
 			d.story = nil
 			h.loadMenu(d)
 			return
@@ -188,16 +190,16 @@ func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Ti
 			d.menuData.memoryDetail = nil
 		} else if d.menuData != nil && d.menuData.detail != nil {
 			d.menuData.detail = nil
-		} else if d.drawer == drawerMenu {
+		} else if d.drawer == pixel.DrawerMenu {
 			d.drawer = ""
-		} else if d.drawer == drawerVolume || d.drawer == drawerPair || d.drawer == drawerUnpair || d.drawer == drawerStats {
-			d.drawer, d.menuPage = drawerMore, 0
+		} else if d.drawer == pixel.DrawerVolume || d.drawer == pixel.DrawerPair || d.drawer == pixel.DrawerUnpair || d.drawer == pixel.DrawerStats {
+			d.drawer, d.menuPage = pixel.DrawerMore, 0
 		} else {
-			d.drawer, d.menuPage = drawerMenu, d.homePage
+			d.drawer, d.menuPage = pixel.DrawerMenu, d.homePage
 		}
 	case "menu-page":
-		d.menuPage, _ = strconv.Atoi(a.value)
-		if d.drawer == drawerStoryReader && d.story != nil {
+		d.menuPage, _ = strconv.Atoi(a.Value)
+		if d.drawer == pixel.DrawerStoryReader && d.story != nil {
 			h.stopPlayback(d, true)
 			d.storyPage = d.menuPage
 			if h.b != nil && h.b.db != nil && d.companionID.get() != "" {
@@ -214,12 +216,12 @@ func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Ti
 			}
 		}
 	}
-	if wasPair && d.drawer != drawerPair {
+	if wasPair && d.drawer != pixel.DrawerPair {
 		h.pushPower(d, d.brightness(), true)
 	}
-	if a.kind != "menu-back" {
+	if a.Kind != "menu-back" {
 		switch d.drawer {
-		case drawerStories, drawerMemories, drawerPair, drawerUnpair:
+		case pixel.DrawerStories, pixel.DrawerMemories, pixel.DrawerPair, pixel.DrawerUnpair:
 			h.loadMenu(d)
 			return
 		}
@@ -227,12 +229,12 @@ func (h *terminalHub) pointerMenu(d *terminalSession, a sceneAction, now time.Ti
 	h.render(d, now, false)
 }
 
-func (h *terminalHub) pointerStory(d *terminalSession, a sceneAction) {
-	switch a.kind {
+func (h *terminalHub) pointerStory(d *terminalSession, a pixel.Action) {
+	switch a.Kind {
 	case "story-open":
-		if d.menuData != nil && d.scene.menu == d.menuData {
+		if d.menuData != nil && d.sceneMenu == d.menuData {
 			for _, st := range d.menuData.storyList {
-				if st.ID == a.value {
+				if st.ID == a.Value {
 					h.chime(d, "tap")
 					h.openStory(d, st, false)
 					return
@@ -240,8 +242,8 @@ func (h *terminalHub) pointerStory(d *terminalSession, a sceneAction) {
 			}
 		}
 	case "story-choice":
-		if d.drawer == drawerStoryReader && d.story != nil {
-			idx, err := strconv.Atoi(a.value)
+		if d.drawer == pixel.DrawerStoryReader && d.story != nil {
+			idx, err := strconv.Atoi(a.Value)
 			if err == nil && idx >= 0 && idx < len(d.story.choices) {
 				h.chime(d, "tap")
 				h.advanceStoryPassage(d, d.story.choices[idx].Target, false)
@@ -251,10 +253,10 @@ func (h *terminalHub) pointerStory(d *terminalSession, a sceneAction) {
 	}
 }
 
-func (h *terminalHub) pointerDetail(d *terminalSession, a sceneAction, now time.Time) {
-	i, _ := strconv.Atoi(a.value)
-	if d.menuData != nil && d.scene.menu == d.menuData {
-		if d.drawer == drawerMemories && i >= 0 && i < len(d.menuData.memories) {
+func (h *terminalHub) pointerDetail(d *terminalSession, a pixel.Action, now time.Time) {
+	i, _ := strconv.Atoi(a.Value)
+	if d.menuData != nil && d.sceneMenu == d.menuData {
+		if d.drawer == pixel.DrawerMemories && i >= 0 && i < len(d.menuData.memories) {
 			d.menuData.memoryDetail = &d.menuData.memories[i]
 			h.chime(d, "tap")
 			h.render(d, now, false)
@@ -266,11 +268,11 @@ func (h *terminalHub) pointerDetail(d *terminalSession, a sceneAction, now time.
 	}
 }
 
-func (h *terminalHub) pointerVolume(d *terminalSession, a sceneAction) {
-	op := a.kind
-	if a.kind == "volume-step" {
+func (h *terminalHub) pointerVolume(d *terminalSession, a pixel.Action) {
+	op := a.Kind
+	if a.Kind == "volume-step" {
 		op = "vol-plus"
-		if strings.HasPrefix(a.value, "-") {
+		if strings.HasPrefix(a.Value, "-") {
 			op = "vol-minus"
 		}
 	}
@@ -285,13 +287,13 @@ func (h *terminalHub) pointerVolume(d *terminalSession, a sceneAction) {
 	}()
 }
 
-func (h *terminalHub) pointerTurnControl(d *terminalSession, key string, a sceneAction, now time.Time) {
-	switch a.kind {
+func (h *terminalHub) pointerTurnControl(d *terminalSession, key string, a pixel.Action, now time.Time) {
+	switch a.Kind {
 	case "intercom-to":
 		h.chime(d, "tap")
-		h.startRecording(d, a.value, now, true)
+		h.startRecording(d, a.Value, now, true)
 	case "rec-cancel", "rec-send":
-		h.recordingControl(d, now, a.kind == "rec-cancel")
+		h.recordingControl(d, now, a.Kind == "rec-cancel")
 	case "rec-continue":
 		if d.busy && !d.recording.active() && h.bridgeEndpoint(d) {
 			h.startRecording(d, "", now, true)
@@ -305,13 +307,13 @@ func (h *terminalHub) pointerTurnControl(d *terminalSession, key string, a scene
 		if d.recording.active() {
 			h.recordingControl(d, now, false)
 		} else {
-			h.startRecording(d, a.value, now, true)
+			h.startRecording(d, a.Value, now, true)
 		}
 	}
 }
 
-func (h *terminalHub) pointerScene(d *terminalSession, a sceneAction, now time.Time) {
-	switch a.kind {
+func (h *terminalHub) pointerScene(d *terminalSession, a pixel.Action, now time.Time) {
+	switch a.Kind {
 	case "close-card":
 		h.chime(d, "tap")
 		d.card = nil
@@ -324,8 +326,8 @@ func (h *terminalHub) pointerScene(d *terminalSession, a sceneAction, now time.T
 	}
 }
 
-func (h *terminalHub) pointerUnpair(d *terminalSession, a sceneAction) {
-	cid, err := strconv.ParseUint(a.value, 10, 32)
+func (h *terminalHub) pointerUnpair(d *terminalSession, a pixel.Action) {
+	cid, err := strconv.ParseUint(a.Value, 10, 32)
 	if err != nil || cid == 0 || h.b.dc == nil || d.companionID.get() == "" {
 		return
 	}
@@ -333,7 +335,7 @@ func (h *terminalHub) pointerUnpair(d *terminalSession, a sceneAction) {
 	go func() {
 		_ = h.b.dc.unpairContact(compID, uint32(cid))
 		d.update(func(d *terminalSession) {
-			if h.active(d) && d.drawer == drawerUnpair {
+			if h.active(d) && d.drawer == pixel.DrawerUnpair {
 				h.chime(d, "tap")
 				h.loadMenu(d)
 			}
@@ -406,14 +408,14 @@ func (d *terminalSession) acceptPointerRevision(action string, rev *uint16) bool
 // pointerKey fingerprints both hit rectangles and the actions behind them.
 // Rectangles alone let a stale tap run a new action under the same box, such
 // as "reply" retargeted to the next peer.
-func pointerKey(hits []hitBox, actions map[string]sceneAction) string {
+func pointerKey(hits []pixel.HitBox, actions map[string]pixel.Action) string {
 	var b strings.Builder
 	for _, h := range hits {
-		fmt.Fprintf(&b, "%s:%d,%d,%d,%d;", h.id, h.x1, h.y1, h.x2, h.y2)
+		fmt.Fprintf(&b, "%s:%d,%d,%d,%d;", h.ID, h.X1, h.Y1, h.X2, h.Y2)
 	}
 	for _, id := range slices.Sorted(maps.Keys(actions)) {
 		a := actions[id]
-		fmt.Fprintf(&b, "%s=%s:%s;", id, a.kind, a.value)
+		fmt.Fprintf(&b, "%s=%s:%s;", id, a.Kind, a.Value)
 	}
 	return b.String()
 }
@@ -464,104 +466,108 @@ func (h *terminalHub) clearView(d *terminalSession) {
 }
 
 type menuContent struct {
-	stories      []pixelStory
+	stories      []pixel.Story
 	storyList    []stories.Saved
-	games        []tile
-	memories     []pixelMemoryItem
+	games        []pixel.Tile
+	memories     []pixel.MemoryItem
 	memoryTitles map[string]string
-	memoryDetail *pixelMemoryItem
-	rows         []menuRow
-	detail       *menuRow
+	memoryDetail *pixel.MemoryItem
+	rows         []pixel.Row
+	detail       *pixel.Row
 	invite       string
 	notice       string
 }
 
-func (h *terminalHub) statsRows(d *terminalSession) []menuRow {
-	var rows []menuRow
+func (h *terminalHub) statsRows(d *terminalSession) []pixel.Row {
+	var rows []pixel.Row
 	if d.companion.Name != "" {
-		rows = append(rows, menuRow{"Companion", d.companion.Name})
+		rows = append(rows, pixel.Row{Title: "Companion", Text: d.companion.Name})
 	}
 	if d.pct >= 0 {
 		ch := ""
 		if d.charging {
 			ch = " (charging)"
 		}
-		rows = append(rows, menuRow{"Battery", fmt.Sprintf("%d%%%s", d.pct, ch)})
+		rows = append(rows, pixel.Row{Title: "Battery", Text: fmt.Sprintf("%d%%%s", d.pct, ch)})
 	}
-	rows = append(rows, menuRow{"Voice", voiceName(d.voice)})
+	rows = append(rows, pixel.Row{Title: "Voice", Text: voiceName(d.voice)})
 	return rows
 }
 
-func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, narrator *image.RGBA, th pixelTheme) (*image.RGBA, []hitBox, map[string]sceneAction, error) {
-	m := r.view.menu
+func (h *terminalHub) renderPixelDrawer(spec pixel.Spec, r renderRequest, narrator *image.RGBA, th pixel.Theme) (*image.RGBA, []pixel.HitBox, map[string]pixel.Action, error) {
+	m := r.menu
 	if m == nil {
 		m = &menuContent{notice: "Loading…"}
 	}
 	switch r.drawer {
-	case drawerMenu:
-		img, hits, acts := renderPixelMenuWithHits(spec, r.menuPage, th)
+	case pixel.DrawerMenu:
+		img, hits, acts := pixel.RenderMenuWithHits(spec, r.menuPage, th)
 		return img, hits, acts, nil
-	case drawerMore:
-		img, hits, acts := renderPixelMoreWithHits(spec, r.menuPage, th)
+	case pixel.DrawerMore:
+		img, hits, acts := pixel.RenderMoreWithHits(spec, r.menuPage, th)
 		return img, hits, acts, nil
-	case drawerVolume:
-		img, hits, acts := renderPixelVolumeWithHits(spec, r.vol, r.menuPage, th)
+	case pixel.DrawerVolume:
+		img, hits, acts := pixel.RenderVolumeWithHits(spec, r.vol, r.menuPage, th)
 		return img, hits, acts, nil
-	case drawerVoice:
-		img, hits, acts := renderPixelVoiceWithHits(spec, r.voice, r.menuPage, th)
+	case pixel.DrawerVoice:
+		voices := make([]pixel.Tile, 0, len(voiceCatalog))
+		for _, v := range voiceCatalog {
+			voices = append(voices, pixel.Tile{ID: v.ID, Label: v.Name})
+		}
+		img, hits, acts := pixel.RenderVoiceWithHits(spec, voices, r.voice, r.menuPage, th)
 		return img, hits, acts, nil
-	case drawerIntercom:
-		items := make([]tile, 0, len(r.peers))
+	case pixel.DrawerIntercom:
+		items := make([]pixel.Tile, 0, len(r.peers))
 		for _, p := range r.peers {
-			items = append(items, tile{
-				id:     "peer-" + p.id,
-				label:  p.name,
-				icon:   "talk",
-				action: sceneAction{"intercom-to", p.id},
+			items = append(items, pixel.Tile{
+				ID:     "peer-" + p.ID,
+				Label:  p.Name,
+				Icon:   "talk",
+				Action: pixel.Action{Kind: "intercom-to", Value: p.ID},
 			})
 		}
-		img, hits, acts := renderPixelListWithHits(spec, "Talk to…", items, "No peers", r.menuPage, th, th.accent)
+		img, hits, acts := pixel.RenderListWithHits(spec, "Talk to…", items, "No peers", r.menuPage, th, th.Accent)
 		return img, hits, acts, nil
-	case drawerStats:
-		img, hits, acts := renderPixelStatsWithHits(spec, r.statsRows, th)
+	case pixel.DrawerStats:
+		img, hits, acts := pixel.RenderStatsWithHits(spec, r.statsRows, th)
 		return img, hits, acts, nil
-	case drawerPair:
+	case pixel.DrawerPair:
 		if m.invite == "" {
-			img, hits, acts := renderPixelListWithHits(spec, "Pair", nil, m.notice, 0, th, th.accent)
+			img, hits, acts := pixel.RenderListWithHits(spec, "Pair", nil, m.notice, 0, th, th.Accent)
 			return img, hits, acts, nil
 		}
 		compName := ""
 		if r.companion != nil {
 			compName = r.companion.Name
 		}
-		return renderPixelPairWithHits(spec, compName, m.invite)
-	case drawerStoryReader:
+		return pixel.RenderPairWithHits(spec, compName, m.invite)
+	case pixel.DrawerStoryReader:
 		if r.storyTitle == "" {
-			img, hits, acts := renderPixelListWithHits(spec, "Story", nil, "No story open", 0, th, th.accent2)
+			img, hits, acts := pixel.RenderListWithHits(spec, "Story", nil, "No story open", 0, th, th.Accent2)
 			return img, hits, acts, nil
 		}
 		labels := make([]string, len(r.storyChoices))
 		for i, ch := range r.storyChoices {
 			labels[i] = ch.Label
 		}
-		img, hits, acts, _ := renderPixelStoryReaderWithHits(spec, r.storyTitle, r.storyText, labels, r.storyEnd, r.storyPage, r.storyBG, narrator, th)
+		img, hits, acts, _ := pixel.RenderStoryReaderWithHits(spec, r.storyTitle, r.storyText, labels, r.storyEnd, r.storyPage, r.storyBG, narrator, th)
 		return img, hits, acts, nil
-	case drawerStories:
+	case pixel.DrawerStories:
 		if len(m.stories) == 0 {
-			img, hits, acts := renderPixelListWithHits(spec, "Stories", nil, m.notice, 0, th, th.accent2)
+			img, hits, acts := pixel.RenderListWithHits(spec, "Stories", nil, m.notice, 0, th, th.Accent2)
 			return img, hits, acts, nil
 		}
-		img := renderPixelStoriesList(spec, m.stories, r.menuPage, th)
+		img := pixel.RenderStoriesList(spec, m.stories, r.menuPage, th)
 		perPage := 2
-		if !spec.round {
+		if !spec.Round {
 			perPage = 3
 		}
 		totalPages := max(1, (len(m.stories)+perPage-1)/perPage)
 		page := max(0, min(r.menuPage, totalPages-1))
-		hits, acts := navBarHits(spec, page, totalPages)
-		listTop := spec.safe.Min.Y + 14
-		navH := pixelNavHeight(spec)
-		listBottom := spec.safe.Max.Y - navH - 3
+		hits, acts := pixel.NavHits(spec, page, totalPages)
+		listTop := spec.Safe.Min.Y + 14
+		navH := pixel.NavHeight(spec)
+		listBottom := spec.Safe.Max.Y - navH - 3
 		gapY := 3
 		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
 		start := page * perPage
@@ -572,34 +578,34 @@ func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, 
 			}
 			ry := listTop + i*(rowH+gapY)
 			id := fmt.Sprintf("story-%d", idx)
-			hits = addLabeledHit(hits, spec, id, m.stories[idx].Title, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
-			acts[id] = sceneAction{"story-open", m.stories[idx].ID}
+			hits = pixel.AddLabeledHit(hits, spec, id, m.stories[idx].Title, image.Rect(spec.Safe.Min.X, ry, spec.Safe.Max.X, ry+rowH))
+			acts[id] = pixel.Action{Kind: "story-open", Value: m.stories[idx].ID}
 		}
 		return img, hits, acts, nil
-	case drawerUnpair:
-		img, hits, acts := renderPixelListWithHits(spec, "Unpair", m.games, m.notice, r.menuPage, th, pxDanger)
+	case pixel.DrawerUnpair:
+		img, hits, acts := pixel.RenderListWithHits(spec, "Unpair", m.games, m.notice, r.menuPage, th, pixel.Danger)
 		return img, hits, acts, nil
-	case drawerMemories:
+	case pixel.DrawerMemories:
 		if m.memoryDetail != nil {
-			img := renderPixelMemoryDetail(spec, *m.memoryDetail, m.memoryTitles, r.menuPage, 0, th)
-			hits, acts := navBarHits(spec, r.menuPage, r.menuPage+2)
+			img := pixel.RenderMemoryDetail(spec, *m.memoryDetail, m.memoryTitles, r.menuPage, 0, th)
+			hits, acts := pixel.NavHits(spec, r.menuPage, r.menuPage+2)
 			return img, hits, acts, nil
 		}
 		if len(m.memories) == 0 {
-			img, hits, acts := renderPixelListWithHits(spec, "Memories", nil, m.notice, 0, th, th.accent)
+			img, hits, acts := pixel.RenderListWithHits(spec, "Memories", nil, m.notice, 0, th, th.Accent)
 			return img, hits, acts, nil
 		}
-		img := renderPixelMemoriesList(spec, m.memories, m.memoryTitles, r.menuPage, th)
+		img := pixel.RenderMemoriesList(spec, m.memories, m.memoryTitles, r.menuPage, th)
 		perPage := 2
-		if !spec.round {
+		if !spec.Round {
 			perPage = 3
 		}
 		totalPages := max(1, (len(m.memories)+perPage-1)/perPage)
 		page := max(0, min(r.menuPage, totalPages-1))
-		hits, acts := navBarHits(spec, page, totalPages)
-		listTop := spec.safe.Min.Y + 14
-		navH := pixelNavHeight(spec)
-		listBottom := spec.safe.Max.Y - navH - 3
+		hits, acts := pixel.NavHits(spec, page, totalPages)
+		listTop := spec.Safe.Min.Y + 14
+		navH := pixel.NavHeight(spec)
+		listBottom := spec.Safe.Max.Y - navH - 3
 		gapY := 3
 		rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
 		start := page * perPage
@@ -610,8 +616,8 @@ func (h *terminalHub) renderPixelDrawer(spec pixelDisplaySpec, r renderRequest, 
 			}
 			ry := listTop + i*(rowH+gapY)
 			id := fmt.Sprintf("memory-%d", idx)
-			hits = addLogicalHit(hits, spec, id, image.Rect(spec.safe.Min.X, ry, spec.safe.Max.X, ry+rowH))
-			acts[id] = sceneAction{"menu-detail", strconv.Itoa(idx)}
+			hits = pixel.AddLogicalHit(hits, spec, id, image.Rect(spec.Safe.Min.X, ry, spec.Safe.Max.X, ry+rowH))
+			acts[id] = pixel.Action{Kind: "menu-detail", Value: strconv.Itoa(idx)}
 		}
 		return img, hits, acts, nil
 	default:
@@ -648,22 +654,22 @@ func (h *terminalHub) menuLoaded(d *terminalSession, m terminalMenu, now time.Ti
 	}
 	count, pageSize := len(menu.rows), perPage
 	switch m.drawer {
-	case drawerStories:
+	case pixel.DrawerStories:
 		count = len(menu.stories)
-	case drawerMemories:
+	case pixel.DrawerMemories:
 		count = len(menu.memories)
-	case drawerUnpair:
+	case pixel.DrawerUnpair:
 		count, pageSize = len(menu.games), perPage
 	}
 	d.menuData = &menu
-	d.menuPage = clampMenuPage(d.menuPage, count, pageSize)
+	d.menuPage = pixel.ClampPage(d.menuPage, count, pageSize)
 	h.render(d, now, false)
 }
 
 func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (menuContent, error) {
 	var m menuContent
 	switch drawer {
-	case drawerStories:
+	case pixel.DrawerStories:
 		list, err := b.listStories(ctx)
 		m.notice = "No stories yet"
 		progMap := map[string]string{}
@@ -672,10 +678,10 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 				progMap[p.StoryID] = p.Passage
 			}
 		}
-		palette := []imagecolor.RGBA{pxMint, pxPeach, pxSky}
+		palette := []imagecolor.RGBA{pixel.Mint, pixel.Peach, pixel.Sky}
 		for i, st := range list {
 			m.storyList = append(m.storyList, st)
-			m.stories = append(m.stories, pixelStory{
+			m.stories = append(m.stories, pixel.Story{
 				ID:       st.ID,
 				Title:    st.Title,
 				Passage:  progMap[st.ID],
@@ -687,14 +693,14 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 			m.notice = ""
 		}
 		return m, err
-	case drawerPair:
+	case pixel.DrawerPair:
 		if b.dc == nil {
 			return m, errors.New("Delta Chat unavailable")
 		}
 		invite, err := b.dc.pairInvite(id)
 		m.invite = invite
 		return m, err
-	case drawerUnpair:
+	case pixel.DrawerUnpair:
 		if b.dc == nil {
 			m.notice = "Delta Chat unavailable"
 			return m, nil
@@ -702,19 +708,19 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 		contacts, err := b.dc.listPairedContacts(id)
 		m.notice = "No paired contacts"
 		for i, ct := range contacts {
-			m.games = append(m.games, tile{
-				id:     "unpair-" + strconv.Itoa(i),
-				label:  menuClip(ct.Name, 13),
-				detail: "Remove",
-				icon:   "unpair",
-				action: sceneAction{"unpair-contact", strconv.FormatUint(uint64(ct.ID), 10)},
+			m.games = append(m.games, pixel.Tile{
+				ID:     "unpair-" + strconv.Itoa(i),
+				Label:  pixel.ClipMenu(ct.Name, 13),
+				Detail: "Remove",
+				Icon:   "unpair",
+				Action: pixel.Action{Kind: "unpair-contact", Value: strconv.FormatUint(uint64(ct.ID), 10)},
 			})
 		}
 		if len(m.games) != 0 {
 			m.notice = ""
 		}
 		return m, err
-	case drawerMemories:
+	case pixel.DrawerMemories:
 		entries, err := b.memoryEntries(ctx, "companion:"+id)
 		m.notice = "No memories yet"
 		m.memoryTitles = map[string]string{}
@@ -726,12 +732,12 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 		if progs, perr := b.listStoryProgress(ctx, id); perr == nil {
 			for _, p := range progs {
 				val, _ := json.Marshal(object{"passage": p.Passage, "page": p.Page + 1})
-				m.memories = append(m.memories, pixelMemoryItem{
+				m.memories = append(m.memories, pixel.MemoryItem{
 					Section: "Reading",
 					Key:     p.StoryID,
 					Value:   string(val),
 				})
-				m.rows = append(m.rows, menuRow{formatMemoryTitle("Reading", p.StoryID, m.memoryTitles), menuText(p.Passage)})
+				m.rows = append(m.rows, pixel.Row{Title: pixel.FormatMemoryTitle("Reading", p.StoryID, m.memoryTitles), Text: menuText(p.Passage)})
 			}
 		}
 		for _, entry := range entries {
@@ -741,12 +747,12 @@ func (b *larkServer) readMenu(ctx context.Context, drawer, id, name string) (men
 			if strings.HasPrefix(k, "reading:") {
 				sec = "Reading"
 			}
-			m.memories = append(m.memories, pixelMemoryItem{
+			m.memories = append(m.memories, pixel.MemoryItem{
 				Section: sec,
 				Key:     k,
 				Value:   raw,
 			})
-			m.rows = append(m.rows, menuRow{formatMemoryTitle(sec, k, m.memoryTitles), menuText(strings.Join(formatMemoryLines(raw), " "))})
+			m.rows = append(m.rows, pixel.Row{Title: pixel.FormatMemoryTitle(sec, k, m.memoryTitles), Text: menuText(strings.Join(pixel.FormatMemoryLines(raw), " "))})
 		}
 		return m, err
 	default:

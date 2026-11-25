@@ -200,7 +200,16 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 	if err != nil || len(left) != 0 {
 		t.Fatalf("retry did not consume timer: %v (%v)", left, err)
 	}
-	events, err := b.history.list(t.Context(), id)
+	// The chime frame reaches the board before the deferred history write.
+	// Wait for the recorded delivery instead of sampling it once.
+	var events []chatEntry
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		events, err = b.history.list(t.Context(), id)
+		if err != nil || len(events) != 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil || len(events) != 1 || events[0].Text != "Time's up! Retry" {
 		t.Fatalf("retry did not deliver exactly once: %v (%v)", events, err)
 	}

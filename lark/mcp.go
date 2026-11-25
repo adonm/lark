@@ -225,9 +225,9 @@ func screenHitIDs(s svgScreen) []string {
 	ids := make([]string, 0, len(s.hits))
 	seen := map[string]bool{}
 	for _, h := range s.hits {
-		if h.id != "" && !seen[h.id] {
-			seen[h.id] = true
-			ids = append(ids, h.id)
+		if h.ID != "" && !seen[h.ID] {
+			seen[h.ID] = true
+			ids = append(ids, h.ID)
 		}
 	}
 	return ids
@@ -349,7 +349,7 @@ func (h *terminalHub) terminalStatus(entry object, id string, full bool) {
 	if full {
 		entry["charging"], entry["has_battery"] = st.telemetry.Charge, st.telemetry.HasBattery
 		entry["wifi_rssi"], entry["cpu_pct"] = st.telemetry.WiFi, st.telemetry.CPU
-		title := st.scene.title
+		title := st.scene.Title
 		if title == "" {
 			title = "Companion"
 		}

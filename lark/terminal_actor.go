@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 // terminalMode is the coarse session phase. Detailed state (capture phase, open
@@ -142,7 +144,7 @@ func (d *terminalSession) deriveMode() terminalMode {
 		return modeRecording
 	case d.busy:
 		return modeThinking
-	case d.drawer == drawerStoryReader:
+	case d.drawer == pixel.DrawerStoryReader:
 		return modeStory
 	case d.drawer != "":
 		return modeMenu
@@ -241,7 +243,7 @@ type terminalEndpoint struct {
 type terminalFrameBuilt struct {
 	job    frameJob
 	screen svgScreen
-	view   sceneView
+	view   pixel.Scene
 	err    error
 	native protocolFrame
 	raw    int
@@ -298,8 +300,8 @@ type terminalStartTurn struct {
 }
 
 type terminalCaption struct {
-	view    *sceneView
-	oldView *sceneView
+	view    *pixel.Scene
+	oldView *pixel.Scene
 }
 
 // terminalActor serializes one session's state. The queue is unbounded and the
@@ -391,10 +393,10 @@ type terminalState struct {
 	storyPage int
 	statsAt   time.Time
 
-	scene         sceneView
-	view          *sceneView
-	pending       *sceneView
-	card          *sceneView
+	scene         pixel.Scene
+	view          *pixel.Scene
+	pending       *pixel.Scene
+	card          *pixel.Scene
 	svg           svgScreen
 	frame         *diagFrame
 	pose          companionPose
@@ -548,7 +550,7 @@ func (h *terminalHub) handleTerminal(d *terminalSession, ev terminalEvent) {
 			h.render(d, ev.now, ev.render.full)
 		}
 	case evPeerRefresh:
-		if h.active(d) && (d.drawer == "intercom" || d.card.hasIntercom() || d.view.hasIntercom()) {
+		if h.active(d) && (d.drawer == "intercom" || d.card.HasIntercom() || d.view.HasIntercom()) {
 			h.render(d, ev.now, false)
 		}
 	case evCompanion:
@@ -579,7 +581,7 @@ func (h *terminalHub) handleTerminal(d *terminalSession, ev terminalEvent) {
 	case evStoryOpen:
 		h.openStoryEvent(d, ev.story.st, ev.story.narrate)
 	case evStoryBG:
-		if d.drawer == drawerStoryReader && d.story != nil && d.story.id == ev.story.storyID &&
+		if d.drawer == pixel.DrawerStoryReader && d.story != nil && d.story.id == ev.story.storyID &&
 			d.story.currentPassageName() == ev.story.passage {
 			d.story.bgImg = ev.story.bg
 			h.render(d, ev.now, false)
@@ -644,7 +646,7 @@ func (h *terminalHub) tickTerminal(d *terminalSession, now time.Time, checkGrade
 	case d.awaitAck && !d.ttsStarted && now.After(d.audioUntil.Add(ttsAckFallback)) &&
 		(!losslessTTSAcks(d.firmware) || d.ackClient != d.client):
 		h.playbackDone(d, now, false)
-	case !d.asleep && d.drawer != drawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
+	case !d.asleep && d.drawer != pixel.DrawerPair && !turnActive && now.Sub(d.last) >= idleSleep:
 		h.setSleeping(d, true)
 		h.render(d, now, false)
 	case d.asleep && d.caps.PanelSleep:

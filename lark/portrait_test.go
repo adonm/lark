@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func portraitFixture(t *testing.T) []byte {
@@ -58,28 +60,28 @@ func TestPortraitAlignsTranslatedSilhouettes(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := parseHexRGBA("#FFF2E7", imagecolor.RGBA{})
-	poses, err := slicePortrait(sheet, p)
+	poses, err := pixel.Slice(sheet, p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var painted image.Rectangle
 	for i, im := range poses {
-		b := portraitBounds(im, im.Bounds(), p)
+		b := pixel.PoseBounds(im, im.Bounds(), p)
 		if i == 0 {
 			painted = b
 		}
 		center := b.Min.Add(b.Max)
 		if b != painted || center.X < 359 || center.X > 361 || center.Y < 323 || center.Y > 325 {
-			t.Fatalf("%s drifted: got %v, idle %v", portraitPoses[i], b, painted)
+			t.Fatalf("%s drifted: got %v, idle %v", pixel.Poses[i], b, painted)
 		}
 		if i != 0 && bytes.Equal(im.Pix, poses[0].Pix) {
-			t.Fatalf("%s did not preserve its expression", portraitPoses[i])
+			t.Fatalf("%s did not preserve its expression", pixel.Poses[i])
 		}
 	}
-	if _, err := slicePortrait(image.NewUniform(imagecolor.White), p); err == nil {
+	if _, err := pixel.Slice(image.NewUniform(imagecolor.White), p); err == nil {
 		t.Fatal("accepted wrong sheet dimensions")
 	}
-	if _, err := slicePortrait(image.NewRGBA(image.Rect(0, 0, 1024, 1024)), p); err == nil {
+	if _, err := pixel.Slice(image.NewRGBA(image.Rect(0, 0, 1024, 1024)), p); err == nil {
 		t.Fatal("accepted an empty sheet")
 	}
 }
@@ -90,27 +92,27 @@ func TestPortraitSilhouettesClearMenuAndBezel(t *testing.T) {
 	for _, shape := range []image.Rectangle{image.Rect(100, 50, 410, 460), image.Rect(22, 106, 490, 406)} {
 		sheet := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
 		draw.Draw(sheet, sheet.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
-		for i := range portraitPoses {
+		for i := range pixel.Poses {
 			offset := image.Pt(i%2*512+i*3, i/2*512-i*4)
 			draw.Draw(sheet, shape.Add(offset), image.NewUniform(imagecolor.Black), image.Point{}, draw.Src)
 		}
-		poses, err := slicePortrait(sheet, bg)
+		poses, err := pixel.Slice(sheet, bg)
 		if err != nil {
 			t.Fatal(err)
 		}
 		menu := image.Rect(120, 292, 240, 340)
 		for i, pose := range poses {
-			b := portraitBounds(pose, pose.Bounds(), bg)
+			b := pixel.PoseBounds(pose, pose.Bounds(), bg)
 			if b.Empty() || b.Overlaps(menu) || b.Min.Y < 42 || b.Max.Y > 284 {
-				t.Fatalf("%s: portrait %v outside safe vertical framing", portraitPoses[i], b)
+				t.Fatalf("%s: portrait %v outside safe vertical framing", pixel.Poses[i], b)
 			}
 			if scaleX, scaleY := float64(b.Dx())/float64(shape.Dx()), float64(b.Dy())/float64(shape.Dy()); math.Abs(scaleX-scaleY) > 0.01 {
-				t.Fatalf("%s: portrait %v distorted from %v", portraitPoses[i], b, shape)
+				t.Fatalf("%s: portrait %v distorted from %v", pixel.Poses[i], b, shape)
 			}
 			for _, x := range []int{b.Min.X, b.Max.X} {
 				for _, y := range []int{b.Min.Y, b.Max.Y} {
 					if (x-180)*(x-180)+(y-180)*(y-180) >= 174*174 {
-						t.Fatalf("%s: portrait %v would be clipped by the bezel", portraitPoses[i], b)
+						t.Fatalf("%s: portrait %v would be clipped by the bezel", pixel.Poses[i], b)
 					}
 				}
 			}
@@ -141,7 +143,7 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 	bg := parseHexRGBA("#FAF0E6", imagecolor.RGBA{})
 	var idle []byte
 	var bounds image.Rectangle
-	for i, pose := range portraitPoses {
+	for i, pose := range pixel.Poses {
 		data, err := store.read(id, pose)
 		if err != nil {
 			t.Fatal(err)
@@ -163,12 +165,12 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 					t.Fatalf("%s: color changed inside a pixel block at %d,%d", pose, x, y)
 				}
 				*k = c
-				if portraitDiff(c, bg) > 25*25 {
+				if pixel.Diff(c, bg) > 25*25 {
 					n, sx, sy = n+1, sx+x, sy+y
 				}
 			}
 		}
-		b := portraitBounds(rgba, rgba.Bounds(), bg)
+		b := pixel.PoseBounds(rgba, rgba.Bounds(), bg)
 		if i == 0 {
 			bounds, idle = b, rgba.Pix
 		} else if b != bounds || bytes.Equal(idle, rgba.Pix) {
@@ -384,19 +386,19 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 	if !portraitIDPattern.MatchString(asset) || c["form"] != "a snowy owl" {
 		t.Fatal(c)
 	}
-	for _, pose := range append(slices.Clone(portraitPoses[:]), "sheet") {
+	for _, pose := range append(slices.Clone(pixel.Poses[:]), "sheet") {
 		fi, err := os.Stat(filepath.Join(dir, asset, pose+".png"))
 		if err != nil || fi.Mode().Perm() != 0o600 {
 			t.Fatalf("%s not private: %v", pose, err)
 		}
 	}
 	_ = other
-	poses, err := loadOrNormalizePoses(filepath.Join(dir, asset), pixelPortraitHeight)
+	poses, err := pixel.LoadOrNormalizePoses(filepath.Join(dir, asset), pixel.PortraitHeight)
 	if err != nil || poses[0] == nil {
-		t.Fatalf("loadOrNormalizePoses: %v", err)
+		t.Fatalf("pixel.LoadOrNormalizePoses: %v", err)
 	}
-	day := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeDay, "", "")
-	night := renderPixelHome(pixelSpecVoCat, nil, poses[0], gradeNight, "", "")
+	day := pixel.RenderHome(pixel.SpecVoCat, nil, poses[0], pixel.GradeDay, "", "")
+	night := pixel.RenderHome(pixel.SpecVoCat, nil, poses[0], pixel.GradeNight, "", "")
 	if day.RGBAAt(180, 180) == night.RGBAAt(180, 180) {
 		t.Fatal("portrait home was not graded")
 	}
@@ -413,11 +415,11 @@ func TestPortraitInteriorMatchesBGStaysOpaque(t *testing.T) {
 	t.Parallel()
 	bg := imagecolor.RGBA{240, 244, 240, 255}
 	outline := imagecolor.RGBA{45, 70, 55, 255}
-	sheet := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))
+	sheet := image.NewRGBA(image.Rect(0, 0, pixel.SheetSide, pixel.SheetSide))
 	draw.Draw(sheet, sheet.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
 	// Draw a closed outline ring in each quadrant whose interior has the exact background colour
 	// (and even transparent pixels) — the flood-fill must keep the entire interior opaque.
-	for i := range portraitPoses {
+	for i := range pixel.Poses {
 		cx, cy := i%2*512+256, i/2*512+256
 		for y := -120; y <= 120; y++ {
 			for x := -120; x <= 120; x++ {
@@ -431,9 +433,9 @@ func TestPortraitInteriorMatchesBGStaysOpaque(t *testing.T) {
 			}
 		}
 	}
-	poses, err := normalizePortraitSheet(sheet, pixelPortraitHeight)
+	poses, err := pixel.NormalizePortraitSheet(sheet, pixel.PortraitHeight)
 	if err != nil {
-		t.Fatalf("normalizePortraitSheet: %v", err)
+		t.Fatalf("pixel.NormalizePortraitSheet: %v", err)
 	}
 	for i, pose := range poses {
 		b := pose.Bounds()
@@ -463,9 +465,9 @@ func TestPortraitInteriorMatchesBGStaysOpaque(t *testing.T) {
 		if f, err := os.Open(mintSheetPath); err == nil {
 			defer f.Close()
 			if img, err := png.Decode(f); err == nil {
-				mPoses, err := normalizePortraitSheet(img, pixelPortraitHeight)
+				mPoses, err := pixel.NormalizePortraitSheet(img, pixel.PortraitHeight)
 				if err != nil {
-					t.Fatalf("mint normalizePortraitSheet: %v", err)
+					t.Fatalf("mint pixel.NormalizePortraitSheet: %v", err)
 				}
 				mb := mPoses[0].Bounds()
 				if got := mPoses[0].RGBAAt(mb.Min.X+mb.Dx()/2, mb.Min.Y+mb.Dy()/2); got.A != 255 {
@@ -495,14 +497,14 @@ func TestCompanionAssetsCachePartialsAndRespectEpoch(t *testing.T) {
 
 	epoch := h.assetsEpoch["p2"] // the epoch a load reads before decoding
 	h.invalidateAssets("p2")
-	h.storeAssets("p2", cachedAssets{theme: placeholderPixelTheme()}, epoch)
+	h.storeAssets("p2", cachedAssets{theme: pixel.PlaceholderTheme()}, epoch)
 	h.assetsMu.RLock()
 	_, stale := h.assets["p2"]
 	h.assetsMu.RUnlock()
 	if stale {
 		t.Fatal("a load from the pre-invalidation epoch was cached")
 	}
-	h.storeAssets("p2", cachedAssets{theme: placeholderPixelTheme()}, h.assetsEpoch["p2"])
+	h.storeAssets("p2", cachedAssets{theme: pixel.PlaceholderTheme()}, h.assetsEpoch["p2"])
 	h.assetsMu.RLock()
 	_, fresh := h.assets["p2"]
 	h.assetsMu.RUnlock()

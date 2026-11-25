@@ -18,6 +18,8 @@ import (
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
@@ -26,18 +28,18 @@ func companionAvatarPNG(b *larkServer, c companionState) ([]byte, error) {
 	loaded := false
 	if b != nil && b.portraits != nil && c.PortraitID != "" {
 		dir := filepath.Join(b.portraits.dir, c.PortraitID)
-		if p, err := loadOrNormalizePoses(dir, pixelPortraitHeight); err == nil {
+		if p, err := pixel.LoadOrNormalizePoses(dir, pixel.PortraitHeight); err == nil {
 			poses = p
 			loaded = true
 		}
-		if bgImg, err := loadBackgroundPNG(dir); err == nil {
+		if bgImg, err := pixel.LoadBackgroundPNG(dir); err == nil {
 			bg = bgImg
 		}
 	}
 	if !loaded {
-		poses = pixelPlaceholderPoses()
+		poses = pixel.PlaceholderPoses()
 	}
-	img := renderPixelHome(pixelSpecVoCat, bg, poses[0], gradeDay, "", "")
+	img := pixel.RenderHome(pixel.SpecVoCat, bg, poses[0], pixel.GradeDay, "", "")
 	return imageToPNG(img)
 }
 

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 func bindMenu(c *testWS, h *terminalHub, termID string) {
@@ -101,7 +103,7 @@ func TestTerminalMenuListDetails(t *testing.T) {
 		drawer, empty, first, label string
 		seed                        func(*testing.T, *larkServer)
 	}{
-		{drawerMemories, "No memories yet", "Memory 0", "memory-3", func(t *testing.T, b *larkServer) {
+		{pixel.DrawerMemories, "No memories yet", "Memory 0", "memory-3", func(t *testing.T, b *larkServer) {
 			for i := range 5 {
 				value := fmt.Sprintf("Memory %d", i)
 				if i == 3 {
@@ -128,7 +130,7 @@ func TestTerminalMenuListDetails(t *testing.T) {
 			tapMenu(t, c, "menu-back", open)
 			tc.seed(t, b)
 			prefix := "history-"
-			if tc.drawer == drawerMemories {
+			if tc.drawer == pixel.DrawerMemories {
 				prefix = "memory-"
 			}
 			first := tapMenu(t, c, open, tc.first, prefix+"0", prefix+"1", "menu-next")
@@ -190,13 +192,13 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, termID, board string
-		spec                pixelDisplaySpec
+		spec                pixel.Spec
 		shape               uint8
 		w, h                uint16
 		tapX, tapY          int
 	}{
-		{"vocat", "vocat-tap1", "esp-vocat", pixelSpecVoCat, shapeRound, 360, 360, 180, 180},
-		{"box3", "box3-tap1", "esp-box-3", pixelSpecBox3, shapeRect, 320, 240, 160, 120},
+		{"vocat", "vocat-tap1", "esp-vocat", pixel.SpecVoCat, shapeRound, 360, 360, 180, 180},
+		{"box3", "box3-tap1", "esp-box-3", pixel.SpecBox3, shapeRect, 320, 240, 160, 120},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, base := wsHarness(t, nil)
@@ -236,7 +238,7 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 			_, revIdle, _ := decodeDisplay(t, fIdle)
 
 			// Tap Menu button on Home opens Menu without starting recording.
-			btn := physicalRect(pixelHomeMenuButtonRect(tc.spec), tc.spec.artScale)
+			btn := pixel.PhysicalRect(pixel.HomeMenuButtonRect(tc.spec), tc.spec.ArtScale)
 			if btn.Dx() < 48 || btn.Dy() < 48 {
 				t.Fatalf("menu button %v smaller than 48px physical", btn)
 			}
@@ -244,8 +246,8 @@ func TestHomeTapStartsRecordingAndMenuButtonOpensMenu(t *testing.T) {
 			waitSVG(t, b.hub, tc.termID, "menu-intercom")
 			st = d.state()
 			rec, drawer = st.recording.active(), st.drawer
-			if rec || drawer != drawerMenu {
-				t.Fatalf("menu tap: recording=%v drawer=%q, want false and %q", rec, drawer, drawerMenu)
+			if rec || drawer != pixel.DrawerMenu {
+				t.Fatalf("menu tap: recording=%v drawer=%q, want false and %q", rec, drawer, pixel.DrawerMenu)
 			}
 		})
 	}
@@ -263,7 +265,7 @@ func TestIntercomMenuPagingRoundScreen(t *testing.T) {
 
 	d := b.hub.live("vocat-intercom-page")
 	updateTerm(t, d, func(d *terminalSession) {
-		d.drawer = drawerIntercom
+		d.drawer = pixel.DrawerIntercom
 		d.menuPage = 1
 		b.hub.render(d, time.Now(), false)
 	})
@@ -362,8 +364,8 @@ func TestVoiceMenuTapSelectsAndPreviewsCachedSample(t *testing.T) {
 
 	var x, y int
 	for _, h := range b.hub.live(termID).state().svg.hits {
-		if h.id == "voice-bm_fable" {
-			x, y = (h.x1+h.x2)/2, (h.y1+h.y2)/2
+		if h.ID == "voice-bm_fable" {
+			x, y = (h.X1+h.X2)/2, (h.Y1+h.Y2)/2
 		}
 	}
 	if x == 0 && y == 0 {

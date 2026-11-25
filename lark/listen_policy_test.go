@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func TestSplitNameToleratesSpeechNearMisses(t *testing.T) {
@@ -232,7 +234,7 @@ func TestSilentReplyGrantsNoFollowUpGrace(t *testing.T) {
 		t.Fatal("a silent turn refreshed the follow-up grace")
 	}
 	d.turn = 2
-	view := sceneView{title: "Answer", text: "hello"}
+	view := pixel.Scene{Title: "Answer", Text: "hello"}
 	h.finishTurn(d, 2, &view, nil)
 	if !d.nameFreeUntil.After(time.Now()) {
 		t.Fatal("a visible reply did not grant follow-up grace")

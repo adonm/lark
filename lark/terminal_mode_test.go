@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func TestModeTransitionsAcceptTheLifecycle(t *testing.T) {
@@ -76,12 +78,12 @@ func TestDeriveModeFollowsTheFlags(t *testing.T) {
 	if got := d.deriveMode(); got != modeListening {
 		t.Fatalf("listening window mode = %v, want listening", got)
 	}
-	d.drawer = drawerStoryReader
+	d.drawer = pixel.DrawerStoryReader
 	d.recording.clear()
 	if got := d.deriveMode(); got != modeStory {
 		t.Fatalf("story mode = %v, want story", got)
 	}
-	d.drawer = drawerMenu
+	d.drawer = pixel.DrawerMenu
 	if got := d.deriveMode(); got != modeMenu {
 		t.Fatalf("menu mode = %v, want menu", got)
 	}

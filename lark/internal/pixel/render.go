@@ -1,65 +1,48 @@
-package main
+package pixel
 
 import (
 	"bytes"
 	"encoding/binary"
 	"image"
 	"image/jpeg"
-	"time"
 
 	"github.com/pierrec/lz4/v4"
 )
 
-const screenSize = 360
-
-type screenGeometry struct {
-	width, height int
-	shape         string
+type HitBox struct {
+	ID, Label      string
+	X1, Y1, X2, Y2 int
 }
 
-var roundScreen = screenGeometry{screenSize, screenSize, "round"}
-
-func inScreenCircle(x, y int) bool {
-	const r = screenSize / 2
-	return (x-r)*(x-r)+(y-r)*(y-r) <= r*r
-}
-
-type hitBox struct {
-	id, label      string
-	x1, y1, x2, y2 int
-}
-
-func hitID(hits []hitBox, x, y int) string {
+func HitID(hits []HitBox, x, y int) string {
 	for i := len(hits) - 1; i >= 0; i-- {
 		h := hits[i]
-		if x >= h.x1 && x <= h.x2 && y >= h.y1 && y <= h.y2 {
-			return h.id
+		if x >= h.X1 && x <= h.X2 && y >= h.Y1 && y <= h.Y2 {
+			return h.ID
 		}
 	}
 	return ""
 }
 
-type svgScreen struct {
-	source string
-	hits   []hitBox
-	fb     []uint16
-	render time.Duration
-	grade  gradeKey
-}
-
-func pack565(r, g, b uint8) uint16 {
+func Pack565(r, g, b uint8) uint16 {
 	return uint16(r&0xf8)<<8 | uint16(g&0xfc)<<3 | uint16(b)>>3
 }
 
 const (
-	frameCodecRaw    byte = 0
-	frameCodecRLE565 byte = 1
-	frameCodecJPEG   byte = 2
-	frameCodecLZ4    byte = 3
+	FrameCodecRaw    byte = 0
+	FrameCodecRLE565 byte = 1
+	FrameCodecJPEG   byte = 2
+	FrameCodecLZ4    byte = 3
 )
 
-func dirtyRect(prev, next []uint16, screen screenGeometry) image.Rectangle {
-	w, h := screen.width, screen.height
+const (
+	codecBitRLE565 = 1 << 1
+	codecBitLZ4    = 1 << 2
+	codecBitJPEG   = 1 << 3
+	CodecBitAll    = 15
+)
+
+func DirtyRect(prev, next []uint16, w, h int) image.Rectangle {
 	if prev == nil || len(prev) != len(next) {
 		return image.Rect(0, 0, w, h)
 	}
@@ -105,7 +88,7 @@ func encodeRLE565FromBE(out []byte, rawBE []byte, pixels int) []byte {
 	return out
 }
 
-type frameEncoder struct {
+type FrameEncoder struct {
 	rawBE   []byte
 	rleBuf  []byte
 	lz4Buf  []byte
@@ -114,7 +97,7 @@ type frameEncoder struct {
 	jpegImg *image.RGBA
 }
 
-func (e *frameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *image.RGBA {
+func (e *FrameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *image.RGBA {
 	rw, rh := r.Dx(), r.Dy()
 	need := rw * rh * 4
 	if e.jpegImg == nil || cap(e.jpegImg.Pix) < need {
@@ -141,13 +124,13 @@ func (e *frameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *im
 	return e.jpegImg
 }
 
-func (e *frameEncoder) encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) protocolFrame {
-	return e.encodeWithCodecs(fb, rgba, r, rev, width, codecBitAll)
+func (e *FrameEncoder) Encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) []byte {
+	return e.EncodeWithCodecs(fb, rgba, r, rev, width, CodecBitAll)
 }
 
-func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int, allowed uint8) protocolFrame {
+func (e *FrameEncoder) EncodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int, allowed uint8) []byte {
 	if allowed == 0 {
-		allowed = codecBitAll
+		allowed = CodecBitAll
 	}
 	rw, rh := r.Dx(), r.Dy()
 	pixels := rw * rh
@@ -165,12 +148,12 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 		}
 	}
 
-	bestCodec := frameCodecRaw
+	bestCodec := FrameCodecRaw
 	bestPayload := rawBE
 	if allowed&codecBitRLE565 != 0 {
 		e.rleBuf = encodeRLE565FromBE(e.rleBuf[:0], rawBE, pixels)
 		if len(e.rleBuf) <= len(bestPayload) {
-			bestCodec = frameCodecRLE565
+			bestCodec = FrameCodecRLE565
 			bestPayload = e.rleBuf
 		}
 	}
@@ -182,7 +165,7 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 		}
 		lz4Dst := e.lz4Buf[:bound]
 		if n, err := e.lz4Comp.CompressBlock(rawBE, lz4Dst); err == nil && n > 0 && n < len(bestPayload) {
-			bestCodec = frameCodecLZ4
+			bestCodec = FrameCodecLZ4
 			bestPayload = lz4Dst[:n]
 		}
 	}
@@ -197,7 +180,7 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 		e.jpegBuf.Reset()
 		if err := jpeg.Encode(&e.jpegBuf, src, &jpeg.Options{Quality: 82}); err == nil {
 			if e.jpegBuf.Len() < len(bestPayload)*6/10 {
-				bestCodec = frameCodecJPEG
+				bestCodec = FrameCodecJPEG
 				bestPayload = e.jpegBuf.Bytes()
 			}
 		}
@@ -212,10 +195,10 @@ func (e *frameEncoder) encodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 	out[9] = bestCodec
 	binary.LittleEndian.PutUint16(out[10:], uint16(rev))
 	copy(out[12:], bestPayload)
-	return newProtocolFrame(terminalBinary, out)
+	return out
 }
 
-func displayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) protocolFrame {
-	var enc frameEncoder
-	return enc.encode(fb, nil, r, rev, width)
+func DisplayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) []byte {
+	var enc FrameEncoder
+	return enc.Encode(fb, nil, r, rev, width)
 }

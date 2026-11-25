@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 type terminalRecord struct {
@@ -136,7 +138,7 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		if err != nil {
 			return nil, problem(502, err.Error())
 		}
-		pairImg, err := renderPixelPair(pixelSpecForGeometry(geom), compName, invite)
+		pairImg, err := pixel.RenderPair(pixel.SpecForGeometry(geom.width, geom.height, geom.shape), compName, invite)
 		if err != nil {
 			return nil, problem(502, err.Error())
 		}
@@ -150,7 +152,7 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 			}
 			now := time.Now()
 			b.hub.wake(d, now)
-			d.drawer = drawerPair
+			d.drawer = pixel.DrawerPair
 			d.menuPage = 0
 			d.menuData = &menuContent{invite: invite}
 			b.hub.pushPower(d, 100, true)
@@ -210,16 +212,16 @@ func (b *larkServer) terminalAPI(w http.ResponseWriter, r *http.Request, path st
 		}
 		hits := make([]hitEntry, 0, len(st.svg.hits))
 		for _, hb := range st.svg.hits {
-			act := st.scene.actions[hb.id]
+			act := st.scene.Actions[hb.ID]
 			hits = append(hits, hitEntry{
-				ID:     hb.id,
-				Label:  hb.label,
-				Action: act.kind,
-				Value:  act.value,
-				X1:     hb.x1,
-				Y1:     hb.y1,
-				X2:     hb.x2,
-				Y2:     hb.y2,
+				ID:     hb.ID,
+				Label:  hb.Label,
+				Action: act.Kind,
+				Value:  act.Value,
+				X1:     hb.X1,
+				Y1:     hb.Y1,
+				X2:     hb.X2,
+				Y2:     hb.Y2,
 			})
 		}
 		return object{

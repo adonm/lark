@@ -13,7 +13,6 @@ import (
 	"image/png"
 	"io"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,12 +23,13 @@ import (
 	"time"
 
 	xdraw "golang.org/x/image/draw"
+
+	"lark/internal/pixel"
 )
 
 const portraitModelID = "gemini-nano-banana-2.1"
 const portraitEndpoint = "https://opencode.ai/inference/google/v1beta/models/" + portraitModelID + ":generateContent"
 const openCodeImagePath = "/api/experimental/generate/image"
-const portraitSheetSide = 1024
 const portraitPixelSide = 64
 const portraitPixelStyle = "pixel"
 const portraitStorybookStyle = "storybook"
@@ -37,7 +37,6 @@ const portraitMaxBytes = 8 << 20
 const portraitTimeout = 65 * time.Second
 const portraitCenterY = 162
 
-var portraitPoses = [...]string{"idle", "blink", "talk", "think"}
 var portraitIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var portraitSchema = closedObject(object{
 	"prompt":  object{"type": "string", "maxLength": 600},
@@ -51,13 +50,25 @@ type portraitSpec struct {
 	Edit                             bool
 }
 
+func decodePortraitSheet(raw []byte) (image.Image, error) {
+	if len(raw) > portraitMaxBytes {
+		return nil, errors.New("portrait sheet exceeds 8 MiB")
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || (format != "png" && format != "jpeg") || cfg.Width != pixel.SheetSide || cfg.Height != pixel.SheetSide {
+		return nil, errors.New("expected a 1024×1024 PNG or JPEG portrait sheet")
+	}
+	sheet, _, err := image.Decode(bytes.NewReader(raw))
+	return sheet, err
+}
+
 func parsePortraitRef(raw string) (id, pose string, ok bool) {
 	ref, found := strings.CutPrefix(raw, "portrait:")
 	if !found {
 		return "", "", false
 	}
 	id, pose, found = strings.Cut(ref, ":")
-	if !found || !portraitIDPattern.MatchString(id) || !slices.Contains(portraitPoses[:], pose) {
+	if !found || !portraitIDPattern.MatchString(id) || !slices.Contains(pixel.Poses[:], pose) {
 		return "", "", false
 	}
 	return id, pose, true
@@ -211,155 +222,10 @@ func requestPortrait(ctx context.Context, client *http.Client, endpoint, key, pr
 	return nil, problem(502, "Console response did not contain a portrait sheet")
 }
 
-func decodePortraitSheet(raw []byte) (image.Image, error) {
-	if len(raw) > portraitMaxBytes {
-		return nil, errors.New("portrait sheet exceeds 8 MiB")
-	}
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil || (format != "png" && format != "jpeg") || cfg.Width != portraitSheetSide || cfg.Height != portraitSheetSide {
-		return nil, errors.New("expected a 1024×1024 PNG or JPEG portrait sheet")
-	}
-	sheet, _, err := image.Decode(bytes.NewReader(raw))
-	return sheet, err
-}
-
 // Use the median of the four inset corner patches, not a single noisy pixel.
-func portraitCorner(img *image.RGBA, r image.Rectangle) imagecolor.RGBA {
-	var channels [3][]uint8
-	for _, x := range []int{r.Min.X + 8, r.Max.X - 13} {
-		for _, y := range []int{r.Min.Y + 8, r.Max.Y - 13} {
-			for j := range 5 {
-				for i := range 5 {
-					c := img.RGBAAt(x+i, y+j)
-					channels[0] = append(channels[0], c.R)
-					channels[1] = append(channels[1], c.G)
-					channels[2] = append(channels[2], c.B)
-				}
-			}
-		}
-	}
-	for _, values := range channels {
-		slices.Sort(values)
-	}
-	return imagecolor.RGBA{channels[0][50], channels[1][50], channels[2][50], 255}
-}
-
-func portraitDiff(a, b imagecolor.RGBA) int {
-	sq := func(n int) int { return n * n }
-	return sq(int(a.R)-int(b.R)) + sq(int(a.G)-int(b.G)) + sq(int(a.B)-int(b.B))
-}
 
 // Use the dominant connected silhouette for the bounds, ignoring small islands
 // of compression or stray illustration at the edges.
-func portraitBounds(img *image.RGBA, r image.Rectangle, bg imagecolor.RGBA) image.Rectangle {
-	w, h := r.Dx(), r.Dy()
-	mask := make([]bool, w*h)
-	for y := range h {
-		for x := range w {
-			mask[y*w+x] = portraitDiff(img.RGBAAt(r.Min.X+x, r.Min.Y+y), bg) > 25*25
-		}
-	}
-	var best image.Rectangle
-	var queue []int
-	largest := 0
-	for i := range mask {
-		if !mask[i] {
-			continue
-		}
-		mask[i] = false
-		queue = append(queue[:0], i)
-		bounds := image.Rectangle{Min: image.Pt(w, h)}
-		for head := 0; head < len(queue); head++ {
-			pos := queue[head]
-			x, y := pos%w, pos/w
-			bounds.Min = image.Pt(min(bounds.Min.X, x), min(bounds.Min.Y, y))
-			bounds.Max = image.Pt(max(bounds.Max.X, x+1), max(bounds.Max.Y, y+1))
-			push := func(p int) {
-				if mask[p] {
-					mask[p] = false
-					queue = append(queue, p)
-				}
-			}
-			if x > 0 {
-				push(pos - 1)
-			}
-			if x+1 < w {
-				push(pos + 1)
-			}
-			if y > 0 {
-				push(pos - w)
-			}
-			if y+1 < h {
-				push(pos + w)
-			}
-		}
-		if len(queue) > largest {
-			best, largest = bounds.Add(r.Min), len(queue)
-		}
-	}
-	if largest < 1024 || best.Dx() < 70 || best.Dy() < 70 {
-		return image.Rectangle{}
-	}
-	return best
-}
-
-func slicePortrait(sheet image.Image, bg imagecolor.RGBA) ([4]*image.RGBA, error) {
-	var poses [4]*image.RGBA
-	if sheet.Bounds().Size() != image.Pt(portraitSheetSide, portraitSheetSide) {
-		return poses, errors.New("portrait sheet must be 1024×1024")
-	}
-	img := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))
-	draw.Draw(img, img.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
-	draw.Draw(img, img.Bounds(), sheet, sheet.Bounds().Min, draw.Over)
-	const side = portraitSheetSide / 2
-	var crops [4]image.Rectangle
-	var backgrounds [4]imagecolor.RGBA
-	scale := 1.0
-	for i, pose := range portraitPoses {
-		cell := image.Rect(0, 0, side, side).Add(image.Pt(i%2*side, i/2*side))
-		backgrounds[i] = portraitCorner(img, cell)
-		inner := cell.Inset(10)
-		b := portraitBounds(img, inner, backgrounds[i])
-		if b.Empty() || b.Min.X == inner.Min.X || b.Min.Y == inner.Min.Y || b.Max.X == inner.Max.X || b.Max.Y == inner.Max.Y {
-			return poses, fmt.Errorf("portrait %s needs one silhouette with a clear margin", pose)
-		}
-		b = b.Inset(-3).Intersect(cell)
-		crops[i] = b
-		// Fit the lower crop corners in the bezel, reserving space for raster
-		// rounding and pixel blocks. Cap the height at y=42..282 above Menu.
-		w, h := float64(b.Dx()), float64(b.Dy())
-		const offset, radius = screenSize/2 - portraitCenterY, 168
-		cornerScale := 2 * (math.Sqrt(w*w*(radius*radius-offset*offset)+h*h*radius*radius) - offset*h) / (w*w + h*h)
-		scale = min(scale, cornerScale, 240/h)
-	}
-	for i, crop := range crops {
-		src := img.SubImage(crop).(*image.RGBA)
-		for y := crop.Min.Y; y < crop.Max.Y; y++ {
-			for x := crop.Min.X; x < crop.Max.X; x++ {
-				c := src.RGBAAt(x, y)
-				// Feather the backdrop normalization around antialiased edges.
-				weight := min(1, max(0, (math.Sqrt(float64(portraitDiff(c, backgrounds[i])))-8)/20))
-				channel := func(v, base uint8) uint8 { return uint8(math.Round(weight*float64(v) + (1-weight)*float64(base))) }
-				src.SetRGBA(x, y, imagecolor.RGBA{channel(c.R, bg.R), channel(c.G, bg.G), channel(c.B, bg.B), 255})
-			}
-		}
-		out := image.NewRGBA(image.Rect(0, 0, screenSize, screenSize))
-		draw.Draw(out, out.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
-		w, h := int(math.Round(float64(crop.Dx())*scale)), int(math.Round(float64(crop.Dy())*scale))
-		x, y := (screenSize-w)/2, portraitCenterY-h/2
-		xdraw.CatmullRom.Scale(out, image.Rect(x, y, x+w, y+h), src, crop, draw.Src, nil)
-		poses[i] = out
-	}
-	return poses, nil
-}
-
-func writePortraitPNG(dir, name string, img image.Image) error {
-	f, err := os.OpenFile(filepath.Join(dir, name+".png"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	return errors.Join(png.Encode(f, img), f.Close())
-}
 
 func backgroundPrompt(form, vibe string) string {
 	scene := strings.TrimSpace(form)
@@ -385,11 +251,11 @@ func (p *portraitStore) generateBackground(ctx context.Context, id, form, vibe s
 	if err != nil {
 		return err
 	}
-	norm, err := normalizeBackground(img, pixelSpecBox3.logicalW, pixelSpecBox3.logicalH)
+	norm, err := pixel.NormalizeBackground(img, pixel.SpecBox3.LogicalW, pixel.SpecBox3.LogicalH)
 	if err != nil {
 		return err
 	}
-	return saveBackgroundPNG(filepath.Join(p.dir, id), norm)
+	return pixel.SaveBackgroundPNG(filepath.Join(p.dir, id), norm)
 }
 
 func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID string) (string, error) {
@@ -413,7 +279,7 @@ func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID
 		return "", problem(502, err.Error())
 	}
 	bg := imagecolor.RGBA{250, 240, 230, 255}
-	poses, err := slicePortrait(sheet, bg)
+	poses, err := pixel.Slice(sheet, bg)
 	if err != nil {
 		return "", problem(502, err.Error())
 	}
@@ -436,16 +302,16 @@ func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID
 		return "", problem(502, "Cannot create portrait")
 	}
 	if err := func() error {
-		if err := writePortraitPNG(dir, "sheet", sheet); err != nil {
+		if err := pixel.WritePNG(dir, "sheet", sheet); err != nil {
 			return err
 		}
-		for i, pose := range portraitPoses {
-			if err := writePortraitPNG(dir, pose, poses[i]); err != nil {
+		for i, pose := range pixel.Poses {
+			if err := pixel.WritePNG(dir, pose, poses[i]); err != nil {
 				return err
 			}
 		}
-		if normPoses, err := normalizePortraitSheet(sheet, pixelPortraitHeight); err == nil {
-			_ = saveNormalizedPoses(dir, normPoses)
+		if normPoses, err := pixel.NormalizePortraitSheet(sheet, pixel.PortraitHeight); err == nil {
+			_ = pixel.SaveNormalizedPoses(dir, normPoses)
 		}
 		return ctx.Err()
 	}(); err != nil {
@@ -455,8 +321,8 @@ func (p *portraitStore) create(ctx context.Context, spec portraitSpec, currentID
 	if spec.Form != "" && !spec.Edit {
 		_ = p.generateBackground(ctx, id, spec.Form, spec.Prompt)
 	} else if spec.Edit && currentID != "" {
-		if bg, err := loadBackgroundPNG(filepath.Join(p.dir, currentID)); err == nil {
-			_ = saveBackgroundPNG(dir, bg)
+		if bg, err := pixel.LoadBackgroundPNG(filepath.Join(p.dir, currentID)); err == nil {
+			_ = pixel.SaveBackgroundPNG(dir, bg)
 		}
 	}
 	return id, nil
@@ -467,9 +333,9 @@ func (p *portraitStore) discard(id string) {
 		return
 	}
 	dir := filepath.Join(p.dir, id)
-	for _, pose := range portraitPoses {
+	for _, pose := range pixel.Poses {
 		_ = os.Remove(filepath.Join(dir, pose+".png"))
-		_ = os.Remove(filepath.Join(dir, pixelPoseFilename(pose)))
+		_ = os.Remove(filepath.Join(dir, pixel.PoseFilename(pose)))
 	}
 	_ = os.Remove(filepath.Join(dir, "bg.png"))
 	_ = os.Remove(filepath.Join(dir, "sheet.png"))
@@ -477,7 +343,7 @@ func (p *portraitStore) discard(id string) {
 }
 
 func (p *portraitStore) read(id, pose string) ([]byte, error) {
-	if p == nil || !portraitIDPattern.MatchString(id) || pose != "sheet" && !slices.Contains(portraitPoses[:], pose) {
+	if p == nil || !portraitIDPattern.MatchString(id) || pose != "sheet" && !slices.Contains(pixel.Poses[:], pose) {
 		return nil, os.ErrNotExist
 	}
 	return os.ReadFile(filepath.Join(p.dir, id, pose+".png"))
@@ -700,7 +566,7 @@ func readPortraitSpec(raw any) (portraitSpec, error) {
 func (b *larkServer) servePortrait(w http.ResponseWriter, r *http.Request, path, scope string) error {
 	id, pose, found := strings.Cut(strings.TrimPrefix(path, "/api/portraits/"), "/")
 	pose, pngFile := strings.CutSuffix(pose, ".png")
-	if !found || !pngFile || !portraitIDPattern.MatchString(id) || !slices.Contains(portraitPoses[:], pose) {
+	if !found || !pngFile || !portraitIDPattern.MatchString(id) || !slices.Contains(pixel.Poses[:], pose) {
 		return problem(404, "Portrait not found")
 	}
 	if scope != "" {

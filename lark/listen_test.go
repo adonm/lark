@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func listenHarness(t *testing.T, replyFn func(string) string) (*larkServer, string, *[]string) {
@@ -387,14 +389,14 @@ func TestListenModeOnlyOpensOnVoiceOwner(t *testing.T) {
 
 func TestListenModeCountdownIndicator(t *testing.T) {
 	t.Parallel()
-	for _, spec := range []pixelDisplaySpec{pixelSpecVoCat, pixelSpecBox3} {
-		idle := renderPixelHomeListen(spec, nil, nil, gradeDay, "", "", false)
-		listen := renderPixelHomeListen(spec, nil, nil, gradeDay, "listening", "", true)
+	for _, spec := range []pixel.Spec{pixel.SpecVoCat, pixel.SpecBox3} {
+		idle := pixel.RenderHomeListen(spec, nil, nil, pixel.GradeDay, "", "", false)
+		listen := pixel.RenderHomeListen(spec, nil, nil, pixel.GradeDay, "listening", "", true)
 		if idle.Bounds() != listen.Bounds() {
-			t.Fatalf("unexpected bounds mismatch for %dx%d", spec.logicalW, spec.logicalH)
+			t.Fatalf("unexpected bounds mismatch for %dx%d", spec.LogicalW, spec.LogicalH)
 		}
 		if string(idle.Pix) == string(listen.Pix) {
-			t.Fatalf("listening indicator did not change from idle for %dx%d", spec.logicalW, spec.logicalH)
+			t.Fatalf("listening indicator did not change from idle for %dx%d", spec.LogicalW, spec.LogicalH)
 		}
 	}
 }

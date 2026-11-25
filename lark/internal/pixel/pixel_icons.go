@@ -1,4 +1,4 @@
-package main
+package pixel
 
 import (
 	imagecolor "image/color"
@@ -14,11 +14,11 @@ var (
 	pxTileActiveBG = imagecolor.RGBA{62, 49, 84, 255}
 	pxInk          = imagecolor.RGBA{250, 240, 246, 255}
 	pxMuted        = imagecolor.RGBA{197, 182, 204, 255}
-	pxPeach        = imagecolor.RGBA{255, 193, 168, 255}
-	pxMint         = imagecolor.RGBA{154, 229, 195, 255}
+	Peach          = imagecolor.RGBA{255, 193, 168, 255}
+	Mint           = imagecolor.RGBA{154, 229, 195, 255}
 	pxWarn         = imagecolor.RGBA{255, 208, 142, 255}
-	pxDanger       = imagecolor.RGBA{255, 175, 194, 255}
-	pxSky          = imagecolor.RGBA{156, 191, 232, 255}
+	Danger         = imagecolor.RGBA{255, 175, 194, 255}
+	Sky            = imagecolor.RGBA{156, 191, 232, 255}
 	pxQRDark       = imagecolor.RGBA{18, 16, 26, 255}
 	pxQRWhite      = imagecolor.RGBA{255, 255, 255, 255}
 )
@@ -26,11 +26,11 @@ var (
 var pxIconPalette = map[string]imagecolor.RGBA{
 	".": {},
 	"w": pxInk,
-	"m": pxMint,
-	"p": pxPeach,
+	"m": Mint,
+	"p": Peach,
 	"y": pxWarn,
-	"r": pxDanger,
-	"s": pxSky,
+	"r": Danger,
+	"s": Sky,
 	"d": pxPanelBorder,
 	"k": pxPanelBG,
 }

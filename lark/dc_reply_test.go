@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
+
+	"lark/internal/pixel"
 )
 
 // dcVoiceHarness is a Delta Chat server with a hardware terminal that can read
@@ -362,7 +364,7 @@ func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
 	st := d.state()
 	target := ""
 	if st.view != nil {
-		target = st.view.actions["reply"].value
+		target = st.view.Actions["reply"].Value
 	}
 	if target != "mum" {
 		t.Fatalf("card reply target = %q, want mum", target)
@@ -472,10 +474,10 @@ func TestSpokenIntercomEmptyTranscriptSendsNothing(t *testing.T) {
 
 func TestIntercomCardReplyTargetsConversationPartner(t *testing.T) {
 	t.Parallel()
-	if got := (intercomCard{companion: "Greg", reply: "Mum"}).scene().actions["reply"].value; got != "mum" {
+	if got := (pixel.IntercomCard{Companion: "Greg", Reply: "Mum"}).Scene().Actions["reply"].Value; got != "mum" {
 		t.Fatalf("card reply target = %q, want mum", got)
 	}
-	if got := (intercomCard{companion: "Cake"}).scene().actions["reply"].value; got != "cake" {
+	if got := (pixel.IntercomCard{Companion: "Cake"}).Scene().Actions["reply"].Value; got != "cake" {
 		t.Fatalf("card without an explicit target = %q, want cake", got)
 	}
 }

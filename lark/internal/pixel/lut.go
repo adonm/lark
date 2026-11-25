@@ -1,33 +1,33 @@
-package main
+package pixel
 
 import "time"
 
-type gradeKey uint8
+type GradeKey uint8
 type colorLUT [3][256]uint8
 
 const (
-	gradeDay gradeKey = iota
-	gradeDawn
-	gradeDusk
-	gradeNight
+	GradeDay GradeKey = iota
+	GradeDawn
+	GradeDusk
+	GradeNight
 	gradeBlend
 )
 
 var atmosphereEdges = [...]struct {
 	minute        int
-	before, after gradeKey
+	before, after GradeKey
 }{
-	{5*60 + 30, gradeNight, gradeDawn},
-	{8*60 + 30, gradeDawn, gradeDay},
-	{17 * 60, gradeDay, gradeDusk},
-	{20*60 + 30, gradeDusk, gradeNight},
+	{5*60 + 30, GradeNight, GradeDawn},
+	{8*60 + 30, GradeDawn, GradeDay},
+	{17 * 60, GradeDay, GradeDusk},
+	{20*60 + 30, GradeDusk, GradeNight},
 }
 
 var atmosphereLUTs, atmosphereKeys = makeAtmosphere()
 
-func makeAtmosphere() ([gradeBlend + 48]colorLUT, [48]gradeKey) {
+func makeAtmosphere() ([gradeBlend + 48]colorLUT, [48]GradeKey) {
 	var tables [gradeBlend + 48]colorLUT
-	var keys [48]gradeKey
+	var keys [48]GradeKey
 	// Dark and light endpoints per channel for the world/companion layer.
 	// UI panels and text are drawn after grading, so night can be genuinely
 	// dark blue and dawn/dusk unmistakably warm without hurting chrome contrast.
@@ -41,13 +41,13 @@ func makeAtmosphere() ([gradeBlend + 48]colorLUT, [48]gradeKey) {
 		}
 	}
 	for slot := range keys {
-		m, phase := slot*30+15, gradeNight
+		m, phase := slot*30+15, GradeNight
 		for _, edge := range atmosphereEdges {
 			if m >= edge.minute {
 				phase = edge.after
 			}
 			if weight := m - edge.minute + 60; weight > 0 && weight < 120 {
-				phase = gradeBlend + gradeKey(slot)
+				phase = gradeBlend + GradeKey(slot)
 				for c := range 3 {
 					for i := range 256 {
 						a, b := int(tables[edge.before][c][i]), int(tables[edge.after][c][i])
@@ -62,7 +62,7 @@ func makeAtmosphere() ([gradeBlend + 48]colorLUT, [48]gradeKey) {
 	return tables, keys
 }
 
-func gradeAt(now time.Time, loc *time.Location) gradeKey {
+func GradeAt(now time.Time, loc *time.Location) GradeKey {
 	if loc == nil {
 		loc = time.Local
 	}

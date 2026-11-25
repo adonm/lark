@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/pierrec/lz4/v4"
+
+	"lark/internal/pixel"
 )
 
 type simBoardSpec struct {
@@ -271,12 +273,12 @@ func decodeFrameInto(fb []uint16, w, h int, pkt []byte) (uint16, bool) {
 	pixels := rw * rh
 	var rawBE []byte
 	switch codec {
-	case frameCodecRaw:
+	case pixel.FrameCodecRaw:
 		if len(payload) < pixels*2 {
 			return 0, false
 		}
 		rawBE = payload[:pixels*2]
-	case frameCodecRLE565:
+	case pixel.FrameCodecRLE565:
 		rawBE = make([]byte, 0, pixels*2)
 		for i := 0; i < len(payload) && len(rawBE) < pixels*2; {
 			tag := payload[i]
@@ -303,13 +305,13 @@ func decodeFrameInto(fb []uint16, w, h int, pkt []byte) (uint16, bool) {
 		if len(rawBE) != pixels*2 {
 			return 0, false
 		}
-	case frameCodecLZ4:
+	case pixel.FrameCodecLZ4:
 		rawBE = make([]byte, pixels*2)
 		n, err := lz4.UncompressBlock(payload, rawBE)
 		if err != nil || n != pixels*2 {
 			return 0, false
 		}
-	case frameCodecJPEG:
+	case pixel.FrameCodecJPEG:
 		img, err := jpeg.Decode(bytes.NewReader(payload))
 		if err != nil {
 			return 0, false
@@ -321,7 +323,7 @@ func decodeFrameInto(fb []uint16, w, h int, pkt []byte) (uint16, bool) {
 		for y := range rh {
 			for x := range rw {
 				r, g, bl, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
-				fb[(ry+y)*w+(rx+x)] = pack565(uint8(r>>8), uint8(g>>8), uint8(bl>>8))
+				fb[(ry+y)*w+(rx+x)] = pixel.Pack565(uint8(r>>8), uint8(g>>8), uint8(bl>>8))
 			}
 		}
 		return rev, true

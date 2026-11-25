@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func TestResumeInsideWindowKeepsVoiceOwnershipAndExpiredResnapshots(t *testing.T) {
@@ -140,14 +142,14 @@ func TestProtocolWireSizesAndAllocs(t *testing.T) {
 		t.Fatalf("unexpected wire sizes: pointer=%d status=%d", ptrBytes, statusBytes)
 	}
 
-	var enc frameEncoder
+	var enc pixel.FrameEncoder
 	fb := make([]uint16, 360*360)
 	rect := image.Rect(0, 0, 360, 360)
 	// Warm encoder buffers before measuring steady-state allocations.
-	_ = enc.encodeWithCodecs(fb, nil, rect, 1, 360, codecBitAll)
+	_ = enc.EncodeWithCodecs(fb, nil, rect, 1, 360, codecBitAll)
 	frameAllocs := testing.AllocsPerRun(20, func() {
-		f := enc.encodeWithCodecs(fb, nil, rect, 2, 360, codecBitAll)
-		if len(f.data()) == 0 {
+		f := enc.EncodeWithCodecs(fb, nil, rect, 2, 360, codecBitAll)
+		if len(f) == 0 {
 			t.Fatal("empty frame")
 		}
 	})

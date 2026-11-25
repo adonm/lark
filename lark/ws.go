@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 const terminalBinary = 2
@@ -100,7 +102,7 @@ var debugScreenText = false
 type cachedAssets struct {
 	bg    *image.RGBA
 	poses [4]*image.RGBA
-	theme pixelTheme
+	theme pixel.Theme
 	used  uint64
 	// A portrait whose sheet is missing renders placeholders. Cache those too
 	// so frames do not decode (and fail) per frame, but let them expire so a

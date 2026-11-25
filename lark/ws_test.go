@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"lark/internal/library"
+
+	"lark/internal/pixel"
 )
 
 func (s *testWS) helloV2(t *testing.T, id, cat string) protocolFrame {
@@ -183,15 +185,15 @@ func (s *testWS) up(t *testing.T, x, y int, rev uint16) {
 	s.sendProto(t, msgPointer, encodePointer(ptrUp, uint16(x), uint16(y), rev))
 }
 
-func (s *testWS) tapMenuSpec(t *testing.T, spec pixelDisplaySpec) {
+func (s *testWS) tapMenuSpec(t *testing.T, spec pixel.Spec) {
 	t.Helper()
-	btn := physicalRect(pixelHomeMenuButtonRect(spec), spec.artScale)
+	btn := pixel.PhysicalRect(pixel.HomeMenuButtonRect(spec), spec.ArtScale)
 	s.tap(t, (btn.Min.X+btn.Max.X)/2, (btn.Min.Y+btn.Max.Y)/2, 0)
 }
 
 func (s *testWS) tapMenu(t *testing.T) {
 	t.Helper()
-	s.tapMenuSpec(t, pixelSpecVoCat)
+	s.tapMenuSpec(t, pixel.SpecVoCat)
 }
 
 func (s *testWS) recStart(t *testing.T, target string) {
@@ -1007,7 +1009,7 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 	dev.sendProto(t, msgTTSAck, encodeTTSAck(false, binary.LittleEndian.Uint64(framePayload(end)[1:9])))
 	dev.barrier(t)
 	st := b.hub.live("vocat-a000").state()
-	settled := !st.busy && !st.awaitAck && st.scene.title == ""
+	settled := !st.busy && !st.awaitAck && st.scene.Title == ""
 	if !settled {
 		t.Fatal("device did not settle after tts_ack")
 	}

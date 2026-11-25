@@ -18,6 +18,8 @@ import (
 	"github.com/chatmail/rpc-client-go/v2/deltachat"
 
 	"lark/internal/stories"
+
+	"lark/internal/pixel"
 )
 
 func fakeTunnelRunner(calls *[]string) tunnelRunner {
@@ -564,7 +566,7 @@ func TestRemoteVolumeStoryOpenAndRevoke(t *testing.T) {
 	if d == nil {
 		t.Fatal("terminal missing")
 	}
-	waitTerm(t, d, func(st terminalState) bool { return st.drawer == drawerStoryReader })
+	waitTerm(t, d, func(st terminalState) bool { return st.drawer == pixel.DrawerStoryReader })
 
 	remoteJSON(t, http.MethodPost, h.base, h.token, "/remote/api/revoke", object{}, 200)
 	if len(b.remote.tokens) != 0 {

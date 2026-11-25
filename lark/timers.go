@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 const (
@@ -561,7 +563,7 @@ func (b *larkServer) deliverTimer(ctx context.Context, t savedTimer) {
 			}
 			return
 		}
-		view := timerScene(message)
+		view := pixel.TimerScene(message)
 		d.update(func(d *terminalSession) {
 			h.wake(d, now)
 			if len(pcm) != 0 && t.Say == "" {

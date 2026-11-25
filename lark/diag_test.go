@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func TestDiagnosticsRecordsSilentAndToolErrors(t *testing.T) {
@@ -189,7 +191,7 @@ func TestDiagnosticsEndpointAndBoardHUD(t *testing.T) {
 		t.Fatalf("invalid device telemetry: %+v", d)
 	}
 	tap := func(x, y int) { board.tap(t, x, y, 0) }
-	board.tapMenuSpec(t, pixelSpecBox3)
+	board.tapMenuSpec(t, pixel.SpecBox3)
 	svg := waitSVG(t, b.hub, id, "menu-more")
 	mx, my, ok := hitCenter(svg, "menu-more")
 	if !ok {

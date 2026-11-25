@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"lark/internal/pixel"
 )
 
 func TestSimDecodeFrames(t *testing.T) {
@@ -16,11 +18,11 @@ func TestSimDecodeFrames(t *testing.T) {
 	src := make([]uint16, w*h)
 	for y := range h {
 		for x := range w {
-			src[y*w+x] = pack565(uint8(x*4), uint8(y*4), 128)
+			src[y*w+x] = pixel.Pack565(uint8(x*4), uint8(y*4), 128)
 		}
 	}
 	r := image.Rect(0, 0, w, h)
-	var enc frameEncoder
+	var enc pixel.FrameEncoder
 	for _, tc := range []struct {
 		name  string
 		codec uint8
@@ -31,9 +33,9 @@ func TestSimDecodeFrames(t *testing.T) {
 		{"jpeg", codecBitJPEG},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := enc.encodeWithCodecs(src, nil, r, 7, w, tc.codec)
+			f := enc.EncodeWithCodecs(src, nil, r, 7, w, tc.codec)
 			dst := make([]uint16, w*h)
-			rev, ok := decodeFrameInto(dst, w, h, f.data())
+			rev, ok := decodeFrameInto(dst, w, h, f)
 			if !ok || rev != 7 {
 				t.Fatalf("decodeFrameInto(%s) failed: ok=%v rev=%d", tc.name, ok, rev)
 			}
@@ -51,7 +53,7 @@ func TestSimDecodeFrames(t *testing.T) {
 func TestSimPNGAndWAV(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	fb := []uint16{pack565(255, 0, 0), pack565(0, 255, 0), pack565(0, 0, 255), pack565(255, 255, 255)}
+	fb := []uint16{pixel.Pack565(255, 0, 0), pixel.Pack565(0, 255, 0), pixel.Pack565(0, 0, 255), pixel.Pack565(255, 255, 255)}
 	pngPath := filepath.Join(dir, "out.png")
 	if err := writeFBToPNG(fb, 2, 2, pngPath); err != nil {
 		t.Fatal(err)

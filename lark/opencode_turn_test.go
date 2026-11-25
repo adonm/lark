@@ -362,7 +362,7 @@ func TestTerminalEagerTTSFailureShowsAnswerUnlessInterrupted(t *testing.T) {
 			}
 			b.hub.sig.wait(t, func() bool {
 				st := d0.state()
-				return st.scene.title == "Answer" && strings.Contains(st.svg.source, first) && strings.Contains(st.svg.source, second)
+				return st.scene.Title == "Answer" && strings.Contains(st.svg.source, first) && strings.Contains(st.svg.source, second)
 			})
 		})
 	}

@@ -9,12 +9,14 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"lark/internal/pixel"
 )
 
 func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 	d.syncMode()
 	switch d.drawer {
-	case drawerStories, drawerMemories, drawerPair, drawerUnpair:
+	case pixel.DrawerStories, pixel.DrawerMemories, pixel.DrawerPair, pixel.DrawerUnpair:
 	default:
 		d.menuData = nil
 	}
@@ -47,7 +49,7 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 		listenWindow: d.recording.active() && d.recording.listen,
 	}
 	switch {
-	case d.drawer != "" && (mood == "idle" || (d.drawer == drawerStoryReader && (mood == "speaking" || d.recording.listen))):
+	case d.drawer != "" && (mood == "idle" || (d.drawer == pixel.DrawerStoryReader && (mood == "speaking" || d.recording.listen))):
 		r.drawer = d.drawer
 		r.menuPage = d.menuPage
 		r.vol = d.vol
@@ -61,10 +63,10 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 		}
 		r.storyPage = d.storyPage
 		switch d.drawer {
-		case drawerStories, drawerMemories, drawerPair, drawerUnpair:
-			r.view.menu = d.menuData
-		case drawerIntercom:
-			var choices []menuPeer
+		case pixel.DrawerStories, pixel.DrawerMemories, pixel.DrawerPair, pixel.DrawerUnpair:
+			r.menu = d.menuData
+		case pixel.DrawerIntercom:
+			var choices []pixel.Peer
 			seen := make(map[string]bool)
 			for _, other := range h.liveAll() {
 				cid := other.companionID.get()
@@ -75,36 +77,36 @@ func (h *terminalHub) render(d *terminalSession, now time.Time, full bool) {
 					continue
 				}
 				seen[cid] = true
-				choices = append(choices, menuPeer{cid, h.b.companionFor(cid).Name})
+				choices = append(choices, pixel.Peer{ID: cid, Name: h.b.companionFor(cid).Name})
 			}
-			slices.SortFunc(choices, func(a, b menuPeer) int { return strings.Compare(a.id, b.id) })
-			choices = append([]menuPeer{{"all", "Everyone"}}, choices...)
+			slices.SortFunc(choices, func(a, b pixel.Peer) int { return strings.Compare(a.ID, b.ID) })
+			choices = append([]pixel.Peer{{ID: "all", Name: "Everyone"}}, choices...)
 			perPage := 2
 			if d.screen.shape == "rect" {
 				perPage = 3
 			}
-			d.menuPage = clampMenuPage(d.menuPage, len(choices), perPage)
+			d.menuPage = pixel.ClampPage(d.menuPage, len(choices), perPage)
 			r.menuPage = d.menuPage
 			r.peers = choices
-		case drawerStats:
+		case pixel.DrawerStats:
 			d.statsAt = now
 			r.statsRows = h.statsRows(d)
 		}
 	case mood == "listening":
 		r.drawer = ""
-	case d.card != nil && (mood == "idle" || mood == "speaking" || mood != "sleepy" && d.card.duringTurn):
+	case d.card != nil && (mood == "idle" || mood == "speaking" || mood != "sleepy" && d.card.DuringTurn):
 		r.view = *d.card
 	case d.view != nil && mood != "sleepy":
 		r.view = *d.view
 	default:
 		r.drawer = ""
 	}
-	if card := r.view.intercom; card != nil {
-		r.view = card.scene()
+	if card := r.view.Intercom; card != nil {
+		r.view = card.Scene()
 	}
-	if r.drawer == "" && r.view.title == "" && (mood == "thinking" || mood == "speaking") {
-		r.view.actions = maps.Clone(r.view.actions)
-		r.view.stopControl()
+	if r.drawer == "" && r.view.Title == "" && (mood == "thinking" || mood == "speaking") {
+		r.view.Actions = maps.Clone(r.view.Actions)
+		r.view.StopControl()
 	}
 	d.renderGen++
 	d.renderNext = &r
@@ -144,7 +146,7 @@ type frameJob struct {
 	gen        uint64
 	rev        uint64
 	geometry   screenGeometry
-	oldScene   sceneView
+	oldScene   pixel.Scene
 	wantRGB    bool
 	pointerRev bool
 	codecs     uint8
@@ -158,7 +160,7 @@ type frameWorker struct {
 	quit    chan struct{}
 	done    chan struct{}
 	scratch []uint16
-	encoder frameEncoder
+	encoder pixel.FrameEncoder
 }
 
 func newFrameWorker(h *terminalHub, d *terminalSession) *frameWorker {
@@ -202,18 +204,18 @@ func (h *terminalHub) handleFrameBuilt(d *terminalSession, fb terminalFrameBuilt
 
 // buildFrame draws the requested scene and packs it into RGB565. It runs
 // without the hub lock; portraits and assets are cached separately.
-func (h *terminalHub) buildFrame(w *frameWorker, job frameJob) (svgScreen, sceneView, error) {
+func (h *terminalHub) buildFrame(w *frameWorker, job frameJob) (svgScreen, pixel.Scene, error) {
 	r, geometry := job.req, job.geometry
-	spec := pixelSpecForGeometry(geometry)
+	spec := pixel.SpecForGeometry(geometry.width, geometry.height, geometry.shape)
 	bg, poses, th := h.companionAssets(r.companion)
 	var img *image.RGBA
-	var hits []hitBox
+	var hits []pixel.HitBox
 	var err error
 	switch {
 	case r.drawer != "":
-		img, hits, r.view.actions, err = h.renderPixelDrawer(spec, r, poses[poseIndexForMood(r.pose)], th)
-	case r.view.title != "" || r.view.heading != "" || r.view.text != "":
-		img, hits = renderPixelSceneCard(spec, r.view, th)
+		img, hits, r.view.Actions, err = h.renderPixelDrawer(spec, r, poses[poseIndexForMood(r.pose)], th)
+	case r.view.Title != "" || r.view.Heading != "" || r.view.Text != "":
+		img, hits = pixel.RenderSceneCard(spec, r.view, th)
 	default:
 		poseIdx := poseIndexForMood(r.pose)
 		status := ""
@@ -221,33 +223,33 @@ func (h *terminalHub) buildFrame(w *frameWorker, job frameJob) (svgScreen, scene
 		case "listening", "speaking", "thinking":
 			status = r.pose.mood
 		}
-		img = renderPixelHomeListen(spec, bg, poses[poseIdx], r.grade, status, "", r.listenWindow)
+		img = pixel.RenderHomeListen(spec, bg, poses[poseIdx], r.grade, status, "", r.listenWindow)
 		switch {
 		case status == "listening" && r.listenWindow:
-			hits = []hitBox{{id: "listen-stop", label: "Stop", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
-			r.view.actions = map[string]sceneAction{"listen-stop": {"listen-stop", ""}}
+			hits = []pixel.HitBox{{ID: "listen-stop", Label: "Stop", X1: 0, Y1: 0, X2: spec.LogicalW*spec.ArtScale - 1, Y2: spec.LogicalH*spec.ArtScale - 1}}
+			r.view.Actions = map[string]pixel.Action{"listen-stop": {Kind: "listen-stop", Value: ""}}
 		case status == "listening":
-			btnH := pixelNavHeight(spec)
-			y := spec.safe.Max.Y - btnH
+			btnH := pixel.NavHeight(spec)
+			y := spec.Safe.Max.Y - btnH
 			gap := 4
-			bw := (spec.safe.Dx() - gap) / 2
-			hits = addLabeledHit(hits, spec, "rec-cancel", "Cancel", image.Rect(spec.safe.Min.X, y, spec.safe.Min.X+bw, y+btnH))
-			hits = addLabeledHit(hits, spec, "rec-send", "Send", image.Rect(spec.safe.Min.X+bw+gap, y, spec.safe.Max.X, y+btnH))
-			r.view.actions = map[string]sceneAction{"rec-cancel": {"rec-cancel", ""}, "rec-send": {"rec-send", ""}}
+			bw := (spec.Safe.Dx() - gap) / 2
+			hits = pixel.AddLabeledHit(hits, spec, "rec-cancel", "Cancel", image.Rect(spec.Safe.Min.X, y, spec.Safe.Min.X+bw, y+btnH))
+			hits = pixel.AddLabeledHit(hits, spec, "rec-send", "Send", image.Rect(spec.Safe.Min.X+bw+gap, y, spec.Safe.Max.X, y+btnH))
+			r.view.Actions = map[string]pixel.Action{"rec-cancel": {Kind: "rec-cancel", Value: ""}, "rec-send": {Kind: "rec-send", Value: ""}}
 		case status == "thinking" || status == "speaking":
-			btnW, btnH := 42, pixelNavHeight(spec)
-			if !spec.round {
+			btnW, btnH := 42, pixel.NavHeight(spec)
+			if !spec.Round {
 				btnW = 48
 			}
-			btn := image.Rect((spec.logicalW-btnW)/2, spec.safe.Max.Y-btnH, (spec.logicalW+btnW)/2, spec.safe.Max.Y)
-			hits = addLabeledHit(hits, spec, "stop", "Stop", btn)
-			r.view.actions = map[string]sceneAction{"stop": {"stop", ""}}
+			btn := image.Rect((spec.LogicalW-btnW)/2, spec.Safe.Max.Y-btnH, (spec.LogicalW+btnW)/2, spec.Safe.Max.Y)
+			hits = pixel.AddLabeledHit(hits, spec, "stop", "Stop", btn)
+			r.view.Actions = map[string]pixel.Action{"stop": {Kind: "stop", Value: ""}}
 		default:
-			hits = []hitBox{{id: "listen", label: "Listen", x1: 0, y1: 0, x2: spec.logicalW*spec.artScale - 1, y2: spec.logicalH*spec.artScale - 1}}
+			hits = []pixel.HitBox{{ID: "listen", Label: "Listen", X1: 0, Y1: 0, X2: spec.LogicalW*spec.ArtScale - 1, Y2: spec.LogicalH*spec.ArtScale - 1}}
 			if status == "" {
-				hits = addLabeledHit(hits, spec, "menu", "Menu", pixelHomeMenuButtonRect(spec))
+				hits = pixel.AddLabeledHit(hits, spec, "menu", "Menu", pixel.HomeMenuButtonRect(spec))
 			}
-			r.view.actions = map[string]sceneAction{"listen": {"listen", ""}, "menu": {"menu", ""}}
+			r.view.Actions = map[string]pixel.Action{"listen": {Kind: "listen", Value: ""}, "menu": {Kind: "menu", Value: ""}}
 		}
 	}
 	var screen svgScreen
@@ -272,11 +274,11 @@ func (h *terminalHub) buildFrame(w *frameWorker, job frameJob) (svgScreen, scene
 	for y := range dh {
 		for x := range dw {
 			c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
-			fb[y*dw+x] = pack565(c.R, c.G, c.B)
+			fb[y*dw+x] = pixel.Pack565(c.R, c.G, c.B)
 		}
 	}
 	screen = svgScreen{fb: fb, hits: hits, grade: r.grade}
-	releasePixelImage(img)
+	pixel.ReleaseImage(img)
 	if debugScreenText {
 		screen.source = screenSource(r, hits)
 	}
@@ -284,82 +286,82 @@ func (h *terminalHub) buildFrame(w *frameWorker, job frameJob) (svgScreen, scene
 }
 
 // screenSource is the labelled hit trace DOM tests wait on.
-func screenSource(r renderRequest, hits []hitBox) string {
+func screenSource(r renderRequest, hits []pixel.HitBox) string {
 	var srcParts []string
 	if r.drawer != "" {
 		srcParts = append(srcParts, r.drawer)
-		if r.drawer == drawerMenu {
-			for _, it := range pixelHomeMenuItems {
-				srcParts = append(srcParts, it.label)
+		if r.drawer == pixel.DrawerMenu {
+			for _, it := range pixel.HomeMenuItems {
+				srcParts = append(srcParts, it.Label)
 			}
 		}
-		if r.drawer == drawerMore {
-			for _, it := range pixelMoreMenuItems {
-				srcParts = append(srcParts, it.label)
+		if r.drawer == pixel.DrawerMore {
+			for _, it := range pixel.MoreMenuItems {
+				srcParts = append(srcParts, it.Label)
 			}
 		}
-		if r.drawer == drawerVoice {
+		if r.drawer == pixel.DrawerVoice {
 			for _, v := range voiceCatalog {
 				srcParts = append(srcParts, v.Name)
 			}
 		}
-		if r.drawer == drawerStats {
+		if r.drawer == pixel.DrawerStats {
 			for _, row := range r.statsRows {
-				srcParts = append(srcParts, row.title, row.text)
+				srcParts = append(srcParts, row.Title, row.Text)
 			}
 		}
-		if r.drawer == drawerVolume {
+		if r.drawer == pixel.DrawerVolume {
 			srcParts = append(srcParts, fmt.Sprintf("Level · %d%%", r.vol))
 		}
-		if r.view.menu != nil {
-			if r.view.menu.detail != nil || r.view.menu.memoryDetail != nil {
+		if r.menu != nil {
+			if r.menu.detail != nil || r.menu.memoryDetail != nil {
 				srcParts = append(srcParts, "menu-detail-view")
 			}
-			if r.view.menu.notice != "" {
-				srcParts = append(srcParts, r.view.menu.notice)
+			if r.menu.notice != "" {
+				srcParts = append(srcParts, r.menu.notice)
 			}
-			for _, g := range r.view.menu.games {
-				srcParts = append(srcParts, g.label)
+			for _, g := range r.menu.games {
+				srcParts = append(srcParts, g.Label)
 			}
-			for _, st := range r.view.menu.stories {
+			for _, st := range r.menu.stories {
 				srcParts = append(srcParts, st.Title)
 			}
-			for _, row := range r.view.menu.rows {
-				srcParts = append(srcParts, row.title, row.text)
+			for _, row := range r.menu.rows {
+				srcParts = append(srcParts, row.Title, row.Text)
 			}
 		}
-		if r.drawer == drawerStoryReader {
+		if r.drawer == pixel.DrawerStoryReader {
 			srcParts = append(srcParts, r.storyTitle, r.storyText)
 			for _, ch := range r.storyChoices {
 				srcParts = append(srcParts, ch.Label)
 			}
 		}
-	} else if r.view.title == "" && r.view.heading == "" && r.view.text == "" {
+	} else if r.view.Title == "" && r.view.Heading == "" && r.view.Text == "" {
 		srcParts = append(srcParts, "home")
 	}
-	if r.view.title != "" {
-		srcParts = append(srcParts, r.view.title)
+	if r.view.Title != "" {
+		srcParts = append(srcParts, r.view.Title)
 	}
-	if r.view.heading != "" {
-		srcParts = append(srcParts, r.view.heading)
+	if r.view.Heading != "" {
+		srcParts = append(srcParts, r.view.Heading)
 	}
-	if r.view.text != "" {
-		srcParts = append(srcParts, r.view.text)
+	if r.view.Text != "" {
+		srcParts = append(srcParts, r.view.Text)
 	}
 	for _, hb := range hits {
-		srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.id, hb.x1, hb.y1, hb.x2, hb.y2))
+		srcParts = append(srcParts, fmt.Sprintf(`<g data-id=%q data-lark-hit="%d %d %d %d"/>`, hb.ID, hb.X1, hb.Y1, hb.X2, hb.Y2))
 	}
 	return strings.Join(srcParts, " ")
 }
 
 // encodeFrame diffs against the last committed frame and encodes only when the
 // rectangle, grade, or interaction targets changed. It runs without the lock.
-func encodeFrame(w *frameWorker, job frameJob, screen svgScreen, view sceneView) (protocolFrame, int, time.Duration, bool) {
+func encodeFrame(w *frameWorker, job frameJob, screen svgScreen, view pixel.Scene) (protocolFrame, int, time.Duration, bool) {
 	var native protocolFrame
 	var rawBytes int
 	fbChanged := !slices.Equal(job.prev.fb, screen.fb)
 	interactionChanged := job.pointerRev && job.wantRGB &&
-		(!maps.Equal(view.actions, job.oldScene.actions) || !slices.Equal(screen.hits, job.prev.hits))
+		(!maps.Equal(view.Actions, job.oldScene.Actions) || !slices.Equal(screen.hits, job.prev.hits))
 	if screen.fb == nil || !job.wantRGB {
 		return native, rawBytes, 0, false
 	}
@@ -367,17 +369,17 @@ func encodeFrame(w *frameWorker, job frameJob, screen svgScreen, view sceneView)
 		return native, rawBytes, 0, false
 	}
 	start := time.Now()
-	rect := dirtyRect(job.prev.fb, screen.fb, job.geometry)
+	rect := pixel.DirtyRect(job.prev.fb, screen.fb, job.geometry.width, job.geometry.height)
 	if rect.Empty() && (interactionChanged || job.req.full) {
 		rect = image.Rect(0, 0, 1, 1)
 	}
 	if !rect.Empty() {
 		frameCodecs := job.codecs
 		fullScene := job.prev.fb == nil || job.req.full || screen.grade != job.prev.grade
-		if !fullScene || job.req.drawer != "" || view.title != "" || view.heading != "" || view.text != "" {
+		if !fullScene || job.req.drawer != "" || view.Title != "" || view.Heading != "" || view.Text != "" {
 			frameCodecs &^= codecBitJPEG
 		}
-		native = w.encoder.encodeWithCodecs(screen.fb, nil, rect, job.rev, job.geometry.width, frameCodecs)
+		native = newProtocolFrame(terminalBinary, w.encoder.EncodeWithCodecs(screen.fb, nil, rect, job.rev, job.geometry.width, frameCodecs))
 		rawBytes = 12 + rect.Dx()*rect.Dy()*2
 	}
 	return native, rawBytes, time.Since(start), true
@@ -386,7 +388,7 @@ func encodeFrame(w *frameWorker, job frameJob, screen svgScreen, view sceneView)
 // commitFrame publishes the built frame. The caller is the session actor.
 func (h *terminalHub) commitFrame(d *terminalSession, fb terminalFrameBuilt) {
 	in := fb.job
-	d.scene, d.svg = fb.view, fb.screen
+	d.scene, d.sceneMenu, d.svg = fb.view, in.req.menu, fb.screen
 	h.sig.notify()
 	if fb.native.data() == nil {
 		if d.announcing {
@@ -397,7 +399,7 @@ func (h *terminalHub) commitFrame(d *terminalSession, fb terminalFrameBuilt) {
 	d.rev.store(in.rev)
 	d.client.enqueueProto(msgFrame, fb.native.data())
 	d.nativeRev = uint16(in.rev)
-	hk := pointerKey(fb.screen.hits, fb.view.actions)
+	hk := pointerKey(fb.screen.hits, fb.view.Actions)
 	if !d.hasActionRev || hk != d.actionHitsKey {
 		d.actionHitsKey = hk
 		d.actionRev = d.nativeRev
@@ -406,11 +408,11 @@ func (h *terminalHub) commitFrame(d *terminalSession, fb terminalFrameBuilt) {
 	in.req.trace.measure(diagRender, fb.render)
 	codec := "RGB565"
 	switch fb.native.data()[9] {
-	case frameCodecRLE565:
+	case pixel.FrameCodecRLE565:
 		codec = "RLE565"
-	case frameCodecJPEG:
+	case pixel.FrameCodecJPEG:
 		codec = "JPEG"
-	case frameCodecLZ4:
+	case pixel.FrameCodecLZ4:
 		codec = "LZ4"
 	}
 	h.trackFrame(d, fb.render, len(fb.native.data()), fb.raw, codec)
@@ -419,7 +421,7 @@ func (h *terminalHub) commitFrame(d *terminalSession, fb terminalFrameBuilt) {
 	}
 }
 
-func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixelTheme) {
+func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image.RGBA, pixel.Theme) {
 	if c != nil && c.PortraitID != "" && h != nil && h.b != nil && h.b.portraits != nil {
 		h.assetsMu.Lock()
 		h.assetsClock++
@@ -439,17 +441,17 @@ func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image
 		var bg *image.RGBA
 		var poses [4]*image.RGBA
 		loaded := false
-		if p, err := loadOrNormalizePoses(dir, pixelPortraitHeight); err == nil {
+		if p, err := pixel.LoadOrNormalizePoses(dir, pixel.PortraitHeight); err == nil {
 			poses = p
 			loaded = true
 		}
-		if b, err := loadBackgroundPNG(dir); err == nil {
+		if b, err := pixel.LoadBackgroundPNG(dir); err == nil {
 			bg = b
 		}
 		if !loaded {
-			poses = pixelPlaceholderPoses()
+			poses = pixel.PlaceholderPoses()
 		}
-		th := derivePixelTheme(bg, poses[:])
+		th := pixel.DeriveTheme(bg, poses[:])
 		assets := cachedAssets{bg: bg, poses: poses, theme: th, used: clock}
 		if !loaded {
 			assets.expires = time.Now().Add(partialAssetTTL)
@@ -457,8 +459,8 @@ func (h *terminalHub) companionAssets(c *companionState) (*image.RGBA, [4]*image
 		h.storeAssets(c.PortraitID, assets, epoch)
 		return bg, poses, th
 	}
-	poses := pixelPlaceholderPoses()
-	return nil, poses, placeholderPixelTheme()
+	poses := pixel.PlaceholderPoses()
+	return nil, poses, pixel.PlaceholderTheme()
 }
 
 // storeAssets discards a load that raced an invalidation: its bytes describe
@@ -527,11 +529,32 @@ func (h *terminalHub) renderCompanion(companionID string, now time.Time, full bo
 
 // openStory opens the reader at saved progress. Menu and panel entry points
 // are silent; narration belongs to conversational story turns.
-func (h *terminalHub) frameGrade(d *terminalSession, now time.Time) gradeKey {
+func (h *terminalHub) frameGrade(d *terminalSession, now time.Time) pixel.GradeKey {
 	if !h.atmosphere {
-		return gradeDay
+		return pixel.GradeDay
 	}
-	return gradeAt(now, nil)
+	return pixel.GradeAt(now, nil)
+}
+
+// companionPose is the display state the face renders for one frame.
+type companionPose struct {
+	mood        string
+	battery     int
+	volume      int
+	charging    bool
+	showMeter   bool
+	stopTaps    int
+	canContinue bool
+}
+
+func poseFrame(mood string, pct, vol int, charging, showMeter bool) companionPose {
+	return companionPose{
+		mood:      mood,
+		battery:   pct,
+		volume:    vol,
+		charging:  charging,
+		showMeter: showMeter,
+	}
 }
 
 func (h *terminalHub) companionPose(d *terminalSession, now time.Time, mood string) companionPose {

@@ -1,4 +1,4 @@
-package main
+package pixel
 
 import (
 	"errors"
@@ -17,31 +17,31 @@ import (
 )
 
 const (
-	pixelPortraitHeight = 80
-	pixelPortraitMaxW   = 84
-	pixelMaxColors      = 32
+	PortraitHeight    = 80
+	pixelPortraitMaxW = 84
+	pixelMaxColors    = 32
 )
 
-func normalizePortraitSheet(sheet image.Image, targetH int) ([4]*image.RGBA, error) {
+func NormalizePortraitSheet(sheet image.Image, targetH int) ([4]*image.RGBA, error) {
 	var poses [4]*image.RGBA
-	if sheet == nil || sheet.Bounds().Size() != image.Pt(portraitSheetSide, portraitSheetSide) {
+	if sheet == nil || sheet.Bounds().Size() != image.Pt(SheetSide, SheetSide) {
 		return poses, errors.New("portrait sheet must be 1024×1024")
 	}
 	if targetH < 16 {
-		targetH = pixelPortraitHeight
+		targetH = PortraitHeight
 	}
-	rgba := image.NewRGBA(image.Rect(0, 0, portraitSheetSide, portraitSheetSide))
+	rgba := image.NewRGBA(image.Rect(0, 0, SheetSide, SheetSide))
 	draw.Draw(rgba, rgba.Bounds(), sheet, sheet.Bounds().Min, draw.Src)
 
-	const side = portraitSheetSide / 2
+	const side = SheetSide / 2
 	var crops [4]image.Rectangle
 	var bgs [4]imagecolor.RGBA
 	maxCropW, maxCropH := 1, 1
-	for i, pose := range portraitPoses {
+	for i, pose := range Poses {
 		cell := image.Rect(0, 0, side, side).Add(image.Pt(i%2*side, i/2*side))
-		bgs[i] = portraitCorner(rgba, cell)
+		bgs[i] = corner(rgba, cell)
 		inner := cell.Inset(10)
-		b := portraitBounds(rgba, inner, bgs[i])
+		b := poseBounds(rgba, inner, bgs[i])
 		if b.Empty() {
 			return poses, fmt.Errorf("portrait %s has no silhouette", pose)
 		}
@@ -61,7 +61,7 @@ func normalizePortraitSheet(sheet image.Image, targetH int) ([4]*image.RGBA, err
 		for ly := range ch {
 			for lx := range cw {
 				c := rgba.RGBAAt(cell.Min.X+lx, cell.Min.Y+ly)
-				if c.A >= 128 && portraitDiff(c, bgs[i]) > 18*18 {
+				if c.A >= 128 && Diff(c, bgs[i]) > 18*18 {
 					fg[ly*cw+lx] = true
 				}
 			}
@@ -291,25 +291,25 @@ func medianCutPalette(samples []imagecolor.RGBA, maxColors int) []imagecolor.RGB
 
 func nearestColor(c imagecolor.RGBA, palette []imagecolor.RGBA) imagecolor.RGBA {
 	best := palette[0]
-	bestDist := portraitDiff(c, best)
+	bestDist := Diff(c, best)
 	for _, p := range palette[1:] {
-		if d := portraitDiff(c, p); d < bestDist {
+		if d := Diff(c, p); d < bestDist {
 			best, bestDist = p, d
 		}
 	}
 	return best
 }
 
-func pixelPoseFilename(pose string) string {
+func PoseFilename(pose string) string {
 	return "pixel_" + pose + ".png"
 }
 
-func saveNormalizedPoses(dir string, poses [4]*image.RGBA) error {
-	for i, pose := range portraitPoses {
+func SaveNormalizedPoses(dir string, poses [4]*image.RGBA) error {
+	for i, pose := range Poses {
 		if poses[i] == nil {
 			continue
 		}
-		path := filepath.Join(dir, pixelPoseFilename(pose))
+		path := filepath.Join(dir, PoseFilename(pose))
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
@@ -321,11 +321,11 @@ func saveNormalizedPoses(dir string, poses [4]*image.RGBA) error {
 	return nil
 }
 
-func loadOrNormalizePoses(dir string, targetH int) ([4]*image.RGBA, error) {
+func LoadOrNormalizePoses(dir string, targetH int) ([4]*image.RGBA, error) {
 	var poses [4]*image.RGBA
 	allLoaded := true
-	for i, pose := range portraitPoses {
-		f, err := os.Open(filepath.Join(dir, pixelPoseFilename(pose)))
+	for i, pose := range Poses {
+		f, err := os.Open(filepath.Join(dir, PoseFilename(pose)))
 		if err != nil {
 			allLoaded = false
 			break
@@ -352,31 +352,31 @@ func loadOrNormalizePoses(dir string, targetH int) ([4]*image.RGBA, error) {
 	if err != nil {
 		return poses, err
 	}
-	poses, err = normalizePortraitSheet(sheet, targetH)
+	poses, err = NormalizePortraitSheet(sheet, targetH)
 	if err != nil {
 		return poses, err
 	}
-	_ = saveNormalizedPoses(dir, poses)
+	_ = SaveNormalizedPoses(dir, poses)
 	return poses, nil
 }
 
-type pixelTheme struct {
-	bg      *image.RGBA
-	accent  imagecolor.RGBA
-	accent2 imagecolor.RGBA
-	border  imagecolor.RGBA
+type Theme struct {
+	Bg      *image.RGBA
+	Accent  imagecolor.RGBA
+	Accent2 imagecolor.RGBA
+	Border  imagecolor.RGBA
 }
 
-func defaultPixelTheme() pixelTheme {
-	return pixelTheme{
-		accent:  pxPeach,
-		accent2: pxMint,
-		border:  pxTileBorder,
+func DefaultTheme() Theme {
+	return Theme{
+		Accent:  Peach,
+		Accent2: Mint,
+		Border:  pxTileBorder,
 	}
 }
 
 func ensureBrightAccent(c imagecolor.RGBA) imagecolor.RGBA {
-	// Ensure high contrast against dark panel/tile backgrounds (~pxPanelBG 30,26,43).
+	// Ensure high contrast against dark panel/Tile backgrounds (~pxPanelBG 30,26,43).
 	lum := 0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)
 	if lum < 145 {
 		mix := (165 - lum) / max(1, 255-lum)
@@ -388,9 +388,9 @@ func ensureBrightAccent(c imagecolor.RGBA) imagecolor.RGBA {
 	return c
 }
 
-func derivePixelTheme(bg *image.RGBA, poses []*image.RGBA) pixelTheme {
-	th := defaultPixelTheme()
-	th.bg = bg
+func DeriveTheme(bg *image.RGBA, poses []*image.RGBA) Theme {
+	th := DefaultTheme()
+	th.Bg = bg
 	type bucket struct {
 		r, g, b int
 		count   int
@@ -460,8 +460,8 @@ func derivePixelTheme(bg *image.RGBA, poses []*image.RGBA) pixelTheme {
 		}
 	}
 	c1 := ensureBrightAccent(avgColor(list[0]))
-	th.accent = c1
-	th.border = imagecolor.RGBA{
+	th.Accent = c1
+	th.Border = imagecolor.RGBA{
 		R: uint8((int(c1.R)*3 + int(pxPanelBG.R)*5) / 8),
 		G: uint8((int(c1.G)*3 + int(pxPanelBG.G)*5) / 8),
 		B: uint8((int(c1.B)*3 + int(pxPanelBG.B)*5) / 8),
@@ -469,8 +469,8 @@ func derivePixelTheme(bg *image.RGBA, poses []*image.RGBA) pixelTheme {
 	}
 	for _, bk := range list[1:] {
 		c2 := ensureBrightAccent(avgColor(bk))
-		if portraitDiff(c1, c2) > 55*55 {
-			th.accent2 = c2
+		if Diff(c1, c2) > 55*55 {
+			th.Accent2 = c2
 			break
 		}
 	}
@@ -481,20 +481,20 @@ var (
 	placeholderOnce       sync.Once
 	placeholderCache      [4]*image.RGBA
 	placeholderThemeOnce  sync.Once
-	placeholderThemeCache pixelTheme
+	placeholderThemeCache Theme
 )
 
-// pixelPlaceholderPoses returns one shared immutable set: every terminal
+// PlaceholderPoses returns one shared immutable set: every terminal
 // without a portrait draws the same creature.
-func pixelPlaceholderPoses() [4]*image.RGBA {
+func PlaceholderPoses() [4]*image.RGBA {
 	placeholderOnce.Do(func() { placeholderCache = buildPlaceholderPoses() })
 	return placeholderCache
 }
 
-func placeholderPixelTheme() pixelTheme {
+func PlaceholderTheme() Theme {
 	placeholderThemeOnce.Do(func() {
-		poses := pixelPlaceholderPoses()
-		placeholderThemeCache = derivePixelTheme(nil, poses[:])
+		poses := PlaceholderPoses()
+		placeholderThemeCache = DeriveTheme(nil, poses[:])
 	})
 	return placeholderThemeCache
 }
@@ -547,7 +547,7 @@ func buildPlaceholderPoses() [4]*image.RGBA {
 	return poses
 }
 
-func normalizeBackground(src image.Image, w, h int) (*image.RGBA, error) {
+func NormalizeBackground(src image.Image, w, h int) (*image.RGBA, error) {
 	if src == nil {
 		return nil, errors.New("background image is nil")
 	}
@@ -577,7 +577,7 @@ func normalizeBackground(src image.Image, w, h int) (*image.RGBA, error) {
 	return dst, nil
 }
 
-func saveBackgroundPNG(dir string, bg *image.RGBA) error {
+func SaveBackgroundPNG(dir string, bg *image.RGBA) error {
 	if bg == nil {
 		return nil
 	}
@@ -589,7 +589,7 @@ func saveBackgroundPNG(dir string, bg *image.RGBA) error {
 	return errors.Join(png.Encode(f, bg), f.Close())
 }
 
-func loadBackgroundPNG(dir string) (*image.RGBA, error) {
+func LoadBackgroundPNG(dir string) (*image.RGBA, error) {
 	f, err := os.Open(filepath.Join(dir, "bg.png"))
 	if err != nil {
 		return nil, err
