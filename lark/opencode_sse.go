@@ -293,6 +293,7 @@ func (t *streamedText) addEvent(event ocEvent) []string {
 type turnStream struct {
 	sentence   func(string)
 	tool       func()
+	firstToken func() // called once when the model's first letter arrives
 	firstChunk bool
 }
 
@@ -332,7 +333,7 @@ func (p *turnProgress) handleEvent(event ocEvent) {
 		p.streamed.SentenceExtractor = audio.SentenceExtractor{}
 		p.markTool()
 	}
-	if p.stream.sentence != nil || p.trace != nil && (!*p.firstSentence || p.streamed.onFirst != nil) {
+	if p.stream.sentence != nil || p.streamed.onFirst != nil || (p.trace != nil && !*p.firstSentence) {
 		for _, s := range p.streamed.addEvent(event) {
 			if p.trace != nil && !*p.firstSentence && strings.ContainsFunc(s, audio.AlphaNum) {
 				p.trace.measure(diagFirstSentence, time.Since(p.start))
@@ -483,8 +484,15 @@ func (o *openCode) runTurnAttempt(ctx context.Context, sid, prompt string, model
 		return reply, err
 	}
 	streamed := streamedText{SentenceExtractor: audio.SentenceExtractor{FirstChunk: stream.firstChunk}, firstChunk: stream.firstChunk}
-	if trace != nil {
-		streamed.onFirst = func() { trace.measure(diagLLMFirst, time.Since(start)) }
+	if trace != nil || stream.firstToken != nil {
+		streamed.onFirst = func() {
+			if trace != nil {
+				trace.measure(diagLLMFirst, time.Since(start))
+			}
+			if stream.firstToken != nil {
+				stream.firstToken()
+			}
+		}
 	}
 	progress := &turnProgress{stream: stream, streamed: &streamed, trace: trace, start: start,
 		firstSentence: &firstSentence, markTool: markTool}

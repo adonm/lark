@@ -116,6 +116,63 @@ func TestAbortedSpeculationExecutesNothing(t *testing.T) {
 	}
 }
 
+// A promoted speculative turn started before its trace existed, so the LLM
+// timings must be copied off the speculation once it settles. They must be
+// present whether the first token landed before or after promotion.
+func TestPromotedSpeculationRecordsLLMTimings(t *testing.T) {
+	t.Parallel()
+	for _, after := range []bool{false, true} {
+		name := "first token before promotion"
+		if after {
+			name = "first token after promotion"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := &larkServer{}
+			start := time.Now()
+			spec := &specTurn{started: start, done: make(chan specResult, 1), cancel: func() {}, cancelFill: func() {}}
+			if !after {
+				spec.firstTokenAt = start.Add(4 * time.Millisecond)
+				spec.doneAt = start.Add(9 * time.Millisecond)
+				spec.done <- specResult{reply: "ready"}
+			} else {
+				go func() {
+					for {
+						spec.mu.Lock()
+						promoted := spec.promoted
+						spec.mu.Unlock()
+						if promoted {
+							break
+						}
+						time.Sleep(time.Millisecond)
+					}
+					time.Sleep(2 * time.Millisecond)
+					now := time.Now()
+					spec.mu.Lock()
+					spec.firstTokenAt = now
+					spec.doneAt = now.Add(2 * time.Millisecond)
+					spec.mu.Unlock()
+					spec.done <- specResult{reply: "ready"}
+				}()
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			ctx = b.traceTurn(ctx, "cake", "Cake", "voice", time.Now())
+			if res := spec.promote(ctx, nil, nil, nil); res.reply != "ready" {
+				t.Fatalf("promote = %+v", res)
+			}
+			report := b.diagnosticReport()
+			if len(report.Turns) != 1 {
+				t.Fatalf("recorded %d turns, want 1", len(report.Turns))
+			}
+			turn := report.Turns[0]
+			if turn.First == nil || turn.Total == nil || *turn.First <= 0 || *turn.Total < *turn.First {
+				t.Fatalf("llm timings = first %v total %v, want 0 < first <= total", turn.First, turn.Total)
+			}
+		})
+	}
+}
+
 // The gate attributes a call by its companion argument so one turn's writes
 // are never held behind an unrelated speculation.
 func TestSpeculationGateAttributesByCompanion(t *testing.T) {

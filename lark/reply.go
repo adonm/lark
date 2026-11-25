@@ -58,19 +58,21 @@ type specTurn struct {
 	cancelFill  context.CancelFunc
 	gate        *specGate // nil outside a terminal hub
 
-	mu        sync.Mutex
-	promoted  bool
-	aborted   bool
-	warming   bool
-	held      []*heldMCP
-	firstAt   time.Time
-	onSent    func(string)
-	onTool    func()
-	onChat    func(chatEntry)
-	sentences []string
-	entries   []chatEntry
-	usedTool  bool
-	done      chan specResult
+	mu           sync.Mutex
+	promoted     bool
+	aborted      bool
+	warming      bool
+	held         []*heldMCP
+	firstAt      time.Time
+	firstTokenAt time.Time
+	doneAt       time.Time
+	onSent       func(string)
+	onTool       func()
+	onChat       func(chatEntry)
+	sentences    []string
+	entries      []chatEntry
+	usedTool     bool
+	done         chan specResult
 }
 
 type specResult struct {
@@ -266,6 +268,13 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 		defer cancel()
 		stream := turnStream{
 			firstChunk: true,
+			firstToken: func() {
+				s.mu.Lock()
+				if s.firstTokenAt.IsZero() {
+					s.firstTokenAt = time.Now()
+				}
+				s.mu.Unlock()
+			},
 			sentence: func(sent string) {
 				s.mu.Lock()
 				first := s.firstAt.IsZero()
@@ -327,6 +336,9 @@ func (b *larkServer) startSpeculate(companionID, text string, audioLen int, sour
 			return companion, b.turnPromptWithState(ctx, companionID, source, text, companion, ch, time.Now().In(b.location()))
 		}
 		reply, sid, err := b.oc.askPrepared(ctx, companionID, prepare, stream, source, nil, onChat)
+		s.mu.Lock()
+		s.doneAt = time.Now()
+		s.mu.Unlock()
 		s.done <- specResult{reply: reply, sid: sid, err: err}
 	}()
 	return s
@@ -390,10 +402,31 @@ func (s *specTurn) promote(ctx context.Context, onSent func(string), onTool func
 	}
 	select {
 	case res := <-s.done:
+		s.recordLLMTimings(ctx)
 		return res
 	case <-ctx.Done():
 		s.abort()
 		return specResult{err: ctx.Err()}
+	}
+}
+
+// recordLLMTimings copies the speculative call's timings onto the promoted
+// turn's trace. They are relative to the speculation start, so the reported
+// latency covers the speculative lead and, when the model is slower than the
+// commit, the wait after promotion.
+func (s *specTurn) recordLLMTimings(ctx context.Context) {
+	trace := traceFrom(ctx)
+	if trace == nil {
+		return
+	}
+	s.mu.Lock()
+	first, done := s.firstTokenAt, s.doneAt
+	s.mu.Unlock()
+	if !first.IsZero() && first.After(s.started) {
+		trace.measure(diagLLMFirst, first.Sub(s.started))
+	}
+	if !done.IsZero() && done.After(s.started) {
+		trace.measure(diagLLMTotal, done.Sub(s.started))
 	}
 }
 
