@@ -292,8 +292,11 @@ func (m *e2eModel) real(w http.ResponseWriter, r *http.Request, s *e2eSuite) {
 		}
 		switch method + " " + action {
 		case "GET ", "GET /message", "POST /wait", "POST /interrupt", "DELETE ":
-		case "GET /instructions/entries", "GET /instructions/entries/lark.companion",
-			"PUT /instructions/entries/lark.companion":
+		case "PUT /instructions/entries/lark.companion":
+			// OpenCode decodes the companion entry from the request body; an
+			// empty forward fails with HTTP 400 "Expected object" on 2.4.1.
+			writeInput(readInput())
+		case "GET /instructions/entries", "GET /instructions/entries/lark.companion":
 		case "POST /prompt":
 			in := readInput()
 			text := str(in["text"])

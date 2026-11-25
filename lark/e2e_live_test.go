@@ -137,14 +137,17 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 	case <-time.After(25 * time.Second):
 		t.Fatal("isolated bridge did not listen")
 	}
+	// Parakeet, Kokoro, Smart Turn and Silero load in parallel; a suite that
+	// starts as soon as Kokoro is warm can script a turn while STT is still
+	// loading, so wait for every backend the bridge will use.
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		h := liveJSON[object](t, s.liveClient, "/health", nil, nil, "", nil)
-		if h["tts"] == true {
+		if e2eModelsReady(h) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("isolated Kokoro did not warm")
+			t.Fatal("isolated speech models did not warm")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -164,6 +167,23 @@ func startE2E(t *testing.T, real bool) *e2eSuite {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return s
+}
+
+// e2eModelsReady reports whether every speech backend the bridge uses has
+// finished loading. The top-level flags cover the request paths; the per-model
+// states make a stalled loader visible instead of timing out anonymously.
+func e2eModelsReady(health object) bool {
+	if health["stt"] != true || health["tts"] != true || health["smart_turn"] != true {
+		return false
+	}
+	models, _ := health["models"].(object)
+	for _, name := range []string{"parakeet", "kokoro", "smart_turn", "silero"} {
+		model, _ := models[name].(object)
+		if model == nil || model["state"] != modelReady {
+			return false
+		}
+	}
+	return true
 }
 
 func e2eInstallation(t *testing.T, home string, required bool) map[string]string {
