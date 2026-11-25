@@ -12,6 +12,7 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -48,10 +49,6 @@ var portraitSchema = closedObject(object{
 type portraitSpec struct {
 	Prompt, Form, Recolor, BG, Style string
 	Edit                             bool
-}
-
-type pendingPortrait struct {
-	id, base, form string
 }
 
 func parsePortraitRef(raw string) (id, pose string, ok bool) {
@@ -506,15 +503,168 @@ func (p *portraitStore) has(id string) bool {
 	return err == nil
 }
 
-func (b *larkServer) preparePortrait(ctx context.Context, companionID string, args object, raw any) (*pendingPortrait, error) {
+// preparePortraitRequest validates a portrait edit without generating it.
+// Generation runs in the single-flight worker after the text fields persist.
+func (b *larkServer) preparePortraitRequest(companionID string, args object, raw any) (portraitSpec, error) {
+	var spec portraitSpec
 	current, ok := b.companionByID(companionID)
 	if !ok {
-		return nil, problem(404, "Companion not found")
+		return spec, problem(404, "Companion not found")
 	}
 	if _, err := updateCompanion(current, args, b.voices); err != nil {
-		return nil, err
+		return spec, err
 	}
-	return b.portraits.prepare(ctx, current, raw)
+	if b.portraits == nil || b.portraits.generate == nil {
+		return spec, problem(503, "Portrait generation unavailable; configure a dedicated OpenCode service or OPENCODE_API_KEY, or use companion.preset")
+	}
+	spec, err := readPortraitSpec(raw)
+	if err != nil {
+		return spec, err
+	}
+	if spec.Prompt = strings.TrimSpace(spec.Prompt); spec.Prompt == "" {
+		return spec, fieldError("companion.portrait.prompt", "describe the character or edit")
+	}
+	if spec.Form = strings.TrimSpace(spec.Form); spec.Form == "" {
+		spec.Form = current.Form
+	}
+	if _, err := updateCompanion(current, object{"form": spec.Form}, b.voices); err != nil {
+		return spec, err
+	}
+	spec.Style = portraitPixelStyle
+	spec.BG = "#FAF0E6"
+	if spec.Edit && !b.portraits.has(current.PortraitID) {
+		return spec, fieldError("companion.portrait.edit", "current companion has no local portrait sheet")
+	}
+	return spec, nil
+}
+
+// portraitReadyNotice confirms a background look change without a full turn.
+const portraitReadyNotice = "Ta-da! My new look is ready!"
+
+type portraitJob struct {
+	running bool
+	dirty   bool
+	spec    portraitSpec
+	done    chan struct{}
+}
+
+// requestPortrait starts or updates the one portrait worker for a companion.
+func (b *larkServer) requestPortrait(id string, spec portraitSpec) {
+	b.portraitJobsMu.Lock()
+	if b.portraitJobs == nil {
+		b.portraitJobs = map[string]*portraitJob{}
+	}
+	q := b.portraitJobs[id]
+	if q == nil {
+		q = &portraitJob{done: make(chan struct{})}
+		b.portraitJobs[id] = q
+	}
+	q.spec, q.dirty = spec, true
+	if q.running {
+		b.portraitJobsMu.Unlock()
+		return
+	}
+	q.running = true
+	b.portraitJobsMu.Unlock()
+	go b.runPortraitJob(id, q)
+}
+
+// waitPortrait blocks until the current portrait worker for a companion has
+// no queued edit left. Tests use it instead of sleeping on the async result.
+func (b *larkServer) waitPortrait(ctx context.Context, id string) error {
+	b.portraitJobsMu.Lock()
+	q := b.portraitJobs[id]
+	if q == nil {
+		b.portraitJobsMu.Unlock()
+		return nil
+	}
+	done := q.done
+	b.portraitJobsMu.Unlock()
+	select {
+	case <-done:
+		b.portraitJobsMu.Lock()
+		left := b.portraitJobs[id]
+		b.portraitJobsMu.Unlock()
+		if left != nil {
+			return b.waitPortrait(ctx, id)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *larkServer) runPortraitJob(id string, q *portraitJob) {
+	for {
+		b.portraitJobsMu.Lock()
+		spec := q.spec
+		q.dirty = false
+		b.portraitJobsMu.Unlock()
+		ctx := b.root
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := b.applyPortrait(ctx, id, spec); err != nil {
+			log.Printf("Lark could not create the portrait for %s: %v", id, err)
+		}
+		b.portraitJobsMu.Lock()
+		if !q.dirty {
+			delete(b.portraitJobs, id)
+			q.running = false
+			close(q.done)
+			b.portraitJobsMu.Unlock()
+			return
+		}
+		b.portraitJobsMu.Unlock()
+	}
+}
+
+// applyPortrait generates the image, then atomically swaps portrait_id and
+// pushes the new look everywhere the companion is attached.
+func (b *larkServer) applyPortrait(ctx context.Context, id string, spec portraitSpec) error {
+	current, ok := b.companionByID(id)
+	if !ok {
+		return problem(404, "Companion not found")
+	}
+	portraitID, err := b.portraits.create(ctx, spec, current.PortraitID)
+	if err != nil {
+		return err
+	}
+	b.companionMu.Lock()
+	if latest, ok := b.companionByID(id); ok {
+		current = latest
+	}
+	result, err := b.db.ExecContext(ctx, `UPDATE companions SET portrait_id=?, updated_at=? WHERE id=? AND portrait_id=?`,
+		portraitID, time.Now().UnixMilli(), id, current.PortraitID)
+	if err != nil {
+		b.companionMu.Unlock()
+		b.portraits.discard(portraitID)
+		return problem(502, "Cannot save companion")
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		b.companionMu.Unlock()
+		b.portraits.discard(portraitID)
+		return problem(409, "Companion changed while the portrait was being drawn")
+	}
+	updated := b.companionFor(id)
+	if b.hub != nil {
+		b.hub.invalidateAssets(current.PortraitID)
+		b.hub.mu.Lock()
+		b.hub.companionChanged(id, updated)
+		b.hub.mu.Unlock()
+	}
+	b.companionMu.Unlock()
+	if current.PortraitID != "" {
+		b.portraits.discard(current.PortraitID)
+	}
+	b.chat(id, newChat("companion", updated.Name, portraitReadyNotice, "portrait"), true)
+	if b.hub != nil {
+		b.hub.deliverNotice(ctx, terminalNotice{
+			recipientIDs: []string{id}, sender: updated, text: portraitReadyNotice,
+			speakText: portraitReadyNotice, voice: b.voiceFor(id), chime: "celebrate", showCard: true,
+		})
+	}
+	return nil
 }
 
 func parseHexRGBA(s string, fallback imagecolor.RGBA) imagecolor.RGBA {
@@ -547,26 +697,6 @@ func readPortraitSpec(raw any) (portraitSpec, error) {
 		err = json.Unmarshal(data, &spec)
 	}
 	return spec, err
-}
-
-func (p *portraitStore) prepare(ctx context.Context, current companionState, raw any) (*pendingPortrait, error) {
-	spec, err := readPortraitSpec(raw)
-	if err != nil {
-		return nil, err
-	}
-	if spec.Prompt = strings.TrimSpace(spec.Prompt); spec.Prompt == "" {
-		return nil, fieldError("companion.portrait.prompt", "describe the character or edit")
-	}
-	if spec.Form = strings.TrimSpace(spec.Form); spec.Form == "" {
-		spec.Form = current.Form
-	}
-	spec.Style = portraitPixelStyle
-	spec.BG = "#FAF0E6"
-	id, err := p.create(ctx, spec, current.PortraitID)
-	if err != nil {
-		return nil, err
-	}
-	return &pendingPortrait{id: id, base: current.PortraitID, form: spec.Form}, nil
 }
 
 func (b *larkServer) servePortrait(w http.ResponseWriter, r *http.Request, path, scope string) error {

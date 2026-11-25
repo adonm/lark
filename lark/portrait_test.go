@@ -133,7 +133,8 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 		return fixture, nil
 	}}
 	const side, grid = 360, 64
-	pending, err := store.prepare(t.Context(), companionState{companionLook: companionLook{Form: "a hedgehog"}}, object{"prompt": "a hedgehog"})
+	spec := portraitSpec{Prompt: "a hedgehog", Form: "a hedgehog", Style: portraitPixelStyle, BG: "#FAF0E6"}
+	id, err := store.create(t.Context(), spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func TestPixelPortraitGridAndAlignment(t *testing.T) {
 	var idle []byte
 	var bounds image.Rectangle
 	for i, pose := range portraitPoses {
-		data, err := store.read(pending.id, pose)
+		data, err := store.read(id, pose)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -285,6 +286,7 @@ func TestCompanionFormChangeRefreshesBackgroundCache(t *testing.T) {
 		return buf.Bytes()
 	}
 	b, base := wsHarness(t, nil)
+	b.portraitSync = true
 	b.portraits = &portraitStore{dir: dir, generate: func(_ context.Context, prompt string, _ []byte) ([]byte, error) {
 		if strings.Contains(prompt, "background scene") {
 			n := backgrounds.Add(1)
@@ -363,6 +365,7 @@ func TestPortraitPatchScopeAndNativeFrames(t *testing.T) {
 		return companion
 	}
 	patch(object{"prompt": "draw an owl"}, true) // No configured generator or paid fallback.
+	b.portraitSync = true
 	b.portraits = &portraitStore{dir: dir, generate: func(_ context.Context, prompt string, input []byte) ([]byte, error) {
 		if strings.Contains(prompt, "add a scarf") != (len(input) > 0) {
 			t.Error("edit source does not match the requested operation")
@@ -505,5 +508,58 @@ func TestCompanionAssetsCachePartialsAndRespectEpoch(t *testing.T) {
 	h.assetsMu.RUnlock()
 	if !fresh {
 		t.Fatal("a load from the current epoch was not cached")
+	}
+}
+
+// A portrait patch returns immediately, persists text fields, then applies the
+// generated portrait and announces it when the worker finishes.
+func TestPortraitPatchGeneratesAsynchronously(t *testing.T) {
+	t.Parallel()
+	sheet := portraitFixture(t)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	encode := func(img image.Image) []byte {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			t.Error(err)
+		}
+		return buf.Bytes()
+	}
+	dir := t.TempDir()
+	b, base := wsHarness(t, nil)
+	b.portraits = &portraitStore{dir: dir, generate: func(_ context.Context, prompt string, _ []byte) ([]byte, error) {
+		if strings.Contains(prompt, "background scene") {
+			img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+			draw.Draw(img, img.Bounds(), image.NewUniform(imagecolor.RGBA{R: 30, G: 80, B: 50, A: 255}), image.Point{}, draw.Src)
+			return encode(img), nil
+		}
+		started <- struct{}{}
+		<-release
+		return sheet, nil
+	}}
+	id := str(testObject(t, testRequest(t, "POST", base+"/api/companions", "unit", object{"name": "Own", "form": "a cat"}, 201))["id"])
+
+	out := toolTest(t, base, "patch", object{"companion_id": id, "companion": object{
+		"personality": "curious", "portrait": object{"prompt": "draw an owl", "form": "a snowy owl"},
+	}}, false)
+	companion, _ := out["companion"].(object)
+	if companion["status"] != "generating" || companion["form"] != "a snowy owl" {
+		t.Fatalf("patch did not return a generating result: %+v", out)
+	}
+	if c := b.companionFor(id); c.Form != "a snowy owl" || c.Personality != "curious" || c.PortraitID != "" {
+		t.Fatalf("text fields were not persisted immediately: %+v", c)
+	}
+	<-started
+	close(release)
+	if err := b.waitPortrait(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	c := b.companionFor(id)
+	if !portraitIDPattern.MatchString(c.PortraitID) {
+		t.Fatalf("portrait was not applied: %+v", c)
+	}
+	entries, err := b.history.list(t.Context(), id)
+	if err != nil || len(entries) == 0 || entries[len(entries)-1].Text != portraitReadyNotice {
+		t.Fatalf("ready notice missing: %+v, %v", entries, err)
 	}
 }

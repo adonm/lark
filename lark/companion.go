@@ -29,6 +29,8 @@ type companionState struct {
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 	DCAccountID uint32 `json:"dc_account_id,omitempty"`
 	Listening   bool   `json:"listening"`
+	Status      string `json:"status,omitempty"`
+	Ok          bool   `json:"ok,omitempty"`
 
 	IdentityVersion int64 `json:"identity_version,omitempty"`
 	IdentitySynced  int64 `json:"identity_synced,omitempty"`
@@ -284,10 +286,10 @@ func companionBool(args object, key string, fallback bool) (bool, error) {
 }
 
 func (b *larkServer) changeCompanion(ctx context.Context, id, op string, args object) (companionState, error) {
-	return b.changeCompanionPrepared(ctx, id, op, args, nil)
+	return b.changeCompanionPrepared(ctx, id, op, args)
 }
 
-func (b *larkServer) changeCompanionPrepared(ctx context.Context, id, op string, args object, portrait *pendingPortrait) (companionState, error) {
+func (b *larkServer) changeCompanionPrepared(ctx context.Context, id, op string, args object) (companionState, error) {
 	id = strings.ToLower(id)
 	unavailable := problem(502, "Cannot save companion")
 	tx, err := b.db.BeginTx(ctx, nil)
@@ -313,19 +315,6 @@ func (b *larkServer) changeCompanionPrepared(ctx context.Context, id, op string,
 		next, err = updateCompanion(current, args, b.voices)
 		if err != nil {
 			return companionState{}, err
-		}
-		if portrait != nil {
-			if current.PortraitID != portrait.base {
-				return companionState{}, problem(409, "Companion changed while the portrait was being drawn")
-			}
-			next.Configured, err = companionBool(args, "configured", true)
-			if err != nil {
-				return companionState{}, err
-			}
-			next.PortraitID = portrait.id
-			if portrait.form != "" {
-				next.Form = portrait.form
-			}
 		}
 	case "reset_blank", "new_session":
 		next = blankCompanion()
@@ -354,8 +343,15 @@ func (b *larkServer) patchCompanion(ctx context.Context, id string, args object)
 	return b.patchCompanionEdit(ctx, id, edit)
 }
 
-// patchCompanionEdit applies one decoded companion patch.
+// patchCompanionEdit applies one decoded companion patch and returns the
+// companion state, which is the REST shape.
 func (b *larkServer) patchCompanionEdit(ctx context.Context, id string, edit companionPatch) (any, error) {
+	return b.patchCompanionResult(ctx, id, edit)
+}
+
+// patchCompanionResult keeps the full tool result, including an async
+// portrait status, for callers that expose it.
+func (b *larkServer) patchCompanionResult(ctx context.Context, id string, edit companionPatch) (any, error) {
 	c := edit.object()
 	if _, supplied := c["op"]; !supplied {
 		c["op"] = "update"
@@ -394,17 +390,20 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 	if !ok {
 		return nil, problem(404, "Companion not found")
 	}
-	var portrait *pendingPortrait
+	var portrait *portraitSpec
 	if raw, ok := args["portrait"]; ok {
 		if op != "update" {
 			return nil, fieldError("companion.portrait", "requires companion update")
 		}
 		args = withCompanion(args, id)
 		delete(args, "portrait")
-		var err error
-		portrait, err = b.preparePortrait(ctx, id, args, raw)
+		spec, err := b.preparePortraitRequest(id, args, raw)
 		if err != nil {
 			return nil, err
+		}
+		portrait = &spec
+		if spec.Form != "" {
+			args["form"] = spec.Form
 		}
 	}
 	c, err := func() (companionState, error) {
@@ -412,7 +411,7 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 			b.companionMu.Lock()
 			defer b.companionMu.Unlock()
 		}
-		c, err := b.changeCompanionPrepared(ctx, id, op, args, portrait)
+		c, err := b.changeCompanionPrepared(ctx, id, op, args)
 		if b.hub != nil && err == nil && op != "get" {
 			b.hub.mu.Lock()
 			b.hub.companionChanged(id, c)
@@ -421,9 +420,6 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 		return c, err
 	}()
 	if err != nil {
-		if portrait != nil {
-			b.portraits.discard(portrait.id)
-		}
 		return nil, err
 	}
 	if op != "get" && b.oc != nil && (c.Name != before.Name || c.Personality != before.Personality) {
@@ -448,6 +444,19 @@ func (b *larkServer) companionTool(ctx context.Context, args object) (object, er
 			b.hub.invalidateAssets(c.PortraitID)
 		}
 		b.schedulePortraitBackground(c.PortraitID, c.Form, c.Personality)
+	}
+	if portrait != nil && op != "get" {
+		if b.portraitSync {
+			if err := b.applyPortrait(ctx, id, *portrait); err != nil {
+				return nil, err
+			}
+			c = b.companionFor(id)
+			c.Status, c.Ok = "ready", true
+			return object{"ok": true, "companion_id": id, "status": "ready", "form": c.Form, "companion": c}, nil
+		}
+		b.requestPortrait(id, *portrait)
+		c.Status, c.Ok = "generating", true
+		return object{"ok": true, "companion_id": id, "status": "generating", "form": c.Form, "companion": c}, nil
 	}
 	return object{"ok": true, "companion_id": id, "companion": c}, nil
 }

@@ -257,7 +257,7 @@ var mcpTools = func() []object {
 			schema(object{"companion_id": text, "include": array(enum(stateSlices...)), "memory_scopes": array(text),
 				"messages_limit":  object{"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
 				"messages_cursor": schema(object{"before_ts": number, "before_id": text}, "before_ts", "before_id")})),
-		tool("patch", "Update companion, terminal, timer, or atomic memory. Portraits use companion.portrait with form.",
+		tool("patch", "Update companion, terminal, timer, or atomic memory. Portraits use companion.portrait and generate in the background (status=generating).",
 			schema(object{"companion_id": text,
 				"terminal": schema(object{"terminal_id": text, "volume": object{"type": "integer", "minimum": 0, "maximum": 100}, "sleep": flag}),
 				"companion": schema(object{"op": enum("update", "reset_blank"), "name": text, "form": text,

@@ -270,7 +270,7 @@ func (b *larkServer) mcpPatch(ctx context.Context, args object) (object, error) 
 				if err := decodeInput(edit, &patch); err != nil {
 					return nil, err
 				}
-				out[key], err = b.patchCompanionEdit(ctx, id, patch)
+				out[key], err = b.patchCompanionResult(ctx, id, patch)
 			case "terminal":
 				if id == "" && strings.TrimSpace(str(edit["terminal_id"])) == "" {
 					return nil, fieldError("companion_id", "required; pass the companion ID from the turn header")

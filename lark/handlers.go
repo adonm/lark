@@ -57,6 +57,9 @@ type larkServer struct {
 	storyCache      storyCompileCache
 	portraitBGMu    sync.Mutex
 	portraitBG      map[string]*portraitBGQueue
+	portraitJobsMu  sync.Mutex
+	portraitJobs    map[string]*portraitJob
+	portraitSync    bool        // Test hook: run portrait generation before returning.
 	emits           emitTracker // Successful emit calls, to detect explicit reply routing.
 }
 

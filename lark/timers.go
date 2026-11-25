@@ -17,6 +17,9 @@ import (
 const (
 	timerGrace  = 2 * time.Second
 	timerExpiry = 2 * time.Minute
+	// Two timers for the same companion and normalized label scheduled this
+	// close together are one request ("tea" said twice), so update in place.
+	timerDedupWindow = 2 * time.Minute
 	// Scheduling policy: a timer fires within a day and no sooner than half a
 	// minute if it wakes the agent; a device may hold 8 and the host 32.
 	timerMinSeconds     = 1
@@ -315,33 +318,74 @@ func (m *timerManager) update(ctx context.Context, id, companion string, edit ti
 	return t, nil
 }
 
-func (m *timerManager) set(ctx context.Context, t savedTimer) error {
+func (m *timerManager) set(ctx context.Context, t savedTimer) (savedTimer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return problem(503, "Timers unavailable")
+		return t, problem(503, "Timers unavailable")
 	}
 	if t.WakeAgent && m.fromTimerTurn[strings.ToLower(t.CompanionID)] != 0 {
-		return problem(409, "Cannot schedule a wake-agent timer during a timer-triggered turn")
+		return t, problem(409, "Cannot schedule a wake-agent timer during a timer-triggered turn")
 	}
 	notes, _ := json.Marshal(t.Notes)
+	label := strings.ToLower(strings.TrimSpace(t.Label))
+	rows, err := m.b.db.QueryContext(ctx, "SELECT "+timerColumns+" FROM timers WHERE companion_id=?", t.CompanionID)
+	if err != nil {
+		return t, problem(502, "Cannot save timer")
+	}
+	existing, found := savedTimer{}, false
+	for rows.Next() {
+		other, err := scanTimer(rows)
+		if err != nil {
+			rows.Close()
+			return t, problem(502, "Cannot save timer")
+		}
+		if label == "" || strings.ToLower(strings.TrimSpace(other.Label)) != label {
+			continue
+		}
+		// A near-duplicate is the same spoken request with a slightly newer
+		// deadline; keep one row and let the later time win.
+		delay := other.FireAt.Sub(t.FireAt)
+		if delay < 0 {
+			delay = -delay
+		}
+		if delay <= timerDedupWindow {
+			existing, found = other, true
+			break
+		}
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return t, problem(502, "Cannot save timer")
+	}
+	if found {
+		if _, err := m.b.db.ExecContext(ctx, `UPDATE timers SET label=?,say=?,chime=?,wake_agent=?,fire_at=?,notes_json=? WHERE id=?`,
+			t.Label, t.Say, t.Chime, t.WakeAgent, t.FireAt.Format(time.RFC3339Nano), string(notes), existing.ID); err != nil {
+			return t, problem(502, "Cannot save timer")
+		}
+		existing.Label, existing.Say, existing.Chime, existing.WakeAgent = t.Label, t.Say, t.Chime, t.WakeAgent
+		existing.FireAt, existing.Notes = t.FireAt, t.Notes
+		m.stopLocked(existing.ID)
+		m.armLocked(existing.ID, time.Until(existing.FireAt))
+		return existing, nil
+	}
 	result, err := m.b.db.ExecContext(ctx, `INSERT INTO timers (`+timerColumns+`)
 		SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM timers WHERE companion_id=?) < ?
 		AND (SELECT count(*) FROM timers) < ?`,
 		t.ID, t.CompanionID, t.Label, t.Say, t.Chime, t.WakeAgent, t.CreatedAt.Format(time.RFC3339Nano), t.FireAt.Format(time.RFC3339Nano),
 		string(notes), t.CompanionID, timerLimitPerDevice, timerLimitTotal)
 	if err != nil {
-		return problem(502, "Cannot save timer")
+		return t, problem(502, "Cannot save timer")
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
-		return problem(502, "Cannot save timer")
+		return t, problem(502, "Cannot save timer")
 	}
 	if n == 0 {
-		return problem(409, fmt.Sprintf("Timer limit reached (%d per device, %d total)", timerLimitPerDevice, timerLimitTotal))
+		return t, problem(409, fmt.Sprintf("Timer limit reached (%d per device, %d total)", timerLimitPerDevice, timerLimitTotal))
 	}
 	m.armLocked(t.ID, time.Until(t.FireAt))
-	return nil
+	return t, nil
 }
 
 func (m *timerManager) armLocked(id string, delay time.Duration) {
@@ -576,7 +620,8 @@ func (b *larkServer) patchTimer(ctx context.Context, id string, args object) (ob
 		if err != nil {
 			return nil, err
 		}
-		if err := m.set(ctx, t); err != nil {
+		t, err = m.set(ctx, t)
+		if err != nil {
 			return nil, err
 		}
 		entry := newChat("card", who.Name, "Timer: "+t.Label, "timer")

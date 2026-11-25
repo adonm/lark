@@ -118,7 +118,7 @@ func TestTimerRestartPrunesAndFiresOnce(t *testing.T) {
 	first := newTimerManager(b)
 	ids := [3]string{testHex(t, 12), testHex(t, 12), testHex(t, 12)}
 	for i, delay := range []time.Duration{time.Minute, time.Hour, 2 * time.Hour} {
-		if err := first.set(t.Context(), savedTimer{ID: ids[i], CompanionID: device, Label: fmt.Sprint(i), Chime: "tap",
+		if _, err := first.set(t.Context(), savedTimer{ID: ids[i], CompanionID: device, Label: fmt.Sprint(i), Chime: "tap",
 			CreatedAt: now.Add(-time.Hour), FireAt: now.Add(delay)}); err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +181,7 @@ func TestTimerClaimRetriesAfterDatabaseError(t *testing.T) {
 	board.helloV2(t, "vocat-0003", "Cake")
 	now := time.Now()
 	timer := savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour), Label: "Retry", Chime: "celebrate"}
-	if err := b.timers.set(t.Context(), timer); err != nil {
+	if _, err := b.timers.set(t.Context(), timer); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.db.Exec("ALTER TABLE timers RENAME TO paused_timers"); err != nil {
@@ -290,17 +290,49 @@ func TestScopedTimerIsolationAndCaps(t *testing.T) {
 	for i := range 31 {
 		id := fmt.Sprintf("companion-%d", i/8)
 		now := time.Now()
-		if err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err != nil {
+		if _, err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err != nil {
 			t.Fatal(i, err)
 		}
 		if i == 7 {
-			if err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
+			if _, err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: id, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
 				t.Fatal("allowed ninth timer")
 			}
 		}
 	}
 	now := time.Now()
-	if err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: owner, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
+	if _, err := b.timers.set(ctx, savedTimer{ID: testHex(t, 12), CompanionID: owner, CreatedAt: now, FireAt: now.Add(time.Hour)}); err == nil {
 		t.Fatal("allowed 33rd timer")
+	}
+}
+
+// Saying "tea" twice inside two minutes is one timer; distinct labels or a
+// genuinely different time still create separate timers.
+func TestTimerDuplicateSetUpdatesExisting(t *testing.T) {
+	t.Parallel()
+	b, base := wsHarness(t, func(b *larkServer, _ string) {
+		b.timers = newTimerManager(b)
+		t.Cleanup(b.timers.close)
+	})
+	const id = "cake"
+	if _, err := b.createCompanion(t.Context(), object{"id": id, "name": "Cake", "form": "a cat"}); err != nil {
+		t.Fatal(err)
+	}
+	first := patchTimerTest(t, base, object{"companion_id": id, "label": "tea", "in_seconds": 60}, false)
+	second := patchTimerTest(t, base, object{"companion_id": id, "label": " Tea ", "in_seconds": 90}, false)
+	if first["id"] != second["id"] {
+		t.Fatalf("near duplicate created a second timer: %v then %v", first, second)
+	}
+	state := toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
+	if len(state) != 1 || state[0].(object)["id"] != first["id"] || state[0].(object)["remaining_s"] != json.Number("90") {
+		t.Fatalf("duplicate timer state = %v", state)
+	}
+	patchTimerTest(t, base, object{"companion_id": id, "label": "coffee", "in_seconds": 90}, false)
+	far := patchTimerTest(t, base, object{"companion_id": id, "label": "tea", "in_seconds": 3600}, false)
+	if far["id"] == first["id"] {
+		t.Fatal("far-apart tea timer was merged")
+	}
+	state = toolTest(t, base, "state", object{"companion_id": id, "include": []string{"timers"}}, false)["timers"].([]any)
+	if len(state) != 3 {
+		t.Fatalf("distinct timers = %v, want three", state)
 	}
 }
