@@ -32,11 +32,17 @@ func run() error {
 	sock := fs.String("sock", "", "brain Unix socket path (default $LARK_EDGE_SOCK or ~/.local/share/lark/edge.sock)")
 	data := fs.String("data", "", "data directory for models (default $LARK_DATA_DIR or ~/.local/share/lark)")
 	noModels := fs.Bool("no-models", false, "start without loading speech models")
+	fakeModels := fs.Bool("fake-models", false, "start with deterministic fake speech models (integration tests)")
 	fs.Parse(os.Args[1:])
 
-	e, err := edge.New(edge.Config{
+	cfg := edge.Config{
 		Addr: *addr, Sock: *sock, DataDir: *data, DisableModels: *noModels,
-	})
+	}
+	if *fakeModels {
+		cfg.DisableModels = true
+		cfg.Transcriber, cfg.Synthesizer, cfg.TurnDetector, cfg.VADFactory = fakeEdgeConfig(fakeEdgeText())
+	}
+	e, err := edge.New(cfg)
 	if err != nil {
 		return err
 	}
