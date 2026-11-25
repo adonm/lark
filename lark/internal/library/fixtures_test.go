@@ -6,18 +6,7 @@ import (
 	"database/sql"
 	"slices"
 	"testing"
-
-	sqlite3 "github.com/mattn/go-sqlite3"
 )
-
-func init() {
-	sql.Register("lark-sqlite3", &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			_, err := conn.Exec("PRAGMA temp_store=MEMORY; PRAGMA mmap_size=268435456;", nil)
-			return err
-		},
-	})
-}
 
 func testWikiDB(t testing.TB, path string, pages map[string]string) {
 	t.Helper()

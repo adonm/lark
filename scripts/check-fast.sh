@@ -87,14 +87,18 @@ phase_fast_go() {
     fi
 }
 
+phase_fast_pkg() {
+    (cd lark && "$GO_BIN" test -race -tags sqlite_fts5 -count=1 "./internal/$1")
+}
+
 # Subpackages (protospec, fonts/dogica) have their own suites; a top-level
 # name filter would silently skip them.
 phase_fast_all() { (cd lark && "$GO_BIN" test -race -tags sqlite_fts5 -count=1 ./...); }
 
 fast_mode() {
     local base merge f stem camel name broad
-    local -a changed=() ids=() names=()
-    local -A tests=()
+    local -a changed=() ids=() names=() pkgs=()
+    local -A tests=() pkg_seen=()
     local all_go=0 prod_go=0 node=0 c_host=0 shell=0 python=0
 
     base=$(fast_base "${1-}")
@@ -113,9 +117,18 @@ fast_mode() {
         case $f in
             lark/go.mod|lark/go.sum) all_go=1 ;;
             lark/*)
-                # The lark tree is one module with a top-level package and a
-                # few small subpackages; a subpackage change runs everything.
+                # lark/internal/<pkg> changes run that package's own suite.
+                # Other subpackages are small enough that a change runs all Go.
                 local rel=${f#lark/}
+                if [[ $rel == internal/* ]]; then
+                    local pkg=${rel#internal/}
+                    pkg=${pkg%%/*}
+                    if [[ -n $pkg && -z ${pkg_seen[$pkg]-} ]]; then
+                        pkg_seen[$pkg]=1
+                        pkgs+=("$pkg")
+                    fi
+                    continue
+                fi
                 case $rel in
                     *_test.go)
                         if [[ $rel == */* ]]; then
@@ -190,6 +203,13 @@ fast_mode() {
         timeit go-test-package phase_fast_go
     else
         printf 'fast: no Go test names related to the change\n'
+    fi
+
+    if ((${#pkgs[@]})); then
+        printf 'fast: %d internal package suite(s): %s\n' "${#pkgs[@]}" "${pkgs[*]}"
+        for pkg in "${pkgs[@]}"; do
+            timeit "go-test-$pkg" phase_fast_pkg "$pkg"
+        done
     fi
 
     if ((shell)); then timeit shell phase_shell; else printf 'fast: skip shell checks (no scripts/*.sh change)\n'; fi

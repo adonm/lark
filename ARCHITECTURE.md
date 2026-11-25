@@ -87,6 +87,24 @@ each transport renders that one error in its own status or text shape.
 offline, reports telemetry, accepts OTA, and drives endpointing when it
 advertises `caps.bridge_endpoint` in `hello`.
 
+## Code layout
+
+`lark/` is one Go module. `package main` owns the transports, server state,
+SQLite schema, and wiring; four `lark/internal/` packages hold plain,
+compiler-enforced subsystems and never import `package main`:
+
+| Package | Contents |
+| --- | --- |
+| `internal/stories` | Twee 3 lex/parse/compile/validation, story evaluation, flags, voice-choice matching. |
+| `internal/library` | FTS5 search/read/list, story-text import, disk-aware planner, downloads, index builders, `library` CLI. |
+| `internal/pixel` | Canvas, icons, screens, scene/menu layout, portrait normalization, LUT grades, RGB565/RLE/LZ4/JPEG frame encoder. Depends only on stdlib image, the bundled font, QR, and lz4. |
+| `internal/audio` | WAV/PCM synthesis and resampling, sentence extraction, melody/SFX, Smart Turn, Parakeet STT (including the native bridge), Kokoro TTS. |
+
+Endpoint VAD policy, the capture/utterance loop, TTS prefetch/cache, and the
+synthesis worker stay in `package main`: they read server turn state and
+diagnostics directly, so moving them would only widen a state API.
+`--fast` runs `go test ./internal/<pkg>` for a changed internal package.
+
 ## Data model
 
 `~/.local/share/lark/lark.db`, SQLite WAL with separate reader and writer
@@ -216,8 +234,9 @@ HUD refreshes every 2 s). There is no animation stream competing with audio.
   adds the live hardware suite.
 - `--remote-ui` — headless-Chromium DOM tests for the remote page.
 - `--fast [ref]` — build, vet, and only the tests related to the diff against
-  `ref` (default: the last green full gate, else `origin/main`). Local inner
-  loop only; CI runs the full gate.
+  `ref` (default: the last green full gate, else `origin/main`); a changed
+  `internal/<pkg>` runs that package's suite. Local inner loop only; CI runs
+  the full gate.
 - `--e2e-real` — dedicated OpenCode with the configured models (spends quota).
 - `--deployed` — read-only installed-service and OTA probes.
 - `lark sim` drives a virtual board; `lark device` talks to a real one.
