@@ -211,7 +211,9 @@ func TestFollowUpGraceConcurrentAccess(t *testing.T) {
 	// Refreshing an existing grace must move it forward, not keep the first.
 	d.update(func(d *terminalSession) { d.nameFreeUntil = now })
 	h.freeFollowUps(d, now.Add(time.Second))
-	if got := d.nameFreeUntil; !got.Equal(now.Add(time.Second + followUpGrace)) {
+	var snap terminalState
+	d.update(func(d *terminalSession) { snap = snapshotState(d) })
+	if got := snap.nameFreeUntil; !got.Equal(now.Add(time.Second + followUpGrace)) {
 		t.Fatalf("nameFreeUntil = %v, want a refreshed %v", got, now.Add(time.Second+followUpGrace))
 	}
 }

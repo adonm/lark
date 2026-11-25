@@ -773,10 +773,8 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	stream := newAudioStream()
 	stream.append(bytes.Repeat([]byte{12, 0}, sampleRate))
 	stream.finish(nil)
-	b.hub.mu.Lock()
-	d := b.hub.terminals[id]
+	d := b.hub.live(id)
 	b.hub.play(d, stream)
-	b.hub.mu.Unlock()
 	phone.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
 		return hasProto(msgStatus, "")(f) && len(p) >= 5 && p[4] == statusSpeaking
@@ -791,9 +789,7 @@ func TestVirtualWSModeFollowsPlaybackAck(t *testing.T) {
 	}
 	phone.sendProto(t, msgTTSAck, encodeTTSAck(false, audio+1))
 	phone.barrier(t)
-	b.hub.mu.Lock()
-	awaiting := d.awaitAck
-	b.hub.mu.Unlock()
+	awaiting := d.state().awaitAck
 	if !awaiting {
 		t.Fatal("a stale acknowledgment changed the current playback mode")
 	}
@@ -978,12 +974,8 @@ func wsEagerVoice(t *testing.T, stopWhileGenerating bool) {
 		return len(turns) == 1 && turns[0].TTS != nil && turns[0].E2E != nil && turns[0].Total == nil
 	})
 	if stopWhileGenerating {
-		b.hub.sig.wait(t, func() bool {
-			b.hub.mu.Lock()
-			defer b.hub.mu.Unlock()
-			d := b.hub.terminals["vocat-a000"]
-			return d != nil && strings.Contains(d.svg.source, `data-id="stop"`)
-		})
+		sess := b.hub.live("vocat-a000")
+		b.hub.sig.wait(t, func() bool { return strings.Contains(sess.state().svg.source, `data-id="stop"`) })
 		dev.tap(t, 180, 290, 0)
 		abort := dev.until(t, func(f protocolFrame) bool {
 			p := framePayload(f)

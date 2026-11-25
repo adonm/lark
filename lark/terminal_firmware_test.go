@@ -69,9 +69,8 @@ func TestNativeSayMoreRequiresCurrentFrameRevision(t *testing.T) {
 
 	d.tap(t, 180, 290, idleRev)
 	d.barrier(t)
-	b.hub.mu.Lock()
-	taps, thinkingRev := dev.stopTaps, dev.nativeRev
-	b.hub.mu.Unlock()
+	st := dev.state()
+	taps, thinkingRev := st.stopTaps, st.nativeRev
 	if taps != 0 {
 		t.Fatal("a stale Stop tap incremented stopTaps")
 	}

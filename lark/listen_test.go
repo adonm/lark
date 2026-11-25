@@ -134,6 +134,7 @@ func sendSpeechAndWaitTTS(t *testing.T, hw *testWS, b *larkServer, termID, sttTe
 	t.Helper()
 	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
 	d0 := b.hub.live(termID)
+	before := d0.state().finished
 	updateTerm(t, d0, func(term *terminalSession) { b.hub.startRecording(term, "", time.Now(), true) })
 	hw.until(t, func(f protocolFrame) bool {
 		p := framePayload(f)
@@ -150,6 +151,9 @@ func sendSpeechAndWaitTTS(t *testing.T, hw *testWS, b *larkServer, termID, sttTe
 		p := framePayload(f)
 		return hasProto(msgTTSCtrl, "")(f) && len(p) >= 9 && p[0] == ttsOpEnd
 	})
+	// A spoken reply is delivered to Delta Chat before the turn completes; wait
+	// for that completion so callers can assert side effects without polling.
+	b.hub.sig.wait(t, func() bool { return d0.state().finished > before })
 	return binary.LittleEndian.Uint64(framePayload(end)[1:9])
 }
 
