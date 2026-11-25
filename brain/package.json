@@ -1,0 +1,17 @@
+{
+  "name": "lark-brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@opencode/sdk": "2.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.10",
+    "typescript": "^5.9.3"
+  }
+}
