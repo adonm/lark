@@ -1,5 +1,9 @@
 # Lark QA Report
 
+> **Historical.** This report describes the v1 Go monolith and its QA harness
+> (`--e2e-stub`, `--qa`, `--qa-hw`, `lark/qa/*.sim`), removed in the v2 cutover.
+> Current checks live in [docs/testing.md](testing.md).
+
 ## Current state
 
 As of 2026-11-24 on `main`:

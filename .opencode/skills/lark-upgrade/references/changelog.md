@@ -4,6 +4,47 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-26 — v2: Go edge + TypeScript brain
+
+### Affects
+- Host: systemd units, `~/.config/lark/lark.env`, `~/.local/share/lark/`, and the operator CLI.
+- Devices: no firmware change. The v1 terminal protocol and wire bytes are unchanged.
+
+### Breaking Changes
+- The single `lark` server binary is gone. `lark-edge.service` (Go) owns terminals, speech models, capture DSP, OTA push, and bulk library builds; `lark-brain.service` (Node 26) owns HTTP, SQLite, Delta Chat, stories, timers, and embedded OpenCode.
+- `lark-opencode.service` is removed. OpenCode runs in-process inside the brain through `@opencode/sdk`; there is no loopback `:49375` API, Basic-auth password, or `LARK_OPENCODE_URL`/`LARK_OPENCODE_PASSWORD` setting.
+- OpenCode models are code defaults in `brain/src/opencode.ts`; the generated `opencode.jsonc`, `config/opencode/` plugins, and `setup-opencode-config.py` no longer exist. The brain imports the `opencode` provider entry from the user's OpenCode `auth.json` once.
+- The local library no longer provisions itself on server launch. `lark library --plan` reads the plan; `lark library --download --build` provisions through `lark-edge`.
+- Removed CLI commands: `serve`, `mcp`, `sim`, `device`, `stt-bench`. Kept: `status`, `doctor`, `companions`, `terminals`, `tunnels`, `capture`, `library`, `ota`, `deploy`.
+- The Go live/QA/bench suites and their stub/fixture harness are removed. The gate now runs the TypeScript brain, including a real Go-edge ↔ TS-brain cross-process test.
+
+### How to Detect
+- `systemctl --user status lark.service lark-opencode.service` shows the v1 units, or `lark --help` lists `serve`/`mcp`.
+- `~/.local/share/lark/lark` is an ELF binary rather than the CLI wrapper symlink.
+
+### Upgrade Steps
+1. Back up `lark.db` and `lark.env`.
+2. Stop and disable the v1 units:
+   ```sh
+   systemctl --user disable --now lark.service lark-opencode.service
+   ```
+3. From the updated checkout, run:
+   ```sh
+   ./scripts/setup-host.sh
+   ```
+   It builds and installs `lark-edge`, runs `npm ci` for the brain, installs the `lark` CLI wrapper, renders and starts `lark-edge.service` and `lark-brain.service`, removes the retired unit files, and strips the old OpenCode password/URL keys from `lark.env`.
+4. No database migration and no firmware flash. The brain creates the same schema the v1 server used and opens the existing `lark.db`.
+5. If you kept a custom `lark.env`, recheck it: `LARK_OPENCODE_*` and `OPENCODE_SERVER_PASSWORD` are ignored and removed; `LARK_DATA_DIR`, `LARK_EDGE_SOCK`, `LARK_DC_RPC_BIN`, and `LARK_REPO_DIR` are set by the units.
+
+### Verification
+- `systemctl --user is-active lark-edge.service lark-brain.service` both print `active`; `lark.service` and `lark-opencode.service` are gone.
+- `lark doctor` reports all checks passed, including the edge socket and each model.
+- `lark status` lists companions and terminals from the existing database; a paired terminal reconnects without re-pairing.
+- `lark library --plan` reports the previously installed packs as `installed`.
+- `./scripts/check.sh` and `./scripts/check.sh --remote-ui` pass.
+
+---
+
 ## 2026-11-25 — faster models, text-only Delta Chat, calmer turns
 
 ### Affects
