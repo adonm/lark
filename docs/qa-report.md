@@ -151,7 +151,9 @@ reply context; `emit.intercom` matching was narrower than `me.contacts`.
 The fix arms a `turnReply` for 2 minutes, consumed by one tap-to-talk or
 listening turn; the final reply goes back to the chat unless `emit` ran.
 `[silent]` and empty replies send nothing. The card Reply target is the
-conversation partner, and a clip for an offline peer goes by voice note.
+conversation partner. Off-device messages are text-only: a clip for an offline
+peer is transcribed and sent as text, and an empty or filler transcript speaks
+a local "didn't catch that" line instead of sending a blank message.
 `emit.intercom` matches display name, address-book name, address fallback, or
 peer id exactly.
 

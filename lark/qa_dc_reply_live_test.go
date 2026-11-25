@@ -187,8 +187,8 @@ func TestQADeltaChatDeviceReplyLive(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	spoke := strings.TrimSpace(last.Text)
-	if spoke == "" && (last.File == nil || *last.File == "") {
-		t.Fatalf("device reply arrived empty: %+v", last)
+	if spoke == "" || last.File != nil || last.ViewType != deltachat.ViewtypeText {
+		t.Fatalf("device reply was not clean text: %+v", last)
 	}
 	if strings.Contains(strings.ToLower(spoke), "couldn't reach") || strings.Contains(strings.ToLower(spoke), "can't reach") {
 		t.Fatalf("device reply claimed it could not reach the sender: %q", spoke)

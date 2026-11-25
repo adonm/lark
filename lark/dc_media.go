@@ -58,18 +58,7 @@ func decodeAudioToPCM16k(ctx context.Context, path string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-func encodePCMToOpus(ctx context.Context, pcm []byte, rate int, outPath string) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", strconv.Itoa(rate), "-ac", "1", "-i", "-", "-c:a", "libopus", "-b:a", "32k", outPath)
-	cmd.Stdin = bytes.NewReader(pcm)
-	var errBuf bytes.Buffer
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffmpeg encode: %v (%s)", err, strings.TrimSpace(errBuf.String()))
-	}
-	return nil
-}
-
-func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetName, text string, pcm16k []byte) ([]string, error) {
+func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetName, text string) ([]string, error) {
 	rpc := s.getRPC()
 	if rpc == nil {
 		return nil, problem(503, "Delta Chat unavailable")
@@ -102,17 +91,9 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 		return nil, problem(404, "No matching paired contact found")
 	}
 
-	var opusPath string
-	if len(pcm16k) > 0 {
-		tmp, err := os.CreateTemp("", "lark-voice-*.ogg")
-		if err == nil {
-			opusPath = tmp.Name()
-			_ = tmp.Close()
-			defer os.Remove(opusPath)
-			if err := encodePCMToOpus(ctx, pcm16k, sampleRate, opusPath); err != nil {
-				opusPath = ""
-			}
-		}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, problem(400, "Message text is required")
 	}
 
 	var sentTo []string
@@ -122,16 +103,7 @@ func (s *dcService) sendIntercom(ctx context.Context, fromCompanionID, targetNam
 		if err != nil {
 			continue
 		}
-		var msg deltachat.MessageData
-		if text != "" {
-			msg.Text = &text
-		}
-		if opusPath != "" {
-			vt := deltachat.ViewtypeVoice
-			msg.File = &opusPath
-			msg.Viewtype = &vt
-		}
-		if _, err := rpc.SendMsg(accID, chatID, msg); err == nil {
+		if _, err := rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &text}); err == nil {
 			label := s.contactName(ct)
 			if peerID, isPeer := s.companionByAddr(ct.Address); isPeer {
 				label = peerID

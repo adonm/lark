@@ -199,6 +199,26 @@ func TestDeltaChatIntercomBetweenCompanions(t *testing.T) {
 	waitSVG(t, b.hub, "vocat-2cac", "Tea time!")
 }
 
+func writeTestWAV(t *testing.T, path string, pcm []byte, rate int) {
+	t.Helper()
+	header := make([]byte, 44)
+	copy(header[0:], "RIFF")
+	binary.LittleEndian.PutUint32(header[4:], uint32(36+len(pcm)))
+	copy(header[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(header[16:], 16)
+	binary.LittleEndian.PutUint16(header[20:], 1)
+	binary.LittleEndian.PutUint16(header[22:], 1)
+	binary.LittleEndian.PutUint32(header[24:], uint32(rate))
+	binary.LittleEndian.PutUint32(header[28:], uint32(rate*2))
+	binary.LittleEndian.PutUint16(header[32:], 2)
+	binary.LittleEndian.PutUint16(header[34:], 16)
+	copy(header[36:], "data")
+	binary.LittleEndian.PutUint32(header[40:], uint32(len(pcm)))
+	if err := os.WriteFile(path, append(header, pcm...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 	t.Parallel()
 	b, _, stub := dcTestHarness(t)
@@ -213,17 +233,13 @@ func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 	}
 	accID := cake.DCAccountID
 
-	// Create a tiny valid WAV/OGG file if ffmpeg is available; otherwise test via a dummy file if ffmpeg is missing.
-	tmpDir := t.TempDir()
-	voicePath := filepath.Join(tmpDir, "note.ogg")
-	wavPath := filepath.Join(tmpDir, "note.wav")
-	// Generate 0.2s of 16kHz silence WAV.
-	pcm := make([]byte, 16000*2/5)
-	if err := encodePCMToOpus(t.Context(), pcm, sampleRate, voicePath); err != nil {
-		// If ffmpeg is not installed in the test environment, skip the ffmpeg subprocess part cleanly.
+	// A real audio file exercises the ffmpeg decode path; skip cleanly when
+	// ffmpeg is unavailable.
+	voicePath := filepath.Join(t.TempDir(), "note.wav")
+	writeTestWAV(t, voicePath, make([]byte, 16000*2/5), sampleRate)
+	if _, err := decodeAudioToPCM16k(t.Context(), voicePath); err != nil {
 		t.Skipf("ffmpeg not available for voice note decode test: %v", err)
 	}
-	_ = os.Remove(wavPath)
 
 	stub.mu.Lock()
 	stub.contacts[accID][10] = deltachat.Contact{Id: 10, DisplayName: "Alice", Address: "alice@example.org", IsVerified: true}
@@ -242,8 +258,11 @@ func TestDeltaChatVoiceNoteTranscribedAndReplied(t *testing.T) {
 		t.Fatal("voice note was not transcribed by STT")
 	}
 	stub.mu.Lock()
-	if len(stub.sent) != 1 || *stub.sent[0].data.Text != "Hello Alice!" {
+	if len(stub.sent) != 1 || stub.sent[0].data.Text == nil || *stub.sent[0].data.Text != "Hello Alice!" {
 		t.Fatalf("voice note did not produce a reply: %+v", stub.sent)
+	}
+	if stub.sent[0].data.File != nil || stub.sent[0].data.Viewtype != nil {
+		t.Fatalf("voice note reply must be text-only: %+v", stub.sent[0].data)
 	}
 	stub.mu.Unlock()
 	_ = httptest.NewServer
@@ -1030,7 +1049,7 @@ func TestDCIntercomMatchesRenamedPeer(t *testing.T) {
 	stub.contacts[qa1.DCAccountID][10] = deltachat.Contact{Id: 10, Address: stub.configs[qa2.DCAccountID]["addr"], DisplayName: "qa2", Name: "qa2", IsVerified: true}
 	stub.mu.Unlock()
 
-	sentTo, err := dc.sendIntercom(t.Context(), "qa1", "Milo", "Hello Milo!", nil)
+	sentTo, err := dc.sendIntercom(t.Context(), "qa1", "Milo", "Hello Milo!")
 	if err != nil {
 		t.Fatalf("sendIntercom failed for renamed peer: %v", err)
 	}

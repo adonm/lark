@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -94,7 +93,7 @@ func (s *dcService) handleMessage(ctx context.Context, accID, msgID uint32) {
 		return
 	}
 	s.b.chat(companionID, newChat("companion", who.Name, reply, "deltachat"), true)
-	s.sendReply(turnCtx, rpc, accID, msg.ChatId, companionID, reply, isVoice)
+	s.sendReply(turnCtx, rpc, accID, msg.ChatId, reply)
 	if !private && s.b.hub != nil {
 		s.b.hub.deliverNotice(ctx, terminalNotice{
 			recipientIDs: []string{companionID},
@@ -246,28 +245,10 @@ func (s *dcService) runRemoteCommand(ctx context.Context, rpc dcRPC, accID, chat
 	return true
 }
 
-// sendReply answers the contact, attaching synthesized speech for a voice
-// message when the worker is ready.
-func (s *dcService) sendReply(ctx context.Context, rpc dcRPC, accID, chatID uint32, companionID, reply string, isVoice bool) {
-	outMsg := deltachat.MessageData{Text: &reply}
-	var opusPath string
-	if isVoice && s.b.worker != nil && s.b.worker.ready.Load() {
-		if clean, err := spokenText(reply); err == nil {
-			if pcm, err := s.b.worker.synthesize(ctx, s.b.voiceFor(companionID), clean); err == nil && len(pcm) > 0 {
-				if tmp, err := os.CreateTemp("", "lark-reply-*.ogg"); err == nil {
-					opusPath = tmp.Name()
-					_ = tmp.Close()
-					defer os.Remove(opusPath)
-					if err := encodePCMToOpus(ctx, pcm, sampleRate, opusPath); err == nil {
-						vt := deltachat.ViewtypeVoice
-						outMsg.File = &opusPath
-						outMsg.Viewtype = &vt
-					}
-				}
-			}
-		}
-	}
-	if _, err := rpc.SendMsg(accID, chatID, outMsg); err != nil {
+// sendReply answers the contact with text. Off-device messages stay text-only
+// so the conversation is searchable and works with any Delta Chat client.
+func (s *dcService) sendReply(ctx context.Context, rpc dcRPC, accID, chatID uint32, reply string) {
+	if _, err := rpc.SendMsg(accID, chatID, deltachat.MessageData{Text: &reply}); err != nil {
 		log.Printf("Delta Chat SendMsg error: %v", err)
 	}
 }

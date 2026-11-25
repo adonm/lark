@@ -555,10 +555,16 @@ func (h *terminalHub) runVoice(ctx context.Context, d *terminalSession, id uint6
 		recipients := h.b.intercomTargets(others, target)
 		voice := h.b.voiceFor(sender.ID)
 		receipts := h.deliverOnline(ctx, sender, recipients, voice, "", pcm)
-		// A card reply to a Delta Chat contact has no online peer; send the
-		// voice note back over Delta Chat instead of reporting it unreachable.
+		// A card reply to a Delta Chat contact has no online peer. Delta Chat
+		// is text-only off-device, so transcribe the clip and send clean text.
 		if len(receipts) == 0 && h.b.dc != nil && h.b.dc.ready.Load() {
-			h.sendIntercom(ctx, d, id, others, target, "", pcm)
+			transcript, err := h.b.transcribe(ctx, pcm)
+			words, fillerOnly, _ := inspectTranscript(transcript)
+			if err != nil || words == 0 || fillerOnly {
+				h.replyNotCaught(ctx, d, id)
+				return
+			}
+			h.sendIntercom(ctx, d, id, others, target, strings.TrimSpace(transcript))
 			return
 		}
 		// Connected peers can play the original clip before transcription.
@@ -625,7 +631,7 @@ func (h *terminalHub) runTurnChannel(ctx context.Context, d *terminalSession, id
 	if direct != nil {
 		h.consumeReply(d, ch.reply)
 		h.b.chat(sender.ID, newChat("user", "You", text, source), true)
-		h.sendIntercom(ctx, d, id, others, direct.target, direct.text, pcm)
+		h.sendIntercom(ctx, d, id, others, direct.target, direct.text)
 		return
 	}
 	if h.b.oc == nil {
@@ -690,13 +696,13 @@ func (h *terminalHub) dropStaleReply(d *terminalSession, capturedAt time.Time) {
 	h.mu.Unlock()
 }
 
-func (h *terminalHub) sendIntercom(ctx context.Context, d *terminalSession, id uint64, others []companionTarget, target, text string, pcm []byte) {
+func (h *terminalHub) sendIntercom(ctx context.Context, d *terminalSession, id uint64, others []companionTarget, target, text string) {
 	sender := h.b.companionFor(d.companionID)
 	if traceFrom(ctx) == nil {
 		ctx = h.b.traceTurn(ctx, sender.ID, sender.Name, "intercom", time.Now())
 	}
 	if h.b.dc != nil && h.b.dc.ready.Load() {
-		sentTo, err := h.b.dc.sendIntercom(ctx, sender.ID, target, text, pcm)
+		sentTo, err := h.b.dc.sendIntercom(ctx, sender.ID, target, text)
 		recipients := h.b.intercomTargets(others, target)
 		if len(recipients) == 0 {
 			// Delta Chat names human contacts, who are not LAN peers.
@@ -708,7 +714,7 @@ func (h *terminalHub) sendIntercom(ctx context.Context, d *terminalSession, id u
 		return
 	}
 	recipients := h.b.intercomTargets(others, target)
-	res := h.b.deliver(ctx, sender, recipients, text, pcm)
+	res := h.b.deliver(ctx, sender, recipients, text, nil)
 	h.confirm(ctx, d, id, target, recipients, len(res.sent) != 0, len(res.failed) != 0)
 }
 

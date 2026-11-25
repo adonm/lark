@@ -667,7 +667,7 @@ func (b *larkServer) mcpIntercom(ctx context.Context, args object) (object, []ob
 	}
 	to := strings.TrimSpace(str(args["to_companion_id"]))
 	if b.dc != nil && b.dc.ready.Load() {
-		sentTo, err := b.dc.sendIntercom(ctx, sender.ID, to, text, nil)
+		sentTo, err := b.dc.sendIntercom(ctx, sender.ID, to, text)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -442,9 +442,13 @@ func TestQADeltaChatLive(t *testing.T) {
 	if _, err := qadc.rpc.SendMsg(qadc.accID, chatID, deltachat.MessageData{File: &oggPath, Viewtype: &vt}); err != nil {
 		t.Fatal(err)
 	}
-	waitMsg(25*time.Second, func(m deltachat.Message) bool {
-		return m.ViewType == deltachat.ViewtypeVoice
+	qaOutgoing := waitMsg(25*time.Second, func(m deltachat.Message) bool {
+		return m.ViewType == deltachat.ViewtypeText && m.File == nil &&
+			(strings.Contains(strings.ToLower(m.Text), "three") || strings.Contains(m.Text, "3"))
 	})
+	if qaOutgoing.File != nil {
+		t.Fatalf("voice-note reply was not text-only: %+v", qaOutgoing)
+	}
 
 	sendText("/unknowncmd")
 	waitMsg(15*time.Second, func(m deltachat.Message) bool {

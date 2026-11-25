@@ -50,7 +50,10 @@ interrupts it and retries once on that fallback model too.
 account per companion. Contacts pair by scanning the companion's QR on the
 device screen. Commands: `/say`, `/private`, `/help`, `/story`, `/stories`,
 `/remote` (and `/remote off`). Every companion has its own address; Lark keeps
-verified contacts and routes intercom through the Chatmail relay.
+verified contacts and routes intercom through the Chatmail relay. Off-device
+messages are text-only: incoming voice notes are decoded with ffmpeg and
+transcribed, while replies and spoken intercom clips are transcribed and sent
+as text. No outbound Opus attachment is created.
 
 **Library.** Three SQLite FTS5 packs provisioned in the background, pending
 packs smallest first: Simple English Wikipedia, Project Gutenberg, then English

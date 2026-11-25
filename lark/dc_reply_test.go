@@ -389,9 +389,9 @@ func TestSayReadoutCardRepliesToHumanSender(t *testing.T) {
 		sent = dcSent(stub)
 		return len(sent) > 0
 	})
-	if len(sent) != 1 || sent[0].accID != greg.DCAccountID || sent[0].data.Viewtype == nil ||
-		*sent[0].data.Viewtype != deltachat.ViewtypeVoice {
-		t.Fatalf("card reply did not send a voice note to Mum: %+v", sent)
+	if len(sent) != 1 || sent[0].accID != greg.DCAccountID || sent[0].data.Text == nil ||
+		*sent[0].data.Text != "See you at six" || sent[0].data.File != nil || sent[0].data.Viewtype != nil {
+		t.Fatalf("card reply was not sent as text to Mum: %+v", sent)
 	}
 	spoken := ""
 	ttsDeadline := time.After(testWait(t))
@@ -409,6 +409,71 @@ loop:
 	}
 	if spoken != "Sent to Mum!" {
 		t.Fatalf("confirmation = %q, want %q", spoken, "Sent to Mum!")
+	}
+}
+
+// spokeIntercom records a targeted voice note and returns the turn marker.
+func spokeIntercom(t *testing.T, hw *testWS, b *larkServer, termID, target, sttText string) uint64 {
+	t.Helper()
+	b.setSTT(func(context.Context, []byte) (string, error) { return sttText, nil })
+	b.hub.mu.Lock()
+	d := b.hub.terminals[termID]
+	mark := d.finished
+	b.hub.startRecording(d, target, time.Now(), true)
+	b.hub.mu.Unlock()
+	hw.until(t, func(f protocolFrame) bool {
+		p := framePayload(f)
+		return hasProto(msgRecCtrl, "")(f) && len(p) >= 2 && p[0] == recOpStart
+	})
+	hw.recStart(t, "")
+	sendTestUtterance(t, hw)
+	hw.recEnd(t, "", false)
+	return mark
+}
+
+// A spoken intercom to a Delta Chat contact cannot reach a LAN peer, so the
+// clip is transcribed and sent as text rather than as a voice attachment.
+func TestSpokenIntercomToDeltaChatContactIsTextOnly(t *testing.T) {
+	t.Parallel()
+	b, base, stub, _ := dcVoiceHarness(t, func(string) string { return "" })
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addDCHuman(stub, greg.DCAccountID, 10, 200, "Mum", "mum@example.org")
+	hw := testConnectWS(t, base, "unit", false)
+	hw.helloHardware(t, "box3-dc-text", "greg", capDrag|capBridgeEndpoint)
+
+	mark := spokeIntercom(t, hw, b, "box3-dc-text", "mum", "Hello Mum, dinner is ready")
+	waitTurnDone(t, b, "box3-dc-text", mark)
+	sent := dcSent(stub)
+	if len(sent) != 1 || sent[0].accID != greg.DCAccountID || sent[0].data.Text == nil ||
+		*sent[0].data.Text != "Hello Mum, dinner is ready" || sent[0].data.File != nil || sent[0].data.Viewtype != nil {
+		t.Fatalf("spoken intercom was not sent as clean text: %+v", sent)
+	}
+}
+
+// An empty transcription must not deliver a blank Delta Chat message.
+func TestSpokenIntercomEmptyTranscriptSendsNothing(t *testing.T) {
+	t.Parallel()
+	b, base, stub, _ := dcVoiceHarness(t, func(string) string { return "" })
+	greg, err := b.createCompanion(t.Context(), object{"id": "greg", "name": "Greg", "form": "a cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addDCHuman(stub, greg.DCAccountID, 10, 200, "Mum", "mum@example.org")
+	hw := testConnectWS(t, base, "unit", false)
+	hw.helloHardware(t, "box3-dc-empty", "greg", capDrag|capBridgeEndpoint)
+
+	mark := spokeIntercom(t, hw, b, "box3-dc-empty", "mum", "um")
+	waitTurnDone(t, b, "box3-dc-empty", mark)
+	if sent := dcSent(stub); len(sent) != 0 {
+		t.Fatalf("empty transcript sent a message: %+v", sent)
+	}
+	select {
+	case <-b.worker.served:
+	default:
+		t.Fatal("empty transcript did not speak a local fallback")
 	}
 }
 
