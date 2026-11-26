@@ -11,7 +11,6 @@ import (
 
 const (
 	KokoroPack    = "kokoro-multi-lang-v1_0"
-	KokoroEngine  = "sherpa-onnx-kokoro"
 	KokoroThreads = 8
 	KokoroRate    = 24000
 )

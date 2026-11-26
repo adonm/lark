@@ -9,7 +9,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"time"
 	"unicode"
 )
 
@@ -32,23 +31,7 @@ func CheckParakeetModel(path string) error {
 	return nil
 }
 
-type Timing struct {
-	Queue time.Duration
-	Run   time.Duration
-}
-
-type sttTimingKey struct{}
 type sttProbeKey struct{}
-
-func WithTiming(ctx context.Context) (context.Context, *Timing) {
-	t := &Timing{}
-	return context.WithValue(ctx, sttTimingKey{}, t), t
-}
-
-func sttTimingFrom(ctx context.Context) *Timing {
-	t, _ := ctx.Value(sttTimingKey{}).(*Timing)
-	return t
-}
 
 func WithProbe(ctx context.Context) context.Context {
 	return context.WithValue(ctx, sttProbeKey{}, true)

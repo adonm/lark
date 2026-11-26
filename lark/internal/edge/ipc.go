@@ -389,7 +389,7 @@ func (e *Edge) transcribeFile(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("path required")
 	}
-	pcm, err := readWAVPCM(path)
+	pcm, err := audio.ReadWAVPCM(path)
 	if err != nil {
 		return "", err
 	}

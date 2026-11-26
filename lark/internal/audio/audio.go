@@ -4,16 +4,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
-	"regexp"
-	"strings"
-	"unicode"
-	"unicode/utf8"
+	"os"
 )
 
 const (
 	SampleRate = 16000
 	MaxPCM     = 4 << 20
-	MaxText    = 640
 )
 
 var (
@@ -120,234 +116,71 @@ func SynthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []
 	return pcm, scratch, nil
 }
 
-func NormalizeVoicePCM(pcm16k []byte) []byte {
-	if len(pcm16k) < 2 || len(pcm16k)%2 != 0 {
-		return pcm16k
+// ReadWAVPCM decodes a RIFF/WAVE file into 16 kHz mono little-endian PCM.
+// It accepts 16-bit PCM at 16 kHz (the edge's capture format) and rejects
+// anything else rather than silently feeding the wrong rate to STT.
+func ReadWAVPCM(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	var peak int
-	var power int64
-	for i := 0; i < len(pcm16k); i += 2 {
-		v := int(int16(le.Uint16(pcm16k[i:])))
-		peak = max(peak, v, -v)
-		power += int64(v * v)
+	if len(raw) < 44 || string(raw[0:4]) != "RIFF" || string(raw[8:12]) != "WAVE" {
+		return nil, errors.New("not a WAV file")
 	}
-	if peak < 1100 || power < int64(len(pcm16k)/2)*400*400 {
-		return pcm16k
-	}
-	gain := min(3, 26027.2982/float64(peak))
-	out := make([]byte, len(pcm16k))
-	for i := 0; i < len(pcm16k); i += 2 {
-		v := float64(int16(le.Uint16(pcm16k[i:])))
-		le.PutUint16(out[i:], uint16(int16(math.RoundToEven(v*gain))))
-	}
-	return out
-}
-
-func AlphaNum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
-
-func PlainText(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if strings.ContainsRune("*_`#", r) {
-			return -1
+	var (
+		channels  uint16
+		rate      uint32
+		bits      uint16
+		data      []byte
+		foundFmt  bool
+		foundData bool
+	)
+	for off := 12; off+8 <= len(raw); {
+		id := string(raw[off : off+4])
+		size := int(le.Uint32(raw[off+4 : off+8]))
+		body := off + 8
+		if body+size > len(raw) {
+			size = len(raw) - body
 		}
-		return r
-	}, s)
-	return strings.Join(strings.Fields(s), " ")
-}
-
-var (
-	sentenceEnd = regexp.MustCompile(`[.!?]+["'”’)\]]*`)
-	abbrev      = regexp.MustCompile(`(?i)\b(?:Mr|Mrs|Ms|Dr|Prof|St|vs|etc|e\.g|i\.e)\.$`)
-	initials    = regexp.MustCompile(`\b(?:[A-Z]\.)+$`)
-)
-
-func Sentences(text string, final, boundary bool) (out []string) {
-	start, clause := 0, 0
-	for _, loc := range sentenceEnd.FindAllStringIndex(text, -1) {
-		a, b := loc[0], loc[1]
-		if b < len(text) && text[b] != ' ' || b == len(text) && !(final || boundary) {
-			continue
-		}
-		s := text[clause:b]
-		if text[a] == '.' && (abbrev.MatchString(s) || initials.MatchString(s)) {
-			continue
-		}
-		clause = b
-		if text[a] != '.' {
-			count := 0
-			for _, r := range s {
-				if AlphaNum(r) {
-					count++
-				}
+		switch id {
+		case "fmt ":
+			if size < 16 {
+				return nil, errors.New("short WAV fmt chunk")
 			}
-			if count == 0 || start != 0 && count < 20 {
-				continue
+			format := le.Uint16(raw[body:])
+			channels = le.Uint16(raw[body+2:])
+			rate = le.Uint32(raw[body+4:])
+			bits = le.Uint16(raw[body+14:])
+			if format != 1 || bits != 16 {
+				return nil, errors.New("only 16-bit PCM WAV is supported")
 			}
+			foundFmt = true
+		case "data":
+			data = raw[body : body+size]
+			foundData = true
 		}
-		out = append(out, strings.TrimSpace(text[start:b]))
-		start = b
-	}
-	if s := strings.TrimSpace(text[start:]); final && s != "" {
-		out = append(out, s)
-	}
-	return out
-}
-
-func SplitSentences(text string) []string { return Sentences(PlainText(text), true, true) }
-
-type SentenceExtractor struct {
-	text              strings.Builder
-	start, clause     int
-	punct             rune
-	closers, space    bool
-	ticks, seen       int
-	utf8Tail          string
-	HasLetter, Halted bool
-	FirstChunk        bool
-}
-
-func (s *SentenceExtractor) boundary(out []string) []string {
-	if s.punct == 0 {
-		return out
-	}
-	punct := s.punct
-	s.punct, s.closers = 0, false
-	text := s.text.String()
-	clause := text[s.clause:]
-	if punct == '.' {
-		// Only the final abbreviation or initial and its word boundary matter.
-		tail := clause[max(0, len(clause)-6):]
-		if abbrev.MatchString(tail) || initials.MatchString(tail) {
-			return out
+		off = body + size
+		if size&1 == 1 {
+			off++
 		}
 	}
-	if punct == ',' || punct == ';' || punct == ':' || punct == '—' {
-		if s.start != 0 {
-			return out
-		}
-		if s.FirstChunk {
-			if len(strings.Fields(text[s.start:])) < 3 {
-				return out
-			}
-		} else {
-			n := 0
-			for _, r := range text[s.start:] {
-				if AlphaNum(r) {
-					n++
-				}
-			}
-			if n < 24 {
-				return out
-			}
-		}
-		s.clause = len(text)
-		out = append(out, strings.TrimSpace(text[s.start:]))
-		s.start = len(text)
-		return out
+	if !foundFmt || !foundData {
+		return nil, errors.New("WAV missing fmt or data chunk")
 	}
-	s.clause = len(text)
-	if punct != '.' {
-		n := 0
-		for _, r := range clause {
-			if AlphaNum(r) {
-				n++
-			}
-		}
-		// Start speaking on a short opening question or exclamation;
-		// coalesce short later clauses to avoid tiny synthesis jobs.
-		if n == 0 || s.start != 0 && n < 20 {
-			return out
-		}
+	if rate != SampleRate {
+		return nil, errors.New("WAV must be 16 kHz")
 	}
-	out = append(out, strings.TrimSpace(text[s.start:]))
-	s.start = len(text)
-	return out
-}
-
-func (s *SentenceExtractor) Flush() []string {
-	if s.Halted || !s.HasLetter {
-		return nil
+	if channels == 1 {
+		return data, nil
 	}
-	rest := strings.TrimSpace(s.text.String()[s.start:])
-	s.start = s.text.Len()
-	s.clause = s.text.Len()
-	s.punct, s.closers = 0, false
-	if rest == "" {
-		return nil
+	if channels != 2 {
+		return nil, errors.New("WAV must be mono or stereo")
 	}
-	return []string{rest}
-}
-
-func (s *SentenceExtractor) Add(delta string) (out []string) {
-	if s.Halted || delta == "" {
-		return nil
+	mono := make([]byte, len(data)/2)
+	for i := range len(mono) / 2 {
+		l := int16(le.Uint16(data[4*i:]))
+		r := int16(le.Uint16(data[4*i+2:]))
+		le.PutUint16(mono[2*i:], uint16(int16((int32(l)+int32(r))/2)))
 	}
-	// Process only new bytes. An unfinished UTF-8 rune is the only input
-	// carried over; punctuation stays pending until its right boundary.
-	const capBytes = 8 * 1024
-	used := min(len(delta), capBytes-s.seen)
-	s.seen += used
-	text := s.utf8Tail + delta[:used]
-	s.utf8Tail = ""
-	for len(text) != 0 {
-		if !utf8.FullRuneInString(text) {
-			s.utf8Tail = text
-			break
-		}
-		r, n := utf8.DecodeRuneInString(text)
-		text = text[n:]
-		if r == '`' {
-			s.ticks++
-			if s.ticks == 3 {
-				s.Halted = true
-				return s.boundary(out)
-			}
-		} else {
-			s.ticks = 0
-		}
-		if strings.ContainsRune("*_`#", r) {
-			continue
-		}
-		if unicode.IsSpace(r) {
-			out = s.boundary(out)
-			if s.FirstChunk && s.start == 0 && s.HasLetter && s.text.Len() > 0 {
-				if len(strings.Fields(s.text.String())) >= 5 {
-					chunk := strings.TrimSpace(s.text.String())
-					if chunk != "" {
-						out = append(out, chunk)
-						s.start = s.text.Len()
-						s.clause = s.text.Len()
-						s.punct, s.closers = 0, false
-					}
-				}
-			}
-			s.space = s.text.Len() != 0
-			continue
-		}
-		if s.space {
-			s.text.WriteByte(' ')
-			s.space = false
-		}
-		switch {
-		case strings.ContainsRune(".!?", r):
-			if s.punct == 0 || s.closers {
-				s.punct, s.closers = r, false
-			}
-		case s.start == 0 && strings.ContainsRune(",;:—", r):
-			if s.punct == 0 || s.closers {
-				s.punct, s.closers = r, false
-			}
-		case s.punct != 0 && strings.ContainsRune("\"'”’)]", r):
-			s.closers = true
-		default:
-			if s.punct == '—' {
-				out = s.boundary(out)
-			}
-			s.punct, s.closers = 0, false
-		}
-		s.text.WriteRune(r)
-		s.HasLetter = s.HasLetter || AlphaNum(r)
-	}
-	s.Halted = s.seen == capBytes
-	return out
+	return mono, nil
 }

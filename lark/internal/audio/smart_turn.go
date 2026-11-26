@@ -186,7 +186,6 @@ type whisperMel struct {
 	tw400   [smartTurnNFFT]complex128
 	tw25    [25][25]complex128
 	fft16   [16]complex128
-	fft25   [25]complex128
 	grid    [25][16]complex128
 }
 

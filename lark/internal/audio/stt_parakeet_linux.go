@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 	"unsafe"
 )
 
@@ -25,11 +24,9 @@ type sttResult struct {
 }
 
 type sttJob struct {
-	ctx    context.Context
-	pcm    []byte
-	at     time.Time
-	timing *Timing
-	res    chan sttResult
+	ctx context.Context
+	pcm []byte
+	res chan sttResult
 }
 
 type STT struct {
@@ -106,8 +103,6 @@ func (p *STT) runJob(job sttJob) {
 		job.res <- sttResult{err: err}
 		return
 	}
-	runStart := time.Now()
-	queueDur := runStart.Sub(job.at)
 	p.scratch = parakeetSamplesInto(p.scratch, job.pcm)
 	if len(p.scratch) == 0 {
 		job.res <- sttResult{}
@@ -117,10 +112,6 @@ func (p *STT) runJob(job sttJob) {
 	C.transcribe_run_params_init(&run)
 	run.timestamps = C.TRANSCRIBE_TIMESTAMPS_NONE
 	status := C.transcribe_run(p.session, (*C.float)(unsafe.Pointer(&p.scratch[0])), C.int(len(p.scratch)), &run)
-	if job.timing != nil {
-		job.timing.Queue = queueDur
-		job.timing.Run = time.Since(runStart)
-	}
 	if err := job.ctx.Err(); err != nil {
 		job.res <- sttResult{err: err}
 		return
@@ -156,11 +147,9 @@ func (p *STT) Transcribe(ctx context.Context, pcm []byte) (string, error) {
 		return "", nil
 	}
 	job := sttJob{
-		ctx:    ctx,
-		pcm:    pcm,
-		at:     time.Now(),
-		timing: sttTimingFrom(ctx),
-		res:    make(chan sttResult, 1),
+		ctx: ctx,
+		pcm: pcm,
+		res: make(chan sttResult, 1),
 	}
 	q := p.commits
 	if isSTTProbe(ctx) {
