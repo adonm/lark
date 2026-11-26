@@ -53,7 +53,7 @@ function stateUpdate(over = {}, companion = {}, terminals) {
   return {
     companion: Object.assign({
       id: "greg", name: "greg", form: "an old chameleon", voice: "af_heart",
-      listening: false, live_state: "idle", portrait: PORTRAIT,
+      listening: false, live_state: "idle", portraitUrl: PORTRAIT,
     }, companion),
     terminals: terminals || [{ id: "box3-b324", name: "BOX-3", online: true, volume: 60, battery_pct: 84, charging: true }],
     stories: [

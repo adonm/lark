@@ -16,6 +16,7 @@ import {
   type TunnelRunner,
 } from "./remote.ts";
 import { startHttp, type RunningHttp } from "./http.ts";
+import type { PortraitManager } from "./portraits.ts";
 import { FakeBrain, FakeEdge, settle } from "./testfakes.ts";
 import type { EdgeClient } from "./edge_client.ts";
 
@@ -343,7 +344,13 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
   assert.match(cookie, /Secure/);
 
   assert.equal((await fetch(`${base}/remote?token=wrong`)).status, 401);
-  assert.equal((await fetch(`${base}/remote/page.css`)).status, 200);
+  const css = await fetch(`${base}/remote/page.css`);
+  assert.equal(css.status, 200);
+  assert.equal(css.headers.get("cache-control"), "no-cache");
+  const cssEtag = css.headers.get("etag");
+  assert.ok(cssEtag !== null);
+  const cssCached = await fetch(`${base}/remote/page.css`, { headers: { "if-none-match": cssEtag ?? "" } });
+  assert.equal(cssCached.status, 304);
   assert.equal((await fetch(`${base}/remote/app.js`)).status, 200);
 
   const sse = await fetch(`${base}/remote/events?token=${encodeURIComponent(token)}`);
@@ -358,6 +365,32 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
   }
   assert.match(buffered, /"name":"Greg"/);
   await reader.cancel();
+
+  // State mutations are pushed immediately; a burst coalesces into one frame.
+  const live = await fetch(`${base}/remote/events?token=${encodeURIComponent(token)}`);
+  const liveReader = live.body?.getReader();
+  assert.ok(liveReader !== undefined);
+  let liveText = "";
+  while (!liveText.includes("event: state")) {
+    const chunk = await liveReader.read();
+    if (chunk.done) break;
+    liveText += new TextDecoder().decode(chunk.value);
+  }
+  const changedAt = Date.now();
+  await router.setVoice("greg", "bm_fable", false);
+  const deadline = changedAt + 700;
+  while (!liveText.includes('"voice":"bm_fable"') && Date.now() < deadline) {
+    const chunk = await Promise.race([
+      liveReader.read(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+    ]);
+    if (chunk === null) continue;
+    if (chunk.done) break;
+    liveText += new TextDecoder().decode(chunk.value);
+  }
+  assert.match(liveText, /"voice":"bm_fable"/);
+  assert.ok(Date.now() - changedAt < 700, "SSE waited for a polling tick");
+  await liveReader.cancel();
 
   const all = (await (
     await fetch(`${base}/remote/api/history?channel=all&limit=20`, { headers: { "x-lark-remote-token": token } })
@@ -439,6 +472,12 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
   });
   assert.equal(wav.status, 206);
   assert.equal((await wav.arrayBuffer()).byteLength, 100);
+  const wavTail = await fetch(`${base}/remote/api/captures/${captureName}.wav`, {
+    headers: { "x-lark-remote-token": token, range: "bytes=100-199" },
+  });
+  assert.equal(wavTail.status, 206);
+  assert.equal(wavTail.headers.get("content-range"), `bytes 100-199/${wavBytes(16000).length}`);
+  assert.equal((await wavTail.arrayBuffer()).byteLength, 100);
 
   const started = await fetch(`${base}/remote/api/capture`, {
     method: "POST",
@@ -475,6 +514,75 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
   });
   assert.equal(revoked.status, 200);
   assert.equal((await fetch(`${base}/remote/api/captures`, { headers: { "x-lark-remote-token": token } })).status, 401);
+});
+
+test("remote portrait route keeps the SSE snapshot compact and revalidates with ETag", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-portrait-http-"));
+  const db = new LarkDb(join(dir, "lark.db"));
+  const portraitId = "b".repeat(32);
+  db.upsertCompanion({ id: "greg", name: "Greg", configured: true, portraitId });
+  const portraitDir = join(dir, "portraits", portraitId);
+  mkdirSync(portraitDir, { recursive: true });
+  const png = Buffer.from("portrait-bytes");
+  writeFileSync(join(portraitDir, "sheet.png"), png);
+  const portraits = {
+    dirFor: (id: string) => (id === portraitId ? portraitDir : undefined),
+    available: true,
+    request: async () => portraitId,
+  };
+  const edge = new FakeEdge();
+  const router = new Router({
+    db,
+    edge,
+    brain: new FakeBrain(),
+    dataDir: dir,
+    portraits,
+    log: () => undefined,
+  });
+  const remote = manager(dir, db, new FakeRunner().runner());
+  const captures = new CaptureStore({
+    dir: join(dir, "debug"),
+    edge: edge as unknown as EdgeClient,
+    terminalForCompanion: () => undefined,
+    companionForTerminal: () => undefined,
+  });
+  const http = await startHttp({
+    host: "127.0.0.1",
+    port: 0,
+    adminToken: "t",
+    dataDir: dir,
+    db,
+    edge: edge as unknown as EdgeClient,
+    router,
+    remote,
+    captures,
+    portraits: portraits as unknown as PortraitManager,
+    libraryDir: join(dir, "library"),
+  });
+  try {
+    const base = `http://127.0.0.1:${http.port}`;
+    const token = (await remote.issueLocal("greg", "sam@example.org", "Sam")).split("token=")[1] ?? "";
+    const snapshot = router.snapshot("greg");
+    assert.equal(snapshot.companion.portraitUrl, `/remote/api/portrait?v=${portraitId}`);
+    assert.equal("portrait" in snapshot.companion, false);
+
+    const first = await fetch(`${base}/remote/api/portrait?token=${encodeURIComponent(token)}`);
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get("cache-control"), "private, max-age=60");
+    const etag = first.headers.get("etag");
+    assert.ok(etag !== null);
+    assert.deepEqual(Buffer.from(await first.arrayBuffer()), png);
+
+    const rest = await fetch(`${base}/remote/api/portrait?token=${encodeURIComponent(token)}`, {
+      headers: { "if-none-match": etag ?? "" },
+    });
+    assert.equal(rest.status, 304);
+    assert.equal((await rest.arrayBuffer()).byteLength, 0);
+
+    assert.equal((await fetch(`${base}/remote/api/portrait?token=wrong`)).status, 401);
+  } finally {
+    await http.close();
+  }
 });
 
 test("admin tunnel routes list and stop active companion routes", async () => {

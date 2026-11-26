@@ -383,6 +383,17 @@ test("in-process startup, companion instruction, and streaming deltas", async ()
   assert.deepEqual(step.value.model, { providerID: "mock", id: "m1" });
 });
 
+test("two sessions stream concurrently from one multiplexed event subscription", async () => {
+  const first = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
+  const second = await brain.createSession({ id: "moss", name: "Moss", personality: "a sleepy turtle" });
+  const [a, b] = await Promise.all([
+    drain(brain.runTurn({ sessionID: first, text: "STREAM first session" })),
+    drain(brain.runTurn({ sessionID: second, text: "STREAM second session" })),
+  ]);
+  assert.equal(a, "Hello from the brain");
+  assert.equal(b, "Hello from the brain");
+});
+
 test("native tools round trip through the model", async () => {
   const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
 

@@ -1,6 +1,7 @@
 // Scoped /remote page: token auth, SSE state/capture streams, remote commands,
 // the PWA manifest and icons, history, and byte-range WAV playback.
 import { readFileSync, statSync } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,7 +32,9 @@ import {
   text,
 } from "./http_common.ts";
 
-const REMOTE_POLL_MS = 750;
+// Burst mutations (a turn updates listening, busy, messages and speech) share
+// one SSE frame; 30 ms is below the page's perception threshold.
+const REMOTE_PUSH_COALESCE_MS = 30;
 const REMOTE_KEEPALIVE_MS = 15_000;
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -42,11 +45,19 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
+// The page template is static; cache it until its mtime or size changes so a
+// reload only stats the file.
+let indexTemplate: { mtimeMs: number; size: number; text: string } | undefined;
+
 function remotePage(name: string, token: string): string {
-  const dir = DEFAULT_REMOTE_DIR;
+  const file = join(DEFAULT_REMOTE_DIR, "index.html");
   let index = "";
   try {
-    index = readFileSync(join(dir, "index.html"), "utf8");
+    const info = statSync(file);
+    if (indexTemplate === undefined || indexTemplate.mtimeMs !== info.mtimeMs || indexTemplate.size !== info.size) {
+      indexTemplate = { mtimeMs: info.mtimeMs, size: info.size, text: readFileSync(file, "utf8") };
+    }
+    index = indexTemplate.text;
   } catch {
     throw fail(500, "Remote page unavailable");
   }
@@ -80,15 +91,8 @@ function cursorFrom(raw: string): { beforeTs: number; beforeId: string } | undef
   return { beforeTs, beforeId };
 }
 
-/** Snapshots differ by their portrait even when nothing visible changed. */
-function withoutPortrait(snapshot: RemoteSnapshot): RemoteSnapshot {
-  const copy = structuredClone(snapshot);
-  delete copy.companion.portrait;
-  return copy;
-}
-
 function snapshotKey(snapshot: RemoteSnapshot): string {
-  return JSON.stringify(withoutPortrait(snapshot));
+  return JSON.stringify(snapshot);
 }
 
 export interface RemoteRoutesOptions {
@@ -106,6 +110,9 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
 } {
   const { db, router, remote, captures } = options;
   const portraits = options.portraits;
+  // The portrait sheet is at most one image per companion generation; keep the
+  // last body so repeated page loads and SSE reconnects avoid disk reads.
+  const portraitCache = new Map<string, { etag: string; body: Buffer }>();
 
   async function handleRemote(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const path = url.pathname;
@@ -203,13 +210,15 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
     };
     if (!send("state", initial)) return;
     let key = snapshotKey(initial);
-    let captureKey = JSON.stringify(captures.status(scope.companionId));
-    if (!send("capture", captures.status(scope.companionId))) return;
-    const tick = setInterval(() => {
+    const initialCapture = captures.status(scope.companionId);
+    let captureKey = JSON.stringify(initialCapture);
+    if (!send("capture", initialCapture)) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const flush = (): void => {
+      timer = undefined;
       if (closed) return;
-      // Polling skips the base64 portrait: it is stable and expensive, and the
-      // page reuses the portrait from the initial state.
-      const snapshot = router.snapshot(scope.companionId, { includePortrait: false });
+      const snapshot = router.snapshot(scope.companionId);
       const nextKey = snapshotKey(snapshot);
       if (nextKey !== key) {
         key = nextKey;
@@ -221,16 +230,62 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
         captureKey = nextCaptureKey;
         send("capture", status);
       }
-    }, REMOTE_POLL_MS);
+    };
+    const schedule = (): void => {
+      if (closed || timer !== undefined) return;
+      timer = setTimeout(flush, REMOTE_PUSH_COALESCE_MS);
+      timer.unref?.();
+    };
+    const unsubscribeRouter = router.subscribe(schedule);
+    const unsubscribeCaptures = captures.subscribe?.(schedule) ?? (() => undefined);
+    // A slow safety net also refreshes capture countdowns, which tick without a
+    // database mutation; real state changes never wait for it.
     const keep = setInterval(() => {
       if (closed) return;
       res.write(": keep-alive\n\n");
+      flush();
     }, REMOTE_KEEPALIVE_MS);
+    keep.unref?.();
     req.on("close", () => {
-      clearInterval(tick);
+      if (timer !== undefined) clearTimeout(timer);
       clearInterval(keep);
+      unsubscribeRouter();
+      unsubscribeCaptures();
       res.end();
     });
+  }
+
+  function servePortrait(req: IncomingMessage, res: ServerResponse, companionId: string): void {
+    const companion = db.getCompanion(companionId);
+    const dir = portraits?.dirFor(companion?.portraitId ?? "");
+    if (dir === undefined) throw fail(404, "No portrait");
+    const file = join(dir, "sheet.png");
+    let info;
+    try {
+      info = statSync(file);
+    } catch {
+      throw fail(404, "No portrait");
+    }
+    const etag = `"${Math.floor(info.mtimeMs)}-${info.size}"`;
+    res.setHeader("etag", etag);
+    res.setHeader("cache-control", "private, max-age=60");
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304).end();
+      return;
+    }
+    let cached = portraitCache.get(file);
+    if (cached === undefined || cached.etag !== etag) {
+      let body: Buffer;
+      try {
+        body = readFileSync(file);
+      } catch {
+        throw fail(404, "No portrait");
+      }
+      portraitCache.clear();
+      cached = { etag, body };
+      portraitCache.set(file, cached);
+    }
+    sendBytes(res, 200, "image/png", cached.body, { etag, "cache-control": "private, max-age=60" });
   }
 
   async function handleRemoteApi(req: IncomingMessage, res: ServerResponse, path: string, scope: RemoteTokenScope): Promise<void> {
@@ -238,6 +293,10 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
     const companionId = scope.companionId;
     const api = `${REMOTE_PATH}/api/`;
     const name = path.slice(api.length);
+    if (name === "portrait" && method === "GET") {
+      servePortrait(req, res, companionId);
+      return;
+    }
     if (name === "say" && method === "POST") {
       const body = await readJson(req);
       const message = requiredText(body.text, "text", 500, "Enter something to say");
@@ -305,7 +364,7 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
         return;
       }
       if (rest.endsWith(".wav") && method === "GET") {
-        serveCaptureWav(req, res, companionId, decodeURIComponent(rest.slice(0, -4)));
+        await serveCaptureWav(req, res, companionId, decodeURIComponent(rest.slice(0, -4)));
         return;
       }
       if (method === "DELETE") {
@@ -323,7 +382,7 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
     throw fail(404, "Not found");
   }
 
-  function serveCaptureWav(req: IncomingMessage, res: ServerResponse, companionId: string, capture: string): void {
+  async function serveCaptureWav(req: IncomingMessage, res: ServerResponse, companionId: string, capture: string): Promise<void> {
     let path: string;
     try {
       path = captures.resolvePath(companionId, capture);
@@ -331,7 +390,13 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
       sendError(res, error);
       return;
     }
-    const info = statSync(path);
+    let info;
+    try {
+      info = statSync(path);
+    } catch (error) {
+      sendError(res, error);
+      return;
+    }
     const range = req.headers.range;
     if (range === undefined) {
       const body = readFileSync(path);
@@ -349,7 +414,23 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
       res.writeHead(416, { "content-range": `bytes */${info.size}` }).end();
       return;
     }
-    const body = readFileSync(path).subarray(start, end + 1);
+    // Read only the requested slice; capture WAVs can be tens of MB and media
+    // players seek through them constantly.
+    const length = end - start + 1;
+    const body = Buffer.allocUnsafe(length);
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(path, "r");
+      let offset = 0;
+      while (offset < length) {
+        const { bytesRead } = await handle.read(body, offset, length - offset, start + offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      if (offset !== length) throw fail(500, "Short read from capture");
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
     res.writeHead(206, {
       "content-type": "audio/wav",
       "content-length": String(body.length),

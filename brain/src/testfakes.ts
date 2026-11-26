@@ -144,6 +144,7 @@ export class FakeBrain implements TurnBrain {
   readonly promoted: string[] = [];
   readonly aborted: string[] = [];
   readonly missingSessions = new Set<string>();
+  sessionExistsCalls = 0;
 
   nextTurn(text: string, deltas?: string[]): void {
     this.turns.push({ deltas: deltas ?? [text], text });
@@ -155,11 +156,13 @@ export class FakeBrain implements TurnBrain {
   }
 
   async sessionExists(sessionID: string): Promise<boolean> {
+    this.sessionExistsCalls++;
     return !this.missingSessions.has(sessionID);
   }
 
   async *runTurn(input: { sessionID: string; text: string }): AsyncGenerator<TurnDelta, TurnResult> {
     this.inputs.push(input);
+    if (this.missingSessions.has(input.sessionID)) throw new Error("session not found");
     const turn = this.turns.shift() ?? { deltas: ["Okay."], text: "Okay." };
     for (const delta of turn.deltas) yield { type: "delta", text: delta };
     return { sessionID: input.sessionID, text: turn.text, model: { providerID: "fake", id: "fake" }, llmFirstMs: 0, llmTotalMs: 0 };
@@ -174,6 +177,10 @@ export class FakeBrain implements TurnBrain {
     const result = Promise.withResolvers<TurnResult>();
     let aborted = false;
     queueMicrotask(() => {
+      if (this.missingSessions.has(input.sessionID)) {
+        result.reject(new Error("session not found"));
+        return;
+      }
       for (const delta of turn.deltas) onDelta?.(delta);
       if (aborted) return;
       result.resolve({ sessionID: input.sessionID, text: turn.text, model: { providerID: "fake", id: "fake" }, llmFirstMs: 0, llmTotalMs: 0 });

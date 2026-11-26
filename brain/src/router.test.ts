@@ -224,7 +224,28 @@ test("a stale v1 session binding is replaced on the next turn", async () => {
   assert.deepEqual(h.brain.sessions, [{ id: "greg", name: "Greg", personality: "dry" }]);
   assert.equal(h.db.getSession("greg"), undefined, "the stale row is dropped");
   assert.equal(h.brain.inputs.at(-1)?.sessionID, "sess-greg");
+  assert.equal(h.brain.sessionExistsCalls, 0, "turns must not pre-probe the session RPC");
   assert.match(h.edge.spoken.map((chunk) => chunk.text).join(" "), /Fresh session/);
+});
+
+test("a healthy stored session is trusted without a per-turn probe", async () => {
+  const h = harness();
+  h.db.putSession({ companionId: "greg", sessionId: "ses_live", updatedAt: 1, contractHash: "", contextAfterMs: 0 });
+  h.brain.nextTurn("Reused session reply.", ["Reused session reply."]);
+  await connect(h);
+  h.edge.emit("turn.commit", {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "hello again",
+    speech_at_ms: 0,
+    listen_window: false,
+    audio_ms: 500,
+  });
+  await settle(20);
+  assert.equal(h.brain.sessionExistsCalls, 0);
+  assert.deepEqual(h.brain.sessions, []);
+  assert.equal(h.brain.inputs.at(-1)?.sessionID, "ses_live");
+  assert.match(h.edge.spoken.map((chunk) => chunk.text).join(" "), /Reused session/);
 });
 
 test("a mismatched commit aborts speculation and runs a fresh turn", async () => {
@@ -324,11 +345,11 @@ test("polling snapshots reuse the cached portrait and parsed story", async () =>
   writeFileSync(join(dir, "sheet.png"), Buffer.from("portrait-bytes"));
 
   const first = h.router.snapshot("greg");
-  assert.match(first.companion.portrait ?? "", /^data:image\/png;base64,/);
-  // Deleting the sheet proves the second snapshot served the cached data URL.
+  assert.equal(first.companion.portraitUrl, `/remote/api/portrait?v=${portraitId}`);
+  // Deleting the sheet proves the second snapshot used the cached presence.
   rmSync(join(dir, "sheet.png"));
-  assert.equal(h.router.snapshot("greg").companion.portrait, first.companion.portrait);
-  assert.equal(h.router.snapshot("greg", { includePortrait: false }).companion.portrait, undefined);
+  assert.equal(h.router.snapshot("greg").companion.portraitUrl, first.companion.portraitUrl);
+  assert.equal(h.router.snapshot("greg").companion.portraitUrl?.includes("base64"), false);
 
   h.db.saveStoryProgress({ companionId: "greg", storyId: "lantern", passage: "Start", page: 0, flags: {}, updatedAt: 1 });
   assert.equal(h.router.storySummaries("greg")[0]?.progress, 50);

@@ -1,7 +1,7 @@
 // Voice turns, device menus, listening policy, story reader and companion
 // state. The router is the only place that knows how edge events map to a
 // companion; HTTP, Delta Chat and the CLI all call the same methods here.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -56,6 +56,7 @@ export const LISTEN_WINDOW_MS = 30_000;
 export const FOLLOW_UP_GRACE_MS = 10_000;
 export const REPLY_CONTEXT_MS = 60_000;
 export const NOT_CAUGHT_LINE = "I didn't catch that.";
+const PORTRAIT_PATH = "/remote/api/portrait";
 
 export interface TurnBrain {
   createSession(companion: { id: string; name: string; personality: string }): Promise<string>;
@@ -154,7 +155,8 @@ export interface RemoteSnapshot {
     voice: string;
     listening: boolean;
     live_state: string;
-    portrait?: string;
+    /** Compact token-scoped URL; the PNG itself is no longer in the SSE body. */
+    portraitUrl?: string;
   };
   terminals: RemoteTerminal[];
   stories: Array<{ name: string; title: string; passages: number; progress: number; passage?: string }>;
@@ -181,6 +183,10 @@ export interface RouterOptions {
   log?: (line: string) => void;
 }
 
+function isSessionNotFound(error: unknown): boolean {
+  return /session not found/i.test(errMessage(error));
+}
+
 function statusOf(state: Pick<TerminalState, "speaking" | "busy" | "listening">): string {
   if (state.speaking) return "speaking";
   if (state.busy) return "thinking";
@@ -199,10 +205,11 @@ export class Router {
   readonly #log: (line: string) => void;
   readonly #terminals = new Map<string, TerminalState>();
   readonly #models = new Map<string, string>();
-  // Portrait data URLs and parsed stories change only when their source
-  // changes, so remote polling must not re-read or re-parse them every tick.
-  readonly #portraitCache = new Map<string, string | null>();
+  // Portrait presence and parsed stories change only when their source changes,
+  // so remote snapshots must not re-read or re-parse them on every event.
+  readonly #portraitCache = new Map<string, boolean>();
   readonly #storyCache = new Map<string, { updatedAt: number; story: Story }>();
+  readonly #subscribers = new Set<() => void>();
   #streamSeq = 0;
   #closed = false;
 
@@ -251,8 +258,27 @@ export class Router {
     return new Map(this.#models);
   }
 
+  /** Listen for state mutations; HTTP coalesces bursts into one SSE event. */
+  subscribe(listener: () => void): () => void {
+    this.#subscribers.add(listener);
+    return () => {
+      this.#subscribers.delete(listener);
+    };
+  }
+
+  #notifyStateChange(): void {
+    for (const listener of this.#subscribers) {
+      try {
+        listener();
+      } catch {
+        // A broken subscriber must not break the mutation that notified it.
+      }
+    }
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
+    this.#subscribers.clear();
     for (const terminal of this.#terminals.values()) {
       if (terminal.listenTimer !== undefined) clearTimeout(terminal.listenTimer);
       terminal.speculation?.handle.abort();
@@ -296,6 +322,12 @@ export class Router {
   remoteTerminals(companionId: string): RemoteTerminal[] {
     const out: RemoteTerminal[] = [];
     const seen = new Set<string>();
+    const rows = this.#db.listTerminalsWithVolume(companionId);
+    const volume = new Map(rows.map((row) => [row.id, row.volume]));
+    const missing = [...this.#terminals.values()]
+      .filter((state) => state.companionId === companionId && !volume.has(state.id))
+      .map((state) => state.id);
+    for (const [id, level] of this.#db.getTerminalVolumes(missing)) volume.set(id, level);
     for (const state of this.#terminals.values()) {
       if (state.companionId !== companionId) continue;
       seen.add(state.id);
@@ -303,23 +335,22 @@ export class Router {
         id: state.id,
         name: state.id,
         online: true,
-        volume: this.#db.getTerminalVolume(state.id),
+        volume: volume.get(state.id) ?? 55,
         ...(state.telemetry === undefined
           ? {}
           : { battery_pct: state.telemetry.battery_pct, charging: state.telemetry.charging }),
       });
     }
-    for (const row of this.#db.listTerminals()) {
-      if (row.companionId !== companionId || seen.has(row.id)) continue;
-      out.push({ id: row.id, name: row.id, online: false, volume: this.#db.getTerminalVolume(row.id) });
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      out.push({ id: row.id, name: row.id, online: false, volume: row.volume });
     }
     out.sort((a, b) => a.id.localeCompare(b.id));
     return out;
   }
 
   storySummaries(companionId: string): StorySummary[] {
-    return this.#db.listStories().map((row) => {
-      const progress = this.#db.getStoryProgress(companionId, row.id);
+    return this.#db.listStoriesWithProgress(companionId).map(({ story: row, progress }) => {
       let percent = 0;
       if (progress !== undefined) {
         percent = 10;
@@ -354,25 +385,21 @@ export class Router {
     return story;
   }
 
-  /** Base64 sheets are expensive; the portrait id is their cache key. */
-  #portraitData(companion: Companion | undefined): string | undefined {
+  /** The portrait id is a content key; only its presence needs caching. */
+  #portraitUrl(companion: Companion | undefined): string | undefined {
     if (companion === undefined || companion.portraitId === "") return undefined;
     const id = companion.portraitId;
-    if (this.#portraitCache.has(id)) return this.#portraitCache.get(id) ?? undefined;
-    let data: string | null = null;
-    const dir = this.#portraits?.dirFor(id);
-    if (dir !== undefined) {
-      try {
-        data = `data:image/png;base64,${readFileSync(join(dir, "sheet.png")).toString("base64")}`;
-      } catch {
-        data = null;
-      }
+    let present = this.#portraitCache.get(id);
+    if (present === undefined) {
+      const dir = this.#portraits?.dirFor(id);
+      present = dir !== undefined && existsSync(join(dir, "sheet.png"));
+      this.#portraitCache.set(id, present);
     }
-    this.#portraitCache.set(id, data);
-    return data ?? undefined;
+    if (!present) return undefined;
+    return `${PORTRAIT_PATH}?v=${encodeURIComponent(id)}`;
   }
 
-  snapshot(companionId: string, options: { includePortrait?: boolean } = {}): RemoteSnapshot {
+  snapshot(companionId: string): RemoteSnapshot {
     const companion = this.#db.getCompanion(companionId) ?? this.defaultCompanion();
     if (companion === undefined) {
       return {
@@ -382,7 +409,7 @@ export class Router {
         voices: VOICES.map((voice) => ({ ...voice })),
       };
     }
-    const portrait = options.includePortrait === false ? undefined : this.#portraitData(companion);
+    const portraitUrl = this.#portraitUrl(companion);
     return {
       companion: {
         id: companion.id,
@@ -391,7 +418,7 @@ export class Router {
         voice: companion.voice === "" ? "af_heart" : companion.voice,
         listening: companion.listening,
         live_state: this.liveState(companion.id),
-        ...(portrait === undefined ? {} : { portrait }),
+        ...(portraitUrl === undefined ? {} : { portraitUrl }),
       },
       terminals: this.remoteTerminals(companion.id),
       stories: this.storySummaries(companion.id).map((story) => ({
@@ -462,6 +489,7 @@ export class Router {
     const companion = this.#db.getCompanion(companionId);
     if (companion !== undefined && companion.listening) await this.#armListening(state);
     else await this.#renderHome(state, "idle");
+    this.#notifyStateChange();
   }
 
   async #disconnected(terminalId: string): Promise<void> {
@@ -481,11 +509,15 @@ export class Router {
       });
     }
     this.#terminals.delete(terminalId);
+    this.#notifyStateChange();
   }
 
   #telemetry(event: EdgeTelemetry): void {
     const state = this.#terminals.get(event.terminal_id);
-    if (state !== undefined) state.telemetry = event;
+    if (state !== undefined) {
+      state.telemetry = event;
+      this.#notifyStateChange();
+    }
   }
 
   #portraitDir(companion: Companion | undefined): string | undefined {
@@ -516,6 +548,7 @@ export class Router {
       if (state.companionId !== companionId) continue;
       if (state.drawer === "") await this.#renderHome(state, statusOf(state));
     }
+    this.#notifyStateChange();
   }
 
   // ---- pointer and menus --------------------------------------------------
@@ -543,6 +576,7 @@ export class Router {
       if (identifying) await this.#edge.captureStop(state.id).catch(() => undefined);
       await this.#edge.stopAudio(state.id);
       await this.#renderHome(state, "idle");
+      this.#notifyStateChange();
       return;
     }
     if (hit === "menu") {
@@ -593,6 +627,7 @@ export class Router {
       this.#db.setTerminalVolume(state.id, level);
       this.#edge.volume(state.id, level);
       await this.#renderVolume(state, level);
+      this.#notifyStateChange();
       return;
     }
     if (state.drawer === "volume" || hit.startsWith("volume")) {
@@ -875,6 +910,7 @@ export class Router {
       await this.#renderStory(state);
       await this.#saveStoryProgress(state);
     }
+    this.#notifyStateChange();
   }
 
   async restartStory(companionId: string, storyId: string): Promise<void> {
@@ -927,6 +963,7 @@ export class Router {
       flags: flagsMap(run.story, run.flags),
       updatedAt: this.#now(),
     });
+    this.#notifyStateChange();
   }
 
   async #spokenStoryChoice(state: TerminalState, transcript: string): Promise<boolean> {
@@ -941,16 +978,31 @@ export class Router {
   // ---- voice turns --------------------------------------------------------
 
   async #sessionFor(companionId: string): Promise<string> {
+    // The sessions table is authoritative. A stale id from an old OpenCode
+    // store is only discovered when prompt fails, then #runTurn rebinds.
     const stored = this.#db.getSession(companionId);
-    if (stored !== undefined) {
-      if (await this.#brain.sessionExists(stored.sessionId)) return stored.sessionId;
-      // The session table survives a v1 cutover, but its ids belong to the old
-      // OpenCode store. Drop the stale binding and start a fresh session.
-      this.#db.deleteSession(companionId);
-    }
+    if (stored !== undefined) return stored.sessionId;
     const companion = this.#db.getCompanion(companionId);
     if (companion === undefined) return Promise.reject(new Error(`companion ${companionId} not found`));
     return this.#brain.createSession({ id: companion.id, name: companion.name, personality: companion.personality });
+  }
+
+  async #runTurn(
+    companionId: string,
+    text: string,
+    onDelta?: (delta: string) => void,
+  ): Promise<TurnResult> {
+    const sessionID = await this.#sessionFor(companionId);
+    try {
+      return await drain(this.#brain.runTurn({ sessionID, text }), (delta) => onDelta?.(delta.text));
+    } catch (error) {
+      if (!isSessionNotFound(error)) throw error;
+      // The persisted session predates this OpenCode store. Drop it and retry
+      // once with a fresh session; every later turn trusts the table again.
+      this.#db.deleteSession(companionId);
+      const fresh = await this.#sessionFor(companionId);
+      return await drain(this.#brain.runTurn({ sessionID: fresh, text }), (delta) => onDelta?.(delta.text));
+    }
   }
 
   async #speculate(event: EdgeSpeculate): Promise<void> {
@@ -970,6 +1022,7 @@ export class Router {
     const companion = this.#db.getCompanion(state.companionId);
     if (companion === undefined) return;
     state.listening = false;
+    this.#notifyStateChange();
 
     // A silent story reader uses spoken choice matching and never synthesizes
     // the passage itself.
@@ -999,6 +1052,7 @@ export class Router {
     }
 
     state.busy = true;
+    this.#notifyStateChange();
     await this.#renderHome(state, "thinking");
     this.#edge.chime(state.id, "think");
 
@@ -1022,17 +1076,26 @@ export class Router {
         const result = await speculation.handle.result;
         full = result.text;
       } else {
-        const sessionID = await this.#sessionFor(state.companionId);
-        const result = await drain(this.#brain.runTurn({ sessionID, text: transcript }), (delta) => capture.push(delta.text));
+        const result = await this.#runTurn(state.companionId, transcript, (delta) => capture.push(delta));
         full = result.text;
       }
     } catch (error) {
-      if (!controller.signal.aborted) {
+      if (matching && isSessionNotFound(error)) {
+        // The speculative turn found a stale binding; rebind and run once.
+        this.#db.deleteSession(state.companionId);
+        try {
+          const result = await this.#runTurn(state.companionId, transcript, (delta) => capture.push(delta));
+          full = result.text;
+        } catch (retryError) {
+          if (!controller.signal.aborted) this.#log(`turn: ${errMessage(retryError)}`);
+        }
+      } else if (!controller.signal.aborted) {
         this.#log(`turn: ${errMessage(error)}`);
       }
     } finally {
       state.turn = undefined;
       state.busy = false;
+      this.#notifyStateChange();
     }
     await speech.end();
 
@@ -1068,6 +1131,7 @@ export class Router {
     });
     state.caption = spoken.slice(0, 120);
     state.speaking = true;
+    this.#notifyStateChange();
     await this.#renderHome(state, "speaking", state.caption);
 
     if (state.reply !== undefined && this.#now() <= state.reply.armedUntil) {
@@ -1092,6 +1156,7 @@ export class Router {
         tsMs: this.#now(),
         peer: reply.peer,
       });
+      this.#notifyStateChange();
     } catch (error) {
       this.#log(`reply routing: ${errMessage(error)}`);
     }
@@ -1110,6 +1175,7 @@ export class Router {
     if (event.aborted) {
       state.busy = false;
       await this.#renderHome(state, "idle");
+      this.#notifyStateChange();
       return;
     }
     const companion = this.#db.getCompanion(state.companionId);
@@ -1118,6 +1184,7 @@ export class Router {
     }
     if (companion?.listening === true) await this.#armListening(state);
     else await this.#renderHome(state, "idle");
+    this.#notifyStateChange();
   }
 
   async #cancel(terminalId: string, reason: string): Promise<void> {
@@ -1131,6 +1198,7 @@ export class Router {
     state.speaking = false;
     state.listening = false;
     await this.#renderHome(state, "idle");
+    this.#notifyStateChange();
   }
 
   async #armListening(state: TerminalState, startRec = true): Promise<void> {
@@ -1162,6 +1230,7 @@ export class Router {
       }
     }, LISTEN_WINDOW_MS + 2000);
     state.listenTimer.unref();
+    this.#notifyStateChange();
   }
 
   // ---- music and song identification --------------------------------------
@@ -1185,6 +1254,7 @@ export class Router {
     await this.#renderHome(state, "speaking", caption);
     const streamId = await this.#edge.metronome(state.id, bpm, beats, durationS);
     state.audioStreamId = streamId;
+    this.#notifyStateChange();
     return { terminal_id: state.id, caption, bpm, beats, duration_s: durationS, stream_id: streamId };
   }
 
@@ -1207,6 +1277,7 @@ export class Router {
     await this.#renderHome(state, "speaking", caption);
     const streamId = await this.#edge.playTune(state.id, tempo, style, notes);
     state.audioStreamId = streamId;
+    this.#notifyStateChange();
     return { terminal_id: state.id, caption, tempo, style, notes: notes.length, stream_id: streamId };
   }
 
@@ -1247,6 +1318,7 @@ export class Router {
       state.listening = false;
       await this.#renderHome(state, "idle", "").catch(() => undefined);
       rmSync(dir, { recursive: true, force: true });
+      this.#notifyStateChange();
     }
   }
 
@@ -1260,6 +1332,7 @@ export class Router {
     state.speaking = false;
     await this.#edge.stopAudio(state.id);
     await this.#renderHome(state, "idle", "");
+    this.#notifyStateChange();
     return { terminal_id: state.id, stopped };
   }
 
@@ -1280,6 +1353,7 @@ export class Router {
     await stream.end();
     state.speaking = true;
     state.caption = sanitizeSpeech(text).slice(0, 120);
+    this.#notifyStateChange();
     await this.#renderHome(state, "speaking", state.caption);
   }
 
@@ -1294,12 +1368,14 @@ export class Router {
         await this.#renderHome(state, "idle");
       }
     }
+    this.#notifyStateChange();
   }
 
   setVolume(terminalId: string, level: number): void {
     const clamped = Math.max(0, Math.min(100, Math.round(level)));
     this.#db.setTerminalVolume(terminalId, clamped);
     this.#edge.volume(terminalId, clamped);
+    this.#notifyStateChange();
   }
 
   async setVoice(companionId: string, voiceId: string, preview: boolean): Promise<void> {
@@ -1310,6 +1386,7 @@ export class Router {
       if (preview) this.#edge.previewVoice(state.id, voiceId);
       if (state.drawer === "voice") await this.#renderVoice(state);
     }
+    this.#notifyStateChange();
   }
 
   async notifyDcTurn(turn: DcPeerTurn & { accountId?: number; chatId?: number }): Promise<string | undefined> {
@@ -1329,8 +1406,7 @@ export class Router {
       await this.speakPhrase(state.id, `Message from ${turn.sender}: ${turn.text}`);
     }
     try {
-      const sessionID = await this.#sessionFor(turn.companionId);
-      const result = await drain(this.#brain.runTurn({ sessionID, text: `${turn.sender} via Delta Chat: ${turn.text}` }));
+      const result = await this.#runTurn(turn.companionId, `${turn.sender} via Delta Chat: ${turn.text}`);
       return sanitizeSpeech(result.text);
     } catch (error) {
       this.#log(`dc turn: ${errMessage(error)}`);

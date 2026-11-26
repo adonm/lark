@@ -47,8 +47,11 @@
     if (!next) return prev || { companion: {}, terminals: [], stories: [], voices: [] };
     const oldComp = (prev && prev.companion) || {};
     const companion = Object.assign({}, oldComp, next.companion || {});
-    if (!next.companion || !next.companion.portrait) {
-      if (oldComp.portrait) companion.portrait = oldComp.portrait;
+    // The portrait URL is compact and stable until the portrait generation
+    // changes; keep the last one when a state push omits it. `portrait` remains
+    // a fallback for older servers that still inline a data URL.
+    for (const key of ["portraitUrl", "portrait"]) {
+      if (!(next.companion && next.companion[key]) && oldComp[key]) companion[key] = oldComp[key];
     }
     return {
       companion,
@@ -140,14 +143,15 @@
     document.getElementById("live-state-text").textContent = stateLabels[live] || live;
     const wrap = document.getElementById("portrait-wrap");
     let img = wrap.querySelector("img.portrait");
-    if (c.portrait) {
+    const portrait = c.portraitUrl || c.portrait;
+    if (portrait) {
       if (!img) {
         wrap.className = "";
         wrap.innerHTML = "";
         img = el("img", { class: "portrait", alt: name + " portrait" });
         wrap.appendChild(img);
       }
-      if (img.getAttribute("src") !== c.portrait) img.src = c.portrait;
+      if (img.getAttribute("src") !== portrait) img.src = portrait;
       img.alt = name + " portrait";
       wrap.removeAttribute("aria-hidden");
     } else if (img) {

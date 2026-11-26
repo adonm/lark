@@ -337,6 +337,56 @@ test("legacy Delta Chat replies are attributed to the turn they answer", () => {
   assert.equal(db.backfillLegacyPeers(), 0);
 });
 
+test("snapshot joins fetch terminals with volume and stories with progress", () => {
+  db.upsertCompanion({ id: "joins", name: "Joins" });
+  db.upsertTerminal({
+    id: "term-a",
+    kind: "terminal",
+    companionId: "joins",
+    ip: "10.0.0.1",
+    port: 0,
+    lastSeen: 1,
+    createdAt: "2026-11-26T00:00:00Z",
+  });
+  db.upsertTerminal({
+    id: "term-b",
+    kind: "terminal",
+    companionId: "joins",
+    ip: "10.0.0.2",
+    port: 0,
+    lastSeen: 1,
+    createdAt: "2026-11-26T00:00:00Z",
+  });
+  db.setTerminalVolume("term-a", 70);
+  assert.deepEqual(
+    db.listTerminalsWithVolume("joins").map((row) => [row.id, row.volume]),
+    [["term-a", 70], ["term-b", 55]],
+  );
+  db.setTerminalVolume("live-only", 33);
+  assert.equal(db.getTerminalVolumes(["live-only", "term-b"]).get("live-only"), 33);
+
+  db.saveStory({ id: "join-a", title: "A", twee: ":: StoryTitle\nA\n", author: "", updatedAt: 2, passages: 2 });
+  db.saveStory({ id: "join-b", title: "B", twee: ":: StoryTitle\nB\n", author: "", updatedAt: 1, passages: 1 });
+  db.saveStoryProgress({
+    companionId: "joins",
+    storyId: "join-a",
+    passage: "Start",
+    page: 1,
+    flags: { has_key: true },
+    updatedAt: 5,
+  });
+  const stories = db.listStoriesWithProgress("joins");
+  assert.deepEqual(stories.map((row) => row.story.id), ["join-a", "join-b"]);
+  assert.equal(stories[0]?.progress?.passage, "Start");
+  assert.deepEqual(stories[0]?.progress?.flags, { has_key: true });
+  assert.equal(stories[1]?.progress, undefined);
+  assert.ok(db.listStoriesWithProgress("someone-else").every((row) => row.progress === undefined));
+
+  db.deleteStory("join-a");
+  db.deleteStory("join-b");
+  db.deleteCompanion("joins");
+});
+
 test("upgraded databases gain the peer column", () => {
   const dir = mkdtempSync(join(tmpdir(), "lark-db-migrate-"));
   const path = join(dir, "legacy.db");

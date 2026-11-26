@@ -1,7 +1,7 @@
 // Typed access to the Lark household database. The schema is kept at byte
 // parity with the existing Go server's `~/.local/share/lark/lark.db` so a
 // database moves between the two runtimes without a migration.
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 export const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
@@ -86,6 +86,15 @@ export interface Terminal {
   port: number;
   lastSeen: number;
   createdAt: string;
+}
+
+export interface TerminalWithVolume extends Terminal {
+  volume: number;
+}
+
+export interface StoryWithProgress {
+  story: StoryRow;
+  progress?: StoryProgressRow;
 }
 
 export interface SessionRow {
@@ -325,6 +334,21 @@ function storyFrom(row: Record<string, unknown>): StoryRow {
   };
 }
 
+function flagsFrom(raw: unknown): Record<string, boolean | number> {
+  const flags: Record<string, boolean | number> = {};
+  try {
+    const parsed: unknown = JSON.parse(String(raw));
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "boolean" || typeof value === "number") flags[key] = value;
+      }
+    }
+  } catch {
+    // A corrupt flags blob is treated as empty progress.
+  }
+  return flags;
+}
+
 function memoryFrom<T = unknown>(row: Record<string, unknown>): MemoryRow<T> {
   return {
     scope: String(row.scope),
@@ -338,6 +362,9 @@ function memoryFrom<T = unknown>(row: Record<string, unknown>): MemoryRow<T> {
 export class LarkDb {
   readonly path: string;
   readonly #db: DatabaseSync;
+  // Static SQL repeats on every turn/poll. Statements keep their compiled plan
+  // until close, so preparation is a Map lookup instead of parse+plan.
+  readonly #statements = new Map<string, StatementSync>();
   #closed = false;
 
   constructor(path: string) {
@@ -360,10 +387,19 @@ export class LarkDb {
    * databases need the column appended instead of recreated.
    */
   #migrate(): void {
-    const columns = this.#db.prepare(`PRAGMA table_info(messages)`).all();
+    const columns = this.#stmt(`PRAGMA table_info(messages)`).all();
     if (!columns.some((column) => String(column.name) === "peer")) {
       this.#db.exec(`ALTER TABLE messages ADD COLUMN peer TEXT NOT NULL DEFAULT ''`);
     }
+  }
+
+  #stmt(sql: string): StatementSync {
+    let statement = this.#statements.get(sql);
+    if (statement === undefined) {
+      statement = this.#db.prepare(sql);
+      this.#statements.set(sql, statement);
+    }
+    return statement;
   }
 
   /** Escape hatch for tests and migration tooling; never used by tool code. */
@@ -374,6 +410,7 @@ export class LarkDb {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#statements.clear();
     this.#db.close();
   }
 
@@ -396,24 +433,22 @@ export class LarkDb {
   // ---- meta -------------------------------------------------------------
 
   getMeta(key: string): string | undefined {
-    const row = this.#db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key);
+    const row = this.#stmt(`SELECT value FROM meta WHERE key = ?`).get(key);
     return row === undefined ? undefined : String(row.value);
   }
 
   setMeta(key: string, value: string): void {
-    this.#db
-      .prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    this.#stmt(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
       .run(key, value);
   }
 
   deleteMeta(key: string): void {
-    this.#db.prepare(`DELETE FROM meta WHERE key = ?`).run(key);
+    this.#stmt(`DELETE FROM meta WHERE key = ?`).run(key);
   }
 
   /** Meta keys matching a SQL LIKE pattern, for durable retry queues. */
   listMetaKeys(pattern: string): string[] {
-    return this.#db
-      .prepare(`SELECT key FROM meta WHERE key LIKE ? ORDER BY key`)
+    return this.#stmt(`SELECT key FROM meta WHERE key LIKE ? ORDER BY key`)
       .all(pattern)
       .map((row) => String(row.key));
   }
@@ -457,8 +492,7 @@ export class LarkDb {
     const replyWindowMs = 5 * 60 * 1000;
     let updated = 0;
     this.transaction(() => {
-      const rows = this.#db
-        .prepare(
+      const rows = this.#stmt(
           `SELECT id, companion_id, role, sender, ts_ms FROM messages
            WHERE channel = 'deltachat' AND peer = ''
            ORDER BY companion_id, ts_ms, id`,
@@ -482,7 +516,7 @@ export class LarkDb {
           peer = pairPeer;
         }
         if (peer !== "") {
-          this.#db.prepare(`UPDATE messages SET peer = ? WHERE id = ?`).run(peer, String(row.id));
+          this.#stmt(`UPDATE messages SET peer = ? WHERE id = ?`).run(peer, String(row.id));
           updated++;
         }
         if (role === "user") {
@@ -499,22 +533,21 @@ export class LarkDb {
   // ---- companions -------------------------------------------------------
 
   getCompanion(id: string): Companion | undefined {
-    const row = this.#db.prepare(`SELECT * FROM companions WHERE id = ?`).get(id.toLowerCase()) as
+    const row = this.#stmt(`SELECT * FROM companions WHERE id = ?`).get(id.toLowerCase()) as
       | CompanionSqlRow
       | undefined;
     return row === undefined ? undefined : companionFrom(row);
   }
 
   listCompanions(): Companion[] {
-    const rows = this.#db.prepare(`SELECT * FROM companions ORDER BY name COLLATE NOCASE`).all() as unknown as CompanionSqlRow[];
+    const rows = this.#stmt(`SELECT * FROM companions ORDER BY name COLLATE NOCASE`).all() as unknown as CompanionSqlRow[];
     return rows.map(companionFrom);
   }
 
   upsertCompanion(input: CompanionUpsert): Companion {
     const id = input.id.toLowerCase();
     const now = input.updatedAt ?? Date.now();
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO companions
            (id, name, configured, personality, voice, updated_at, dc_account_id, form, portrait_id, listening, identity_version, identity_synced)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -558,24 +591,23 @@ export class LarkDb {
   }
 
   deleteCompanion(id: string): void {
-    this.#db.prepare(`DELETE FROM companions WHERE id = ?`).run(id.toLowerCase());
+    this.#stmt(`DELETE FROM companions WHERE id = ?`).run(id.toLowerCase());
   }
 
   // ---- terminals --------------------------------------------------------
 
   getTerminal(id: string): Terminal | undefined {
-    const row = this.#db.prepare(`SELECT * FROM terminals WHERE id = ?`).get(id);
+    const row = this.#stmt(`SELECT * FROM terminals WHERE id = ?`).get(id);
     return row === undefined ? undefined : terminalFrom(row);
   }
 
   listTerminals(): Terminal[] {
-    const rows = this.#db.prepare(`SELECT * FROM terminals ORDER BY id`).all();
+    const rows = this.#stmt(`SELECT * FROM terminals ORDER BY id`).all();
     return rows.map(terminalFrom);
   }
 
   upsertTerminal(input: Omit<Terminal, "companionId"> & { companionId?: string | null }): Terminal {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO terminals (id, kind, companion_id, ip, port, last_seen, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
@@ -601,17 +633,39 @@ export class LarkDb {
   }
 
   deleteTerminal(id: string): void {
-    this.#db.prepare(`DELETE FROM terminals WHERE id = ?`).run(id);
+    this.#stmt(`DELETE FROM terminals WHERE id = ?`).run(id);
   }
 
   getTerminalVolume(terminalId: string): number {
-    const row = this.#db.prepare(`SELECT volume FROM terminal_prefs WHERE terminal_id = ?`).get(terminalId);
+    const row = this.#stmt(`SELECT volume FROM terminal_prefs WHERE terminal_id = ?`).get(terminalId);
     return row === undefined ? 55 : num(row.volume as number);
   }
 
+  /** One JOIN per companion snapshot instead of a volume query per terminal. */
+  listTerminalsWithVolume(companionId: string): TerminalWithVolume[] {
+    const rows = this.#stmt(
+      `SELECT t.*, COALESCE(p.volume, 55) AS volume
+       FROM terminals t
+       LEFT JOIN terminal_prefs p ON p.terminal_id = t.id
+       WHERE t.companion_id = ?
+       ORDER BY t.id`,
+    ).all(companionId.toLowerCase());
+    return rows.map((row) => ({ ...terminalFrom(row), volume: num(row.volume as number) }));
+  }
+
+  /** Volumes for live terminals that are not yet persisted in `terminals`. */
+  getTerminalVolumes(terminalIds: string[]): Map<string, number> {
+    const out = new Map<string, number>();
+    if (terminalIds.length === 0) return out;
+    const placeholders = terminalIds.map(() => "?").join(",");
+    const rows = this.#stmt(`SELECT terminal_id, volume FROM terminal_prefs WHERE terminal_id IN (${placeholders})`)
+      .all(...terminalIds);
+    for (const row of rows) out.set(String(row.terminal_id), num(row.volume as number));
+    return out;
+  }
+
   setTerminalVolume(terminalId: string, volume: number): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO terminal_prefs (terminal_id, volume) VALUES (?, ?)
          ON CONFLICT(terminal_id) DO UPDATE SET volume = excluded.volume`,
       )
@@ -621,20 +675,18 @@ export class LarkDb {
   // ---- sessions ---------------------------------------------------------
 
   getSession(companionId: string): SessionRow | undefined {
-    const row = this.#db.prepare(`SELECT * FROM sessions WHERE companion_id = ?`).get(companionId.toLowerCase());
+    const row = this.#stmt(`SELECT * FROM sessions WHERE companion_id = ?`).get(companionId.toLowerCase());
     return row === undefined ? undefined : sessionFrom(row);
   }
 
   listSessions(): SessionRow[] {
-    return this.#db
-      .prepare(`SELECT * FROM sessions ORDER BY companion_id`)
+    return this.#stmt(`SELECT * FROM sessions ORDER BY companion_id`)
       .all()
       .map(sessionFrom);
   }
 
   putSession(input: SessionRow): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO sessions (companion_id, session_id, updated_at, contract_hash, context_after_ms)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(companion_id) DO UPDATE SET
@@ -653,14 +705,13 @@ export class LarkDb {
   }
 
   deleteSession(companionId: string): void {
-    this.#db.prepare(`DELETE FROM sessions WHERE companion_id = ?`).run(companionId.toLowerCase());
+    this.#stmt(`DELETE FROM sessions WHERE companion_id = ?`).run(companionId.toLowerCase());
   }
 
   // ---- messages ---------------------------------------------------------
 
   appendMessage(message: Message): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO messages (id, companion_id, role, sender, text, source, channel, card_title, ts_ms, peer)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
@@ -710,7 +761,7 @@ export class LarkDb {
     }
     sql += ` ORDER BY ts_ms DESC, id DESC LIMIT ?`;
     args.push(limit + 1);
-    const rows = this.#db.prepare(sql).all(...args).map(messageFrom);
+    const rows = this.#stmt(sql).all(...args).map(messageFrom);
     const hasMore = rows.length > limit;
     const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
     const oldest = page[0];
@@ -724,7 +775,7 @@ export class LarkDb {
   }
 
   deleteMessages(companionId: string): void {
-    this.#db.prepare(`DELETE FROM messages WHERE companion_id = ?`).run(companionId.toLowerCase());
+    this.#stmt(`DELETE FROM messages WHERE companion_id = ?`).run(companionId.toLowerCase());
   }
 
   /**
@@ -766,7 +817,7 @@ export class LarkDb {
     }
     sql += ` ORDER BY ts_ms DESC, id DESC LIMIT ?`;
     args.push(limit + 1);
-    const rows = this.#db.prepare(sql).all(...args).map(messageFrom);
+    const rows = this.#stmt(sql).all(...args).map(messageFrom);
     const hasMore = rows.length > limit;
     const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
     const oldest = page[0];
@@ -782,13 +833,12 @@ export class LarkDb {
   // ---- memory -----------------------------------------------------------
 
   getMemory<T = unknown>(scope: string, key: string): MemoryRow<T> | undefined {
-    const row = this.#db.prepare(`SELECT * FROM memory WHERE scope = ? AND key = ?`).get(scope, key);
+    const row = this.#stmt(`SELECT * FROM memory WHERE scope = ? AND key = ?`).get(scope, key);
     return row === undefined ? undefined : memoryFrom<T>(row);
   }
 
   listMemory(scope: string): MemoryRow[] {
-    return this.#db
-      .prepare(`SELECT * FROM memory WHERE scope = ? ORDER BY key`)
+    return this.#stmt(`SELECT * FROM memory WHERE scope = ? ORDER BY key`)
       .all(scope)
       .map((row) => memoryFrom(row));
   }
@@ -810,8 +860,7 @@ export class LarkDb {
         throw new VersionConflictError(input.scope, input.key, input.expectedVersion, 0);
       }
       const version = (existing?.version ?? 0) + 1;
-      this.#db
-        .prepare(
+      this.#stmt(
           `INSERT INTO memory (scope, key, value_json, version, updated_at) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(scope, key) DO UPDATE SET
              value_json = excluded.value_json,
@@ -826,14 +875,13 @@ export class LarkDb {
   }
 
   deleteMemory(scope: string, key: string): void {
-    this.#db.prepare(`DELETE FROM memory WHERE scope = ? AND key = ?`).run(scope, key);
+    this.#stmt(`DELETE FROM memory WHERE scope = ? AND key = ?`).run(scope, key);
   }
 
   // ---- stories ----------------------------------------------------------
 
   saveStory(story: StoryRow): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO stories (id, title, twee, author, updated_at, passages)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
@@ -847,53 +895,70 @@ export class LarkDb {
   }
 
   getStory(id: string): StoryRow | undefined {
-    const row = this.#db.prepare(`SELECT * FROM stories WHERE id = ?`).get(id);
+    const row = this.#stmt(`SELECT * FROM stories WHERE id = ?`).get(id);
     return row === undefined ? undefined : storyFrom(row);
   }
 
   listStories(): StoryRow[] {
-    return this.#db
-      .prepare(`SELECT * FROM stories ORDER BY updated_at DESC, id`)
+    return this.#stmt(`SELECT * FROM stories ORDER BY updated_at DESC, id`)
       .all()
       .map(storyFrom);
   }
 
+  /** One JOIN for the remote story list instead of a progress query per story. */
+  listStoriesWithProgress(companionId: string): StoryWithProgress[] {
+    const rows = this.#stmt(
+      `SELECT s.*,
+              p.companion_id AS progress_companion_id,
+              p.story_id AS progress_story_id,
+              p.passage AS progress_passage,
+              p.page AS progress_page,
+              p.flags_json AS progress_flags_json,
+              p.updated_at AS progress_updated_at
+       FROM stories s
+       LEFT JOIN story_progress p ON p.story_id = s.id AND p.companion_id = ?
+       ORDER BY s.updated_at DESC, s.id`,
+    ).all(companionId.toLowerCase());
+    return rows.map((row) => ({
+      story: storyFrom(row),
+      ...(row.progress_story_id == null
+        ? {}
+        : {
+            progress: {
+              companionId: String(row.progress_companion_id),
+              storyId: String(row.progress_story_id),
+              passage: String(row.progress_passage),
+              page: num(row.progress_page as number),
+              flags: flagsFrom(row.progress_flags_json),
+              updatedAt: num(row.progress_updated_at as number),
+            },
+          }),
+    }));
+  }
+
   deleteStory(id: string): void {
     this.transaction(() => {
-      this.#db.prepare(`DELETE FROM story_progress WHERE story_id = ?`).run(id);
-      this.#db.prepare(`DELETE FROM stories WHERE id = ?`).run(id);
+      this.#stmt(`DELETE FROM story_progress WHERE story_id = ?`).run(id);
+      this.#stmt(`DELETE FROM stories WHERE id = ?`).run(id);
     });
   }
 
   getStoryProgress(companionId: string, storyId: string): StoryProgressRow | undefined {
-    const row = this.#db
-      .prepare(`SELECT * FROM story_progress WHERE companion_id = ? AND story_id = ?`)
+    const row = this.#stmt(`SELECT * FROM story_progress WHERE companion_id = ? AND story_id = ?`)
       .get(companionId.toLowerCase(), storyId);
     if (row === undefined) return undefined;
-    let flags: Record<string, boolean | number> = {};
-    try {
-      const parsed: unknown = JSON.parse(String(row.flags_json));
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        for (const [key, value] of Object.entries(parsed)) {
-          if (typeof value === "boolean" || typeof value === "number") flags[key] = value;
-        }
-      }
-    } catch {
-      flags = {};
-    }
     return {
       companionId: String(row.companion_id),
       storyId: String(row.story_id),
       passage: String(row.passage),
       page: num(row.page as number),
-      flags,
+      flags: flagsFrom(row.flags_json),
       updatedAt: num(row.updated_at as number),
     };
   }
 
   saveStoryProgress(progress: StoryProgressRow): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO story_progress (companion_id, story_id, passage, page, flags_json, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(companion_id, story_id) DO UPDATE SET
@@ -913,8 +978,7 @@ export class LarkDb {
   }
 
   deleteStoryProgress(companionId: string, storyId: string): void {
-    this.#db
-      .prepare(`DELETE FROM story_progress WHERE companion_id = ? AND story_id = ?`)
+    this.#stmt(`DELETE FROM story_progress WHERE companion_id = ? AND story_id = ?`)
       .run(companionId.toLowerCase(), storyId);
   }
 
@@ -923,19 +987,18 @@ export class LarkDb {
   listTimers(companionId?: string): TimerRow[] {
     const rows =
       companionId === undefined
-        ? this.#db.prepare(`SELECT * FROM timers ORDER BY fire_at, id`).all()
-        : this.#db.prepare(`SELECT * FROM timers WHERE companion_id = ? ORDER BY fire_at, id`).all(companionId.toLowerCase());
+        ? this.#stmt(`SELECT * FROM timers ORDER BY fire_at, id`).all()
+        : this.#stmt(`SELECT * FROM timers WHERE companion_id = ? ORDER BY fire_at, id`).all(companionId.toLowerCase());
     return (rows as unknown as TimerSqlRow[]).map(timerFrom);
   }
 
   getTimer(id: string): TimerRow | undefined {
-    const row = this.#db.prepare(`SELECT * FROM timers WHERE id = ?`).get(id) as TimerSqlRow | undefined;
+    const row = this.#stmt(`SELECT * FROM timers WHERE id = ?`).get(id) as TimerSqlRow | undefined;
     return row === undefined ? undefined : timerFrom(row);
   }
 
   insertTimer(timer: TimerInsert): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `INSERT INTO timers (id, companion_id, label, say, chime, wake_agent, created_at, fire_at, notes_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
@@ -953,27 +1016,26 @@ export class LarkDb {
   }
 
   updateTimer(timer: TimerInsert): void {
-    this.#db
-      .prepare(
+    this.#stmt(
         `UPDATE timers SET label = ?, say = ?, chime = ?, wake_agent = ?, fire_at = ?, notes_json = ? WHERE id = ?`,
       )
       .run(timer.label, timer.say, timer.chime, Number(timer.wakeAgent), timer.fireAt, JSON.stringify(timer.notes), timer.id);
   }
 
   claimTimer(id: string): TimerRow | undefined {
-    const row = this.#db.prepare(`DELETE FROM timers WHERE id = ? RETURNING *`).get(id) as TimerSqlRow | undefined;
+    const row = this.#stmt(`DELETE FROM timers WHERE id = ? RETURNING *`).get(id) as TimerSqlRow | undefined;
     return row === undefined ? undefined : timerFrom(row);
   }
 
   deleteTimer(id: string): void {
-    this.#db.prepare(`DELETE FROM timers WHERE id = ?`).run(id);
+    this.#stmt(`DELETE FROM timers WHERE id = ?`).run(id);
   }
 
   countTimers(companionId?: string): number {
     const row =
       companionId === undefined
-        ? this.#db.prepare(`SELECT count(*) AS n FROM timers`).get()
-        : this.#db.prepare(`SELECT count(*) AS n FROM timers WHERE companion_id = ?`).get(companionId.toLowerCase());
+        ? this.#stmt(`SELECT count(*) AS n FROM timers`).get()
+        : this.#stmt(`SELECT count(*) AS n FROM timers WHERE companion_id = ?`).get(companionId.toLowerCase());
     return num(row?.n as number | null);
   }
 }

@@ -269,6 +269,38 @@ export function parseModelSpec(spec: string): ModelRef {
 
 // ---- brain --------------------------------------------------------------
 
+type OcEvent = { type: string; data?: unknown };
+
+/** Minimal async queue so turns consume the shared event stream without an
+ * iterator per turn. */
+class AsyncQueue<T> {
+  readonly #items: T[] = [];
+  readonly #waiters: Array<(step: IteratorResult<T>) => void> = [];
+  #closed = false;
+
+  push(value: T): void {
+    if (this.#closed) return;
+    const waiter = this.#waiters.shift();
+    if (waiter !== undefined) waiter({ value, done: false });
+    else this.#items.push(value);
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const waiter of this.#waiters.splice(0)) {
+      waiter({ value: undefined as T, done: true });
+    }
+  }
+
+  next(): Promise<IteratorResult<T>> {
+    const value = this.#items.shift();
+    if (value !== undefined) return Promise.resolve({ value, done: false });
+    if (this.#closed) return Promise.resolve({ value: undefined as T, done: true });
+    return new Promise((resolve) => this.#waiters.push(resolve));
+  }
+}
+
 export class Brain {
   readonly #options: BrainOptions;
   readonly #db: LarkDb;
@@ -283,6 +315,9 @@ export class Brain {
   readonly #deep: ModelRef;
   readonly #now: () => number;
   readonly #stallMs: number;
+  readonly #eventListeners = new Map<string, Set<(event: OcEvent) => void>>();
+  #eventPump: Promise<void> | undefined;
+  #eventAbort: AbortController | undefined;
   #oc: Oc | undefined;
   #closed = false;
 
@@ -423,6 +458,55 @@ export class Brain {
     return this.#oc;
   }
 
+  /** Register a turn listener on the one multiplexed event stream. */
+  #listenEvents(sessionID: string, listener: (event: OcEvent) => void): () => void {
+    let listeners = this.#eventListeners.get(sessionID);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.#eventListeners.set(sessionID, listeners);
+    }
+    listeners.add(listener);
+    this.#ensureEventPump();
+    return () => {
+      const current = this.#eventListeners.get(sessionID);
+      if (current === undefined) return;
+      current.delete(listener);
+      if (current.size === 0) this.#eventListeners.delete(sessionID);
+    };
+  }
+
+  /** One lifetime subscription fans out by sessionID and reconnects on EOF. */
+  #ensureEventPump(): void {
+    if (this.#eventPump !== undefined || this.#closed) return;
+    this.#eventPump = (async () => {
+      while (!this.#closed) {
+        const abort = new AbortController();
+        this.#eventAbort = abort;
+        try {
+          for await (const event of this.#requireOc().events.subscribe({ signal: abort.signal })) {
+            const data = event.data as { sessionID?: string } | undefined;
+            const sessionID = data?.sessionID;
+            if (sessionID === undefined) continue;
+            const listeners = this.#eventListeners.get(sessionID);
+            if (listeners === undefined) continue;
+            for (const listener of [...listeners]) listener(event);
+          }
+        } catch {
+          // The shared stream ended; active turns get a fresh one.
+        }
+        if (this.#eventAbort === abort) this.#eventAbort = undefined;
+        if (this.#closed) break;
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 25);
+          timer.unref?.();
+        });
+      }
+    })().finally(() => {
+      this.#eventPump = undefined;
+      if (!this.#closed) this.#ensureEventPump();
+    });
+  }
+
   async createSession(companion: CompanionInstruction): Promise<string> {
     const oc = this.#requireOc();
     const session = await oc.sessions.create({
@@ -537,6 +621,8 @@ export class Brain {
       this.#gate.close();
       for (const speculation of this.#speculations) speculation.abort(new SpeculationAbortedError("brain closed"));
       this.#speculations.clear();
+      this.#eventListeners.clear();
+      this.#eventAbort?.abort();
       this.#timers?.stop();
     } finally {
       try {
@@ -564,8 +650,14 @@ export class Brain {
       signal?.addEventListener("abort", forwardAbort, { once: true });
       let stalled = false;
       let firstToken = false;
+      let terminalSeen = false;
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
-      const iterator = oc.events.subscribe({ signal: ac.signal })[Symbol.asyncIterator]();
+      // One shared subscription feeds every active session; this turn only
+      // consumes its own queue.
+      const queue = new AsyncQueue<OcEvent>();
+      const unsubscribe = this.#listenEvents(sessionID, (event) => queue.push(event));
+      const closeQueue = (): void => queue.close();
+      ac.signal.addEventListener("abort", closeQueue, { once: true });
 
       if (this.#stallMs > 0) {
         stallTimer = setTimeout(() => {
@@ -579,7 +671,7 @@ export class Brain {
         await oc.session.switchModel({ sessionID, model: { ...current } });
         await oc.sessions.prompt({ sessionID, text: input.text, agent: input.agent ?? "lark" });
         for (;;) {
-          const step = await iterator.next();
+          const step = await queue.next();
           if (step.done) break;
           const event = step.value;
           const data = event.data as { sessionID?: string; delta?: string } | undefined;
@@ -601,18 +693,23 @@ export class Brain {
             event.type === "session.execution.interrupted" ||
             event.type === "session.execution.failed"
           ) {
+            terminalSeen = true;
             break;
           }
         }
       } catch (error) {
         if (!ac.signal.aborted && !signal?.aborted) throw error;
       } finally {
+        unsubscribe();
         ac.abort();
+        queue.close();
         if (stallTimer !== undefined) clearTimeout(stallTimer);
         signal?.removeEventListener("abort", forwardAbort);
       }
 
-      if (!signal?.aborted) {
+      // The terminal event already settled the execution; a second wait RPC is
+      // pure latency. Keep the wait only when the stream ended without one.
+      if (!signal?.aborted && !terminalSeen) {
         try {
           await oc.session.wait({ sessionID });
         } catch (error) {

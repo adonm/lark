@@ -141,6 +141,7 @@ export class CaptureStore {
   readonly #active = new Map<string, CaptureJob>(); // companion -> job
   readonly #done = new Map<string, CaptureDone>();
   readonly #transcribing = new Set<string>();
+  readonly #subscribers = new Set<() => void>();
 
   constructor(options: CaptureStoreOptions) {
     this.#dir = join(options.dir);
@@ -161,6 +162,24 @@ export class CaptureStore {
     return this.#dir;
   }
 
+  /** Capture progress/done changes for push-driven remote SSE. */
+  subscribe(listener: () => void): () => void {
+    this.#subscribers.add(listener);
+    return () => {
+      this.#subscribers.delete(listener);
+    };
+  }
+
+  #notify(): void {
+    for (const listener of this.#subscribers) {
+      try {
+        listener();
+      } catch {
+        // A broken SSE client must not break the capture job.
+      }
+    }
+  }
+
   prune(): number {
     try {
       return pruneCaptures(this.#dir, this.#retentionMs, this.#maxBytes);
@@ -175,7 +194,11 @@ export class CaptureStore {
     if (companionId === undefined) return;
     const job = this.#active.get(companionId);
     if (job === undefined) return;
-    job.remaining = Math.max(0, Math.min(job.seconds, Math.floor(event.remaining_s)));
+    const remaining = Math.max(0, Math.min(job.seconds, Math.floor(event.remaining_s)));
+    if (remaining !== job.remaining) {
+      job.remaining = remaining;
+      this.#notify();
+    }
   }
 
   #finish(event: EdgeCaptureDone): void {
@@ -198,6 +221,7 @@ export class CaptureStore {
       path: event.path,
       ...(event.error === undefined ? {} : { error: event.error }),
     });
+    this.#notify();
   }
 
   status(companionId: string): CaptureStatus {
@@ -255,6 +279,7 @@ export class CaptureStore {
     void resolve.promise.then((result) => {
       if (result.error !== undefined) this.#log(`capture ${result.name}: ${result.error}`);
     });
+    this.#notify();
     return { id: name, name, seconds, started_at: new Date(startedAt).toISOString() };
   }
 
@@ -328,6 +353,7 @@ export class CaptureStore {
     const path = this.resolvePath(companionId, name);
     rmSync(path, { force: true });
     rmSync(join(this.#dir, `${name}.txt`), { force: true });
+    this.#notify();
   }
 }
 
