@@ -1,8 +1,7 @@
 // Package library opens databases by the "lark-sqlite3" driver name. Register
-// it here so the compiled edge (which owns bulk downloads and index builds) and
-// this package's tests need no server package. Build with `-tags sqlite_fts5`
-// so the driver compiles FTS5 support; every Lark build command and the gate
-// pass that tag.
+// it here so the lark-library provisioner and this package's tests need no
+// server package. Build lark-library with `-tags sqlite_fts5` so the driver
+// compiles FTS5 support; the gate passes that tag for the tests.
 package library
 
 import (

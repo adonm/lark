@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Operator CLI. Most commands talk to the running brain over its loopback HTTP
-# API; OTA and library downloads/builds run in the compiled edge.
+# API; OTA runs in the compiled edge and library downloads/builds in the
+# separate lark-library provisioner.
 set -euo pipefail
 
 self=$(readlink -f -- "${BASH_SOURCE[0]}")
@@ -16,9 +17,24 @@ fi
 if [[ -z $edge ]] && command -v lark-edge >/dev/null; then
     edge=$(command -v lark-edge)
 fi
+library=${LARK_LIBRARY_BIN:-}
+if [[ -z $library ]]; then
+    for candidate in "$data_home/lark/lark-library" "$repo/lark-library"; do
+        if [[ -x $candidate ]]; then library=$candidate; break; fi
+    done
+fi
+if [[ -z $library ]] && command -v lark-library >/dev/null; then
+    library=$(command -v lark-library)
+fi
 need_edge() {
     if [[ -z $edge ]]; then
         printf 'lark: cannot find the lark-edge binary; run scripts/setup-host.sh or set LARK_EDGE_BIN\n' >&2
+        exit 1
+    fi
+}
+need_library() {
+    if [[ -z $library ]]; then
+        printf 'lark: cannot find the lark-library binary; run scripts/setup-host.sh or set LARK_LIBRARY_BIN\n' >&2
         exit 1
     fi
 }
@@ -37,8 +53,9 @@ case ${1-} in
         for arg in "$@"; do
             case $arg in
                 --build|--download)
-                    need_edge
-                    exec "$edge" library "$@"
+                    need_library
+                    shift
+                    exec "$library" "$@"
                     ;;
             esac
         done

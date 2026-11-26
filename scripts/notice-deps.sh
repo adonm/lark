@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Print the Go modules linked into the lark binary with their versions and
-# detected licences. Regenerate the matching NOTICE list with this.
+# Print the Go modules linked into the lark-edge and lark-library binaries with
+# their versions and detected licences. Regenerate the matching NOTICE list with
+# this.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../lark"
 
 template='{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}}{{end}}{{end}}'
-go list -deps -tags sqlite_fts5 -f "$template" ./cmd/lark-edge | sort -u |
+{
+    go list -deps -f "$template" ./cmd/lark-edge
+    go list -deps -tags sqlite_fts5 -f "$template" ./cmd/lark-library
+} | sort -u |
     while read -r module version; do
         dir=$(go list -m -f '{{.Dir}}' "$module")
         license=unknown

@@ -254,7 +254,7 @@ roughly 65 GiB more.
 stories, books, and reference facts; web search remains the path for current
 information and anything the library misses.
 
-Provisioning is explicit and runs in the compiled edge:
+Provisioning is explicit and runs in the compiled `lark-library` provisioner:
 
 ```sh
 lark library --download --build
@@ -332,8 +332,8 @@ Kokoro starts synthesizing sentences while OpenCode streams its reply.
 
 Use `lark status`, `lark doctor`, `lark companions`, `lark terminals`,
 `lark tunnels`, `lark capture`, `lark library`, `lark ota`, and `lark deploy`
-from the CLI. `lark` routes HTTP commands to the brain and `ota` /
-`library --download|--build` to the compiled edge.
+from the CLI. `lark` routes HTTP commands to the brain, `ota` to `lark-edge`,
+and `library --download|--build` to `lark-library`.
 
 | Device · port 80 | Request → response |
 | --- | --- |

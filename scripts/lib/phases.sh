@@ -58,7 +58,7 @@ phase_parakeet_compile() {
         cd lark || exit
         CGO_CFLAGS="\"-I$native/include\"${CGO_CFLAGS:+ $CGO_CFLAGS}" \
         CGO_LDFLAGS="\"-L$native/lib\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" \
-            "$GO_BIN" build -tags 'parakeet,sqlite_fts5' -o /dev/null ./cmd/lark-edge
+            "$GO_BIN" build -tags 'parakeet' -o /dev/null ./cmd/lark-edge
     )
     printf 'PASS parakeet compile (%s)\n' "$native"
 }

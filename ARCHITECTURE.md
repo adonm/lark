@@ -17,10 +17,9 @@ and UDP `:8766`, the brain IPC socket (`$LARK_DATA_DIR/edge.sock`, `0600`), and
 loads Parakeet STT, Silero VAD, Smart Turn, and Kokoro TTS in the background.
 It owns the terminal protocol (binary frames in RGB565/RLE565/LZ4/JPEG,
 touch events, control messages, 16 kHz mono s16le PCM), endpointing, capture
-DSP, playback queueing, and the OTA push command. `lark-edge library` also runs
-the bulk Wikipedia/Gutenberg downloads and FTS5 index builders, which need a
-compiled SQLite driver. STT needs a Vulkan GPU; Kokoro and Silero run through
-sherpa-onnx and the checksummed libraries in `$ORIGIN/lib`.
+DSP, playback queueing, and the OTA push command. STT needs a Vulkan GPU;
+Kokoro and Silero run through sherpa-onnx and the checksummed libraries in
+`$ORIGIN/lib`.
 
 On start the edge prints `lark-edge terminal=… udp=… brain=…`. Every brain
 connection immediately receives `ready` (model states) plus one
@@ -71,8 +70,8 @@ outbound Opus attachment is created.
 **Library.** Three SQLite FTS5 packs, planned against the data volume: Simple
 English Wikipedia, Project Gutenberg, then English Wikipedia when the volume can
 hold the peak download plus index. The brain reads, searches, and plans with
-`node:sqlite`; the compiled `lark-edge library --download --build` downloads
-and builds the indexes. Search returns in tens of milliseconds, so the agent
+`node:sqlite`; the compiled `lark-library --download --build` downloads and
+builds the indexes. Search returns in tens of milliseconds, so the agent
 checks it before web search.
 
 **`/remote`.** A phone-first control page served at `/remote?token=…` and
@@ -105,19 +104,20 @@ in `hello` so the edge owns endpointing.
 | --- | --- |
 | `brain/src/` | Node 26 TypeScript brain: HTTP, DB, router, Delta Chat, OpenCode, stories, library reader, timers, portraits, remote controls, CLI, cross-process E2E. |
 | `lark/cmd/lark-edge/` | Edge entry point, OTA push command, deterministic fake models for the E2E test. |
+| `lark/cmd/lark-library/` | Standalone library provisioner entry point. |
 | `lark/internal/edge/` | Terminal server, IPC, capture/utterance loop, TTS prefetch, WAV, models. |
 | `lark/internal/audio/` | WAV/PCM synthesis and resampling, metronome/tune synth, Smart Turn, Parakeet STT, Kokoro TTS. |
 | `lark/internal/pixel/` | Canvas, icons, screens, scene/menu layout, portrait normalization, LUT grades, frame encoder. |
 | `lark/internal/proto/` | Generated v1 terminal wire codec shared by edge and firmware. |
-| `lark/internal/library/` | FTS5 downloads, index builders, search/read, story-text import, disk planner, `library` CLI. |
+| `lark/internal/library/` | FTS5 downloads, index builders, story-text import, and the `lark-library` CLI. |
 | `lark/protospec/` | Single source of truth for the terminal wire protocol; generates C header, Go codec, docs, and fixtures. |
 | `web/remote/` | Remote control page assets served by the brain. |
 | `web/remote-ui/` | Headless-Chromium Playwright suite for that page. |
 
 `scripts/lark` is the operator CLI: most commands call the brain's loopback
-HTTP API; `ota` and `library --download|--build` route to `lark-edge`; `deploy`
-runs `scripts/setup-host.sh`. Setup installs the compiled edge to
-`~/.local/share/lark/lark-edge` and symlinks this wrapper next to it.
+HTTP API; `ota` routes to `lark-edge`, `library --download|--build` routes to
+`lark-library`, and `deploy` runs `scripts/setup-host.sh`. Setup installs both
+binaries to `~/.local/share/lark/` and symlinks this wrapper next to them.
 
 ## Data model
 

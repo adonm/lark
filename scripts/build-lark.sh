@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Shared release build for `lark deploy` and scripts/setup-host.sh.
-# Sourcing this file defines lark_build; running it builds the lark-edge binary
-# to OUTPUT. The TypeScript brain runs from the checkout via node.
+# Sourcing this file defines lark_build; running it builds the real-time edge
+# and the library provisioner. The TypeScript brain runs from the checkout via
+# node.
 #
 # The Parakeet bridge build is cached in ~/.cache/lark/parakeet-native, so a
 # redeploy reuses the compiled native libraries instead of a fresh CMake build.
@@ -9,9 +10,9 @@ set -euo pipefail
 umask 077
 
 lark_build() {
-    local output=${1-}
-    if [[ -z $output ]]; then
-        printf 'Usage: %s OUTPUT\n' "$0" >&2
+    local edge=${1-} library=${2-}
+    if [[ -z $edge || -z $library ]]; then
+        printf 'Usage: %s EDGE_OUTPUT LIBRARY_OUTPUT\n' "$0" >&2
         return 2
     fi
     local repo data_home data cache stt_stage native
@@ -25,9 +26,11 @@ lark_build() {
     local GO_BIN
     GO_BIN=$(resolve_go)
     install -d -m 700 -- "$cache"
-    if [[ ! -d $(dirname -- "$output") ]]; then
-        mkdir -p -- "$(dirname -- "$output")"
-    fi
+    for path in "$edge" "$library"; do
+        if [[ ! -d $(dirname -- "$path") ]]; then
+            mkdir -p -- "$(dirname -- "$path")"
+        fi
+    done
     stt_stage=$cache/parakeet-native
     install -d -m 700 -- "$stt_stage" "$data/lib" "$data/stt-models"
     "$repo/scripts/build-parakeet.sh" "$stt_stage" "$data/stt-models"
@@ -38,7 +41,7 @@ lark_build() {
         export CGO_LDFLAGS="\"-L$stt_stage/native/lib\" -Wl,-rpath,\$ORIGIN/lib${CGO_LDFLAGS:+ $CGO_LDFLAGS}"
         "$GO_BIN" mod download github.com/k2-fsa/sherpa-onnx-go-linux
         "$GO_BIN" mod verify
-        "$GO_BIN" build -tags parakeet,sqlite_fts5 -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$output" ./cmd/lark-edge
+        "$GO_BIN" build -tags parakeet -trimpath -ldflags="-s -w -extldflags \"-Wl,-rpath,\$ORIGIN/lib\"" -o "$edge" ./cmd/lark-edge
         case $("$GO_BIN" env GOARCH) in
             amd64) native=x86_64-unknown-linux-gnu ;;
             arm64) native=aarch64-unknown-linux-gnu ;;
@@ -67,7 +70,11 @@ lark_build() {
         install -D -m 644 -- "$stt_stage/source/ggml/LICENSE" "$notices/ggml.txt"
         install -D -m 644 -- "$stt_stage/native/share/licenses/transcribe/LICENSE.silero_vad" "$notices/silero-vad.txt"
     )
-    chmod 700 -- "$output"
+    (
+        cd -- "$repo/lark"
+        CGO_ENABLED=1 "$GO_BIN" build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o "$library" ./cmd/lark-library
+    )
+    chmod 700 -- "$edge" "$library"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

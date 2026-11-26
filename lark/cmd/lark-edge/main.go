@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -12,7 +11,6 @@ import (
 	"syscall"
 
 	"lark/internal/edge"
-	"lark/internal/library"
 )
 
 func main() {
@@ -23,14 +21,8 @@ func main() {
 		}
 		return
 	}
-	// Bulk Wikipedia/Gutenberg provisioning needs a compiled SQLite builder;
-	// the brain reads the resulting FTS5 indexes directly.
-	if len(os.Args) > 1 && os.Args[1] == "library" {
-		if err := library.RunCLI(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
+	// Bulk Wikipedia/Gutenberg provisioning lives in lark-library so this
+	// binary keeps SQLite and the downloaders out of its footprint.
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
