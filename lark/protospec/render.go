@@ -33,11 +33,16 @@ func Render() ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
+	edgeTS, err := renderEdgeTS()
+	if err != nil {
+		return nil, err
+	}
 	return []File{
 		{Path: "firmware/main/proto.h", Content: cSrc},
 		{Path: "firmware/tests/testdata/proto_fixtures.h", Content: fixC},
 		{Path: "lark/internal/proto/proto_gen.go", Content: protoSrc},
 		{Path: "docs/protocol.md", Content: docs},
+		{Path: "brain/src/edge_types_gen.ts", Content: edgeTS},
 	}, nil
 }
 
@@ -131,7 +136,9 @@ func renderGoFile(pkg string) ([]byte, error) {
 		b.WriteString("}\n\n")
 		if m.Opaque {
 			fmt.Fprintf(&b, "func (m %s) %s() []byte { return append([]byte(nil), m.payload...) }\n", typeName, s.encodeName())
-			fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) { return %s{payload: b}, true }\n\n", s.decodeName(m), typeName, typeName)
+			if m.NeedsGoDecode() {
+				fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) { return %s{payload: b}, true }\n\n", s.decodeName(m), typeName, typeName)
+			}
 			continue
 		}
 		fmt.Fprintf(&b, "const %sFixedSize = %d\n", typeName, m.FixedSize())
@@ -225,56 +232,59 @@ func renderGoFile(pkg string) ([]byte, error) {
 		}
 		b.WriteString("\treturn b\n}\n\n")
 
-		// decode
-		fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) {\n", s.decodeName(m), typeName)
-		fmt.Fprintf(&b, "\tvar m %s\n", typeName)
-		fmt.Fprintf(&b, "\tif len(b) < %sFixedSize {\n\t\treturn m, false\n\t}\n", typeName)
-		for _, f := range m.Fields {
-			if f.Variable() {
-				continue
-			}
-			c := fmt.Sprintf("%s%sOff", typeName, s.fieldName(f))
-			switch f.Kind {
-			case U8:
-				fmt.Fprintf(&b, "\tm.%s = b[%s]\n", s.fieldName(f), c)
-			case U16:
-				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint16(b[%s : %s+2])\n", s.fieldName(f), c, c)
-			case I16:
-				fmt.Fprintf(&b, "\tm.%s = int16(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", s.fieldName(f), c, c)
-			case U32:
-				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint32(b[%s : %s+4])\n", s.fieldName(f), c, c)
-			case U64:
-				fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint64(b[%s : %s+8])\n", s.fieldName(f), c, c)
-			case Bytes:
-				fmt.Fprintf(&b, "\tcopy(m.%s[:], b[%s:%s+%d])\n", s.fieldName(f), c, c, f.Count)
-			}
-		}
-		hasVar := false
-		for _, f := range m.Fields {
-			if f.Variable() {
-				hasVar = true
-			}
-		}
-		if hasVar {
-			fmt.Fprintf(&b, "\toff := %sFixedSize\n", typeName)
-			vi := 0
+		// Lark never decodes a message only it sends; skip that dead codec.
+		if m.NeedsGoDecode() {
+			// decode
+			fmt.Fprintf(&b, "func %s(b []byte) (%s, bool) {\n", s.decodeName(m), typeName)
+			fmt.Fprintf(&b, "\tvar m %s\n", typeName)
+			fmt.Fprintf(&b, "\tif len(b) < %sFixedSize {\n\t\treturn m, false\n\t}\n", typeName)
 			for _, f := range m.Fields {
-				if !f.Variable() {
+				if f.Variable() {
 					continue
 				}
-				lenOff := fmt.Sprintf("%s%sOff", typeName, s.fieldName(f))
-				if f.Kind == Str8 {
-					fmt.Fprintf(&b, "\tn%d := int(b[%s])\n", vi, lenOff)
-				} else {
-					fmt.Fprintf(&b, "\tn%d := int(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", vi, lenOff, lenOff)
+				c := fmt.Sprintf("%s%sOff", typeName, s.fieldName(f))
+				switch f.Kind {
+				case U8:
+					fmt.Fprintf(&b, "\tm.%s = b[%s]\n", s.fieldName(f), c)
+				case U16:
+					fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint16(b[%s : %s+2])\n", s.fieldName(f), c, c)
+				case I16:
+					fmt.Fprintf(&b, "\tm.%s = int16(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", s.fieldName(f), c, c)
+				case U32:
+					fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint32(b[%s : %s+4])\n", s.fieldName(f), c, c)
+				case U64:
+					fmt.Fprintf(&b, "\tm.%s = binary.LittleEndian.Uint64(b[%s : %s+8])\n", s.fieldName(f), c, c)
+				case Bytes:
+					fmt.Fprintf(&b, "\tcopy(m.%s[:], b[%s:%s+%d])\n", s.fieldName(f), c, c, f.Count)
 				}
-				fmt.Fprintf(&b, "\tif off+n%d > len(b) {\n\t\treturn m, false\n\t}\n", vi)
-				fmt.Fprintf(&b, "\tm.%s = string(b[off : off+n%d])\n", s.fieldName(f), vi)
-				fmt.Fprintf(&b, "\toff += n%d\n", vi)
-				vi++
 			}
+			hasVar := false
+			for _, f := range m.Fields {
+				if f.Variable() {
+					hasVar = true
+				}
+			}
+			if hasVar {
+				fmt.Fprintf(&b, "\toff := %sFixedSize\n", typeName)
+				vi := 0
+				for _, f := range m.Fields {
+					if !f.Variable() {
+						continue
+					}
+					lenOff := fmt.Sprintf("%s%sOff", typeName, s.fieldName(f))
+					if f.Kind == Str8 {
+						fmt.Fprintf(&b, "\tn%d := int(b[%s])\n", vi, lenOff)
+					} else {
+						fmt.Fprintf(&b, "\tn%d := int(binary.LittleEndian.Uint16(b[%s : %s+2]))\n", vi, lenOff, lenOff)
+					}
+					fmt.Fprintf(&b, "\tif off+n%d > len(b) {\n\t\treturn m, false\n\t}\n", vi)
+					fmt.Fprintf(&b, "\tm.%s = string(b[off : off+n%d])\n", s.fieldName(f), vi)
+					fmt.Fprintf(&b, "\toff += n%d\n", vi)
+					vi++
+				}
+			}
+			b.WriteString("\treturn m, true\n}\n\n")
 		}
-		b.WriteString("\treturn m, true\n}\n\n")
 	}
 	src, err := format.Source(b.Bytes())
 	if err != nil {

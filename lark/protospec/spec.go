@@ -121,6 +121,9 @@ type Message struct {
 	Opaque   bool // variable payload with no fields (frame, TTS PCM)
 	Doc      string
 	Fields   []Field
+	// TestDecode keeps the Go decoder for a Lark -> terminal message because
+	// the host tests decode crafted payloads to stand in for a fake board.
+	TestDecode bool
 }
 
 func (m Message) FixedSize() int {
@@ -130,6 +133,11 @@ func (m Message) FixedSize() int {
 	}
 	return n
 }
+
+// NeedsGoDecode reports whether the Go codec emits a decoder. Lark never
+// decodes its own terminal-bound messages, so those decoders would be dead
+// unless a host test deliberately decodes a crafted payload.
+func (m Message) NeedsGoDecode() bool { return !m.ToDevice || m.TestDecode }
 
 // Const is a protocol constant shared by both languages (or one, when Only is
 // set).
@@ -255,7 +263,8 @@ var Messages = []Message{
 	{
 		Name: "Welcome", GoName: "protoWelcome", CName: "lark_welcome_t",
 		MsgGo: "msgWelcome", MsgC: "LARK_MSG_WELCOME", TypeByte: 0x81, ToDevice: true,
-		Doc: "Session accepted: UDP endpoint, SSRC, limits, resume token and ids.",
+		TestDecode: true,
+		Doc:        "Session accepted: UDP endpoint, SSRC, limits, resume token and ids.",
 		Fields: []Field{
 			{Go: "protoVersion", C: "proto_version", Kind: U8, Sample: 1},
 			{Go: "flags", C: "flags", Kind: U8, Sample: 1},
@@ -297,7 +306,8 @@ var Messages = []Message{
 	{
 		Name: "TTSCtrl", GoName: "protoTTSCtrl", CName: "lark_tts_ctrl_t",
 		MsgGo: "msgTTSCtrl", MsgC: "LARK_MSG_TTS_CTRL", TypeByte: 0x87, ToDevice: true,
-		Doc: "Start, finish or stop a TTS stream identified by audio_id.",
+		TestDecode: true,
+		Doc:        "Start, finish or stop a TTS stream identified by audio_id.",
 		Fields: []Field{
 			{Go: "op", C: "op", Kind: U8, Sample: 1},
 			{Go: "audioID", C: "audio_id", Kind: U64, Sample: 0x0102030405060708},

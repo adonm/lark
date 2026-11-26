@@ -633,29 +633,12 @@ func (m ProtoReject) Encode() []byte {
 	return b
 }
 
-func DecodeProtoReject(b []byte) (ProtoReject, bool) {
-	var m ProtoReject
-	if len(b) < ProtoRejectFixedSize {
-		return m, false
-	}
-	m.Reason = b[ProtoRejectReasonOff]
-	off := ProtoRejectFixedSize
-	n0 := int(b[ProtoRejectMessageOff])
-	if off+n0 > len(b) {
-		return m, false
-	}
-	m.Message = string(b[off : off+n0])
-	off += n0
-	return m, true
-}
-
 // Frame: Display frame; the payload is owned by the frame codec in frame.h.
 type ProtoFrame struct {
 	payload []byte
 }
 
-func (m ProtoFrame) Encode() []byte                { return append([]byte(nil), m.payload...) }
-func DecodeProtoFrame(b []byte) (ProtoFrame, bool) { return ProtoFrame{payload: b}, true }
+func (m ProtoFrame) Encode() []byte { return append([]byte(nil), m.payload...) }
 
 // RecCtrl: Start, stop or cancel recording, with target flags and session.
 type ProtoRecCtrl struct {
@@ -683,24 +666,6 @@ func (m ProtoRecCtrl) Encode() []byte {
 	b = append(b, byte(len(s0)))
 	b = append(b, s0...)
 	return b
-}
-
-func DecodeProtoRecCtrl(b []byte) (ProtoRecCtrl, bool) {
-	var m ProtoRecCtrl
-	if len(b) < ProtoRecCtrlFixedSize {
-		return m, false
-	}
-	m.Op = b[ProtoRecCtrlOpOff]
-	m.Flags = b[ProtoRecCtrlFlagsOff]
-	m.Session = binary.LittleEndian.Uint16(b[ProtoRecCtrlSessionOff : ProtoRecCtrlSessionOff+2])
-	off := ProtoRecCtrlFixedSize
-	n0 := int(b[ProtoRecCtrlTargetOff])
-	if off+n0 > len(b) {
-		return m, false
-	}
-	m.Target = string(b[off : off+n0])
-	off += n0
-	return m, true
 }
 
 // TTSCtrl: Start, finish or stop a TTS stream identified by audio_id.
@@ -735,8 +700,7 @@ type ProtoTTSPCM struct {
 	payload []byte
 }
 
-func (m ProtoTTSPCM) Encode() []byte                 { return append([]byte(nil), m.payload...) }
-func DecodeProtoTTSPCM(b []byte) (ProtoTTSPCM, bool) { return ProtoTTSPCM{payload: b}, true }
+func (m ProtoTTSPCM) Encode() []byte { return append([]byte(nil), m.payload...) }
 
 // Chime: Play one named tone.
 type ProtoChime struct {
@@ -752,15 +716,6 @@ func (m ProtoChime) Encode() []byte {
 	return b
 }
 
-func DecodeProtoChime(b []byte) (ProtoChime, bool) {
-	var m ProtoChime
-	if len(b) < ProtoChimeFixedSize {
-		return m, false
-	}
-	m.Kind = b[ProtoChimeKindOff]
-	return m, true
-}
-
 // Power: Set panel brightness, 0-100.
 type ProtoPower struct {
 	Level uint8
@@ -773,15 +728,6 @@ func (m ProtoPower) Encode() []byte {
 	b := make([]byte, 0, ProtoPowerFixedSize)
 	b = append(b, m.Level)
 	return b
-}
-
-func DecodeProtoPower(b []byte) (ProtoPower, bool) {
-	var m ProtoPower
-	if len(b) < ProtoPowerFixedSize {
-		return m, false
-	}
-	m.Level = b[ProtoPowerLevelOff]
-	return m, true
 }
 
 // Volume: Set output volume, optionally persisting. The auto-mode byte is retired.
@@ -821,30 +767,6 @@ func (m ProtoVolume) Encode() []byte {
 	return b
 }
 
-func DecodeProtoVolume(b []byte) (ProtoVolume, bool) {
-	var m ProtoVolume
-	if len(b) < ProtoVolumeFixedSize {
-		return m, false
-	}
-	m.Level = b[ProtoVolumeLevelOff]
-	m.Persist = b[ProtoVolumePersistOff]
-	m.Auto = b[ProtoVolumeAutoOff]
-	off := ProtoVolumeFixedSize
-	n0 := int(b[ProtoVolumeTerminalIDOff])
-	if off+n0 > len(b) {
-		return m, false
-	}
-	m.TerminalID = string(b[off : off+n0])
-	off += n0
-	n1 := int(b[ProtoVolumeCompanionIDOff])
-	if off+n1 > len(b) {
-		return m, false
-	}
-	m.CompanionID = string(b[off : off+n1])
-	off += n1
-	return m, true
-}
-
 // Status: Assistant state. Sequence, progress, kind and text stay in the layout.
 type ProtoStatus struct {
 	// retired state sequence
@@ -880,25 +802,6 @@ func (m ProtoStatus) Encode() []byte {
 	return b
 }
 
-func DecodeProtoStatus(b []byte) (ProtoStatus, bool) {
-	var m ProtoStatus
-	if len(b) < ProtoStatusFixedSize {
-		return m, false
-	}
-	m.Seq = binary.LittleEndian.Uint32(b[ProtoStatusSeqOff : ProtoStatusSeqOff+4])
-	m.State = b[ProtoStatusStateOff]
-	m.Progress = b[ProtoStatusProgressOff]
-	m.Kind = b[ProtoStatusKindOff]
-	off := ProtoStatusFixedSize
-	n0 := int(binary.LittleEndian.Uint16(b[ProtoStatusTextOff : ProtoStatusTextOff+2]))
-	if off+n0 > len(b) {
-		return m, false
-	}
-	m.Text = string(b[off : off+n0])
-	off += n0
-	return m, true
-}
-
 // VoiceOwner: Companion voice ownership broadcast.
 type ProtoVoiceOwner struct {
 	// retired state sequence
@@ -928,26 +831,4 @@ func (m ProtoVoiceOwner) Encode() []byte {
 	b = append(b, s0...)
 	b = append(b, s1...)
 	return b
-}
-
-func DecodeProtoVoiceOwner(b []byte) (ProtoVoiceOwner, bool) {
-	var m ProtoVoiceOwner
-	if len(b) < ProtoVoiceOwnerFixedSize {
-		return m, false
-	}
-	m.Seq = binary.LittleEndian.Uint32(b[ProtoVoiceOwnerSeqOff : ProtoVoiceOwnerSeqOff+4])
-	off := ProtoVoiceOwnerFixedSize
-	n0 := int(b[ProtoVoiceOwnerCompanionIDOff])
-	if off+n0 > len(b) {
-		return m, false
-	}
-	m.CompanionID = string(b[off : off+n0])
-	off += n0
-	n1 := int(b[ProtoVoiceOwnerTerminalIDOff])
-	if off+n1 > len(b) {
-		return m, false
-	}
-	m.TerminalID = string(b[off : off+n1])
-	off += n1
-	return m, true
 }

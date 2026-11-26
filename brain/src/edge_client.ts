@@ -5,178 +5,42 @@
 // snapshot for every live board, so a brain restart never drops hardware.
 import { createConnection, type Socket } from "node:net";
 import { existsSync } from "node:fs";
+import type {
+  EdgeEventMap,
+  EdgeHealthReply,
+  EdgeHit,
+  EdgeHitsReply,
+  EdgeModelState,
+  EdgeReady,
+  RecStartOptions,
+  Screen,
+  TuneNote,
+} from "./edge_types_gen.ts";
 
-export interface EdgeModelState {
-  state: string;
-  error?: string;
-}
-
-export interface EdgeReady {
-  models: Record<string, EdgeModelState>;
-}
-
-export interface EdgeTerminal {
-  terminal_id: string;
-  board: string;
-  firmware: string;
-  width: number;
-  height: number;
-  shape: string;
-  ip: string;
-  /** Reconnects since boot; older edges omit it. */
-  reconnects?: number;
-}
-
-export interface EdgeTelemetry {
-  terminal_id: string;
-  wifi_rssi: number;
-  battery_pct: number;
-  charging: boolean;
-  cpu_pct: number;
-  free_heap: number;
-  uptime_s: number;
-}
-
-export interface EdgeSpeculate {
-  terminal_id: string;
-  seq: number;
-  transcript: string;
-  speech_at_ms: number;
-}
-
-export interface EdgeCommit extends EdgeSpeculate {
-  listen_window: boolean;
-  audio_ms: number;
-}
-
-export interface EdgeCancel {
-  terminal_id: string;
-  seq: number;
-  reason: string;
-}
-
-export interface EdgePlayback {
-  terminal_id: string;
-  stream_id: number;
-  aborted: boolean;
-  underruns_delta: number;
-}
-
-export interface EdgePointer {
-  terminal_id: string;
-  action: string;
-  value: string;
-}
-
-export interface EdgeCaptureProgress {
-  terminal_id: string;
-  capture_id: string;
-  remaining_s: number;
-}
-
-export interface EdgeCaptureDone {
-  terminal_id: string;
-  capture_id: string;
-  path: string;
-  seconds: number;
-  error?: string;
-}
-
-export interface EdgeEventMap {
-  ready: EdgeReady;
-  "terminal.connected": EdgeTerminal;
-  "terminal.disconnected": { terminal_id: string };
-  "terminal.telemetry": EdgeTelemetry;
-  "turn.speculate": EdgeSpeculate;
-  "turn.commit": EdgeCommit;
-  "turn.cancel": EdgeCancel;
-  "turn.not_caught": { terminal_id: string };
-  "pointer.action": EdgePointer;
-  "playback.done": EdgePlayback;
-  "capture.progress": EdgeCaptureProgress;
-  "capture.done": EdgeCaptureDone;
-  disconnected: { reason: string };
-}
-
-export interface EdgeHit {
-  ID: string;
-  Label?: string;
-  X1: number;
-  Y1: number;
-  X2: number;
-  Y2: number;
-}
-
-export interface EdgeHitsReply {
-  rev: number;
-  screen: string;
-  mode: string;
-  hits: EdgeHit[];
-}
-
-export interface EdgeHealthReply {
-  models: Record<string, EdgeModelState>;
-  terminals: number;
-}
-
-export interface ScreenItem {
-  id: string;
-  label: string;
-  detail?: string;
-  icon?: string;
-  action?: string;
-  value?: string;
-}
-
-export interface ScreenChoice {
-  id: string;
-  label: string;
-  value: string;
-}
-
-export interface ScreenVoice {
-  id: string;
-  label: string;
-}
-
-export interface ScreenRow {
-  title: string;
-  text: string;
-}
-
-export interface Screen {
-  kind: string;
-  portrait_dir?: string;
-  companion_name?: string;
-  companion_form?: string;
-  status?: string;
-  caption?: string;
-  listen_window?: boolean;
-  page?: number;
-  title?: string;
-  heading?: string;
-  body?: string;
-  body_scale?: number;
-  invite?: string;
-  level?: number;
-  current?: string;
-  items?: ScreenItem[];
-  choices?: ScreenChoice[];
-  voices?: ScreenVoice[];
-  rows?: ScreenRow[];
-}
-
-export interface RecStartOptions {
-  listenWindow?: boolean;
-  windowS?: number;
-  followUpGraceMs?: number;
-  companionName?: string;
-}
-
-export interface TuneNote {
-  note: string;
-  beats: number;
-}
+export type {
+  EdgeCancel,
+  EdgeCaptureDone,
+  EdgeCaptureProgress,
+  EdgeCommit,
+  EdgeEventMap,
+  EdgeHealthReply,
+  EdgeHit,
+  EdgeHitsReply,
+  EdgeModelState,
+  EdgePlayback,
+  EdgePointer,
+  EdgeReady,
+  EdgeSpeculate,
+  EdgeTelemetry,
+  EdgeTerminal,
+  RecStartOptions,
+  Screen,
+  ScreenChoice,
+  ScreenItem,
+  ScreenRow,
+  ScreenVoice,
+  TuneNote,
+} from "./edge_types_gen.ts";
 
 type Listener<T> = (value: T) => void;
 
