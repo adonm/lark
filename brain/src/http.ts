@@ -595,16 +595,13 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
     if (!send("capture", captures.status(scope.companionId))) return;
     const tick = setInterval(() => {
       if (closed) return;
-      const snapshot = router.snapshot(scope.companionId);
+      // Polling skips the base64 portrait: it is stable and expensive, and the
+      // page reuses the portrait from the initial state.
+      const snapshot = router.snapshot(scope.companionId, { includePortrait: false });
       const nextKey = snapshotKey(snapshot);
       if (nextKey !== key) {
         key = nextKey;
-        const update: Record<string, unknown> = { ...snapshot };
-        if (update.companion !== null && typeof update.companion === "object") {
-          update.companion = { ...(update.companion as Record<string, unknown>) };
-          delete (update.companion as Record<string, unknown>).portrait;
-        }
-        if (!send("state", update)) return;
+        if (!send("state", snapshot)) return;
       }
       const status = captures.status(scope.companionId);
       const nextCaptureKey = JSON.stringify(status);

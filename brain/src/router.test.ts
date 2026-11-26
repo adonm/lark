@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -290,6 +290,54 @@ test("fuzzy names and spoken sanitising", () => {
   assert.equal(nameMatches("hey cake", "Greg"), false);
   assert.equal(nameMatches("hello", "Greg"), false);
   assert.equal(sanitizeSpeech("**Hi** [silent] there"), "Hi there");
+});
+
+test("one voice turn writes exactly one user row", async () => {
+  const h = harness();
+  await connect(h);
+  h.brain.nextTurn("A single reply.", ["A single reply."]);
+  h.edge.emit("turn.commit", {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "hello greg",
+    speech_at_ms: 0,
+    listen_window: false,
+    audio_ms: 500,
+  });
+  await settle(20);
+  const rows = h.db.listMessages({ companionId: "greg", limit: 50 }).messages;
+  assert.equal(rows.filter((row) => row.role === "user").length, 1);
+  assert.equal(rows.filter((row) => row.role === "assistant").length, 1);
+  assert.equal(rows.find((row) => row.role === "user")?.text, "hello greg");
+});
+
+test("polling snapshots reuse the cached portrait and parsed story", async () => {
+  const portraitId = "a".repeat(32);
+  const h = harness({ portrait: portraitId });
+  const dir = join(h.dir, "portraits", portraitId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "sheet.png"), Buffer.from("portrait-bytes"));
+
+  const first = h.router.snapshot("greg");
+  assert.match(first.companion.portrait ?? "", /^data:image\/png;base64,/);
+  // Deleting the sheet proves the second snapshot served the cached data URL.
+  rmSync(join(dir, "sheet.png"));
+  assert.equal(h.router.snapshot("greg").companion.portrait, first.companion.portrait);
+  assert.equal(h.router.snapshot("greg", { includePortrait: false }).companion.portrait, undefined);
+
+  h.db.saveStoryProgress({ companionId: "greg", storyId: "lantern", passage: "Start", page: 0, flags: {}, updatedAt: 1 });
+  assert.equal(h.router.storySummaries("greg")[0]?.progress, 50);
+
+  // Rewriting the Twee under the same updated_at must not invalidate the cache.
+  h.db.saveStory({
+    id: "lantern",
+    title: "Lantern",
+    twee: ":: StoryTitle\nLantern\n\n:: Start\nOne.\n[[a]]\n[[b]]\n[[c]]\n[[d]]\n[[e]]\n\n:: a\nA\n\n:: b\nB\n\n:: c\nC\n\n:: d\nD\n\n:: e\nE\n",
+    author: "",
+    updatedAt: 1,
+    passages: 6,
+  });
+  assert.equal(h.router.storySummaries("greg")[0]?.progress, 50);
 });
 
 test("a device reply within the 60 s window is sent back to Delta Chat", async () => {

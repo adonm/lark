@@ -15,7 +15,7 @@ import type {
   ScreenChoice,
   ScreenItem,
 } from "./edge_client.ts";
-import type { Companion, LarkDb, Message } from "./db.ts";
+import type { Companion, LarkDb, Message, StoryRow } from "./db.ts";
 import {
   evalPassage,
   flagsMap,
@@ -340,6 +340,10 @@ export class Router {
   readonly #log: (line: string) => void;
   readonly #terminals = new Map<string, TerminalState>();
   readonly #models = new Map<string, string>();
+  // Portrait data URLs and parsed stories change only when their source
+  // changes, so remote polling must not re-read or re-parse them every tick.
+  readonly #portraitCache = new Map<string, string | null>();
+  readonly #storyCache = new Map<string, { updatedAt: number; story: Story }>();
   #streamSeq = 0;
   #closed = false;
 
@@ -458,7 +462,7 @@ export class Router {
       if (progress !== undefined) {
         percent = 10;
         try {
-          const story = parseTwee(row.twee);
+          const story = this.#parseStory(row);
           const index = story.byName.get(progress.passage);
           if (index !== undefined) {
             const passage = story.passages[index];
@@ -479,7 +483,34 @@ export class Router {
     });
   }
 
-  snapshot(companionId: string): RemoteSnapshot {
+  /** Parse each Twee once per updated_at; polling only touches the cache. */
+  #parseStory(row: StoryRow): Story {
+    const cached = this.#storyCache.get(row.id);
+    if (cached !== undefined && cached.updatedAt === row.updatedAt) return cached.story;
+    const story = parseTwee(row.twee);
+    this.#storyCache.set(row.id, { updatedAt: row.updatedAt, story });
+    return story;
+  }
+
+  /** Base64 sheets are expensive; the portrait id is their cache key. */
+  #portraitData(companion: Companion | undefined): string | undefined {
+    if (companion === undefined || companion.portraitId === "") return undefined;
+    const id = companion.portraitId;
+    if (this.#portraitCache.has(id)) return this.#portraitCache.get(id) ?? undefined;
+    let data: string | null = null;
+    const dir = this.#portraits?.dirFor(id);
+    if (dir !== undefined) {
+      try {
+        data = `data:image/png;base64,${readFileSync(join(dir, "sheet.png")).toString("base64")}`;
+      } catch {
+        data = null;
+      }
+    }
+    this.#portraitCache.set(id, data);
+    return data ?? undefined;
+  }
+
+  snapshot(companionId: string, options: { includePortrait?: boolean } = {}): RemoteSnapshot {
     const companion = this.#db.getCompanion(companionId) ?? this.defaultCompanion();
     if (companion === undefined) {
       return {
@@ -489,15 +520,7 @@ export class Router {
         voices: VOICES.map((voice) => ({ ...voice })),
       };
     }
-    let portrait: string | undefined;
-    const portraitDir = this.#portraits?.dirFor(companion.portraitId);
-    if (portraitDir !== undefined) {
-      try {
-        portrait = `data:image/png;base64,${readFileSync(join(portraitDir, "sheet.png")).toString("base64")}`;
-      } catch {
-        portrait = undefined;
-      }
-    }
+    const portrait = options.includePortrait === false ? undefined : this.#portraitData(companion);
     return {
       companion: {
         id: companion.id,
@@ -623,6 +646,9 @@ export class Router {
   }
 
   async refreshCompanion(companionId: string): Promise<void> {
+    // A completed portrait replaces the sheet behind a new id; drop the cached
+    // data URLs so a same-id rewrite is also picked up.
+    this.#portraitCache.clear();
     for (const state of this.#terminals.values()) {
       if (state.companionId !== companionId) continue;
       if (state.drawer === "") await this.#renderHome(state, this.#statusFor(state));
@@ -955,7 +981,7 @@ export class Router {
   async openStory(companionId: string, storyId: string, restart: boolean): Promise<void> {
     const row = this.#db.getStory(storyId);
     if (row === undefined) throw new Error(`story ${storyId} not found`);
-    const story = parseTwee(row.twee);
+    const story = this.#parseStory(row);
     let passage = story.start;
     let flags = flagsSlice(story);
     let page = 0;
@@ -1178,17 +1204,6 @@ export class Router {
       return;
     }
 
-    this.#db.appendMessage({
-      id: `turn:${state.id}:${this.#now()}:user`,
-      companionId: state.companionId,
-      role: "user",
-      sender: "Someone",
-      text: transcript,
-      source: "voice",
-      channel: "in_person",
-      cardTitle: "",
-      tsMs: this.#now(),
-    });
     this.#db.appendMessage({
       id: `turn:${state.id}:${this.#now()}:reply`,
       companionId: state.companionId,
