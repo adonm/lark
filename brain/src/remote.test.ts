@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +118,16 @@ test("scoped links survive a brain restart", async () => {
   assert.equal(second.authorize(token)?.companionId, "greg");
   assert.equal(second.listTunnels()[0]?.contacts, 1);
   await second.close();
+});
+
+test("v1 bare-hash links keep working after upgrade", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-remote-legacy-"));
+  const db = new LarkDb(join(dir, "lark.db"));
+  db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
+  const raw = "legacy-link-token";
+  db.setMeta("remote_token:greg:sam@example.org", createHash("sha256").update(raw).digest("hex"));
+  const remote = manager(dir, db, new FakeRunner().runner());
+  assert.equal(remote.authorize(raw)?.companionId, "greg");
 });
 
 test("pruneCaptures enforces retention and the byte budget", async () => {

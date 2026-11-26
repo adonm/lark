@@ -180,18 +180,28 @@ export class RemoteManager {
       if (split <= 0) continue;
       const companionId = rest.slice(0, split);
       const contact = rest.slice(split + 1);
-      try {
-        const meta = JSON.parse(raw) as TokenMeta;
-        if (typeof meta.hash !== "string" || meta.hash.length !== 64) continue;
-        if (this.#db.getCompanion(companionId) === undefined) continue;
-        this.#tokens.set(meta.hash, {
-          companionId,
-          contact,
-          contactName: typeof meta.name === "string" ? meta.name : contact,
-        });
-      } catch {
+      // v1 stored the hash as a bare string; those links keep working, only
+      // the contact name is missing until the link is reissued.
+      const meta: TokenMeta | undefined = /^[0-9a-f]{64}$/i.test(raw)
+        ? { hash: raw }
+        : (() => {
+            try {
+              return JSON.parse(raw) as TokenMeta;
+            } catch {
+              return undefined;
+            }
+          })();
+      if (meta === undefined) {
         this.#log(`remote: ignoring malformed ${key}`);
+        continue;
       }
+      if (typeof meta.hash !== "string" || meta.hash.length !== 64) continue;
+      if (this.#db.getCompanion(companionId) === undefined) continue;
+      this.#tokens.set(meta.hash, {
+        companionId,
+        contact,
+        contactName: typeof meta.name === "string" ? meta.name : contact,
+      });
     }
   }
 
