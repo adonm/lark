@@ -196,16 +196,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.10.0
-  espressif/mdns:
-    component_hash: 2fa43caa78cc170842255bc7bf71f306bc815cae12e9496bfb12372423019ac7
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.15.1
   espressif/sensor_hub:
     component_hash: ea30db551c34aee2862482abf8b3164dd3855ecb4b4659b1e6878455c9cb9e22
     dependencies:
@@ -233,8 +223,7 @@ direct_dependencies:
 - espressif/esp_lcd_touch
 - espressif/esp_new_jpeg
 - espressif/lz4
-- espressif/mdns
 - idf
-manifest_hash: 56a66ee50e345147abe34c2a76be3357a365c4dbc9b89254c85949cdfd2263d7
+manifest_hash: c3a80e0f3c35e59a3af49b5e5956a4c065e5c2e7b4a14b96f48fb1f045655014
 target: esp32s3
 version: 2.0.0

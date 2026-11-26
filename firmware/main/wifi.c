@@ -11,7 +11,6 @@
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
-#include "mdns.h"
 #include "sdkconfig.h"
 #include "telemetry.h"
 
@@ -20,7 +19,6 @@ static esp_netif_t *sta;
 static esp_timer_handle_t retry_timer;
 static wifi_state_cb_t state_cb;
 static bool sntp_started;
-static bool mdns_started;
 
 char device_id[13];
 char device_mac[18];
@@ -79,29 +77,6 @@ static void connect(void *arg)
     }
 }
 
-static esp_err_t start_mdns(void)
-{
-    char instance[40];
-    snprintf(instance, sizeof(instance), "%s (%s)", wifi_character(), device_id);
-    mdns_txt_item_t txt[] = {
-        { "character", wifi_character() },
-        { "firmware", esp_app_get_description()->version },
-        { "mac", device_mac },
-    };
-    ESP_RETURN_ON_ERROR(mdns_init(), TAG, "Start mDNS");
-    esp_err_t err = mdns_hostname_set(device_id);
-    if (err == ESP_OK) {
-        err = mdns_instance_name_set(instance);
-    }
-    if (err == ESP_OK) {
-        err = mdns_service_add(instance, "_http", "_tcp", 80, txt, sizeof(txt) / sizeof(txt[0]));
-    }
-    if (err != ESP_OK) {
-        mdns_free();
-    }
-    return err;
-}
-
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -126,13 +101,6 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             }
         }
         state_cb(true, ip);
-        if (!mdns_started) {
-            esp_err_t err = start_mdns();
-            mdns_started = err == ESP_OK;
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "mDNS unavailable: %s", esp_err_to_name(err));
-            }
-        }
     }
 }
 

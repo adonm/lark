@@ -4,6 +4,25 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-27 — firmware 0.23.0: transport split and mDNS removal
+
+### Affects
+- Devices: firmware `0.23.0` on vocat and box3.
+- Host: no change. Protocol, wire bytes and `/status` fields are unchanged.
+
+### Breaking Changes
+- None. Boards still register their IP in `HELLO`; nothing resolved `<device-id>.local`, and the unused mDNS responder is gone.
+- `net_client.c` is now session logic only; socket setup, TCP framing, the wake pipe and RTP uplink live in `net_transport.c`. No external interface changed.
+
+### Upgrade Steps
+1. OTA both board types as usual (canary vocat first, then box3).
+
+### Verification
+- `/status` reports `firmware: "0.23.0"`, `connected: true`, `ota_pending: false`.
+- Frames, touch input and TTS still work; `lark doctor` reports all checks passed.
+
+---
+
 ## 2026-11-27 — separate library provisioner and one-time v2 metadata normalization
 
 ### Affects
