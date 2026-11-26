@@ -23,6 +23,10 @@ export class FakeEdge implements RouterEdge {
   readonly previews: Array<{ terminalId: string; voice: string }> = [];
   readonly powers: Array<{ terminalId: string; brightness: number }> = [];
   readonly hitsReply: EdgeHit[] = [];
+  readonly metronomes: Array<{ terminalId: string; bpm: number; beats: number; durationS: number }> = [];
+  readonly tunes: Array<{ terminalId: string; tempo: number; style: string; notes: unknown[] }> = [];
+  readonly captures: Array<{ terminalId: string; path: string; seconds: number }> = [];
+  captureStops = 0;
   transcribeText = "";
   normalizeCalls: string[] = [];
 
@@ -78,7 +82,24 @@ export class FakeEdge implements RouterEdge {
     this.previews.push({ terminalId, voice });
   }
 
-  async captureStart(_terminalId: string, _outPath: string, _seconds: number): Promise<void> {}
+  async captureStart(terminalId: string, path: string, seconds: number): Promise<void> {
+    this.captures.push({ terminalId, path, seconds });
+  }
+
+  async captureStop(_terminalId: string): Promise<void> {
+    this.captureStops++;
+  }
+
+  async metronome(terminalId: string, bpm: number, beats: number, durationS: number): Promise<number> {
+    this.metronomes.push({ terminalId, bpm, beats, durationS });
+    return this.metronomes.length;
+  }
+
+  async playTune(terminalId: string, tempo: number, style: string, notes: unknown[]): Promise<number> {
+    this.tunes.push({ terminalId, tempo, style, notes });
+    return this.tunes.length;
+  }
+
   async normalizePortrait(dir: string): Promise<number> {
     this.normalizeCalls.push(dir);
     return 12;

@@ -156,6 +156,14 @@ class MockModel {
           call("lark_library", { op: "search", query: "otters", source: "simple" });
           return;
         }
+        if (prompt.includes("TOOLAUDIO")) {
+          call("lark_audio", { op: "metronome", bpm: 100, beats: 4, duration_s: 10 });
+          return;
+        }
+        if (prompt.includes("BADAUDIO")) {
+          call("lark_audio", { op: "tune", notes: [{ note: "C4", beats: 1 }], bogus: true });
+          return;
+        }
         if (prompt.includes("GATEPATCH")) {
           call("lark_patch", { companion: { name: "Patched" } });
           return;
@@ -227,6 +235,7 @@ const dataDir = join(dir, "data");
 const db = new LarkDb(join(dir, "lark.db"));
 const library = new Library(libraryDir);
 const model = new MockModel();
+const audioCalls: string[] = [];
 let brain: Brain;
 
 function buildLibrary(): void {
@@ -266,6 +275,24 @@ before(async () => {
     library,
     timers,
     agentFile: resolve(import.meta.dirname, "../../agents/lark.md"),
+    audio: {
+      metronome: async (_companionId, bpm, beats, durationS) => {
+        audioCalls.push(`metronome:${bpm}:${beats}:${durationS}`);
+        return { caption: `Metronome · ${bpm} BPM (${beats}/4)` };
+      },
+      tune: async (_companionId, tempo, style, notes) => {
+        audioCalls.push(`tune:${tempo}:${style}:${notes.length}`);
+        return { caption: `Tune · ${style}` };
+      },
+      identify: async () => {
+        audioCalls.push("identify");
+        return { matched: true, title: "Get Lucky", artist: "Daft Punk" };
+      },
+      stop: async () => {
+        audioCalls.push("stop");
+        return { stopped: true };
+      },
+    },
     provider: { id: "mock", baseURL: model.baseURL, models: ["m1", "m2", "m3"] },
     models: { primary: "mock/m1", fallback: "mock/m2", deep: "mock/m3" },
     stallMs: 1500,
@@ -378,7 +405,12 @@ test("native tools round trip through the model", async () => {
   await drain(brain.runTurn({ sessionID, text: "TOOLLIBRARY now" }));
   assert.ok(model.toolResults().some((content) => content.includes("Otters")));
 
-  for (const name of ["lark_state", "lark_patch", "lark_story", "lark_library", "lark_emit"]) {
+  model.reset();
+  await drain(brain.runTurn({ sessionID, text: "TOOLAUDIO now" }));
+  assert.ok(audioCalls.includes("metronome:100:4:10"));
+  assert.ok(model.toolResults().some((content) => content.includes("Metronome")));
+
+  for (const name of ["lark_state", "lark_patch", "lark_story", "lark_library", "lark_emit", "lark_audio"]) {
     assert.ok(model.toolNames().includes(name), `missing tool ${name}`);
   }
 });
@@ -390,6 +422,11 @@ test("strict tool validation rejects unknown fields without dropping them", asyn
   assert.equal(text, "Tool finished.");
   assert.equal(db.getCompanion("cake")?.name, "Cake");
   assert.ok(model.toolResults().some((content) => content.includes("unknown field")));
+
+  model.reset();
+  await drain(brain.runTurn({ sessionID, text: "BADAUDIO now" }));
+  assert.ok(model.toolResults().some((content) => content.includes("unknown field")));
+  assert.equal(audioCalls.includes("tune:100:hum:1"), false);
 });
 
 test("speculation holds a mutating patch until promotion", async () => {

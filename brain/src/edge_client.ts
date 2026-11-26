@@ -171,6 +171,11 @@ export interface RecStartOptions {
   companionName?: string;
 }
 
+export interface TuneNote {
+  note: string;
+  beats: number;
+}
+
 type Listener<T> = (value: T) => void;
 
 class TypedEmitter<Events extends object> {
@@ -450,6 +455,22 @@ export class EdgeClient extends TypedEmitter<EdgeEventMap> {
     this.#send({ cmd: "terminal.chime", terminal_id: terminalId, kind });
   }
 
+  async metronome(terminalId: string, bpm: number, beats: number, durationS: number): Promise<number> {
+    const reply = await this.#request({
+      cmd: "terminal.metronome",
+      terminal_id: terminalId,
+      bpm,
+      beats,
+      duration_s: durationS,
+    });
+    return typeof reply.stream_id === "number" ? reply.stream_id : 0;
+  }
+
+  async playTune(terminalId: string, tempo: number, style: string, notes: TuneNote[]): Promise<number> {
+    const reply = await this.#request({ cmd: "terminal.play_tune", terminal_id: terminalId, tempo, style, notes });
+    return typeof reply.stream_id === "number" ? reply.stream_id : 0;
+  }
+
   power(terminalId: string, brightness: number): void {
     this.#send({ cmd: "terminal.power", terminal_id: terminalId, brightness });
   }
@@ -498,6 +519,10 @@ export class EdgeClient extends TypedEmitter<EdgeEventMap> {
 
   async captureStart(terminalId: string, outPath: string, seconds: number): Promise<void> {
     await this.#request({ cmd: "capture.start", terminal_id: terminalId, out_path: outPath, seconds });
+  }
+
+  async captureStop(terminalId: string): Promise<void> {
+    await this.#request({ cmd: "capture.stop", terminal_id: terminalId });
   }
 
   async health(): Promise<EdgeHealthReply> {

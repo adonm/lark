@@ -1,9 +1,11 @@
 // Voice turns, device menus, listening policy, story reader and companion
 // state. The router is the only place that knows how edge events map to a
 // companion; HTTP, Delta Chat and the CLI all call the same methods here.
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
+  EdgeCaptureDone,
   EdgeCommit,
   EdgeEventMap,
   EdgePlayback,
@@ -14,7 +16,9 @@ import type {
   Screen,
   ScreenChoice,
   ScreenItem,
+  TuneNote,
 } from "./edge_client.ts";
+import type { SongMatch } from "./song_id.ts";
 import type { Companion, LarkDb, Message, StoryRow } from "./db.ts";
 import {
   evalPassage,
@@ -77,6 +81,10 @@ export interface RouterEdge {
   ): Promise<void>;
   recCancel(terminalId: string): Promise<void>;
   previewVoice(terminalId: string, voice: string): void;
+  metronome(terminalId: string, bpm: number, beats: number, durationS: number): Promise<number>;
+  playTune(terminalId: string, tempo: number, style: string, notes: TuneNote[]): Promise<number>;
+  captureStart(terminalId: string, outPath: string, seconds: number): Promise<void>;
+  captureStop(terminalId: string): Promise<void>;
 }
 
 export interface RouterDc {
@@ -120,6 +128,8 @@ interface TerminalState {
   busy: boolean;
   speaking: boolean;
   caption: string;
+  audio?: "metronome" | "tune" | "identify";
+  audioStreamId?: number;
   reply?: ReplyContext;
   previousBrightness: number;
   listenTimer?: ReturnType<typeof setTimeout>;
@@ -166,6 +176,7 @@ export interface RouterOptions {
   dataDir: string;
   dc?: RouterDc;
   portraits?: Pick<PortraitManager, "request" | "dirFor" | "available">;
+  identifySong?: (wavPath: string) => Promise<SongMatch>;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -183,6 +194,7 @@ export class Router {
   readonly #brain: TurnBrain;
   readonly #dc: RouterDc | undefined;
   readonly #portraits: RouterOptions["portraits"];
+  readonly #identify: RouterOptions["identifySong"];
   readonly #now: () => number;
   readonly #log: (line: string) => void;
   readonly #terminals = new Map<string, TerminalState>();
@@ -200,6 +212,7 @@ export class Router {
     this.#brain = options.brain;
     this.#dc = options.dc;
     this.#portraits = options.portraits;
+    this.#identify = options.identifySong;
     this.#now = options.now ?? (() => Date.now());
     this.#log = options.log ?? (() => undefined);
     this.#bind();
@@ -514,7 +527,11 @@ export class Router {
       return;
     }
     if (hit === "listen-stop" || hit === "stop") {
+      const identifying = state.audio === "identify";
       state.listening = false;
+      state.audio = undefined;
+      state.audioStreamId = undefined;
+      if (identifying) await this.#edge.captureStop(state.id).catch(() => undefined);
       await this.#edge.stopAudio(state.id);
       await this.#renderHome(state, "idle");
       return;
@@ -1074,6 +1091,12 @@ export class Router {
   async #playbackDone(event: EdgePlayback): Promise<void> {
     const state = this.#terminals.get(event.terminal_id);
     if (state === undefined) return;
+    // Identify has no playback stream; a stale stop event must not close the
+    // listening screen. A replaced metronome/tune stream is likewise ignored.
+    if (state.audio === "identify") return;
+    if (state.audioStreamId !== undefined && event.stream_id !== state.audioStreamId) return;
+    state.audio = undefined;
+    state.audioStreamId = undefined;
     state.speaking = false;
     if (event.aborted) {
       state.busy = false;
@@ -1130,6 +1153,105 @@ export class Router {
       }
     }, LISTEN_WINDOW_MS + 2000);
     state.listenTimer.unref();
+  }
+
+  // ---- music and song identification --------------------------------------
+
+  #audioTerminal(companionId: string): TerminalState {
+    const state = this.onlineTerminals(companionId)[0];
+    if (state === undefined) throw new Error("terminal is offline");
+    return state;
+  }
+
+  async audioMetronome(companionId: string, bpm: number, beats: number, durationS: number): Promise<Record<string, unknown>> {
+    const state = this.#audioTerminal(companionId);
+    await this.#edge.stopAudio(state.id);
+    const caption = `Metronome · ${bpm} BPM (${beats}/4)`;
+    state.audio = "metronome";
+    state.audioStreamId = undefined;
+    state.speaking = true;
+    state.listening = false;
+    state.drawer = "";
+    state.story = undefined;
+    await this.#renderHome(state, "speaking", caption);
+    const streamId = await this.#edge.metronome(state.id, bpm, beats, durationS);
+    state.audioStreamId = streamId;
+    return { terminal_id: state.id, caption, bpm, beats, duration_s: durationS, stream_id: streamId };
+  }
+
+  async audioTune(
+    companionId: string,
+    tempo: number,
+    style: string,
+    notes: TuneNote[],
+    title?: string,
+  ): Promise<Record<string, unknown>> {
+    const state = this.#audioTerminal(companionId);
+    await this.#edge.stopAudio(state.id);
+    const caption = title === undefined || title === "" ? `Tune · ${style}` : `Tune · ${title} (${style})`;
+    state.audio = "tune";
+    state.audioStreamId = undefined;
+    state.speaking = true;
+    state.listening = false;
+    state.drawer = "";
+    state.story = undefined;
+    await this.#renderHome(state, "speaking", caption);
+    const streamId = await this.#edge.playTune(state.id, tempo, style, notes);
+    state.audioStreamId = streamId;
+    return { terminal_id: state.id, caption, tempo, style, notes: notes.length, stream_id: streamId };
+  }
+
+  async audioIdentify(companionId: string, seconds: number): Promise<SongMatch & Record<string, unknown>> {
+    const state = this.#audioTerminal(companionId);
+    if (this.#identify === undefined) throw new Error("song recognition is unavailable");
+    const dir = mkdtempSync(join(tmpdir(), "lark-song-"));
+    const wav = join(dir, "capture.wav");
+    try {
+      await this.#edge.stopAudio(state.id);
+      state.audio = "identify";
+      state.audioStreamId = undefined;
+      state.speaking = false;
+      state.listening = true;
+      state.drawer = "";
+      state.story = undefined;
+      await this.#renderHome(state, "listening", "Listening to music...");
+      const captured = new Promise<EdgeCaptureDone>((resolve, reject) => {
+        let off: () => void = () => undefined;
+        const timer = setTimeout(() => {
+          off();
+          reject(new Error("music capture timed out"));
+        }, (seconds + 8) * 1000);
+        off = this.#edge.on("capture.done", (event) => {
+          if (event.terminal_id !== state.id || event.path !== wav) return;
+          clearTimeout(timer);
+          off();
+          resolve(event);
+        });
+      });
+      await this.#edge.captureStart(state.id, wav, seconds);
+      const done = await captured;
+      if (done.error !== undefined && done.error !== "") throw new Error(done.error);
+      return { ...(await this.#identify(wav)), terminal_id: state.id, seconds };
+    } finally {
+      state.audio = undefined;
+      state.audioStreamId = undefined;
+      state.listening = false;
+      await this.#renderHome(state, "idle", "").catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  async audioStop(companionId: string): Promise<Record<string, unknown>> {
+    const state = this.#audioTerminal(companionId);
+    const stopped = state.audio !== undefined;
+    if (state.audio === "identify") await this.#edge.captureStop(state.id).catch(() => undefined);
+    state.audio = undefined;
+    state.audioStreamId = undefined;
+    state.listening = false;
+    state.speaking = false;
+    await this.#edge.stopAudio(state.id);
+    await this.#renderHome(state, "idle", "");
+    return { terminal_id: state.id, stopped };
   }
 
   // ---- shared commands ----------------------------------------------------

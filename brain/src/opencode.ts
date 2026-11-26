@@ -19,7 +19,7 @@ import {
   sameModel,
   type Speculation,
 } from "./oc_plugins.ts";
-import { toolPlugin } from "./tools.ts";
+import { toolPlugin, type AudioOps } from "./tools.ts";
 
 export { SpeculationAbortedError, SpeculationGate, contextPlugin, modelFallbackPlugin, stripState } from "./oc_plugins.ts";
 export { ToolInputError } from "./tools.ts";
@@ -152,6 +152,7 @@ export interface BrainOptions {
   db: LarkDb;
   library?: Library;
   timers?: TimerScheduler;
+  audio?: AudioOps;
   onEmit?: (event: EmitEvent) => void;
 }
 
@@ -374,6 +375,7 @@ export class Brain {
         timers: this.#timers,
         gate: this.#gate,
         emit: options.onEmit,
+        audio: options.audio,
         companionFor: (sessionID) => this.#companions.get(sessionID)?.id,
         setCompanion: (sessionID, companion) => this.setCompanion(sessionID, companion),
       }),

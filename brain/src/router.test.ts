@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -58,7 +58,11 @@ interface Harness {
   now: { value: number };
 }
 
-function harness(options: { listening?: boolean; portrait?: string } = {}): Harness {
+function harness(options: {
+  listening?: boolean;
+  portrait?: string;
+  identifySong?: (wavPath: string) => Promise<{ matched: boolean; title?: string; artist?: string; album?: string }>;
+} = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), "lark-router-test-"));
   const db = new LarkDb(join(dir, "lark.db"));
   db.upsertCompanion({
@@ -82,6 +86,7 @@ function harness(options: { listening?: boolean; portrait?: string } = {}): Harn
     brain,
     dataDir: dir,
     dc,
+    ...(options.identifySong === undefined ? {} : { identifySong: options.identifySong }),
     ...(options.portrait === undefined ? {} : { portraits: { dirFor: (portraitId: string) => join(dir, "portraits", portraitId), request: async () => options.portrait ?? "", available: true } }),
     now: () => now.value,
     log: () => undefined,
@@ -422,6 +427,74 @@ test("pair menu raises brightness and shows the invite", async () => {
   assert.equal(h.edge.lastScreen()?.kind, "pair_qr");
   assert.equal(h.edge.lastScreen()?.invite, "https://i.delta.chat/#abc&a=greg");
   assert.equal(h.edge.powers.at(-1)?.brightness, 100);
+});
+
+test("lark_audio metronome and tune captions end in a clean home screen", async () => {
+  const h = harness();
+  await connect(h);
+
+  const metro = await h.router.audioMetronome("greg", 100, 4, 10);
+  assert.equal(metro.caption, "Metronome · 100 BPM (4/4)");
+  assert.deepEqual(h.edge.metronomes, [{ terminalId: "vocat-1", bpm: 100, beats: 4, durationS: 10 }]);
+  assert.equal(h.edge.lastScreen()?.status, "speaking");
+  assert.equal(h.edge.lastScreen()?.caption, "Metronome · 100 BPM (4/4)");
+
+  h.edge.emit("playback.done", { terminal_id: "vocat-1", stream_id: 1, aborted: false, underruns_delta: 0 });
+  await settle();
+  assert.equal(h.edge.lastScreen()?.status, "idle");
+
+  const tune = await h.router.audioTune("greg", 120, "hum", [{ note: "C4", beats: 1 }], "Twinkle");
+  assert.equal(tune.caption, "Tune · Twinkle (hum)");
+  assert.equal(h.edge.tunes.length, 1);
+  assert.deepEqual(h.edge.tunes[0]?.notes, [{ note: "C4", beats: 1 }]);
+  assert.equal(h.edge.lastScreen()?.status, "speaking");
+
+  await h.router.audioStop("greg");
+  assert.equal(h.edge.lastScreen()?.status, "idle");
+});
+
+test("lark_audio identify captures, recognizes, deletes, and restores home", async () => {
+  let seen = "";
+  const h = harness({
+    identifySong: async (wavPath) => {
+      seen = wavPath;
+      return { matched: true, title: "Get Lucky", artist: "Daft Punk", album: "Random Access Memories" };
+    },
+  });
+  await connect(h);
+
+  const pending = h.router.audioIdentify("greg", 7);
+  await settle(20);
+  const capture = h.edge.captures[0];
+  assert.ok(capture !== undefined, "capture did not start");
+  assert.equal(capture.seconds, 7);
+  assert.equal(h.edge.lastScreen()?.status, "listening");
+  assert.equal(h.edge.lastScreen()?.caption, "Listening to music...");
+
+  h.edge.emitCaptureDone({ terminal_id: "vocat-1", capture_id: "c1", path: capture.path, seconds: 7 });
+  const result = await pending;
+  assert.equal(result.matched, true);
+  assert.equal(result.title, "Get Lucky");
+  assert.equal(result.artist, "Daft Punk");
+  assert.equal(result.album, "Random Access Memories");
+  assert.equal(seen, capture.path);
+  assert.equal(existsSync(capture.path), false, "capture WAV must be removed");
+  assert.equal(h.edge.lastScreen()?.status, "idle");
+});
+
+test("lark_audio stop cancels an active identify capture", async () => {
+  const h = harness({ identifySong: async () => ({ matched: false }) });
+  await connect(h);
+  const pending = h.router.audioIdentify("greg", 8);
+  await settle(20);
+  assert.ok(h.edge.captures[0] !== undefined);
+  await h.router.audioStop("greg");
+  assert.equal(h.edge.captureStops, 1);
+  const capture = h.edge.captures[0];
+  assert.ok(capture !== undefined);
+  h.edge.emitCaptureDone({ terminal_id: "vocat-1", capture_id: "c1", path: capture.path, seconds: 1 });
+  assert.equal((await pending).matched, false);
+  assert.equal(h.edge.lastScreen()?.status, "idle");
 });
 
 test("remote controls drive the same router commands", async () => {

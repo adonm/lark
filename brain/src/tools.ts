@@ -9,6 +9,8 @@ import { parseTwee, slugFromTitle, tweeFromText, type Story } from "./stories.ts
 import type { TimerEdit, TimerScheduler } from "./timers.ts";
 import type { CompanionInstruction, EmitEvent } from "./opencode.ts";
 import type { SpeculationGate } from "./oc_plugins.ts";
+import type { TuneNote } from "./edge_client.ts";
+import type { SongMatch } from "./song_id.ts";
 
 export class ToolInputError extends Error {
   constructor(message: string) {
@@ -54,6 +56,38 @@ function optionalNumber(value: unknown, name: string): number | undefined {
   return value;
 }
 
+function expectNumber(value: unknown, name: string): number {
+  const number = optionalNumber(value, name);
+  if (number === undefined) throw new ToolInputError(`${name} is required`);
+  return number;
+}
+
+function integerIn(value: unknown, name: string, low: number, high: number): number {
+  const number = expectNumber(value, name);
+  if (!Number.isInteger(number) || number < low || number > high) {
+    throw new ToolInputError(`${name} must be an integer from ${low} to ${high}`);
+  }
+  return number;
+}
+
+const NOTE_PATTERN = /^(?:[A-Ga-g](?:#|b)?[0-8]|R|rest)$/;
+
+function tuneNotes(value: unknown): TuneNote[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) {
+    throw new ToolInputError("notes must contain 1 to 64 entries");
+  }
+  return value.map((entry, index) => {
+    const name = `notes[${index}]`;
+    const raw = expectObject(entry, name);
+    onlyKeys(raw, ["note", "beats"], name);
+    const note = expectString(raw.note, `${name}.note`, 8);
+    if (!NOTE_PATTERN.test(note)) throw new ToolInputError(`${name}.note must look like C4, F#4, Bb3, or R`);
+    const beats = expectNumber(raw.beats, `${name}.beats`);
+    if (beats < 0.25 || beats > 8) throw new ToolInputError(`${name}.beats must be 0.25..8`);
+    return { note, beats };
+  });
+}
+
 function expectStringArray(value: unknown, name: string, max = 32): string[] {
   if (!Array.isArray(value)) throw new ToolInputError(`${name} must be an array of strings`);
   if (value.length > max) throw new ToolInputError(`${name} has too many entries`);
@@ -77,12 +111,26 @@ function schemaObject(properties: Record<string, unknown>, required: readonly st
 
 // ---- native tools -------------------------------------------------------
 
+export interface AudioOps {
+  metronome(companionId: string, bpm: number, beats: number, durationS: number): Promise<Record<string, unknown>>;
+  tune(
+    companionId: string,
+    tempo: number,
+    style: string,
+    notes: TuneNote[],
+    title?: string,
+  ): Promise<Record<string, unknown>>;
+  identify(companionId: string, seconds: number): Promise<SongMatch & Record<string, unknown>>;
+  stop(companionId: string): Promise<Record<string, unknown>>;
+}
+
 interface ToolDeps {
   db: LarkDb;
   library?: Library;
   timers?: TimerScheduler;
   gate: SpeculationGate;
   emit?: (event: EmitEvent) => void;
+  audio?: AudioOps;
   companionFor: (sessionID: string) => string | undefined;
   setCompanion: (sessionID: string, companion: CompanionInstruction) => Promise<void>;
 }
@@ -107,6 +155,7 @@ export function toolPlugin(deps: ToolDeps): Plugin.Plugin {
         editor.add(storyTool(deps));
         editor.add(libraryTool(deps));
         editor.add(emitTool(deps));
+        editor.add(audioTool(deps));
       });
     },
   });
@@ -528,6 +577,78 @@ function libraryTool(deps: ToolDeps) {
         });
       }
       throw new ToolInputError("library.op must be search, read, list, or import");
+    },
+  };
+}
+
+function audioTool(deps: ToolDeps) {
+  return {
+    name: "lark_audio",
+    description:
+      "Play a sample-exact metronome or a short hum/chime/pluck tune, identify music playing nearby, or stop current metronome/tune playback.",
+    input: jsonSchema(
+      {
+        op: { type: "string", enum: ["metronome", "tune", "identify", "stop"] },
+        bpm: { type: "integer", minimum: 30, maximum: 240 },
+        beats: { type: "integer", minimum: 1, maximum: 12 },
+        duration_s: { type: "integer", minimum: 5, maximum: 300 },
+        style: { type: "string", enum: ["hum", "chime", "pluck"] },
+        tempo: { type: "integer", minimum: 40, maximum: 240 },
+        notes: {
+          type: "array",
+          maxItems: 64,
+          items: schemaObject({ note: { type: "string" }, beats: { type: "number", minimum: 0.25, maximum: 8 } }, ["note", "beats"]),
+        },
+        title: { type: "string", maxLength: 80 },
+        seconds: { type: "integer", minimum: 6, maximum: 10 },
+      },
+      ["op"],
+    ),
+    options: { codemode: false },
+    execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
+      const args = expectObject(input, "audio");
+      onlyKeys(args, ["op", "bpm", "beats", "duration_s", "style", "tempo", "notes", "title", "seconds"], "audio");
+      const op = expectString(args.op, "op", 16);
+      const fields: Record<string, readonly string[]> = {
+        metronome: ["op", "bpm", "beats", "duration_s"],
+        tune: ["op", "style", "tempo", "notes", "title"],
+        identify: ["op", "seconds"],
+        stop: ["op"],
+      };
+      const allowed = fields[op];
+      if (allowed === undefined) throw new ToolInputError("audio.op must be metronome, tune, identify, or stop");
+      onlyKeys(args, allowed, "audio");
+      const companionId = deps.companionFor(context.sessionID);
+      if (companionId === undefined) throw new ToolInputError("companion_id is required");
+
+      return deps.gate.mutate(context.sessionID, context.signal, async () => {
+        const audio = deps.audio;
+        if (audio === undefined) throw new ToolInputError("audio is unavailable");
+        if (op === "metronome") {
+          const bpm = integerIn(args.bpm, "bpm", 30, 240);
+          const beats = args.beats === undefined ? 4 : integerIn(args.beats, "beats", 1, 12);
+          const durationS = args.duration_s === undefined ? 120 : integerIn(args.duration_s, "duration_s", 5, 300);
+          return textResult(await audio.metronome(companionId, bpm, beats, durationS));
+        }
+        if (op === "tune") {
+          const style = args.style === undefined ? "hum" : expectString(args.style, "style", 16);
+          if (style !== "hum" && style !== "chime" && style !== "pluck") {
+            throw new ToolInputError("style must be hum, chime, or pluck");
+          }
+          const tempo = args.tempo === undefined ? 100 : integerIn(args.tempo, "tempo", 40, 240);
+          const notes = tuneNotes(args.notes);
+          const title = optionalString(args.title, "title", 80);
+          return textResult(await audio.tune(companionId, tempo, style, notes, title));
+        }
+        if (op === "identify") {
+          const seconds = args.seconds === undefined ? 7 : integerIn(args.seconds, "seconds", 6, 10);
+          const result: Record<string, unknown> = { ...(await audio.identify(companionId, seconds)) };
+          delete result.terminal_id;
+          delete result.seconds;
+          return textResult(result);
+        }
+        return textResult(await audio.stop(companionId));
+      });
     },
   };
 }

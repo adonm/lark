@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { songRecognizerReady } from "./song_id.ts";
 import { errMessage, humanBytes } from "./util.ts";
 
 interface Json {
@@ -145,6 +146,7 @@ async function doctor(): Promise<number> {
   const problems: string[] = [];
   const socket = process.env.LARK_EDGE_SOCK ?? join(dataDir(), "edge.sock");
   if (!existsSync(socket)) problems.push(`edge socket missing: ${socket}`);
+  if (!songRecognizerReady()) problems.push("song recognizer (shazamio-core) is unavailable");
   try {
     const health = await request("/health", {}, 5000);
     if (health.ok !== true) problems.push("/health did not report ok");

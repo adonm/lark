@@ -17,6 +17,8 @@ import { PortraitManager } from "./portraits.ts";
 import { RemoteManager, CaptureStore, resolveTunnelBin } from "./remote.ts";
 import { Router } from "./router.ts";
 import { startHttp, type RunningHttp } from "./http.ts";
+import { identifySong } from "./song_id.ts";
+import type { AudioOps } from "./tools.ts";
 import { errMessage } from "./util.ts";
 
 export interface RuntimeConfig {
@@ -138,12 +140,31 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       ? undefined
       : { id: "larkmock", baseURL: config.llmBaseURL, models: [config.llmModel] };
   const modelSpec = provider === undefined ? undefined : `larkmock/${config.llmModel}`;
+  const audio: AudioOps = {
+    metronome: async (companionId, bpm, beats, durationS) => {
+      if (router === undefined) throw new Error("router is not ready");
+      return await router.audioMetronome(companionId, bpm, beats, durationS);
+    },
+    tune: async (companionId, tempo, style, notes, title) => {
+      if (router === undefined) throw new Error("router is not ready");
+      return await router.audioTune(companionId, tempo, style, notes, title);
+    },
+    identify: async (companionId, seconds) => {
+      if (router === undefined) throw new Error("router is not ready");
+      return await router.audioIdentify(companionId, seconds);
+    },
+    stop: async (companionId) => {
+      if (router === undefined) throw new Error("router is not ready");
+      return await router.audioStop(companionId);
+    },
+  };
   const brain = await Brain.create({
     directory: config.directory,
     dataDir: config.opencodeDataDir,
     db,
     library,
     timers,
+    audio,
     agentFile: config.agentFile,
     ...(provider === undefined ? {} : { provider }),
     ...(modelSpec === undefined
@@ -215,6 +236,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     brain,
     dataDir: config.dataDir,
     portraits,
+    identifySong: (wavPath) => identifySong(wavPath),
     ...(dc === undefined ? {} : { dc }),
     log,
   });
