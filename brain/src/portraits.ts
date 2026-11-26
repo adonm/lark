@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import { join } from "node:path";
 import type { LarkDb } from "./db.ts";
 import type { EdgeClient } from "./edge_client.ts";
+import { errMessage } from "./util.ts";
 
 export const PORTRAIT_MODEL = "gemini-nano-banana-2.1";
 export const PORTRAIT_ENDPOINT = `https://opencode.ai/inference/google/v1beta/models/${PORTRAIT_MODEL}:generateContent`;
@@ -217,13 +218,13 @@ export class PortraitManager {
     try {
       await this.#onReady?.(companionId, id);
     } catch (error) {
-      this.#log(`portrait refresh: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`portrait refresh: ${errMessage(error)}`);
     }
     this.#cleanup(previous, id);
     try {
       await this.#announce?.(companionId, PORTRAIT_READY_NOTICE);
     } catch (error) {
-      this.#log(`portrait announce: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`portrait announce: ${errMessage(error)}`);
     }
     return id;
   }

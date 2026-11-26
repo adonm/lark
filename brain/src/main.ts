@@ -17,6 +17,7 @@ import { PortraitManager } from "./portraits.ts";
 import { RemoteManager, CaptureStore } from "./remote.ts";
 import { Router } from "./router.ts";
 import { startHttp, type RunningHttp } from "./http.ts";
+import { errMessage } from "./util.ts";
 
 export interface RuntimeConfig {
   directory: string;
@@ -232,11 +233,11 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   try {
     await edge.waitReady(10_000);
   } catch (error) {
-    log(`edge not ready: ${error instanceof Error ? error.message : String(error)}`);
+    log(`edge not ready: ${errMessage(error)}`);
   }
 
   if (dc !== undefined) {
-    void dc.start().catch((error: unknown) => log(`Delta Chat: ${error instanceof Error ? error.message : String(error)}`));
+    void dc.start().catch((error: unknown) => log(`Delta Chat: ${errMessage(error)}`));
   }
 
   let http: RunningHttp | undefined;
@@ -265,6 +266,17 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
 
   let closed = false;
+  // Reverse startup order; a failing closer must not strand the rest.
+  const closers: Array<() => Promise<void> | void> = [
+    () => http?.close(),
+    () => dc?.close(),
+    () => router?.close(),
+    () => edge.close(),
+    () => brain.close(),
+    () => remote.close(),
+    () => library.close(),
+    () => db.close(),
+  ];
   return {
     config,
     db,
@@ -279,30 +291,11 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     async close() {
       if (closed) return;
       closed = true;
-      try {
-        await http?.close();
-      } finally {
+      for (const close of closers) {
         try {
-          await dc?.close();
-        } finally {
-          try {
-            await router?.close();
-          } finally {
-            try {
-              await edge.close();
-            } finally {
-              try {
-                await brain.close();
-              } finally {
-                try {
-                  await remote.close();
-                } finally {
-                  library.close();
-                  db.close();
-                }
-              }
-            }
-          }
+          await close();
+        } catch (error) {
+          log(`close: ${errMessage(error)}`);
         }
       }
     },

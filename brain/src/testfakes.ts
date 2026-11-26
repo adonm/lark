@@ -74,14 +74,11 @@ export class FakeEdge implements RouterEdge {
 
   async recCancel(_terminalId: string): Promise<void> {}
 
-  filler(_terminalId: string, _voice: string): void {}
-
   previewVoice(terminalId: string, voice: string): void {
     this.previews.push({ terminalId, voice });
   }
 
   async captureStart(_terminalId: string, _outPath: string, _seconds: number): Promise<void> {}
-  async captureStop(_terminalId: string): Promise<void> {}
   async normalizePortrait(dir: string): Promise<number> {
     this.normalizeCalls.push(dir);
     return 12;
@@ -144,7 +141,7 @@ export class FakeBrain implements TurnBrain {
     this.inputs.push(input);
     const turn = this.turns.shift() ?? { deltas: ["Okay."], text: "Okay." };
     for (const delta of turn.deltas) yield { type: "delta", text: delta };
-    return { sessionID: input.sessionID, text: turn.text, model: {}, llmFirstMs: 0, llmTotalMs: 0 };
+    return { sessionID: input.sessionID, text: turn.text, model: { providerID: "fake", id: "fake" }, llmFirstMs: 0, llmTotalMs: 0 };
   }
 
   startSpeculate(
@@ -158,7 +155,7 @@ export class FakeBrain implements TurnBrain {
     queueMicrotask(() => {
       for (const delta of turn.deltas) onDelta?.(delta);
       if (aborted) return;
-      result.resolve({ sessionID: input.sessionID, text: turn.text, model: {}, llmFirstMs: 0, llmTotalMs: 0 });
+      result.resolve({ sessionID: input.sessionID, text: turn.text, model: { providerID: "fake", id: "fake" }, llmFirstMs: 0, llmTotalMs: 0 });
     });
     const handle: TurnHandle & { transcript: string } = {
       sessionID: input.sessionID,

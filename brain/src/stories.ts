@@ -1,6 +1,7 @@
 // Twee 3 subset used by Lark stories. This replaces the removed Go
 // lark/internal/stories package (parse, compile, validate, eval, voice
 // matching); a story authored against the v1 server parses identically here.
+import { slugify } from "./util.ts";
 
 export const MAX_PASSAGES = 64;
 export const MAX_PASSAGE_TEXT = 600;
@@ -40,15 +41,6 @@ export interface Story {
 export interface EvalResult {
   text: string;
   choices: Choice[];
-}
-
-export interface SavedStory {
-  id: string;
-  title: string;
-  twee: string;
-  author: string;
-  updatedAt: number;
-  passages: number;
 }
 
 interface RawPassage {
@@ -608,23 +600,7 @@ export function matchChoice(spoken: string, choices: readonly Choice[]): { index
 }
 
 export function slugFromTitle(title: string): string {
-  let slug = "";
-  let previousDash = false;
-  for (const character of title.trim().toLowerCase()) {
-    if ((character >= "a" && character <= "z") || (character >= "0" && character <= "9")) {
-      slug += character;
-      previousDash = false;
-    } else if (!previousDash && slug.length > 0) {
-      slug += "-";
-      previousDash = true;
-    }
-    if (slug.length >= 40) break;
-  }
-  return slug.replace(/^-+|-+$/g, "") || "story";
-}
-
-export function bgPrompt(description: string): string {
-  return `Create a cozy indie-game pixel art background scene (Stardew Valley or GBA style) depicting: ${description.trim()}. Use crisp pixel clusters, soft atmospheric lighting, and a harmonious limited palette. No characters, no creatures, no text, no UI, no borders, no frames.`;
+  return slugify(title.trim().toLowerCase(), { max: 40, fallback: "story" });
 }
 
 // ---- import -------------------------------------------------------------

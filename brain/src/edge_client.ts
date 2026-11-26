@@ -442,10 +442,6 @@ export class EdgeClient extends TypedEmitter<EdgeEventMap> {
     await this.#request({ cmd: "terminal.stop_audio", terminal_id: terminalId });
   }
 
-  filler(terminalId: string, voice: string): void {
-    this.#send({ cmd: "terminal.filler", terminal_id: terminalId, voice });
-  }
-
   previewVoice(terminalId: string, voice: string): void {
     this.#send({ cmd: "terminal.preview_voice", terminal_id: terminalId, voice });
   }
@@ -495,12 +491,6 @@ export class EdgeClient extends TypedEmitter<EdgeEventMap> {
     return reply.text;
   }
 
-  async ttsWav(voice: string, text: string, outPath: string): Promise<string> {
-    const reply = await this.#request({ cmd: "tts.wav", voice, text, out_path: outPath }, 60_000);
-    if (typeof reply.path !== "string") throw new EdgeRpcError("tts.wav returned no path");
-    return reply.path;
-  }
-
   async normalizePortrait(dir: string): Promise<number> {
     const reply = await this.#request({ cmd: "portrait.normalize", dir }, 60_000);
     return typeof reply.colors === "number" ? reply.colors : 0;
@@ -508,10 +498,6 @@ export class EdgeClient extends TypedEmitter<EdgeEventMap> {
 
   async captureStart(terminalId: string, outPath: string, seconds: number): Promise<void> {
     await this.#request({ cmd: "capture.start", terminal_id: terminalId, out_path: outPath, seconds });
-  }
-
-  async captureStop(terminalId: string): Promise<void> {
-    await this.#request({ cmd: "capture.stop", terminal_id: terminalId });
   }
 
   async health(): Promise<EdgeHealthReply> {

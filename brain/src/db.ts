@@ -289,6 +289,49 @@ function messageFrom(row: Record<string, unknown>): Message {
   };
 }
 
+function terminalFrom(row: Record<string, unknown>): Terminal {
+  return {
+    id: String(row.id),
+    kind: String(row.kind),
+    companionId: row.companion_id == null ? null : String(row.companion_id),
+    ip: String(row.ip),
+    port: num(row.port as number),
+    lastSeen: num(row.last_seen as number),
+    createdAt: String(row.created_at),
+  };
+}
+
+function sessionFrom(row: Record<string, unknown>): SessionRow {
+  return {
+    companionId: String(row.companion_id),
+    sessionId: String(row.session_id),
+    updatedAt: num(row.updated_at as number),
+    contractHash: String(row.contract_hash),
+    contextAfterMs: num(row.context_after_ms as number),
+  };
+}
+
+function storyFrom(row: Record<string, unknown>): StoryRow {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    twee: String(row.twee),
+    author: String(row.author),
+    updatedAt: num(row.updated_at as number),
+    passages: num(row.passages as number),
+  };
+}
+
+function memoryFrom<T = unknown>(row: Record<string, unknown>): MemoryRow<T> {
+  return {
+    scope: String(row.scope),
+    key: String(row.key),
+    value: JSON.parse(String(row.value_json)) as T,
+    version: num(row.version as number),
+    updatedAt: num(row.updated_at as number),
+  };
+}
+
 export class LarkDb {
   readonly path: string;
   readonly #db: DatabaseSync;
@@ -429,29 +472,12 @@ export class LarkDb {
 
   getTerminal(id: string): Terminal | undefined {
     const row = this.#db.prepare(`SELECT * FROM terminals WHERE id = ?`).get(id);
-    if (row === undefined) return undefined;
-    return {
-      id: String(row.id),
-      kind: String(row.kind),
-      companionId: row.companion_id == null ? null : String(row.companion_id),
-      ip: String(row.ip),
-      port: num(row.port as number),
-      lastSeen: num(row.last_seen as number),
-      createdAt: String(row.created_at),
-    };
+    return row === undefined ? undefined : terminalFrom(row);
   }
 
   listTerminals(): Terminal[] {
     const rows = this.#db.prepare(`SELECT * FROM terminals ORDER BY id`).all();
-    return rows.map((row) => ({
-      id: String(row.id),
-      kind: String(row.kind),
-      companionId: row.companion_id == null ? null : String(row.companion_id),
-      ip: String(row.ip),
-      port: num(row.port as number),
-      lastSeen: num(row.last_seen as number),
-      createdAt: String(row.created_at),
-    }));
+    return rows.map(terminalFrom);
   }
 
   upsertTerminal(input: Omit<Terminal, "companionId"> & { companionId?: string | null }): Terminal {
@@ -503,27 +529,14 @@ export class LarkDb {
 
   getSession(companionId: string): SessionRow | undefined {
     const row = this.#db.prepare(`SELECT * FROM sessions WHERE companion_id = ?`).get(companionId.toLowerCase());
-    if (row === undefined) return undefined;
-    return {
-      companionId: String(row.companion_id),
-      sessionId: String(row.session_id),
-      updatedAt: num(row.updated_at as number),
-      contractHash: String(row.contract_hash),
-      contextAfterMs: num(row.context_after_ms as number),
-    };
+    return row === undefined ? undefined : sessionFrom(row);
   }
 
   listSessions(): SessionRow[] {
     return this.#db
       .prepare(`SELECT * FROM sessions ORDER BY companion_id`)
       .all()
-      .map((row) => ({
-        companionId: String(row.companion_id),
-        sessionId: String(row.session_id),
-        updatedAt: num(row.updated_at as number),
-        contractHash: String(row.contract_hash),
-        contextAfterMs: num(row.context_after_ms as number),
-      }));
+      .map(sessionFrom);
   }
 
   putSession(input: SessionRow): void {
@@ -665,27 +678,14 @@ export class LarkDb {
 
   getMemory<T = unknown>(scope: string, key: string): MemoryRow<T> | undefined {
     const row = this.#db.prepare(`SELECT * FROM memory WHERE scope = ? AND key = ?`).get(scope, key);
-    if (row === undefined) return undefined;
-    return {
-      scope: String(row.scope),
-      key: String(row.key),
-      value: JSON.parse(String(row.value_json)) as T,
-      version: num(row.version as number),
-      updatedAt: num(row.updated_at as number),
-    };
+    return row === undefined ? undefined : memoryFrom<T>(row);
   }
 
   listMemory(scope: string): MemoryRow[] {
     return this.#db
       .prepare(`SELECT * FROM memory WHERE scope = ? ORDER BY key`)
       .all(scope)
-      .map((row) => ({
-        scope: String(row.scope),
-        key: String(row.key),
-        value: JSON.parse(String(row.value_json)) as unknown,
-        version: num(row.version as number),
-        updatedAt: num(row.updated_at as number),
-      }));
+      .map((row) => memoryFrom(row));
   }
 
   /** Upserts with optimistic concurrency; omit `expectedVersion` to write unconditionally. */
@@ -743,29 +743,14 @@ export class LarkDb {
 
   getStory(id: string): StoryRow | undefined {
     const row = this.#db.prepare(`SELECT * FROM stories WHERE id = ?`).get(id);
-    if (row === undefined) return undefined;
-    return {
-      id: String(row.id),
-      title: String(row.title),
-      twee: String(row.twee),
-      author: String(row.author),
-      updatedAt: num(row.updated_at as number),
-      passages: num(row.passages as number),
-    };
+    return row === undefined ? undefined : storyFrom(row);
   }
 
   listStories(): StoryRow[] {
     return this.#db
       .prepare(`SELECT * FROM stories ORDER BY updated_at DESC, id`)
       .all()
-      .map((row) => ({
-        id: String(row.id),
-        title: String(row.title),
-        twee: String(row.twee),
-        author: String(row.author),
-        updatedAt: num(row.updated_at as number),
-        passages: num(row.passages as number),
-      }));
+      .map(storyFrom);
   }
 
   deleteStory(id: string): void {

@@ -26,7 +26,12 @@ import {
   type StoryValue,
 } from "./stories.ts";
 import type { DcPeerTurn } from "./deltachat.ts";
+import type { SpeculationHandle, TurnDelta, TurnResult } from "./opencode.ts";
 import type { PortraitManager } from "./portraits.ts";
+import { drain, errMessage } from "./util.ts";
+
+export type { TurnDelta, TurnResult };
+export type TurnHandle = SpeculationHandle;
 
 export const VOICES = [
   { id: "af_heart", name: "Heart" },
@@ -43,26 +48,6 @@ export const LISTEN_WINDOW_MS = 30_000;
 export const FOLLOW_UP_GRACE_MS = 10_000;
 export const REPLY_CONTEXT_MS = 60_000;
 export const NOT_CAUGHT_LINE = "I didn't catch that.";
-
-export interface TurnDelta {
-  type: "delta";
-  text: string;
-}
-
-export interface TurnResult {
-  sessionID: string;
-  text: string;
-  model: unknown;
-  llmFirstMs: number;
-  llmTotalMs: number;
-}
-
-export interface TurnHandle {
-  sessionID: string;
-  result: Promise<TurnResult>;
-  promote(): void;
-  abort(reason?: Error): void;
-}
 
 export interface TurnBrain {
   createSession(companion: { id: string; name: string; personality: string }): Promise<string>;
@@ -87,7 +72,6 @@ export interface RouterEdge {
     options?: { listenWindow?: boolean; windowS?: number; followUpGraceMs?: number; companionName?: string },
   ): Promise<void>;
   recCancel(terminalId: string): Promise<void>;
-  filler(terminalId: string, voice: string): void;
   previewVoice(terminalId: string, voice: string): void;
 }
 
@@ -182,6 +166,13 @@ export interface RouterOptions {
 
 function normalize(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function statusOf(state: Pick<TerminalState, "speaking" | "busy" | "listening">): string {
+  if (state.speaking) return "speaking";
+  if (state.busy) return "thinking";
+  if (state.listening) return "listening";
+  return "idle";
 }
 
 function levenshtein(a: string, b: string): number {
@@ -421,14 +412,8 @@ export class Router {
   }
 
   liveState(companionId: string): string {
-    const states = this.onlineTerminals(companionId);
-    if (states.length === 0) return "offline";
-    const state = states[0];
-    if (state === undefined) return "offline";
-    if (state.speaking) return "speaking";
-    if (state.busy) return "thinking";
-    if (state.listening) return "listening";
-    return "idle";
+    const state = this.onlineTerminals(companionId)[0];
+    return state === undefined ? "offline" : statusOf(state);
   }
 
   remoteTerminals(companionId: string): RemoteTerminal[] {
@@ -651,15 +636,8 @@ export class Router {
     this.#portraitCache.clear();
     for (const state of this.#terminals.values()) {
       if (state.companionId !== companionId) continue;
-      if (state.drawer === "") await this.#renderHome(state, this.#statusFor(state));
+      if (state.drawer === "") await this.#renderHome(state, statusOf(state));
     }
-  }
-
-  #statusFor(state: TerminalState): string {
-    if (state.speaking) return "speaking";
-    if (state.busy) return "thinking";
-    if (state.listening) return "listening";
-    return "idle";
   }
 
   // ---- pointer and menus --------------------------------------------------
@@ -698,7 +676,7 @@ export class Router {
         state.drawer = "stories";
       } else if (state.drawer === "menu") {
         state.drawer = "";
-        await this.#renderHome(state, this.#statusFor(state));
+        await this.#renderHome(state, statusOf(state));
         return;
       } else if (["volume", "pair", "unpair", "stats"].includes(state.drawer)) {
         state.drawer = "more";
@@ -780,7 +758,7 @@ export class Router {
     }
     if (actionValue === "companion" || actionValue === "dismiss" || actionValue === "close-card") {
       state.drawer = "";
-      await this.#renderHome(state, this.#statusFor(state));
+      await this.#renderHome(state, statusOf(state));
     }
   }
 
@@ -831,7 +809,7 @@ export class Router {
             invite,
           });
         } catch (error) {
-          await this.#renderDetail(state, "pair", "Pairing unavailable", error instanceof Error ? error.message : String(error));
+          await this.#renderDetail(state, "pair", "Pairing unavailable", errMessage(error));
         }
         return;
       }
@@ -970,7 +948,7 @@ export class Router {
       await this.#dc.unpairContact(state.companionId, contactId);
       this.#edge.chime(state.id, "tap");
     } catch (error) {
-      this.#log(`unpair: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`unpair: ${errMessage(error)}`);
     }
     state.drawer = "unpair";
     await this.#renderDrawer(state);
@@ -1093,17 +1071,13 @@ export class Router {
     return this.#brain.createSession({ id: companion.id, name: companion.name, personality: companion.personality });
   }
 
-  #prompt(text: string): string {
-    return text.trim();
-  }
-
   async #speculate(event: EdgeSpeculate): Promise<void> {
     const state = this.#terminals.get(event.terminal_id);
     if (state === undefined || state.busy || state.drawer === "story-reader" || event.transcript.trim() === "") return;
     state.speculation?.handle.abort();
     const sessionID = await this.#sessionFor(state.companionId);
     const capture = new DeltaCapture();
-    const handle = this.#brain.startSpeculate({ sessionID, text: this.#prompt(event.transcript) }, (delta) => capture.push(delta));
+    const handle = this.#brain.startSpeculate({ sessionID, text: event.transcript.trim() }, (delta) => capture.push(delta));
     state.speculation = { transcript: event.transcript.trim(), stream: capture, handle };
     void handle.result.catch(() => undefined);
   }
@@ -1167,19 +1141,12 @@ export class Router {
         full = result.text;
       } else {
         const sessionID = await this.#sessionFor(state.companionId);
-        const iterator = this.#brain.runTurn({ sessionID, text: this.#prompt(transcript) });
-        for (;;) {
-          const step = await iterator.next();
-          if (step.done) {
-            full = step.value.text;
-            break;
-          }
-          capture.push(step.value.text);
-        }
+        const result = await drain(this.#brain.runTurn({ sessionID, text: transcript }), (delta) => capture.push(delta.text));
+        full = result.text;
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        this.#log(`turn: ${error instanceof Error ? error.message : String(error)}`);
+        this.#log(`turn: ${errMessage(error)}`);
       }
     } finally {
       state.turn = undefined;
@@ -1241,7 +1208,7 @@ export class Router {
         tsMs: this.#now(),
       });
     } catch (error) {
-      this.#log(`reply routing: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`reply routing: ${errMessage(error)}`);
     }
   }
 
@@ -1293,7 +1260,7 @@ export class Router {
           companionName: companion?.name ?? "",
         });
       } catch (error) {
-        this.#log(`listen arm: ${error instanceof Error ? error.message : String(error)}`);
+        this.#log(`listen arm: ${errMessage(error)}`);
       }
     }
     state.listenTimer = setTimeout(() => {
@@ -1372,18 +1339,10 @@ export class Router {
     }
     try {
       const sessionID = await this.#sessionFor(turn.companionId);
-      const iterator = this.#brain.runTurn({ sessionID, text: `${turn.sender} via Delta Chat: ${turn.text}` });
-      let text = "";
-      for (;;) {
-        const step = await iterator.next();
-        if (step.done) {
-          text = step.value.text;
-          break;
-        }
-      }
-      return sanitizeSpeech(text);
+      const result = await drain(this.#brain.runTurn({ sessionID, text: `${turn.sender} via Delta Chat: ${turn.text}` }));
+      return sanitizeSpeech(result.text);
     } catch (error) {
-      this.#log(`dc turn: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`dc turn: ${errMessage(error)}`);
       return undefined;
     }
   }

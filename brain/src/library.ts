@@ -5,6 +5,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { humanBytes } from "./util.ts";
 
 export const READ_CHUNK = 3200;
 export const READ_MAX = 4000;
@@ -557,17 +558,6 @@ export function libraryBudget(total: number, free: number): number {
   const spendable = free - (total * LIBRARY_RESERVE_PERCENT) / 100;
   if (spendable <= 0) return 0;
   return Math.floor((spendable * LIBRARY_SAFETY_PERCENT) / 100);
-}
-
-export function humanBytes(bytes: number): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let value = Math.max(0, bytes);
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 function fileSize(path: string): number {

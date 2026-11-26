@@ -9,8 +9,9 @@ import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LarkDb } from "./db.ts";
 import type { EdgeClient, EdgeHit } from "./edge_client.ts";
-import type { Router } from "./router.ts";
+import type { RemoteSnapshot, Router } from "./router.ts";
 import { planLibrary } from "./library.ts";
+import { errMessage, slugify } from "./util.ts";
 import {
   CAPTURE_DEFAULT_SECONDS,
   CAPTURE_PAGE_SECONDS,
@@ -115,7 +116,7 @@ function sendError(res: ServerResponse, error: unknown): void {
       : error instanceof Error && /not found/i.test(error.message)
         ? 404
         : 502;
-  sendJson(res, status, { error: error instanceof Error ? error.message : String(error) });
+  sendJson(res, status, { error: errMessage(error) });
 }
 
 function sendBytes(res: ServerResponse, status: number, kind: string, body: Buffer, extra: Record<string, string> = {}): void {
@@ -175,13 +176,24 @@ function companionId(value: string): string {
   return value.toLowerCase();
 }
 
+function requiredText(value: unknown, name: string, max: number, emptyError: string): string {
+  const trimmed = text(value, name, max).trim();
+  if (trimmed === "") throw fail(400, emptyError);
+  return trimmed;
+}
+
+function assertIdle(router: Router, companionId: string): void {
+  if (["listening", "thinking", "speaking"].includes(router.liveState(companionId))) {
+    throw fail(409, "The companion is busy; try again when the turn ends");
+  }
+}
+
+function okState(res: ServerResponse, router: Router, companionId: string, message: string): void {
+  sendJson(res, 200, { ok: true, message, state: router.snapshot(companionId) });
+}
+
 function slug(name: string): string {
-  const base = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return base === "" ? `companion-${Date.now().toString(36)}` : base;
+  return slugify(name, { max: 48, fallback: `companion-${Date.now().toString(36)}` });
 }
 
 function companionEntry(db: LarkDb, router: Router, id: string): Record<string, unknown> {
@@ -416,7 +428,7 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
           const reply = await options.edge.hits(id);
           sendJson(res, 200, { ...reply, hits: reply.hits.map((hit: EdgeHit) => ({ id: hit.ID, label: hit.Label ?? "", action: "", value: "", x1: hit.X1, y1: hit.Y1, x2: hit.X2, y2: hit.Y2 })) });
         } catch (error) {
-          throw fail(404, error instanceof Error ? error.message : "Terminal not connected");
+          throw fail(404, errMessage(error));
         }
         return;
       }
@@ -473,9 +485,7 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
       const body = await readJson(req);
       const companion = companionId(text(body.companion_id, "companion_id", 64));
       const seconds = body.seconds === undefined ? CAPTURE_DEFAULT_SECONDS : integer(body.seconds, "seconds");
-      if (["listening", "thinking", "speaking"].includes(router.liveState(companion))) {
-        throw fail(409, "The companion is busy; try again when the turn ends");
-      }
+      assertIdle(router, companion);
       const started = await captures.start(companion, seconds);
       const result = await captures.wait(companion, (seconds + 30) * 1000);
       if (result.error !== undefined) throw fail(502, result.error);
@@ -628,42 +638,39 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
     const name = path.slice(api.length);
     if (name === "say" && method === "POST") {
       const body = await readJson(req);
-      const message = text(body.text, "text", 500).trim();
-      if (message === "") throw fail(400, "Enter something to say");
+      const message = requiredText(body.text, "text", 500, "Enter something to say");
       await router.sayNow(companionId, message);
-      sendJson(res, 200, { ok: true, message: "Said it.", state: router.snapshot(companionId) });
+      okState(res, router, companionId, "Said it.");
       return;
     }
     if (name === "listen" && method === "POST") {
       const body = await readJson(req);
       await router.setListening(companionId, boolean(body.listening, "listening"));
-      sendJson(res, 200, { ok: true, message: "Listening mode updated.", state: router.snapshot(companionId) });
+      okState(res, router, companionId, "Listening mode updated.");
       return;
     }
     if (name === "volume" && method === "POST") {
       const body = await readJson(req);
-      const terminal = text(body.terminal, "terminal", 128).trim();
-      if (terminal === "") throw fail(400, "Terminal is required");
+      const terminal = requiredText(body.terminal, "terminal", 128, "Terminal is required");
       const owned = router.onlineTerminals(companionId).some((state) => state.id === terminal) || db.getTerminal(terminal)?.companionId === companionId;
       if (!owned) throw fail(403, "Terminal out of scope");
       router.setVolume(terminal, integer(body.volume, "volume"));
-      sendJson(res, 200, { ok: true, message: "Volume updated.", state: router.snapshot(companionId) });
+      okState(res, router, companionId, "Volume updated.");
       return;
     }
     if (name === "voice" && method === "POST") {
       const body = await readJson(req);
       await router.setVoice(companionId, text(body.voice, "voice", 64), true);
-      sendJson(res, 200, { ok: true, message: "Voice updated.", state: router.snapshot(companionId) });
+      okState(res, router, companionId, "Voice updated.");
       return;
     }
     if (name === "story/open" || name === "story/restart") {
       if (method !== "POST") throw fail(404, "Not found");
       const body = await readJson(req);
-      const story = text(body.story, "story", 64).trim();
-      if (story === "") throw fail(400, "Missing story ID");
+      const story = requiredText(body.story, "story", 64, "Missing story ID");
       if (name.endsWith("restart")) await router.restartStory(companionId, story);
       else await router.openStory(companionId, story, false);
-      sendJson(res, 200, { ok: true, message: name.endsWith("restart") ? "Started over on device." : "Opened on device.", state: router.snapshot(companionId) });
+      okState(res, router, companionId, name.endsWith("restart") ? "Started over on device." : "Opened on device.");
       return;
     }
     if (name === "history" && method === "GET") {
@@ -679,9 +686,7 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
     if (name === "capture" && method === "POST") {
       const body = await readJson(req);
       const seconds = body.seconds === undefined ? CAPTURE_PAGE_SECONDS : integer(body.seconds, "seconds");
-      if (["listening", "thinking", "speaking"].includes(router.liveState(companionId))) {
-        throw fail(409, "The companion is busy; try again when the turn ends");
-      }
+      assertIdle(router, companionId);
       const started = await captures.start(companionId, seconds);
       sendJson(res, 200, started);
       return;
@@ -788,12 +793,15 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
   };
 }
 
-function snapshotKey(snapshot: ReturnType<Router["snapshot"]>): string {
-  const copy = structuredClone(snapshot) as unknown as Record<string, unknown>;
-  if (copy.companion !== null && typeof copy.companion === "object") {
-    delete (copy.companion as Record<string, unknown>).portrait;
-  }
-  return JSON.stringify(copy);
+/** Snapshots differ by their portrait even when nothing visible changed. */
+function withoutPortrait(snapshot: RemoteSnapshot): RemoteSnapshot {
+  const copy = structuredClone(snapshot);
+  delete copy.companion.portrait;
+  return copy;
+}
+
+function snapshotKey(snapshot: RemoteSnapshot): string {
+  return JSON.stringify(withoutPortrait(snapshot));
 }
 
 function portraitSpec(raw: unknown): PortraitSpec {

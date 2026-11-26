@@ -3,8 +3,7 @@
 // traffic is text-only in both directions (inbound voice notes are decoded
 // with ffmpeg and transcribed, never re-encoded to Opus).
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +11,7 @@ import { StdioDeltaChat } from "@deltachat/jsonrpc-client";
 import type { Companion, LarkDb } from "./db.ts";
 import { parseTwee, slugFromTitle } from "./stories.ts";
 import type { RemoteManager } from "./remote.ts";
+import { errMessage } from "./util.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,7 +63,6 @@ export interface DcRpc {
   batchSetConfig(accountId: number, config: Record<string, string>): Promise<void>;
   setConfig(accountId: number, key: string, value: string | null): Promise<void>;
   getConfig(accountId: number, key: string): Promise<string | null>;
-  createQrSvg(text: string): Promise<string>;
   getChatSecurejoinQrCode(accountId: number, chatId: number | null): Promise<string>;
   secureJoin(accountId: number, qr: string): Promise<number>;
   getContacts(accountId: number, listFlags: number, query: string | null): Promise<DcContact[]>;
@@ -196,7 +195,7 @@ async function defaultDecodeVoice(path: string): Promise<string> {
     return out;
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
-    throw new DeltaChatError(`cannot decode voice note: ${error instanceof Error ? error.message : String(error)}`);
+    throw new DeltaChatError(`cannot decode voice note: ${errMessage(error)}`);
   }
 }
 
@@ -273,7 +272,7 @@ export class DcService {
     rpc.subscribe({
       onIncomingMessage: (accountId, messageId) => {
         void this.handleMessage(accountId, messageId).catch((error: unknown) => {
-          this.#log(`Delta Chat message: ${error instanceof Error ? error.message : String(error)}`);
+          this.#log(`Delta Chat message: ${errMessage(error)}`);
         });
       },
       onSecureJoinVerified: (accountId, contactId) => {
@@ -283,7 +282,7 @@ export class DcService {
     try {
       await rpc.startIoForAllAccounts();
     } catch (error) {
-      this.#log(`Delta Chat start IO: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`Delta Chat start IO: ${errMessage(error)}`);
     }
     this.#ready = true;
     await this.syncAccounts();
@@ -300,7 +299,7 @@ export class DcService {
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
-      this.#log(`Delta Chat spawn: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`Delta Chat spawn: ${errMessage(error)}`);
       this.#scheduleRestart();
       return;
     }
@@ -309,7 +308,7 @@ export class DcService {
     const dc = new StdioDeltaChat(child.stdin, child.stdout, true);
     const adapter = new StdioDcAdapter(dc as unknown as DcClient);
     void this.attach(adapter).catch((error: unknown) => {
-      this.#log(`Delta Chat attach: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`Delta Chat attach: ${errMessage(error)}`);
     });
     child.on("exit", (code, signal) => {
       this.#ready = false;
@@ -360,7 +359,7 @@ export class DcService {
       try {
         await this.ensureCompanion(companion);
       } catch (error) {
-        this.#log(`Delta Chat account for ${companion.id}: ${error instanceof Error ? error.message : String(error)}`);
+        this.#log(`Delta Chat account for ${companion.id}: ${errMessage(error)}`);
       }
     }
     await this.autoPairAll();
@@ -386,7 +385,7 @@ export class DcService {
     try {
       await rpc.setConfig(accountId, "displayname", companion.name);
     } catch (error) {
-      this.#log(`Delta Chat displayname for ${companion.id}: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`Delta Chat displayname for ${companion.id}: ${errMessage(error)}`);
     }
     return accountId;
   }
@@ -637,7 +636,7 @@ export class DcService {
       });
       await this.sendText(accountId, message.chatId, reply);
     } catch (error) {
-      this.#log(`Delta Chat turn: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`Delta Chat turn: ${errMessage(error)}`);
     }
   }
 
@@ -788,24 +787,6 @@ export class DcService {
       .sort((a, b) => contactName(a).localeCompare(contactName(b), undefined, { sensitivity: "base" }));
   }
 
-  async listContacts(companionId: string): Promise<Array<{ id: number; name: string; kind: string; verified: boolean }>> {
-    const accountId = this.accountForCompanion(companionId);
-    if (accountId === 0) throw new DeltaChatError("Companion has no Delta Chat account");
-    const contacts = await this.#requireRpc().getContacts(accountId, 0, null);
-    return contacts
-      .filter((c) => c.id !== 1 && !c.isBlocked)
-      .map((c) => {
-        const peer = this.companionByAddress(c.address);
-        const peerCompanion = peer === undefined ? undefined : this.#db.getCompanion(peer);
-        return {
-          id: c.id,
-          name: peerCompanion?.name ?? contactName(c),
-          kind: peer === undefined ? "human" : "companion",
-          verified: c.isVerified,
-        };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  }
 
   async unpairContact(companionId: string, contactId: number): Promise<void> {
     const accountId = this.accountForCompanion(companionId);
@@ -889,8 +870,7 @@ interface DcClient {
     batchSetConfig(id: number, config: Record<string, string | null>): Promise<null>;
     setConfig(id: number, key: string, value: string | null): Promise<null>;
     getConfig(id: number, key: string): Promise<string | null>;
-    createQrSvg(text: string): Promise<string>;
-    getChatSecurejoinQrCode(id: number, chat: number | null): Promise<string>;
+      getChatSecurejoinQrCode(id: number, chat: number | null): Promise<string>;
     secureJoin(id: number, qr: string): Promise<number>;
     getContacts(id: number, flags: number, query: string | null): Promise<RawContact[]>;
     getContact(id: number, contact: number): Promise<RawContact>;
@@ -956,9 +936,6 @@ export class StdioDcAdapter implements DcRpc {
     return await this.#dc.rpc.getConfig(accountId, key);
   }
 
-  async createQrSvg(text: string): Promise<string> {
-    return await this.#dc.rpc.createQrSvg(text);
-  }
 
   async getChatSecurejoinQrCode(accountId: number, chatId: number | null): Promise<string> {
     return await this.#dc.rpc.getChatSecurejoinQrCode(accountId, chatId);
@@ -1036,29 +1013,4 @@ function toContact(raw: RawContact): DcContact {
   };
 }
 
-/** Test helper: write a decoded PCM WAV into a fresh temporary directory. */
-export function writeTestWav(samples: Int16Array): string {
-  const dir = mkdtempSync(join(tmpdir(), "lark-test-wav-"));
-  const path = join(dir, "note.wav");
-  const data = Buffer.alloc(44 + samples.length * 2);
-  data.write("RIFF", 0);
-  data.writeUInt32LE(36 + samples.length * 2, 4);
-  data.write("WAVEfmt ", 8);
-  data.writeUInt32LE(16, 16);
-  data.writeUInt16LE(1, 20);
-  data.writeUInt16LE(1, 22);
-  data.writeUInt32LE(16000, 24);
-  data.writeUInt32LE(32000, 28);
-  data.writeUInt16LE(2, 32);
-  data.writeUInt16LE(16, 34);
-  data.write("data", 36);
-  data.writeUInt32LE(samples.length * 2, 40);
-  for (let i = 0; i < samples.length; i++) data.writeInt16LE(samples[i] ?? 0, 44 + i * 2);
-  writeFileSync(path, data);
-  return path;
-}
 
-/** Random opaque token used by tests and diagnostics. */
-export function randomToken(bytes = 16): string {
-  return randomBytes(bytes).toString("base64url");
-}

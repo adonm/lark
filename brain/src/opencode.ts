@@ -10,8 +10,9 @@ import { Plugin, Model, Provider } from "@opencode/plugin";
 import type { Tool } from "@opencode/schema/tool";
 import type { LarkDb, CompanionPatch, TimerRow } from "./db.ts";
 import type { Library, SourceChoice } from "./library.ts";
-import { parseTwee, slugFromTitle, tweeFromText } from "./stories.ts";
-import type { TimerScheduler } from "./timers.ts";
+import { parseTwee, slugFromTitle, tweeFromText, type Story } from "./stories.ts";
+import type { TimerEdit, TimerScheduler } from "./timers.ts";
+import { drain, errMessage } from "./util.ts";
 
 type Oc = Awaited<ReturnType<typeof OpenCode.create>>;
 type ToolSchema = Tool.ValueSchema;
@@ -194,9 +195,6 @@ export class ToolInputError extends Error {
     this.name = "ToolInputError";
   }
 }
-
-export const READ_ONLY_TOOLS = ["lark_state", "lark_library.search", "lark_library.read", "lark_library.list", "lark_story.get"] as const;
-export const MUTATING_TOOLS = ["lark_patch", "lark_emit", "lark_story.create", "lark_story.update", "lark_story.delete", "lark_library.import"] as const;
 
 // ---- agent markdown -----------------------------------------------------
 
@@ -573,18 +571,6 @@ export class Brain {
     return this.#db;
   }
 
-  get primaryModel(): ModelRef {
-    return { ...this.#primary };
-  }
-
-  get fallbackModel(): ModelRef {
-    return { ...this.#fallback };
-  }
-
-  get deepModel(): ModelRef {
-    return { ...this.#deep };
-  }
-
   #restoreEnv(): void {
     for (const [key, value] of this.#envBefore) {
       if (value === undefined) delete process.env[key];
@@ -723,7 +709,7 @@ export class Brain {
     } catch (error) {
       // A transient failure must not discard a healthy session; only a
       // definite "not found" resets the binding.
-      if (/session not found/i.test(error instanceof Error ? error.message : String(error))) return false;
+      if (/session not found/i.test(errMessage(error))) return false;
       return true;
     }
   }
@@ -753,12 +739,7 @@ export class Brain {
   }
 
   async *runTurn(input: TurnInput): AsyncGenerator<TurnDelta, TurnResult> {
-    const generator = this.#turn(input);
-    for (;;) {
-      const step = await generator.next();
-      if (step.done) return step.value;
-      yield step.value;
-    }
+    return yield* this.#turn(input);
   }
 
   startSpeculate(
@@ -772,11 +753,7 @@ export class Brain {
 
     const consume = async (): Promise<TurnResult> => {
       const generator = this.#turn(input, controller.signal);
-      for (;;) {
-        const step = await generator.next();
-        if (step.done) return step.value;
-        onDelta?.(step.value.text);
-      }
+      return await drain(generator, (delta) => onDelta?.(delta.text));
     };
 
     const completed = consume().finally(() => {
@@ -923,10 +900,6 @@ export class Brain {
       };
     }
   }
-}
-
-export async function createBrain(options: BrainOptions): Promise<Brain> {
-  return Brain.create(options);
 }
 
 // ---- provider (test hook) ----------------------------------------------
@@ -1100,6 +1073,39 @@ function timerNotes(value: unknown): string | string[] {
   return expectStringArray(value, "timer.notes", 32);
 }
 
+/** Optional timer fields shared by set and update. */
+function timerFields(raw: Record<string, unknown>): TimerEdit {
+  return {
+    ...(raw.in_seconds === undefined ? {} : { inSeconds: optionalNumber(raw.in_seconds, "timer.in_seconds") }),
+    ...(raw.at === undefined ? {} : { at: expectString(raw.at, "timer.at", 64) }),
+    ...(raw.label === undefined ? {} : { label: expectString(raw.label, "timer.label", 60) }),
+    ...(raw.say === undefined ? {} : { say: expectString(raw.say, "timer.say", 600) }),
+    ...(raw.chime === undefined ? {} : { chime: expectString(raw.chime, "timer.chime", 16) }),
+    ...(raw.notes === undefined ? {} : { notes: timerNotes(raw.notes) }),
+    ...(raw.wake_agent === undefined ? {} : { wakeAgent: optionalBoolean(raw.wake_agent, "timer.wake_agent") }),
+  };
+}
+
+/** Store a parsed story and return the shape both story tools report. */
+function saveParsedStory(
+  db: LarkDb,
+  parsed: Story,
+  twee: string,
+  author: string,
+  explicitId?: string,
+): { id: string; title: string; passages: number; author: string } {
+  const id = explicitId ?? slugFromTitle(parsed.title);
+  db.saveStory({
+    id,
+    title: parsed.title,
+    twee,
+    author,
+    updatedAt: Date.now(),
+    passages: parsed.passages.length,
+  });
+  return { id, title: parsed.title, passages: parsed.passages.length, author };
+}
+
 function timerState(row: TimerRow): Record<string, unknown> {
   const fireAt = new Date(row.fireAt);
   const remaining = Math.max(0, fireAt.getTime() - Date.now());
@@ -1255,27 +1261,10 @@ function patchTool(deps: ToolDeps) {
           onlyKeys(raw, ["op", "id", "all", "in_seconds", "at", "label", "say", "chime", "notes", "wake_agent"], "timer");
           const op = raw.op === undefined ? "set" : expectString(raw.op, "timer.op", 16);
           if (op === "set") {
-            out.timer = deps.timers.set({
-              companionId,
-              ...(raw.in_seconds === undefined ? {} : { inSeconds: optionalNumber(raw.in_seconds, "timer.in_seconds") }),
-              ...(raw.at === undefined ? {} : { at: expectString(raw.at, "timer.at", 64) }),
-              ...(raw.label === undefined ? {} : { label: expectString(raw.label, "timer.label", 60) }),
-              ...(raw.say === undefined ? {} : { say: expectString(raw.say, "timer.say", 600) }),
-              ...(raw.chime === undefined ? {} : { chime: expectString(raw.chime, "timer.chime", 16) }),
-              ...(raw.notes === undefined ? {} : { notes: timerNotes(raw.notes) }),
-              ...(raw.wake_agent === undefined ? {} : { wakeAgent: optionalBoolean(raw.wake_agent, "timer.wake_agent") }),
-            });
+            out.timer = deps.timers.set({ companionId, ...timerFields(raw) });
           } else if (op === "update") {
             const id = expectString(raw.id, "timer.id", 64);
-            out.timer = deps.timers.update(id, companionId, {
-              ...(raw.in_seconds === undefined ? {} : { inSeconds: optionalNumber(raw.in_seconds, "timer.in_seconds") }),
-              ...(raw.at === undefined ? {} : { at: expectString(raw.at, "timer.at", 64) }),
-              ...(raw.label === undefined ? {} : { label: expectString(raw.label, "timer.label", 60) }),
-              ...(raw.say === undefined ? {} : { say: expectString(raw.say, "timer.say", 600) }),
-              ...(raw.chime === undefined ? {} : { chime: expectString(raw.chime, "timer.chime", 16) }),
-              ...(raw.notes === undefined ? {} : { notes: timerNotes(raw.notes) }),
-              ...(raw.wake_agent === undefined ? {} : { wakeAgent: optionalBoolean(raw.wake_agent, "timer.wake_agent") }),
-            });
+            out.timer = deps.timers.update(id, companionId, timerFields(raw));
           } else if (op === "cancel") {
             const id = optionalString(raw.id, "timer.id", 64);
             const all = optionalBoolean(raw.all, "timer.all");
@@ -1335,15 +1324,7 @@ function storyTool(deps: ToolDeps) {
         if (op === "create" && existing !== undefined) throw new ToolInputError(`story ${storyId} already exists`);
         if (op === "update" && existing === undefined) throw new ToolInputError(`story ${storyId} not found`);
         const author = optionalString(args.author, "author", 200) ?? existing?.author ?? "";
-        deps.db.saveStory({
-          id: storyId,
-          title: parsed.title,
-          twee,
-          author,
-          updatedAt: Date.now(),
-          passages: parsed.passages.length,
-        });
-        return textResult({ id: storyId, title: parsed.title, passages: parsed.passages.length, author });
+        return textResult(saveParsedStory(deps.db, parsed, twee, author, storyId));
       });
     },
   };
@@ -1399,16 +1380,7 @@ function libraryTool(deps: ToolDeps) {
           const loaded = library.sourceText(source, ref);
           const twee = tweeFromText(loaded.title, loaded.text);
           const parsed = parseTwee(twee);
-          const id = slugFromTitle(parsed.title);
-          deps.db.saveStory({
-            id,
-            title: parsed.title,
-            twee,
-            author: loaded.author,
-            updatedAt: Date.now(),
-            passages: parsed.passages.length,
-          });
-          return textResult({ id, title: parsed.title, passages: parsed.passages.length, source: loaded.used });
+          return textResult({ ...saveParsedStory(deps.db, parsed, twee, loaded.author), source: loaded.used });
         });
       }
       throw new ToolInputError("library.op must be search, read, list, or import");

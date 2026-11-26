@@ -5,20 +5,19 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import type { EdgeCaptureDone, EdgeCaptureProgress, EdgeClient } from "./edge_client.ts";
 import type { LarkDb } from "./db.ts";
+import { errMessage } from "./util.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,13 +78,6 @@ function routeKey(companionId: string): string {
 
 function tokenKey(companionId: string, contact: string): string {
   return `remote_token:${companionId.toLowerCase()}:${contact.toLowerCase()}`;
-}
-
-export function findTunnelCli(): string {
-  if (process.env.LARK_OPENTUNNEL_BIN !== undefined && process.env.LARK_OPENTUNNEL_BIN !== "") {
-    return process.env.LARK_OPENTUNNEL_BIN;
-  }
-  return "opentunnel";
 }
 
 export function defaultTunnelRunner(bin: string): TunnelRunner {
@@ -180,17 +172,7 @@ export class RemoteManager {
       if (split <= 0) continue;
       const companionId = rest.slice(0, split);
       const contact = rest.slice(split + 1);
-      // v1 stored the hash as a bare string; those links keep working, only
-      // the contact name is missing until the link is reissued.
-      const meta: TokenMeta | undefined = /^[0-9a-f]{64}$/i.test(raw)
-        ? { hash: raw }
-        : (() => {
-            try {
-              return JSON.parse(raw) as TokenMeta;
-            } catch {
-              return undefined;
-            }
-          })();
+      const meta = this.#decodeTokenMeta(raw);
       if (meta === undefined) {
         this.#log(`remote: ignoring malformed ${key}`);
         continue;
@@ -202,6 +184,20 @@ export class RemoteManager {
         contact,
         contactName: typeof meta.name === "string" ? meta.name : contact,
       });
+    }
+  }
+
+  /**
+   * v1 stored the hash as a bare string; those links keep working, only the
+   * contact name is missing until the link is reissued. Remove this fallback
+   * once v1 databases are no longer upgraded in place.
+   */
+  #decodeTokenMeta(raw: string): TokenMeta | undefined {
+    if (/^[0-9a-f]{64}$/i.test(raw)) return { hash: raw };
+    try {
+      return JSON.parse(raw) as TokenMeta;
+    } catch {
+      return undefined;
     }
   }
 
@@ -223,6 +219,16 @@ export class RemoteManager {
       if (safeEqualHex(stored, hash)) return scope;
     }
     return undefined;
+  }
+
+  /** Persist the replacement before retiring the previous link. */
+  #storeToken(companionId: string, contact: string, contactName: string, raw: string): void {
+    const hash = tokenHash(raw);
+    this.#db.setMeta(tokenKey(companionId, contact), JSON.stringify({ hash, name: contactName } satisfies TokenMeta));
+    for (const [oldHash, scope] of this.#tokens) {
+      if (scope.companionId === companionId && scope.contact === contact) this.#tokens.delete(oldHash);
+    }
+    this.#tokens.set(hash, { companionId, contact, contactName });
   }
 
   async issue(companionId: string, contact: string, contactName: string): Promise<string> {
@@ -260,13 +266,7 @@ export class RemoteManager {
       }
 
       const raw = randomBytes(16).toString("base64url");
-      const hash = tokenHash(raw);
-      // Persist the replacement before retiring the previous link.
-      this.#db.setMeta(tokenKey(id, peer), JSON.stringify({ hash, name: contactName } satisfies TokenMeta));
-      for (const [oldHash, scope] of this.#tokens) {
-        if (scope.companionId === id && scope.contact === peer) this.#tokens.delete(oldHash);
-      }
-      this.#tokens.set(hash, { companionId: id, contact: peer, contactName });
+      this.#storeToken(id, peer, contactName, raw);
       return `${route.url.replace(/\/+$/, "")}${REMOTE_PATH}?token=${encodeURIComponent(raw)}`;
     });
   }
@@ -275,12 +275,7 @@ export class RemoteManager {
     const id = companionId.toLowerCase();
     const peer = contact.trim().toLowerCase();
     const raw = randomBytes(16).toString("base64url");
-    const hash = tokenHash(raw);
-    this.#db.setMeta(tokenKey(id, peer), JSON.stringify({ hash, name: contactName } satisfies TokenMeta));
-    for (const [oldHash, scope] of this.#tokens) {
-      if (scope.companionId === id && scope.contact === peer) this.#tokens.delete(oldHash);
-    }
-    this.#tokens.set(hash, { companionId: id, contact: peer, contactName });
+    this.#storeToken(id, peer, contactName, raw);
     return `${REMOTE_PATH}?token=${encodeURIComponent(raw)}`;
   }
 
@@ -344,7 +339,6 @@ export class RemoteManager {
 
 export interface CaptureEdge {
   captureStart(terminalId: string, outPath: string, seconds: number): Promise<void>;
-  captureStop(terminalId: string): Promise<void>;
   on(name: "capture.done", listener: (event: EdgeCaptureDone) => void): () => void;
   on(name: "capture.progress", listener: (event: EdgeCaptureProgress) => void): () => void;
   transcribe?(path: string): Promise<string>;
@@ -495,7 +489,7 @@ export class CaptureStore {
     try {
       return pruneCaptures(this.#dir, this.#retentionMs, this.#maxBytes);
     } catch (error) {
-      this.#log(`capture prune: ${error instanceof Error ? error.message : String(error)}`);
+      this.#log(`capture prune: ${errMessage(error)}`);
       return 0;
     }
   }
@@ -669,17 +663,6 @@ function uniqueCaptureName(companionId: string, at: Date, dir: string): string {
     const name = i === 1 ? base : `${base}-${i}`;
     if (!existsSync(join(dir, `${name}.wav`))) return name;
   }
-}
-
-// Re-exported for the HTTP layer's range handling.
-export function openCaptureFile(path: string): number {
-  return openSync(path, "r");
-}
-export function closeCaptureFile(fd: number): void {
-  closeSync(fd);
-}
-export function captureExtension(path: string): string {
-  return extname(path);
 }
 
 export type { EdgeClient };

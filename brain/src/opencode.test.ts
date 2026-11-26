@@ -11,7 +11,6 @@ import {
   Brain,
   DEFAULT_MODELS,
   SpeculationAbortedError,
-  createBrain,
   parseAgentMarkdown,
   parseModelSpec,
   readOpenCodeCredentials,
@@ -260,7 +259,7 @@ before(async () => {
   db.upsertCompanion({ id: "cake", name: "Cake", personality: "a curious cat" });
   await model.start();
   const timers = new TimerScheduler(db, { onFire: () => undefined, minSeconds: 0.01 });
-  brain = await createBrain({
+  brain = await Brain.create({
     directory: dir,
     dataDir,
     db,
@@ -482,7 +481,7 @@ test("missing agent markdown fails fast", async () => {
   const scratchDb = new LarkDb(join(scratch, "lark.db"));
   try {
     await assert.rejects(
-      createBrain({
+      Brain.create({
         directory: scratch,
         dataDir: join(scratch, "data"),
         db: scratchDb,

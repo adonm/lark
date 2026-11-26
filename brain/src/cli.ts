@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { errMessage, humanBytes } from "./util.ts";
 
 interface Json {
   [key: string]: unknown;
@@ -93,18 +94,6 @@ function num(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
-function humanBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value.toFixed(1)} ${units[unit]}`;
-}
-
 async function status(): Promise<void> {
   const [health, companions, terminals, library] = await Promise.all([
     request("/health"),
@@ -175,7 +164,7 @@ async function doctor(): Promise<number> {
       if (orphans.length > 0) problems.push(`orphaned Delta Chat accounts: ${orphans.join(",")}`);
     }
   } catch (error) {
-    problems.push(`HTTP: ${error instanceof Error ? error.message : String(error)}`);
+    problems.push(`HTTP: ${errMessage(error)}`);
   }
   if (problems.length === 0) {
     process.stdout.write("Doctor: all checks passed\n");
@@ -308,7 +297,7 @@ export async function run(argv: string[]): Promise<number> {
         throw new Error(`unknown command ${JSON.stringify(command)}`);
     }
   } catch (error) {
-    process.stderr.write(`lark: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`lark: ${errMessage(error)}\n`);
     return 1;
   }
 }
