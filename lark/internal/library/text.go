@@ -1,80 +1,10 @@
 package library
 
 import (
-	"fmt"
 	"html"
 	"regexp"
 	"strings"
 )
-
-var pgStart = regexp.MustCompile(`(?m)^\*\*\* ?START OF (?:THE|THIS) PROJECT GUTENBERG[^\n]*\n`)
-var pgEnd = regexp.MustCompile(`(?m)^\*\*\* ?END OF (?:THE|THIS) PROJECT GUTENBERG[^\n]*\n?`)
-
-func gutenbergBody(text string) string {
-	if m := pgStart.FindStringIndex(text); m != nil {
-		text = text[m[1]:]
-	}
-	if m := pgEnd.FindStringIndex(text); m != nil {
-		text = text[:m[0]]
-	}
-	return strings.TrimSpace(text)
-}
-
-func Twee(title, text string) (string, error) {
-	title = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(title, "\n", " "), "::", ":"))
-	if title == "" {
-		title = "Library Story"
-	}
-	passages := splitLibraryPassages(text, passageRunes)
-	if len(passages) == 0 {
-		passages = []string{"Once upon a time."}
-	}
-	if len(passages) > maxPassages {
-		passages = passages[:maxPassages]
-	}
-	var out strings.Builder
-	fmt.Fprintf(&out, ":: StoryTitle\n%s\n\n", title)
-	for i, passage := range passages {
-		if i+1 == len(passages) {
-			fmt.Fprintf(&out, ":: Chapter %d {\"end\":true}\n%s\n", i+1, passage)
-			continue
-		}
-		fmt.Fprintf(&out, ":: Chapter %d\n%s\n\n[[Continue->Chapter %d]]\n\n", i+1, passage, i+2)
-	}
-	twee := out.String()
-	return twee, nil
-}
-
-var tweeUnsafe = strings.NewReplacer("[", "(", "]", ")", "<", "‹", ">", "›")
-
-func splitLibraryPassages(text string, maxRunes int) []string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	paragraphs := strings.Split(text, "\n\n")
-	var passages []string
-	for _, paragraph := range paragraphs {
-		paragraph = strings.Join(strings.Fields(paragraph), " ")
-		if paragraph == "" {
-			continue
-		}
-		paragraph = tweeUnsafe.Replace(paragraph)
-		for len([]rune(paragraph)) > maxRunes {
-			cut := maxRunes
-			runes := []rune(paragraph)
-			for i := cut; i > maxRunes/2; i-- {
-				if runes[i] == ' ' || runes[i] == '.' || runes[i] == '!' || runes[i] == '?' {
-					cut = i + 1
-					break
-				}
-			}
-			passages = append(passages, strings.TrimSpace(string(runes[:cut])))
-			paragraph = strings.TrimSpace(string(runes[cut:]))
-		}
-		if paragraph != "" {
-			passages = append(passages, strings.TrimSpace(paragraph))
-		}
-	}
-	return passages
-}
 
 var wikiComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 var wikiRef = regexp.MustCompile(`(?is)<ref[^>]*?/>|<ref[^>]*?>.*?</ref>`)

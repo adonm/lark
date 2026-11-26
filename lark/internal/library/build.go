@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,8 +15,44 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// libraryBuildLock acquires the per-pack build lock. A nil release means the
+// lock is held elsewhere and the caller should leave the build alone.
+func libraryBuildLock(dbPath string) (release func(), err error) {
+	file, err := os.OpenFile(dbPath+".build.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}
+
+// reclaimWikiDump removes the dump and any resumable pieces. Callers must hold
+// or verify the build lock first.
+func reclaimWikiDump(dump string) int64 {
+	var reclaimed int64
+	segments, _ := filepath.Glob(dump + ".seg*")
+	paths := append([]string{dump, dump + ".part", dump + ".lock"}, segments...)
+	for _, path := range paths {
+		size := fileSize(path)
+		if os.Remove(path) == nil {
+			reclaimed += size
+		}
+	}
+	return reclaimed
+}
 
 // buildWikipedia streams the dump through bzip2 and a small wiki-markup
 // cleaner, writing both the content table and its FTS5 shadow table.

@@ -10,10 +10,35 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPinnedGutenbergIDsResolveFromRepoRoot(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "scripts", "gutenberg-ids.txt"), []byte("11\n# a comment\n22\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LARK_GUTENBERG_IDS", "")
+	t.Setenv("LARK_REPO_DIR", repo)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pinnedGutenbergIDs()
+	if err != nil || !slices.Equal(ids, []int64{11, 22}) {
+		t.Fatalf("pinnedGutenbergIDs = %v, %v; want [11 22] from %s", ids, err, repo)
+	}
+}
 
 func TestDownloadResumeAndChecksum(t *testing.T) {
 	t.Parallel()
