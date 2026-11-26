@@ -19,7 +19,47 @@ export class ToolInputError extends Error {
   }
 }
 
-// ---- input validation ---------------------------------------------------
+// ---- field schemas ------------------------------------------------------
+
+// One declaration per field drives both the JSON Schema the model sees and
+// the strict runtime parser. Objects always advertise additionalProperties
+// so unknown keys reach the handler; the parser then rejects them by name.
+interface Field<T> {
+  readonly schema: Record<string, unknown>;
+  readonly required: boolean;
+  parse(value: unknown, name: string): T;
+  optional(): Field<T | undefined>;
+}
+
+function field<T>(schema: Record<string, unknown>, parse: (value: unknown, name: string) => T): Field<T> {
+  return {
+    schema,
+    required: true,
+    parse,
+    optional(): Field<T | undefined> {
+      const optionalField: Field<T | undefined> = {
+        schema,
+        required: false,
+        parse: (value, name) => (value === undefined ? undefined : parse(value, name)),
+        optional: () => optionalField,
+      };
+      return optionalField;
+    },
+  };
+}
+
+interface Limits {
+  min?: number;
+  max?: number;
+  description?: string;
+}
+
+function rangeText(limits: Limits): string {
+  if (limits.min !== undefined && limits.max !== undefined) return ` from ${limits.min} to ${limits.max}`;
+  if (limits.min !== undefined) return ` at least ${limits.min}`;
+  if (limits.max !== undefined) return ` at most ${limits.max}`;
+  return "";
+}
 
 function expectObject(value: unknown, name: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -28,85 +68,145 @@ function expectObject(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function str(limits: Limits = {}): Field<string> {
+  const schema: Record<string, unknown> = { type: "string" };
+  if (limits.min !== undefined) schema.minLength = limits.min;
+  if (limits.max !== undefined) schema.maxLength = limits.max;
+  if (limits.description !== undefined) schema.description = limits.description;
+  return field(schema, (value, name) => {
+    if (typeof value !== "string") throw new ToolInputError(`${name} must be a string`);
+    if (limits.min !== undefined && value.length < limits.min) {
+      throw new ToolInputError(`${name} must be at least ${limits.min} characters`);
+    }
+    if (limits.max !== undefined && value.length > limits.max) {
+      throw new ToolInputError(`${name} exceeds ${limits.max} characters`);
+    }
+    return value;
+  });
+}
+
+function finiteNumber(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new ToolInputError(`${name} must be a number`);
+  return value;
+}
+
+function num(limits: Limits = {}): Field<number> {
+  const schema: Record<string, unknown> = { type: "number" };
+  if (limits.min !== undefined) schema.minimum = limits.min;
+  if (limits.max !== undefined) schema.maximum = limits.max;
+  if (limits.description !== undefined) schema.description = limits.description;
+  return field(schema, (value, name) => {
+    const number = finiteNumber(value, name);
+    if ((limits.min !== undefined && number < limits.min) || (limits.max !== undefined && number > limits.max)) {
+      throw new ToolInputError(`${name} must be a number${rangeText(limits)}`);
+    }
+    return number;
+  });
+}
+
+function int(limits: Limits = {}): Field<number> {
+  const schema: Record<string, unknown> = { type: "integer" };
+  if (limits.min !== undefined) schema.minimum = limits.min;
+  if (limits.max !== undefined) schema.maximum = limits.max;
+  if (limits.description !== undefined) schema.description = limits.description;
+  return field(schema, (value, name) => {
+    const number = finiteNumber(value, name);
+    if (!Number.isInteger(number)) throw new ToolInputError(`${name} must be an integer`);
+    if ((limits.min !== undefined && number < limits.min) || (limits.max !== undefined && number > limits.max)) {
+      throw new ToolInputError(`${name} must be an integer${rangeText(limits)}`);
+    }
+    return number;
+  });
+}
+
+function bool(description?: string): Field<boolean> {
+  return field({ type: "boolean", ...(description === undefined ? {} : { description }) }, (value, name) => {
+    if (typeof value !== "boolean") throw new ToolInputError(`${name} must be a boolean`);
+    return value;
+  });
+}
+
+function oneOf<const T extends string>(values: readonly T[], description?: string): Field<T> {
+  return field(
+    { type: "string", enum: [...values], ...(description === undefined ? {} : { description }) },
+    (value, name) => {
+      if (typeof value !== "string" || !(values as readonly string[]).includes(value)) {
+        throw new ToolInputError(`${name} must be one of ${values.map((entry) => JSON.stringify(entry)).join(", ")}`);
+      }
+      return value as T;
+    },
+  );
+}
+
+interface ArrayLimits {
+  min?: number;
+  max?: number;
+  description?: string;
+}
+
+function arr<T>(item: Field<T>, limits: ArrayLimits = {}): Field<T[]> {
+  const schema: Record<string, unknown> = { type: "array", items: item.schema };
+  if (limits.min !== undefined) schema.minItems = limits.min;
+  if (limits.max !== undefined) schema.maxItems = limits.max;
+  if (limits.description !== undefined) schema.description = limits.description;
+  return field(schema, (value, name) => {
+    if (!Array.isArray(value)) throw new ToolInputError(`${name} must be an array`);
+    if (limits.min !== undefined && value.length < limits.min) {
+      throw new ToolInputError(`${name} must contain at least ${limits.min} entries`);
+    }
+    if (limits.max !== undefined && value.length > limits.max) {
+      throw new ToolInputError(`${name} must contain at most ${limits.max} entries`);
+    }
+    return value.map((entry, index) => item.parse(entry, `${name}[${index}]`));
+  });
+}
+
+type Shape = Record<string, Field<any>>;
+type Parsed<S extends Shape> = { [K in keyof S]: ReturnType<S[K]["parse"]> };
+
+function obj<S extends Shape>(shape: S, description?: string): Field<Parsed<S>> {
+  const entries = Object.entries(shape);
+  const schema: Record<string, unknown> = {
+    type: "object",
+    properties: Object.fromEntries(entries.map(([key, value]) => [key, value.schema])),
+    required: entries.filter(([, value]) => value.required).map(([key]) => key),
+    additionalProperties: true,
+    ...(description === undefined ? {} : { description }),
+  };
+  return field(schema, (value, name) => {
+    const raw = expectObject(value, name);
+    for (const key of Object.keys(raw)) {
+      if (!Object.hasOwn(shape, key)) {
+        throw new ToolInputError(`${name} has unknown field ${JSON.stringify(key)}`);
+      }
+    }
+    const parsed: Record<string, unknown> = {};
+    for (const [key, entry] of entries) parsed[key] = entry.parse(raw[key], `${name}.${key}`);
+    return parsed as Parsed<S>;
+  });
+}
+
+/** Any JSON value, used for memory values whose shape is caller-defined. */
+function json(): Field<unknown> {
+  return field({}, (value) => value);
+}
+
+/** A single string or an array of strings, as accepted by timer/emit notes. */
+function strOrList(limits: { itemMax?: number; maxItems?: number } = {}): Field<string | string[]> {
+  const list = arr(str({ max: limits.itemMax ?? 512 }), { max: limits.maxItems ?? 32 });
+  return field({ anyOf: [{ type: "string" }, list.schema] }, (value, name) =>
+    typeof value === "string" ? value : list.parse(value, name),
+  );
+}
+
 function onlyKeys(value: Record<string, unknown>, allowed: readonly string[], name: string): void {
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) throw new ToolInputError(`${name} has unknown field ${JSON.stringify(key)}`);
   }
 }
 
-function expectString(value: unknown, name: string, max = 65536): string {
-  if (typeof value !== "string") throw new ToolInputError(`${name} must be a string`);
-  if (value.length > max) throw new ToolInputError(`${name} exceeds ${max} characters`);
-  return value;
-}
-
-function optionalString(value: unknown, name: string, max = 65536): string | undefined {
-  return value === undefined ? undefined : expectString(value, name, max);
-}
-
-function optionalBoolean(value: unknown, name: string): boolean | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "boolean") throw new ToolInputError(`${name} must be a boolean`);
-  return value;
-}
-
-function optionalNumber(value: unknown, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new ToolInputError(`${name} must be a number`);
-  return value;
-}
-
-function expectNumber(value: unknown, name: string): number {
-  const number = optionalNumber(value, name);
-  if (number === undefined) throw new ToolInputError(`${name} is required`);
-  return number;
-}
-
-function integerIn(value: unknown, name: string, low: number, high: number): number {
-  const number = expectNumber(value, name);
-  if (!Number.isInteger(number) || number < low || number > high) {
-    throw new ToolInputError(`${name} must be an integer from ${low} to ${high}`);
-  }
-  return number;
-}
-
-const NOTE_PATTERN = /^(?:[A-Ga-g](?:#|b)?[0-8]|R|rest)$/;
-
-function tuneNotes(value: unknown): TuneNote[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 64) {
-    throw new ToolInputError("notes must contain 1 to 64 entries");
-  }
-  return value.map((entry, index) => {
-    const name = `notes[${index}]`;
-    const raw = expectObject(entry, name);
-    onlyKeys(raw, ["note", "beats"], name);
-    const note = expectString(raw.note, `${name}.note`, 8);
-    if (!NOTE_PATTERN.test(note)) throw new ToolInputError(`${name}.note must look like C4, F#4, Bb3, or R`);
-    const beats = expectNumber(raw.beats, `${name}.beats`);
-    if (beats < 0.25 || beats > 8) throw new ToolInputError(`${name}.beats must be 0.25..8`);
-    return { note, beats };
-  });
-}
-
-function expectStringArray(value: unknown, name: string, max = 32): string[] {
-  if (!Array.isArray(value)) throw new ToolInputError(`${name} must be an array of strings`);
-  if (value.length > max) throw new ToolInputError(`${name} has too many entries`);
-  return value.map((entry, index) => expectString(entry, `${name}[${index}]`, 512));
-}
-
-function jsonSchema(properties: Record<string, unknown>, required: readonly string[] = []): ToolSchema {
-  return {
-    type: "object",
-    properties,
-    required: [...required],
-    // Unknown keys must reach the handler so it can reject them by name; the
-    // SDK's schema decoder would otherwise silently drop them.
-    additionalProperties: true,
-  } as unknown as ToolSchema;
-}
-
-function schemaObject(properties: Record<string, unknown>, required: readonly string[] = []): Record<string, unknown> {
-  return { type: "object", properties, required: [...required], additionalProperties: true };
+function inputSchema(schema: Field<unknown>): ToolSchema {
+  return schema.schema as unknown as ToolSchema;
 }
 
 // ---- native tools -------------------------------------------------------
@@ -135,16 +235,6 @@ interface ToolDeps {
   setCompanion: (sessionID: string, companion: CompanionInstruction) => Promise<void>;
 }
 
-const COMPANION_FIELDS = [
-  "name",
-  "personality",
-  "voice",
-  "listening",
-  "form",
-  "portrait_id",
-  "configured",
-] as const;
-
 export function toolPlugin(deps: ToolDeps): Plugin.Plugin {
   return Plugin.define({
     id: "lark.tools",
@@ -165,44 +255,32 @@ function textResult(value: unknown): { content: string } {
   return { content: JSON.stringify(value) };
 }
 
+const STATE_INPUT = obj({
+  companion_id: str({ max: 64 }),
+  include: arr(
+    oneOf(["me", "companions", "terminals", "messages", "memory", "timers", "stories"]),
+    { max: 7 },
+  ).optional(),
+  messages_limit: int({ min: 1, max: 30 }).optional(),
+  messages_cursor: obj({
+    before_ts: int(),
+    before_id: str({ max: 512 }),
+  }).optional(),
+  channel: str({ max: 64 }).optional(),
+  sender: str({ max: 128 }).optional(),
+});
+
 function stateTool(deps: ToolDeps) {
   return {
     name: "lark_state",
     description:
       "Read companion, terminal, message, memory, timer, and story state. Message pages use a (before_ts, before_id) cursor.",
-    input: jsonSchema(
-      {
-        companion_id: { type: "string" },
-        include: {
-          type: "array",
-          items: {
-            type: "string",
-            enum: ["me", "companions", "terminals", "messages", "memory", "timers", "stories"],
-          },
-        },
-        messages_limit: { type: "integer", minimum: 1, maximum: 30 },
-        messages_cursor: schemaObject(
-          { before_ts: { type: "integer" }, before_id: { type: "string" } },
-          ["before_ts", "before_id"],
-        ),
-        channel: { type: "string" },
-        sender: { type: "string" },
-      },
-      ["companion_id"],
-    ),
+    input: inputSchema(STATE_INPUT),
     options: { codemode: false },
     execute: async (input: unknown) => {
-      const args = expectObject(input, "state");
-      onlyKeys(args, ["companion_id", "include", "messages_limit", "messages_cursor", "channel", "sender"], "state");
-      const companionId = expectString(args.companion_id, "companion_id", 64).toLowerCase();
-      const include = args.include === undefined
-        ? ["me", "messages", "memory", "timers", "stories"]
-        : expectStringArray(args.include, "include", 7);
-      for (const name of include) {
-        if (!["me", "companions", "terminals", "messages", "memory", "timers", "stories"].includes(name)) {
-          throw new ToolInputError(`include has unknown value ${JSON.stringify(name)}`);
-        }
-      }
+      const args = STATE_INPUT.parse(input, "state");
+      const companionId = args.companion_id.toLowerCase();
+      const include = args.include ?? ["me", "messages", "memory", "timers", "stories"];
       const out: Record<string, unknown> = { companion_id: companionId };
       if (include.includes("me")) {
         const me = deps.db.getCompanion(companionId);
@@ -212,31 +290,19 @@ function stateTool(deps: ToolDeps) {
       if (include.includes("companions")) out.companions = deps.db.listCompanions();
       if (include.includes("terminals")) out.terminals = deps.db.listTerminals();
       if (include.includes("messages")) {
-        let limit = 10;
-        if (args.messages_limit !== undefined) {
-          const value = optionalNumber(args.messages_limit, "messages_limit");
-          if (value === undefined || !Number.isInteger(value) || value < 1 || value > 30) {
-            throw new ToolInputError("messages_limit must be an integer from 1 to 30");
-          }
-          limit = value;
-        }
+        const limit = args.messages_limit ?? 10;
         let cursor: { beforeTs: number; beforeId: string } | undefined;
         if (args.messages_cursor !== undefined) {
-          const raw = expectObject(args.messages_cursor, "messages_cursor");
-          onlyKeys(raw, ["before_ts", "before_id"], "messages_cursor");
-          const beforeTs = optionalNumber(raw.before_ts, "messages_cursor.before_ts");
-          const beforeId = optionalString(raw.before_id, "messages_cursor.before_id", 512);
-          if (beforeTs === undefined || !Number.isInteger(beforeTs) || beforeId === undefined || beforeId === "") {
-            throw new ToolInputError("messages_cursor requires before_ts and before_id");
-          }
+          const { before_ts: beforeTs, before_id: beforeId } = args.messages_cursor;
+          if (beforeId === "") throw new ToolInputError("messages_cursor requires before_ts and before_id");
           cursor = { beforeTs, beforeId };
         }
         const page = deps.db.listMessages({
           companionId,
           limit,
           ...(cursor === undefined ? {} : { cursor }),
-          ...(args.channel === undefined ? {} : { channel: expectString(args.channel, "channel", 64) }),
-          ...(args.sender === undefined ? {} : { sender: expectString(args.sender, "sender", 128) }),
+          ...(args.channel === undefined ? {} : { channel: args.channel }),
+          ...(args.sender === undefined ? {} : { sender: args.sender }),
         });
         out.messages = page.messages;
         out.messages_has_more = page.hasMore;
@@ -261,21 +327,26 @@ function stateTool(deps: ToolDeps) {
   };
 }
 
-function timerNotes(value: unknown): string | string[] {
-  if (typeof value === "string") return value;
-  return expectStringArray(value, "timer.notes", 32);
+interface TimerArgs {
+  in_seconds?: number;
+  at?: string;
+  label?: string;
+  say?: string;
+  chime?: "tap" | "think" | "intercom" | "celebrate";
+  notes?: string | string[];
+  wake_agent?: boolean;
 }
 
 /** Optional timer fields shared by set and update. */
-function timerFields(raw: Record<string, unknown>): TimerEdit {
+function timerEdit(raw: TimerArgs): TimerEdit {
   return {
-    ...(raw.in_seconds === undefined ? {} : { inSeconds: optionalNumber(raw.in_seconds, "timer.in_seconds") }),
-    ...(raw.at === undefined ? {} : { at: expectString(raw.at, "timer.at", 64) }),
-    ...(raw.label === undefined ? {} : { label: expectString(raw.label, "timer.label", 60) }),
-    ...(raw.say === undefined ? {} : { say: expectString(raw.say, "timer.say", 600) }),
-    ...(raw.chime === undefined ? {} : { chime: expectString(raw.chime, "timer.chime", 16) }),
-    ...(raw.notes === undefined ? {} : { notes: timerNotes(raw.notes) }),
-    ...(raw.wake_agent === undefined ? {} : { wakeAgent: optionalBoolean(raw.wake_agent, "timer.wake_agent") }),
+    ...(raw.in_seconds === undefined ? {} : { inSeconds: raw.in_seconds }),
+    ...(raw.at === undefined ? {} : { at: raw.at }),
+    ...(raw.label === undefined ? {} : { label: raw.label }),
+    ...(raw.say === undefined ? {} : { say: raw.say }),
+    ...(raw.chime === undefined ? {} : { chime: raw.chime }),
+    ...(raw.notes === undefined ? {} : { notes: raw.notes }),
+    ...(raw.wake_agent === undefined ? {} : { wakeAgent: raw.wake_agent }),
   };
 }
 
@@ -315,64 +386,54 @@ function timerState(row: TimerRow): Record<string, unknown> {
   };
 }
 
+const PATCH_INPUT = obj({
+  companion_id: str({ max: 64 }).optional(),
+  companion: obj({
+    name: str({ max: 80 }).optional(),
+    personality: str({ max: 2000 }).optional(),
+    voice: str({ max: 64 }).optional(),
+    listening: bool().optional(),
+    form: str({ max: 80 }).optional(),
+    portrait_id: str({ max: 128 }).optional(),
+    configured: bool().optional(),
+  }).optional(),
+  memory: obj({
+    op: oneOf(["set", "delete"]).optional(),
+    scope: str({ max: 64 }),
+    key: str({ max: 128 }),
+    value: json().optional(),
+    expected_version: int({ min: 0 }).optional(),
+  }).optional(),
+  timer: obj({
+    op: oneOf(["set", "update", "cancel"]).optional(),
+    id: str({ max: 64 }).optional(),
+    all: bool().optional(),
+    in_seconds: num({ min: 1, max: 86400 }).optional(),
+    at: str({ max: 64 }).optional(),
+    label: str({ max: 60 }).optional(),
+    say: str({ max: 600 }).optional(),
+    chime: oneOf(["tap", "think", "intercom", "celebrate"]).optional(),
+    notes: strOrList().optional(),
+    wake_agent: bool().optional(),
+  }).optional(),
+  terminal: obj({
+    terminal_id: str({ max: 128 }).optional(),
+    volume: int({ min: 0, max: 100 }),
+  }).optional(),
+});
+
 function patchTool(deps: ToolDeps) {
   return {
     name: "lark_patch",
     description:
       "Update a companion, terminal volume, memory entry, or timer. Every field is validated; unknown fields are rejected.",
-    input: jsonSchema({
-      companion_id: { type: "string" },
-      companion: schemaObject(
-        {
-          name: { type: "string", maxLength: 80 },
-          personality: { type: "string", maxLength: 2000 },
-          voice: { type: "string", maxLength: 64 },
-          listening: { type: "boolean" },
-          form: { type: "string", maxLength: 80 },
-          portrait_id: { type: "string", maxLength: 128 },
-          configured: { type: "boolean" },
-        },
-        [],
-      ),
-      memory: schemaObject(
-        {
-          op: { type: "string", enum: ["set", "delete"] },
-          scope: { type: "string", maxLength: 64 },
-          key: { type: "string", maxLength: 128 },
-          value: {},
-          expected_version: { type: "integer", minimum: 0 },
-        },
-        ["scope", "key"],
-      ),
-      timer: schemaObject(
-        {
-          op: { type: "string", enum: ["set", "update", "cancel"] },
-          id: { type: "string" },
-          all: { type: "boolean" },
-          in_seconds: { type: "number", minimum: 1, maximum: 86400 },
-          at: { type: "string" },
-          label: { type: "string", maxLength: 60 },
-          say: { type: "string", maxLength: 600 },
-          chime: { type: "string", enum: ["tap", "think", "intercom", "celebrate"] },
-          notes: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
-          wake_agent: { type: "boolean" },
-        },
-        [],
-      ),
-      terminal: schemaObject(
-        { terminal_id: { type: "string" }, volume: { type: "integer", minimum: 0, maximum: 100 } },
-        ["volume"],
-      ),
-    }),
+    input: inputSchema(PATCH_INPUT),
     options: { codemode: false },
     execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
-      const args = expectObject(input, "patch");
-      onlyKeys(args, ["companion_id", "companion", "memory", "timer", "terminal"], "patch");
-      const companionId = (
-        args.companion_id === undefined
-          ? deps.companionFor(context.sessionID)
-          : expectString(args.companion_id, "companion_id", 64).toLowerCase()
-      );
+      const args = PATCH_INPUT.parse(input, "patch");
+      const companionId = args.companion_id === undefined
+        ? deps.companionFor(context.sessionID)
+        : args.companion_id.toLowerCase();
       if (companionId === undefined) throw new ToolInputError("companion_id is required");
       if (args.companion === undefined && args.memory === undefined && args.timer === undefined && args.terminal === undefined) {
         throw new ToolInputError("patch needs one of companion, memory, timer, or terminal");
@@ -381,20 +442,18 @@ function patchTool(deps: ToolDeps) {
       return deps.gate.mutate(context.sessionID, context.signal, async () => {
         const out: Record<string, unknown> = { companion_id: companionId };
         if (args.companion !== undefined) {
-          const raw = expectObject(args.companion, "companion");
-          onlyKeys(raw, COMPANION_FIELDS, "companion");
           const patch: CompanionPatch = {};
-          if (raw.name !== undefined) {
-            const name = expectString(raw.name, "companion.name", 80).trim();
+          if (args.companion.name !== undefined) {
+            const name = args.companion.name.trim();
             if (name === "") throw new ToolInputError("companion.name cannot be empty");
             patch.name = name;
           }
-          if (raw.personality !== undefined) patch.personality = expectString(raw.personality, "companion.personality", 2000);
-          if (raw.voice !== undefined) patch.voice = expectString(raw.voice, "companion.voice", 64);
-          if (raw.listening !== undefined) patch.listening = optionalBoolean(raw.listening, "companion.listening");
-          if (raw.form !== undefined) patch.form = expectString(raw.form, "companion.form", 80);
-          if (raw.portrait_id !== undefined) patch.portraitId = expectString(raw.portrait_id, "companion.portrait_id", 128);
-          if (raw.configured !== undefined) patch.configured = optionalBoolean(raw.configured, "companion.configured");
+          if (args.companion.personality !== undefined) patch.personality = args.companion.personality;
+          if (args.companion.voice !== undefined) patch.voice = args.companion.voice;
+          if (args.companion.listening !== undefined) patch.listening = args.companion.listening;
+          if (args.companion.form !== undefined) patch.form = args.companion.form;
+          if (args.companion.portrait_id !== undefined) patch.portraitId = args.companion.portrait_id;
+          if (args.companion.configured !== undefined) patch.configured = args.companion.configured;
           const saved = deps.db.patchCompanion(companionId, patch);
           if (saved === undefined) throw new ToolInputError(`companion ${companionId} not found`);
           out.companion = saved;
@@ -408,62 +467,41 @@ function patchTool(deps: ToolDeps) {
         }
 
         if (args.memory !== undefined) {
-          const raw = expectObject(args.memory, "memory");
-          onlyKeys(raw, ["op", "scope", "key", "value", "expected_version"], "memory");
-          const scope = expectString(raw.scope, "memory.scope", 64);
-          const key = expectString(raw.key, "memory.key", 128);
-          const op = raw.op === undefined ? "set" : expectString(raw.op, "memory.op", 16);
-          if (op === "delete") {
+          const { scope, key } = args.memory;
+          if (args.memory.op === "delete") {
             deps.db.deleteMemory(scope, key);
             out.memory = { scope, key, deleted: true };
-          } else if (op === "set") {
-            if (!("value" in raw)) throw new ToolInputError("memory.value is required for set");
-            const expectedVersion = optionalNumber(raw.expected_version, "memory.expected_version");
-            if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 0)) {
-              throw new ToolInputError("memory.expected_version must be a non-negative integer");
-            }
+          } else {
+            if (args.memory.value === undefined) throw new ToolInputError("memory.value is required for set");
             const saved = deps.db.putMemory({
               scope,
               key,
-              value: raw.value,
-              ...(expectedVersion === undefined ? {} : { expectedVersion }),
+              value: args.memory.value,
+              ...(args.memory.expected_version === undefined ? {} : { expectedVersion: args.memory.expected_version }),
             });
             out.memory = saved;
-          } else {
-            throw new ToolInputError("memory.op must be set or delete");
           }
         }
 
         if (args.terminal !== undefined) {
-          const raw = expectObject(args.terminal, "terminal");
-          onlyKeys(raw, ["terminal_id", "volume"], "terminal");
-          const terminalId = raw.terminal_id === undefined
-            ? expectString(args.companion_id ?? context.sessionID, "terminal_id", 128)
-            : expectString(raw.terminal_id, "terminal_id", 128);
-          const volume = optionalNumber(raw.volume, "terminal.volume");
-          if (volume === undefined || !Number.isInteger(volume) || volume < 0 || volume > 100) {
-            throw new ToolInputError("terminal.volume must be an integer from 0 to 100");
-          }
-          deps.db.setTerminalVolume(terminalId, volume);
-          out.terminal = { terminal_id: terminalId, volume };
+          const terminalId = args.terminal.terminal_id ?? args.companion_id ?? context.sessionID;
+          deps.db.setTerminalVolume(terminalId, args.terminal.volume);
+          out.terminal = { terminal_id: terminalId, volume: args.terminal.volume };
         }
 
         if (args.timer !== undefined) {
           if (deps.timers === undefined) throw new ToolInputError("timers are unavailable");
-          const raw = expectObject(args.timer, "timer");
-          onlyKeys(raw, ["op", "id", "all", "in_seconds", "at", "label", "say", "chime", "notes", "wake_agent"], "timer");
-          const op = raw.op === undefined ? "set" : expectString(raw.op, "timer.op", 16);
+          const op = args.timer.op ?? "set";
           if (op === "set") {
-            out.timer = deps.timers.set({ companionId, ...timerFields(raw) });
+            out.timer = deps.timers.set({ companionId, ...timerEdit(args.timer) });
           } else if (op === "update") {
-            const id = expectString(raw.id, "timer.id", 64);
-            out.timer = deps.timers.update(id, companionId, timerFields(raw));
-          } else if (op === "cancel") {
-            const id = optionalString(raw.id, "timer.id", 64);
-            const all = optionalBoolean(raw.all, "timer.all");
-            out.cancelled = deps.timers.cancel(companionId, { ...(id === undefined ? {} : { id }), ...(all === undefined ? {} : { all }) });
+            if (args.timer.id === undefined) throw new ToolInputError("timer.id is required");
+            out.timer = deps.timers.update(args.timer.id, companionId, timerEdit(args.timer));
           } else {
-            throw new ToolInputError("timer.op must be set, update, or cancel");
+            out.cancelled = deps.timers.cancel(companionId, {
+              ...(args.timer.id === undefined ? {} : { id: args.timer.id }),
+              ...(args.timer.all === undefined ? {} : { all: args.timer.all }),
+            });
           }
         }
         return textResult(out);
@@ -472,26 +510,24 @@ function patchTool(deps: ToolDeps) {
   };
 }
 
+const STORY_INPUT = obj({
+  op: oneOf(["create", "update", "get", "delete"]),
+  id: str({ max: 64 }).optional(),
+  twee: str({ max: 65536 }).optional(),
+  author: str({ max: 200 }).optional(),
+});
+
 function storyTool(deps: ToolDeps) {
   return {
     name: "lark_story",
     description: "Create, update, get, or delete a Twee 3 story. Input is validated before it is stored.",
-    input: jsonSchema(
-      {
-        op: { type: "string", enum: ["create", "update", "get", "delete"] },
-        id: { type: "string", maxLength: 64 },
-        twee: { type: "string", maxLength: 65536 },
-        author: { type: "string", maxLength: 200 },
-      },
-      ["op"],
-    ),
+    input: inputSchema(STORY_INPUT),
     options: { codemode: false },
     execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
-      const args = expectObject(input, "story");
-      onlyKeys(args, ["op", "id", "twee", "author"], "story");
-      const op = expectString(args.op, "op", 16);
-      const id = optionalString(args.id, "id", 64);
+      const args = STORY_INPUT.parse(input, "story");
+      const op = args.op;
       if (op === "get") {
+        const id = args.id;
         if (id === undefined) throw new ToolInputError("story.get requires id");
         const story = deps.db.getStory(id);
         if (story === undefined) throw new ToolInputError(`story ${id} not found`);
@@ -500,6 +536,7 @@ function storyTool(deps: ToolDeps) {
         return textResult({ story, ...(progress === undefined ? {} : { progress }) });
       }
       if (op === "delete") {
+        const id = args.id;
         if (id === undefined) throw new ToolInputError("story.delete requires id");
         return deps.gate.mutate(context.sessionID, context.signal, () => {
           if (deps.db.getStory(id) === undefined) throw new ToolInputError(`story ${id} not found`);
@@ -507,142 +544,134 @@ function storyTool(deps: ToolDeps) {
           return textResult({ id, deleted: true });
         });
       }
-      if (op !== "create" && op !== "update") throw new ToolInputError("story.op must be create, update, get, or delete");
-      const twee = optionalString(args.twee, "twee", 65536);
+      const twee = args.twee;
       if (twee === undefined) throw new ToolInputError(`story.${op} requires twee`);
       return deps.gate.mutate(context.sessionID, context.signal, () => {
         const parsed = parseTwee(twee);
-        const storyId = id ?? slugFromTitle(parsed.title);
+        const storyId = args.id ?? slugFromTitle(parsed.title);
         const existing = deps.db.getStory(storyId);
         if (op === "create" && existing !== undefined) throw new ToolInputError(`story ${storyId} already exists`);
         if (op === "update" && existing === undefined) throw new ToolInputError(`story ${storyId} not found`);
-        const author = optionalString(args.author, "author", 200) ?? existing?.author ?? "";
+        const author = args.author ?? existing?.author ?? "";
         return textResult(saveParsedStory(deps.db, parsed, twee, author, storyId));
       });
     },
   };
 }
 
+const LIBRARY_INPUT = obj({
+  op: oneOf(["search", "read", "list", "import"]),
+  query: str({ max: 500 }).optional(),
+  source: oneOf(["auto", "simple", "enwiki", "gutenberg"]).optional(),
+  ref: str({ max: 500 }).optional(),
+  section: int({ min: 0 }).optional(),
+  limit: int({ min: 1, max: 30 }).optional(),
+});
+
 function libraryTool(deps: ToolDeps) {
   return {
     name: "lark_library",
     description:
       "Search, read, list, or import from the offline library. Search ranks Simple Wikipedia, English Wikipedia, and Gutenberg together; reads are bounded to 3200 characters per section.",
-    input: jsonSchema(
-      {
-        op: { type: "string", enum: ["search", "read", "list", "import"] },
-        query: { type: "string", maxLength: 500 },
-        source: { type: "string", enum: ["auto", "simple", "enwiki", "gutenberg"] },
-        ref: { type: "string", maxLength: 500 },
-        section: { type: "integer", minimum: 0 },
-        limit: { type: "integer", minimum: 1, maximum: 30 },
-      },
-      ["op"],
-    ),
+    input: inputSchema(LIBRARY_INPUT),
     options: { codemode: false },
     execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
-      const args = expectObject(input, "library");
-      onlyKeys(args, ["op", "query", "source", "ref", "section", "limit"], "library");
+      const args = LIBRARY_INPUT.parse(input, "library");
       const library = deps.library;
       if (library === undefined) throw new ToolInputError("library is unavailable");
-      const op = expectString(args.op, "op", 16);
-      const source = (args.source === undefined ? "auto" : expectString(args.source, "source", 16)) as SourceChoice;
-      if (!["auto", "simple", "enwiki", "gutenberg"].includes(source)) {
-        throw new ToolInputError("source must be auto, simple, enwiki, or gutenberg");
+      const source: SourceChoice = args.source ?? "auto";
+      if (args.op === "search") {
+        if (args.query === undefined) throw new ToolInputError("query is required");
+        return textResult(library.search(args.query, { source, ...(args.limit === undefined ? {} : { limit: args.limit }) }));
       }
-      const limit = optionalNumber(args.limit, "limit");
-      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 30)) {
-        throw new ToolInputError("limit must be an integer from 1 to 30");
+      if (args.op === "read") {
+        if (args.ref === undefined) throw new ToolInputError("ref is required");
+        return textResult(library.read(source, args.ref, args.section ?? 0));
       }
-      if (op === "search") {
-        const query = expectString(args.query, "query", 500);
-        return textResult(library.search(query, { source, ...(limit === undefined ? {} : { limit }) }));
-      }
-      if (op === "read") {
-        const ref = expectString(args.ref, "ref", 500);
-        const section = optionalNumber(args.section, "section");
-        if (section !== undefined && (!Number.isInteger(section) || section < 0)) {
-          throw new ToolInputError("section must be a non-negative integer");
-        }
-        return textResult(library.read(source, ref, section ?? 0));
-      }
-      if (op === "list") return textResult(library.list(source, limit ?? 20));
-      if (op === "import") {
-        const ref = expectString(args.ref, "ref", 500);
-        return deps.gate.mutate(context.sessionID, context.signal, () => {
-          const loaded = library.sourceText(source, ref);
-          const twee = tweeFromText(loaded.title, loaded.text);
-          const parsed = parseTwee(twee);
-          return textResult({ ...saveParsedStory(deps.db, parsed, twee, loaded.author), source: loaded.used });
-        });
-      }
-      throw new ToolInputError("library.op must be search, read, list, or import");
+      if (args.op === "list") return textResult(library.list(source, args.limit ?? 20));
+      const ref = args.ref;
+      if (ref === undefined) throw new ToolInputError("ref is required");
+      return deps.gate.mutate(context.sessionID, context.signal, () => {
+        const loaded = library.sourceText(source, ref);
+        const twee = tweeFromText(loaded.title, loaded.text);
+        const parsed = parseTwee(twee);
+        return textResult({ ...saveParsedStory(deps.db, parsed, twee, loaded.author), source: loaded.used });
+      });
     },
   };
 }
+
+const NOTE_PATTERN = /^(?:[A-Ga-g](?:#|b)?[0-8]|R|rest)$/;
+
+function tuneNotes(notes: readonly TuneNote[] | undefined): TuneNote[] {
+  if (notes === undefined) throw new ToolInputError("notes must contain 1 to 64 entries");
+  return notes.map((entry, index) => {
+    if (!NOTE_PATTERN.test(entry.note)) {
+      throw new ToolInputError(`notes[${index}].note must look like C4, F#4, Bb3, or R`);
+    }
+    return { note: entry.note, beats: entry.beats };
+  });
+}
+
+const AUDIO_INPUT = obj({
+  op: oneOf(["metronome", "tune", "identify", "stop"]),
+  bpm: int({ min: 30, max: 240 }).optional(),
+  beats: int({ min: 1, max: 12 }).optional(),
+  duration_s: int({ min: 5, max: 300 }).optional(),
+  style: oneOf(["hum", "chime", "pluck"]).optional(),
+  tempo: int({ min: 40, max: 240 }).optional(),
+  notes: arr(
+    obj({
+      note: str({ max: 8 }),
+      beats: num({ min: 0.25, max: 8 }),
+    }),
+    { min: 1, max: 64 },
+  ).optional(),
+  title: str({ max: 80 }).optional(),
+  seconds: int({ min: 6, max: 10 }).optional(),
+});
 
 function audioTool(deps: ToolDeps) {
   return {
     name: "lark_audio",
     description:
       "Play a sample-exact metronome or a short hum/chime/pluck tune, identify music playing nearby, or stop current metronome/tune playback.",
-    input: jsonSchema(
-      {
-        op: { type: "string", enum: ["metronome", "tune", "identify", "stop"] },
-        bpm: { type: "integer", minimum: 30, maximum: 240 },
-        beats: { type: "integer", minimum: 1, maximum: 12 },
-        duration_s: { type: "integer", minimum: 5, maximum: 300 },
-        style: { type: "string", enum: ["hum", "chime", "pluck"] },
-        tempo: { type: "integer", minimum: 40, maximum: 240 },
-        notes: {
-          type: "array",
-          maxItems: 64,
-          items: schemaObject({ note: { type: "string" }, beats: { type: "number", minimum: 0.25, maximum: 8 } }, ["note", "beats"]),
-        },
-        title: { type: "string", maxLength: 80 },
-        seconds: { type: "integer", minimum: 6, maximum: 10 },
-      },
-      ["op"],
-    ),
+    input: inputSchema(AUDIO_INPUT),
     options: { codemode: false },
     execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
-      const args = expectObject(input, "audio");
-      onlyKeys(args, ["op", "bpm", "beats", "duration_s", "style", "tempo", "notes", "title", "seconds"], "audio");
-      const op = expectString(args.op, "op", 16);
+      const args = AUDIO_INPUT.parse(input, "audio");
       const fields: Record<string, readonly string[]> = {
         metronome: ["op", "bpm", "beats", "duration_s"],
         tune: ["op", "style", "tempo", "notes", "title"],
         identify: ["op", "seconds"],
         stop: ["op"],
       };
-      const allowed = fields[op];
-      if (allowed === undefined) throw new ToolInputError("audio.op must be metronome, tune, identify, or stop");
-      onlyKeys(args, allowed, "audio");
+      onlyKeys(expectObject(input, "audio"), fields[args.op] ?? ["op"], "audio");
       const companionId = deps.companionFor(context.sessionID);
       if (companionId === undefined) throw new ToolInputError("companion_id is required");
 
       return deps.gate.mutate(context.sessionID, context.signal, async () => {
         const audio = deps.audio;
         if (audio === undefined) throw new ToolInputError("audio is unavailable");
-        if (op === "metronome") {
-          const bpm = integerIn(args.bpm, "bpm", 30, 240);
-          const beats = args.beats === undefined ? 4 : integerIn(args.beats, "beats", 1, 12);
-          const durationS = args.duration_s === undefined ? 120 : integerIn(args.duration_s, "duration_s", 5, 300);
-          return textResult(await audio.metronome(companionId, bpm, beats, durationS));
+        if (args.op === "metronome") {
+          if (args.bpm === undefined) throw new ToolInputError("bpm is required");
+          return textResult(
+            await audio.metronome(companionId, args.bpm, args.beats ?? 4, args.duration_s ?? 120),
+          );
         }
-        if (op === "tune") {
-          const style = args.style === undefined ? "hum" : expectString(args.style, "style", 16);
-          if (style !== "hum" && style !== "chime" && style !== "pluck") {
-            throw new ToolInputError("style must be hum, chime, or pluck");
-          }
-          const tempo = args.tempo === undefined ? 100 : integerIn(args.tempo, "tempo", 40, 240);
-          const notes = tuneNotes(args.notes);
-          const title = optionalString(args.title, "title", 80);
-          return textResult(await audio.tune(companionId, tempo, style, notes, title));
+        if (args.op === "tune") {
+          return textResult(
+            await audio.tune(
+              companionId,
+              args.tempo ?? 100,
+              args.style ?? "hum",
+              tuneNotes(args.notes),
+              args.title,
+            ),
+          );
         }
-        if (op === "identify") {
-          const seconds = args.seconds === undefined ? 7 : integerIn(args.seconds, "seconds", 6, 10);
-          const result: Record<string, unknown> = { ...(await audio.identify(companionId, seconds)) };
+        if (args.op === "identify") {
+          const result: Record<string, unknown> = { ...(await audio.identify(companionId, args.seconds ?? 7)) };
           delete result.terminal_id;
           delete result.seconds;
           return textResult(result);
@@ -653,38 +682,35 @@ function audioTool(deps: ToolDeps) {
   };
 }
 
+const EMIT_INPUT = obj({
+  to: str({ max: 128 }).optional(),
+  say: str({ max: 1000 }).optional(),
+  intercom: obj({
+    from: str({ max: 128 }),
+    text: str({ max: 1000 }),
+  }).optional(),
+  notes: strOrList().optional(),
+  sfx: str({ max: 64 }).optional(),
+});
+
 function emitTool(deps: ToolDeps) {
   return {
     name: "lark_emit",
     description: "Emit an intercom message, spoken line, melody, or sound effect to a terminal.",
-    input: jsonSchema({
-      to: { type: "string", maxLength: 128 },
-      say: { type: "string", maxLength: 1000 },
-      intercom: schemaObject({ from: { type: "string" }, text: { type: "string", maxLength: 1000 } }, ["from", "text"]),
-      notes: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
-      sfx: { type: "string", maxLength: 64 },
-    }),
+    input: inputSchema(EMIT_INPUT),
     options: { codemode: false },
     execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
-      const args = expectObject(input, "emit");
-      onlyKeys(args, ["to", "say", "intercom", "notes", "sfx"], "emit");
+      const args = EMIT_INPUT.parse(input, "emit");
       const event: EmitEvent = {};
-      if (args.to !== undefined) event.to = expectString(args.to, "to", 128);
-      if (args.say !== undefined) event.say = expectString(args.say, "say", 1000);
-      if (args.intercom !== undefined) {
-        const raw = expectObject(args.intercom, "intercom");
-        onlyKeys(raw, ["from", "text"], "intercom");
-        event.intercom = {
-          from: expectString(raw.from, "intercom.from", 128),
-          text: expectString(raw.text, "intercom.text", 1000),
-        };
-      }
+      if (args.to !== undefined) event.to = args.to;
+      if (args.say !== undefined) event.say = args.say;
+      if (args.intercom !== undefined) event.intercom = { from: args.intercom.from, text: args.intercom.text };
       if (args.notes !== undefined) {
         event.notes = typeof args.notes === "string"
           ? args.notes.split(/\s+/).filter(Boolean)
-          : expectStringArray(args.notes, "notes", 32);
+          : args.notes;
       }
-      if (args.sfx !== undefined) event.sfx = expectString(args.sfx, "sfx", 64);
+      if (args.sfx !== undefined) event.sfx = args.sfx;
       if (event.say === undefined && event.intercom === undefined && event.notes === undefined && event.sfx === undefined) {
         throw new ToolInputError("emit needs say, intercom, notes, or sfx");
       }
