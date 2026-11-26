@@ -181,7 +181,10 @@ systemctl --user daemon-reload
 retire_unit() {
     local unit=$1
     if [[ -e $units/$unit ]]; then
-        systemctl --user disable --now "$unit"
+        # Separate disable/stop: `--now` refuses to run where sd_booted()
+        # reports false (containers) even though the user manager is up.
+        systemctl --user disable "$unit"
+        systemctl --user stop "$unit"
         rm -f -- "$units/$unit"
     fi
 }
