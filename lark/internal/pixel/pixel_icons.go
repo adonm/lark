@@ -7,20 +7,17 @@ import (
 
 // UI palette for pixel-art screens (applied after LUT grading).
 var (
-	pxPanelBG      = imagecolor.RGBA{30, 26, 43, 255}
-	pxPanelBorder  = imagecolor.RGBA{141, 121, 148, 255}
-	pxTileBG       = imagecolor.RGBA{42, 35, 56, 255}
-	pxTileBorder   = imagecolor.RGBA{112, 95, 124, 255}
-	pxTileActiveBG = imagecolor.RGBA{62, 49, 84, 255}
-	pxInk          = imagecolor.RGBA{250, 240, 246, 255}
-	pxMuted        = imagecolor.RGBA{197, 182, 204, 255}
-	Peach          = imagecolor.RGBA{255, 193, 168, 255}
-	Mint           = imagecolor.RGBA{154, 229, 195, 255}
-	pxWarn         = imagecolor.RGBA{255, 208, 142, 255}
-	Danger         = imagecolor.RGBA{255, 175, 194, 255}
-	Sky            = imagecolor.RGBA{156, 191, 232, 255}
-	pxQRDark       = imagecolor.RGBA{18, 16, 26, 255}
-	pxQRWhite      = imagecolor.RGBA{255, 255, 255, 255}
+	pxPanelBG     = imagecolor.RGBA{30, 26, 43, 255}
+	pxPanelBorder = imagecolor.RGBA{141, 121, 148, 255}
+	pxTileBG      = imagecolor.RGBA{42, 35, 56, 255}
+	pxTileBorder  = imagecolor.RGBA{112, 95, 124, 255}
+	pxInk         = imagecolor.RGBA{250, 240, 246, 255}
+	pxMuted       = imagecolor.RGBA{197, 182, 204, 255}
+	Peach         = imagecolor.RGBA{255, 193, 168, 255}
+	Mint          = imagecolor.RGBA{154, 229, 195, 255}
+	pxWarn        = imagecolor.RGBA{255, 208, 142, 255}
+	Danger        = imagecolor.RGBA{255, 175, 194, 255}
+	Sky           = imagecolor.RGBA{156, 191, 232, 255}
 )
 
 var pxIconPalette = map[string]imagecolor.RGBA{
@@ -207,13 +204,6 @@ var pxStatusSprites = map[string][]string{
 		"rrrwwrrr",
 		"rrrrrrrr",
 	},
-}
-
-// defaultPixelBackground generates a cozy procedural pixel scene (sky gradient,
-// clouds, distant hills, and foreground meadow) at logical grid resolution.
-func defaultPixelBackground(w, h int, tintHex string) *imagecolor.RGBA {
-	_ = tintHex
-	return nil
 }
 
 func drawDefaultPixelBackground(c *pixelCanvas) {

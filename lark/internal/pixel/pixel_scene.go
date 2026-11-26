@@ -5,29 +5,11 @@ import (
 	"image"
 	imagecolor "image/color"
 	"strconv"
-	"strings"
 
 	"lark/fonts/dogica"
 )
 
-const (
-	DrawerMenu        = "menu"
-	DrawerMore        = "more"
-	DrawerStories     = "stories"
-	DrawerStoryReader = "story-reader"
-	DrawerMemories    = "memories"
-	DrawerPair        = "pair"
-	DrawerUnpair      = "unpair"
-	DrawerVolume      = "volume"
-	DrawerVoice       = "voice"
-	DrawerIntercom    = "intercom"
-	DrawerStats       = "stats"
-)
-
-const (
-	menuRowsPerPage = 2
-	tilesPerPage    = 6
-)
+const DrawerIntercom = "intercom"
 
 type Action struct{ Kind, Value string }
 
@@ -40,76 +22,12 @@ type Scene struct {
 	DuringTurn           bool
 }
 
-func (s *Scene) HasIntercom() bool { return s != nil && s.Intercom != nil }
-
-func (card IntercomCard) Scene() Scene {
-	// Reply targets the conversation partner, not the card's title: a card the
-	// companion sends about its own Delta Chat reply must not record a voice
-	// note addressed to itself.
-	reply := card.Reply
-	if reply == "" {
-		reply = card.Companion
-	}
-	return Scene{
-		Title:    card.Companion,
-		Heading:  card.Heading,
-		Text:     card.Text,
-		Intercom: &card,
-		Actions: map[string]Action{
-			"close": {"close-card", ""},
-			"reply": {"reply", strings.ToLower(reply)},
-		},
-	}
-}
-
-func NoticeScene(title, message string) Scene {
-	return Scene{
-		Title:   title,
-		Text:    message,
-		Actions: map[string]Action{"close": {"close-view", ""}},
-	}
-}
-
-func TimerScene(message string) Scene {
-	return Scene{
-		Title:   "Timer",
-		Text:    message,
-		Actions: map[string]Action{"close": {"close-view", ""}},
-	}
-}
-
-func (s *Scene) StopControl() {
-	if s.Actions == nil {
-		s.Actions = map[string]Action{}
-	}
-	s.Actions["stop"] = Action{"stop-turn", ""}
-}
-
 type Row struct{ Title, Text string }
-
-type Peer struct{ ID, Name string }
 
 type Tile struct {
 	ID, Label, Detail, Icon string
 	Action                  Action
 	Saved                   bool
-}
-
-func ClampPage(page, count, pageSize int) int {
-	if pageSize <= 0 || count <= 0 {
-		return 0
-	}
-	pages := (count + pageSize - 1) / pageSize
-	return max(0, min(page, pages-1))
-}
-
-func ClipMenu(s string, maxRunes int) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return string(r[:max(1, maxRunes-1)]) + "…"
 }
 
 func AddLabeledHit(hits []HitBox, spec Spec, id, label string, r image.Rectangle) []HitBox {
@@ -347,16 +265,6 @@ func RenderMenuWithHits(spec Spec, page int, th Theme) (*image.RGBA, []HitBox, m
 		return "menu-" + item.ID, Action{"menu-open", item.ID}
 	})
 	return RenderMenu(spec, page, th), hits, actions
-}
-
-func RenderMoreWithHits(spec Spec, page int, th Theme) (*image.RGBA, []HitBox, map[string]Action) {
-	if th.Border.A == 0 {
-		th = DefaultTheme()
-	}
-	hits, actions := menuGridHits(spec, MoreMenuItems, page, func(item pixelMenuItem) (string, Action) {
-		return "menu-" + item.ID, Action{"menu-open", item.ID}
-	})
-	return renderPixelMenuGrid(spec, "More", MoreMenuItems, page, th, ""), hits, actions
 }
 
 func RenderVolumeWithHits(spec Spec, vol, page int, th Theme) (*image.RGBA, []HitBox, map[string]Action) {

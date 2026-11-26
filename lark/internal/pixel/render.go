@@ -124,10 +124,6 @@ func (e *FrameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *im
 	return e.jpegImg
 }
 
-func (e *FrameEncoder) Encode(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int) []byte {
-	return e.EncodeWithCodecs(fb, rgba, r, rev, width, CodecBitAll)
-}
-
 func (e *FrameEncoder) EncodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.Rectangle, rev uint64, width int, allowed uint8) []byte {
 	if allowed == 0 {
 		allowed = CodecBitAll
@@ -196,9 +192,4 @@ func (e *FrameEncoder) EncodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 	binary.LittleEndian.PutUint16(out[10:], uint16(rev))
 	copy(out[12:], bestPayload)
 	return out
-}
-
-func DisplayFrame(fb []uint16, r image.Rectangle, rev uint64, width int) []byte {
-	var enc FrameEncoder
-	return enc.Encode(fb, nil, r, rev, width)
 }

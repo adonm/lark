@@ -1,15 +1,12 @@
 package pixel
 
 import (
-	"encoding/json"
 	"fmt"
 	"image"
 	imagecolor "image/color"
 	"math"
 	"slices"
 	"strconv"
-	"strings"
-	"unicode"
 
 	"lark/fonts/dogica"
 	"rsc.io/qr"
@@ -37,27 +34,6 @@ var HomeMenuItems = []pixelMenuItem{
 	{ID: "memories", Label: "Memories", Icon: "memories", Accent: Danger},
 	{ID: "voice", Label: "Voice", Icon: "voice", Accent: Mint},
 	{ID: "more", Label: "More", Icon: "stats", Accent: Sky},
-}
-
-var MoreMenuItems = []pixelMenuItem{
-	{ID: "volume", Label: "Volume", Icon: "volume", Accent: Sky},
-	{ID: "pair", Label: "Pair", Icon: "pair", Accent: Peach},
-	{ID: "unpair", Label: "Unpair", Icon: "unpair", Accent: Danger},
-	{ID: "stats", Label: "Stats", Icon: "stats", Accent: Mint},
-}
-
-type Story struct {
-	ID       string
-	Title    string
-	Passage  string
-	Passages int
-	Color    imagecolor.RGBA
-}
-
-type MemoryItem struct {
-	Section string
-	Key     string
-	Value   string // raw JSON
 }
 
 func finishPixelScreen(c *pixelCanvas, spec Spec, texts []pixelTextOp) *image.RGBA {
@@ -303,70 +279,6 @@ func renderPixelMenuGrid(spec Spec, title string, items []pixelMenuItem, page in
 	return finishPixelScreen(c, spec, texts)
 }
 
-func RenderStoriesList(spec Spec, stories []Story, page int, th Theme) *image.RGBA {
-	if th.Border.A == 0 {
-		th = DefaultTheme()
-	}
-	c := newPixelCanvas(spec.LogicalW, spec.LogicalH)
-	darkenBackground(c, th.Bg)
-	s := spec.ArtScale
-	var texts []pixelTextOp
-
-	titleH := 12
-	titleRect := image.Rect(spec.Safe.Min.X, spec.Safe.Min.Y, spec.Safe.Max.X, spec.Safe.Min.Y+titleH)
-	texts = addCenteredText(texts, PhysicalRect(titleRect, s), "Stories", dogica.Bold, spec.TitleTextScale, th.Accent2)
-
-	perPage := 2
-	if !spec.Round {
-		perPage = 3
-	}
-	navH := NavHeight(spec)
-	totalPages := max(1, (len(stories)+perPage-1)/perPage)
-	page = max(0, min(page, totalPages-1))
-
-	listTop := spec.Safe.Min.Y + titleH + 2
-	listBottom := spec.Safe.Max.Y - navH - 3
-	gapY := 3
-	rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
-
-	start := page * perPage
-	for i := range perPage {
-		idx := start + i
-		if idx >= len(stories) {
-			break
-		}
-		st := stories[idx]
-		ry := listTop + i*(rowH+gapY)
-		rx := spec.Safe.Min.X
-		rw := spec.Safe.Dx()
-		c.panel(rx, ry, rw, rowH, pxTileBG, th.Border)
-
-		coverCol := st.Color
-		if coverCol.A == 0 {
-			coverCol = th.Accent
-		}
-		coverX, coverY := rx+3, ry+(rowH-14)/2
-		c.panel(coverX, coverY, 14, 14, coverCol, pxInk)
-		c.blitSprite(coverX+1, coverY+1, pxMenuSprites["books"], pxIconPalette, 1)
-
-		physText := PhysicalRect(image.Rect(rx+20, ry+2, rx+rw-3, ry+rowH-2), s)
-		title := truncateEllipsisPx(st.Title, dogica.Bold, spec.BodyTextScale, physText.Dx())
-		prog := fmt.Sprintf("%d scenes", max(1, st.Passages))
-		if st.Passage != "" {
-			prog = truncateEllipsisPx(st.Passage, dogica.Regular, spec.BodyTextScale, physText.Dx())
-		}
-		lineH := dogica.Regular.LineHeight * spec.BodyTextScale
-		topY := physText.Min.Y + max(0, (physText.Dy()-2*lineH)/2)
-		texts = append(texts,
-			pixelTextOp{x: physText.Min.X, y: topY, text: title, font: dogica.Bold, scale: spec.BodyTextScale, color: pxInk},
-			pixelTextOp{x: physText.Min.X, y: topY + lineH, text: prog, font: dogica.Regular, scale: spec.BodyTextScale, color: pxMuted},
-		)
-	}
-
-	texts = drawNavBar(c, spec, texts, page, totalPages, th.Border)
-	return finishPixelScreen(c, spec, texts)
-}
-
 func wrapTitleLines(title string, f dogica.Font, scale, maxW, maxLines int) []string {
 	lines := wrapTextPx(title, f, scale, maxW)
 	if len(lines) <= maxLines {
@@ -375,51 +287,6 @@ func wrapTitleLines(title string, f dogica.Font, scale, maxW, maxLines int) []st
 	out := slices.Clone(lines[:maxLines])
 	out[maxLines-1] = truncateEllipsisPx(out[maxLines-1]+" …", f, scale, maxW)
 	return out
-}
-
-func RenderReader(spec Spec, title, body string, page, bodyScaleOverride int, th Theme) *image.RGBA {
-	if th.Border.A == 0 {
-		th = DefaultTheme()
-	}
-	c := newPixelCanvas(spec.LogicalW, spec.LogicalH)
-	darkenBackground(c, th.Bg)
-	s := spec.ArtScale
-	bodyScale := spec.BodyTextScale
-	if bodyScaleOverride > 0 {
-		bodyScale = bodyScaleOverride
-	}
-	var texts []pixelTextOp
-
-	safePhys := PhysicalRect(spec.Safe, s)
-	titleLines := wrapTitleLines(title, dogica.Bold, spec.BodyTextScale, safePhys.Dx(), 2)
-	titleLineH := dogica.Bold.LineHeight * spec.BodyTextScale
-	titlePhysH := max(12*s, len(titleLines)*titleLineH)
-	titleH := (titlePhysH + s - 1) / s
-	for i, line := range titleLines {
-		lineBox := image.Rect(safePhys.Min.X, safePhys.Min.Y+i*titleLineH, safePhys.Max.X, safePhys.Min.Y+(i+1)*titleLineH)
-		texts = addCenteredText(texts, lineBox, line, dogica.Bold, spec.BodyTextScale, th.Accent2)
-	}
-
-	navH := NavHeight(spec)
-	panelRect := image.Rect(spec.Safe.Min.X, spec.Safe.Min.Y+titleH+1, spec.Safe.Max.X, spec.Safe.Max.Y-navH-2)
-	c.panel(panelRect.Min.X, panelRect.Min.Y, panelRect.Dx(), panelRect.Dy(), pxTileBG, th.Border)
-
-	physPanel := PhysicalRect(panelRect, s)
-	padX, padY := 10, 10
-	lineH := dogica.Regular.LineHeight * bodyScale
-	lines := wrapTextPx(body, dogica.Regular, bodyScale, physPanel.Dx()-2*padX)
-	pages := paginateLines(lines, lineH, physPanel.Dy()-2*padY)
-	page = max(0, min(page, len(pages)-1))
-
-	for i, line := range pages[page] {
-		texts = append(texts, pixelTextOp{
-			x: physPanel.Min.X + padX, y: physPanel.Min.Y + padY + i*lineH,
-			text: line, font: dogica.Regular, scale: bodyScale, color: pxInk,
-		})
-	}
-
-	texts = drawNavBar(c, spec, texts, page, len(pages), th.Border)
-	return finishPixelScreen(c, spec, texts)
 }
 
 func RenderStoryReaderWithHits(spec Spec, title, body string, choices []string, end bool, page int, bg, narrator *image.RGBA, th Theme) (*image.RGBA, []HitBox, map[string]Action, int) {
@@ -535,176 +402,6 @@ func RenderStoryReaderWithHits(spec Spec, title, body string, choices []string, 
 		acts["menu-back"] = Action{"menu-back", ""}
 	}
 	return finishPixelScreen(c, spec, texts), hits, acts, totalPages
-}
-
-func humanizeKey(key string) string {
-	k := strings.TrimSpace(key)
-	for _, p := range []string{"story_", "reading:", "reading_"} {
-		if strings.HasPrefix(k, p) {
-			k = strings.TrimPrefix(k, p)
-			break
-		}
-	}
-	k = strings.ReplaceAll(k, "_", " ")
-	k = strings.ReplaceAll(k, "-", " ")
-	words := strings.Fields(k)
-	for i, w := range words {
-		runes := []rune(w)
-		if len(runes) > 0 {
-			runes[0] = unicode.ToUpper(runes[0])
-			words[i] = string(runes)
-		}
-	}
-	if len(words) == 0 {
-		return key
-	}
-	return strings.Join(words, " ")
-}
-
-func FormatMemoryTitle(section, key string, titles map[string]string) string {
-	if titles != nil {
-		if t := strings.TrimSpace(titles[key]); t != "" {
-			return t
-		}
-		trimmed := strings.TrimPrefix(key, "reading:")
-		if t := strings.TrimSpace(titles[trimmed]); t != "" {
-			return t
-		}
-	}
-	return humanizeKey(key)
-}
-
-// FormatMemoryLines converts structured memory JSON into readable prose or key: value lines.
-func FormatMemoryLines(rawJSON string) []string {
-	var val any
-	if err := json.Unmarshal([]byte(rawJSON), &val); err != nil {
-		return []string{rawJSON}
-	}
-	return formatMemoryValue(val)
-}
-
-func formatMemoryValue(val any) []string {
-	switch v := val.(type) {
-	case string:
-		return []string{v}
-	case map[string]any:
-		if txt, ok := v["text"].(string); ok && strings.TrimSpace(txt) != "" {
-			return []string{txt}
-		}
-		if parts, ok := v["parts"].([]any); ok {
-			var strs []string
-			for _, p := range parts {
-				if s, ok := p.(string); ok && strings.TrimSpace(s) != "" {
-					strs = append(strs, strings.TrimSpace(s))
-				}
-			}
-			if len(strs) > 0 {
-				return []string{strings.Join(strs, " ")}
-			}
-		}
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
-		var lines []string
-		for _, k := range keys {
-			lines = append(lines, fmt.Sprintf("%s: %s", k, formatMemoryScalar(v[k])))
-		}
-		return lines
-	case []any:
-		var lines []string
-		for _, item := range v {
-			lines = append(lines, "- "+formatMemoryScalar(item))
-		}
-		return lines
-	default:
-		return []string{formatMemoryScalar(v)}
-	}
-}
-
-func formatMemoryScalar(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case float64:
-		if x == float64(int64(x)) {
-			return fmt.Sprintf("%d", int64(x))
-		}
-		return fmt.Sprintf("%g", x)
-	case bool:
-		if x {
-			return "yes"
-		}
-		return "no"
-	case nil:
-		return "none"
-	default:
-		b, _ := json.Marshal(x)
-		return string(b)
-	}
-}
-
-func RenderMemoriesList(spec Spec, items []MemoryItem, titles map[string]string, page int, th Theme) *image.RGBA {
-	if th.Border.A == 0 {
-		th = DefaultTheme()
-	}
-	c := newPixelCanvas(spec.LogicalW, spec.LogicalH)
-	darkenBackground(c, th.Bg)
-	s := spec.ArtScale
-	var texts []pixelTextOp
-
-	titleH := 12
-	titleRect := image.Rect(spec.Safe.Min.X, spec.Safe.Min.Y, spec.Safe.Max.X, spec.Safe.Min.Y+titleH)
-	texts = addCenteredText(texts, PhysicalRect(titleRect, s), "Memories", dogica.Bold, spec.TitleTextScale, th.Accent)
-
-	perPage := 2
-	if !spec.Round {
-		perPage = 3
-	}
-	navH := NavHeight(spec)
-	totalPages := max(1, (len(items)+perPage-1)/perPage)
-	page = max(0, min(page, totalPages-1))
-
-	listTop := spec.Safe.Min.Y + titleH + 2
-	listBottom := spec.Safe.Max.Y - navH - 3
-	gapY := 3
-	rowH := (listBottom - listTop - (perPage-1)*gapY) / perPage
-
-	start := page * perPage
-	for i := range perPage {
-		idx := start + i
-		if idx >= len(items) {
-			break
-		}
-		it := items[idx]
-		ry := listTop + i*(rowH+gapY)
-		rx := spec.Safe.Min.X
-		rw := spec.Safe.Dx()
-		c.panel(rx, ry, rw, rowH, pxTileBG, th.Border)
-
-		physText := PhysicalRect(image.Rect(rx+3, ry+2, rx+rw-3, ry+rowH-2), s)
-		readableTitle := FormatMemoryTitle(it.Section, it.Key, titles)
-		header := truncateEllipsisPx(it.Section+": "+readableTitle, dogica.Bold, spec.BodyTextScale, physText.Dx())
-		preview := strings.Join(FormatMemoryLines(it.Value), " ")
-		preview = truncateEllipsisPx(preview, dogica.Regular, spec.BodyTextScale, physText.Dx())
-
-		lineH := dogica.Regular.LineHeight * spec.BodyTextScale
-		topY := physText.Min.Y + max(0, (physText.Dy()-2*lineH)/2)
-		texts = append(texts,
-			pixelTextOp{x: physText.Min.X, y: topY, text: header, font: dogica.Bold, scale: spec.BodyTextScale, color: th.Accent},
-			pixelTextOp{x: physText.Min.X, y: topY + lineH, text: preview, font: dogica.Regular, scale: spec.BodyTextScale, color: pxInk},
-		)
-	}
-
-	texts = drawNavBar(c, spec, texts, page, totalPages, th.Border)
-	return finishPixelScreen(c, spec, texts)
-}
-
-func RenderMemoryDetail(spec Spec, item MemoryItem, titles map[string]string, page, bodyScaleOverride int, th Theme) *image.RGBA {
-	body := strings.Join(FormatMemoryLines(item.Value), "\n")
-	title := item.Section + ": " + FormatMemoryTitle(item.Section, item.Key, titles)
-	return RenderReader(spec, title, body, page, bodyScaleOverride, th)
 }
 
 type pairQRLayout struct {

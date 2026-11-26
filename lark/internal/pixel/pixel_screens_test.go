@@ -14,39 +14,9 @@ import (
 	"lark/fonts/dogica"
 )
 
-func TestFormatMemoryLinesAndTitles(t *testing.T) {
-	t.Parallel()
-	if got := FormatMemoryLines(`{"text":"Once upon a time."}`); len(got) != 1 || got[0] != "Once upon a time." {
-		t.Fatalf("text field: %v", got)
-	}
-	if got := FormatMemoryLines(`{"parts":["Line one.","Line two."]}`); len(got) != 1 || got[0] != "Line one. Line two." {
-		t.Fatalf("parts field: %v", got)
-	}
-	got := FormatMemoryLines(`{"Mint":4,"Cake":0}`)
-	if len(got) != 2 || got[0] != "Cake: 0" || got[1] != "Mint: 4" {
-		t.Fatalf("object fields: %v", got)
-	}
-	titles := map[string]string{"monsters": "Monsters", "lost_island": "The Lost Island"}
-	if got := FormatMemoryTitle("Game saves", "monsters", titles); got != "Monsters" {
-		t.Fatalf("game save title = %q, want Monsters", got)
-	}
-	if got := FormatMemoryTitle("Reading", "story_lost_island", nil); got != "Lost Island" {
-		t.Fatalf("humanized story title = %q, want Lost Island", got)
-	}
-}
-
 func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 	t.Parallel()
-	stories := []Story{
-		{ID: "lost_island", Title: "The Lost Island", Passage: "Harbor", Passages: 7, Color: Mint},
-		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: Peach},
-	}
 	storyChoices := []string{"Take the mossy path", "Follow the lantern", "Wait here"}
-	memories := []MemoryItem{
-		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed."}`},
-		{Section: "Game saves", Key: "monsters", Value: `{"Mint":4,"Cake":0}`},
-	}
-	titles := map[string]string{"monsters": "Monsters"}
 	invite := "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&i=abcdef1234567890&s=1234567890abcdef&a=greg%40example.org"
 
 	voices := []Tile{
@@ -59,7 +29,6 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 		th := DefaultTheme()
 		voiceP1, v1Hits, _ := RenderVoiceWithHits(spec, voices, "bf_lily", 0, th)
 		voiceP2, _, _ := RenderVoiceWithHits(spec, voices, "bf_lily", 1, th)
-		moreImg, _, _ := RenderMoreWithHits(spec, 0, th)
 		volImg, _, _ := RenderVolumeWithHits(spec, 60, 0, th)
 		statsImg, _, _ := RenderStatsWithHits(spec, []Row{{"Companion", "Greg"}, {"Voice", "Heart"}}, th)
 		wantVoiceP1 := 3
@@ -84,13 +53,10 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 			{"home-hint", RenderHome(spec, nil, nil, GradeDay, "", "")},
 			{"home-caption", RenderHome(spec, nil, nil, GradeDay, "speaking", "Message from Mum: dinner's ready")},
 			{"menu", RenderMenu(spec, 0, th)},
-			{"more", moreImg},
 			{"voice-p1", voiceP1},
 			{"voice-p2", voiceP2},
 			{"volume", volImg},
 			{"stats", statsImg},
-			{"stories", RenderStoriesList(spec, stories, 0, th)},
-			{"reader", RenderReader(spec, "The Lost Island", "Once upon a time in a faraway land.", 0, 0, th)},
 			{"story-bg", func() *image.RGBA {
 				img, _, _, _ := RenderStoryReaderWithHits(spec, "Woods", "Fork in the trail.", storyChoices, false, 0, nil, nil, th)
 				return img
@@ -104,8 +70,6 @@ func TestEveryScreenFitsSafeAreaAndNoTextOverflow(t *testing.T) {
 				}
 				return img
 			}()},
-			{"memories", RenderMemoriesList(spec, memories, titles, 0, th)},
-			{"memory-detail", RenderMemoryDetail(spec, memories[1], titles, 0, 0, th)},
 		}
 		pairImg, err := RenderPair(spec, "Greg", invite)
 		if err != nil {
@@ -160,23 +124,7 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 	gregBG, _ := LoadBackgroundPNG(gregDir)
 	th := DeriveTheme(gregBG, poses[:])
 
-	stories := []Story{
-		{ID: "lost_island", Title: "The Lost Island", Passage: "Harbor", Passages: 7, Color: Mint},
-		{ID: "clockwork_owl", Title: "The Clockwork Owl", Passage: "Start", Passages: 5, Color: Peach},
-		{ID: "moonlight_meadow", Title: "Moonlight Meadow", Passage: "Clearing", Passages: 4, Color: Sky},
-	}
 	storyChoices := []string{"Take the mossy path", "Follow the lantern", "Wait here"}
-	lostIslandText := "Once upon a time in a faraway land, there were people who always told tales about this island. All of them thought it was true, so they tried hunting for the Lost Island."
-	memories := []MemoryItem{
-		{Section: "Notes", Key: "bedtime", Value: `{"text":"Greg likes warm chamomile tea before bed and stories about old sailing ships."}`},
-		{Section: "Reading", Key: "story_lost_island", Value: `{"parts":["Once upon a time in a faraway land,","they sailed toward the Lost Island."]}`},
-		{Section: "Game saves", Key: "monsters", Value: `{"Mint":4,"Cake":0,"Greg":7}`},
-		{Section: "Shared", Key: "household", Value: `{"dinner":"6:30 PM","mum":"paired"}`},
-	}
-	titles := map[string]string{
-		"story_lost_island": "The Lost Island",
-		"monsters":          "Monsters",
-	}
 	invite := "https://i.delta.chat/#72120f6660ef1a2151b318904197b15e&i=abcdef1234567890&s=1234567890abcdef&a=greg%40example.org"
 
 	type sampleEntry struct {
@@ -234,8 +182,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		if spec.Round {
 			save(spec.name+"-menu-p2", RenderMenu(spec, 1, th))
 		}
-		moreImg, _, _ := RenderMoreWithHits(spec, 0, th)
-		save(spec.name+"-more", moreImg)
 		voiceP1, _, _ := RenderVoiceWithHits(spec, voices, "bf_lily", 0, th)
 		voiceP2, _, _ := RenderVoiceWithHits(spec, voices, "bf_lily", 1, th)
 		save(spec.name+"-voice-p1", voiceP1)
@@ -244,8 +190,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 		save(spec.name+"-volume", volImg)
 		statsImg, _, _ := RenderStatsWithHits(spec, []Row{{"Companion", "Greg"}, {"Battery", "88%"}, {"Voice", "Heart"}}, th)
 		save(spec.name+"-stats", statsImg)
-		save(spec.name+"-stories-list", RenderStoriesList(spec, stories, 0, th))
-		save(spec.name+"-reader", RenderReader(spec, "The Lost Island", lostIslandText, 0, 0, th))
 		storyTextImg, _, _, _ := RenderStoryReaderWithHits(spec, "The Whispering Woods", "You stand at a fork in the trail.", storyChoices, false, 0, gregBG, poses[0], th)
 		save(spec.name+"-story-bg", storyTextImg)
 		storyChoicesImg, choiceHits, _, _ := RenderStoryReaderWithHits(spec, "The Whispering Woods", "You stand at a fork in the trail.", storyChoices, false, 1, gregBG, poses[0], th)
@@ -255,8 +199,6 @@ func TestGeneratePixelRenderSamples(t *testing.T) {
 				t.Fatalf("%s choice %s height %dpx < 48px", spec.name, ch.ID, ch.Y2-ch.Y1+1)
 			}
 		}
-		save(spec.name+"-memories-list", RenderMemoriesList(spec, memories, titles, 0, th))
-		save(spec.name+"-memories-detail", RenderMemoryDetail(spec, memories[2], titles, 0, 0, th))
 		pairImg, err := RenderPair(spec, "Greg", invite)
 		if err != nil {
 			t.Fatal(err)

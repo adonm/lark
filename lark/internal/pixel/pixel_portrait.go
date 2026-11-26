@@ -547,48 +547,6 @@ func buildPlaceholderPoses() [4]*image.RGBA {
 	return poses
 }
 
-func NormalizeBackground(src image.Image, w, h int) (*image.RGBA, error) {
-	if src == nil {
-		return nil, errors.New("background image is nil")
-	}
-	if w <= 0 || h <= 0 {
-		w, h = 160, 120
-	}
-	sb := src.Bounds()
-	// Center-crop source to target aspect ratio before scaling.
-	srcAspect := float64(sb.Dx()) / float64(sb.Dy())
-	dstAspect := float64(w) / float64(h)
-	crop := sb
-	if srcAspect > dstAspect {
-		newW := max(1, int(math.Round(float64(sb.Dy())*dstAspect)))
-		dx := (sb.Dx() - newW) / 2
-		crop = image.Rect(sb.Min.X+dx, sb.Min.Y, sb.Min.X+dx+newW, sb.Max.Y)
-	} else if srcAspect < dstAspect {
-		newH := max(1, int(math.Round(float64(sb.Dx())/dstAspect)))
-		dy := (sb.Dy() - newH) / 2
-		crop = image.Rect(sb.Min.X, sb.Min.Y+dy, sb.Max.X, sb.Min.Y+dy+newH)
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, crop, draw.Src, nil)
-	for i := 3; i < len(dst.Pix); i += 4 {
-		dst.Pix[i] = 255
-	}
-	quantizePortraitPoses([]*image.RGBA{dst}, pixelMaxColors)
-	return dst, nil
-}
-
-func SaveBackgroundPNG(dir string, bg *image.RGBA) error {
-	if bg == nil {
-		return nil
-	}
-	path := filepath.Join(dir, "bg.png")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	return errors.Join(png.Encode(f, bg), f.Close())
-}
-
 func LoadBackgroundPNG(dir string) (*image.RGBA, error) {
 	f, err := os.Open(filepath.Join(dir, "bg.png"))
 	if err != nil {

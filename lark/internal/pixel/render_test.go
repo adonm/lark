@@ -113,7 +113,8 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 	if r := DirtyRect(nil, next, 360, 360); r != image.Rect(0, 0, 360, 360) {
 		t.Fatal(r)
 	}
-	frame := DisplayFrame(next, rect, 0x10303, 360)
+	var enc FrameEncoder
+	frame := enc.EncodeWithCodecs(next, nil, rect, 0x10303, 360, CodecBitAll)
 	if got := frame[:12]; !slices.Equal(got, []byte{3, 18, 0, 20, 0, 6, 1, 2, 0, 1, 3, 3}) {
 		t.Fatalf("header %x", got)
 	}
@@ -125,7 +126,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 	for i := range 129 {
 		next[360+i] = uint16(i)*213 + 1
 	}
-	frame = DisplayFrame(next, image.Rect(0, 1, 129, 2), 1, 360)
+	frame = enc.EncodeWithCodecs(next, nil, image.Rect(0, 1, 129, 2), 1, 360, CodecBitAll)
 	_, _, p = decodeDisplay(t, frame)
 	if frame[9] != 0 || !slices.Equal(p, next[360:489]) || frame[12] != 0 || frame[13] != 1 {
 		t.Fatal("incompressible pixels did not use raw big-endian fallback")
@@ -137,7 +138,7 @@ func TestDirtyRectAndRLE565(t *testing.T) {
 			next[i] = 0x1234
 		}
 	}
-	frame = DisplayFrame(next, image.Rect(0, 0, 300, 1), 19, 360)
+	frame = enc.EncodeWithCodecs(next, nil, image.Rect(0, 0, 300, 1), 19, 360, CodecBitAll)
 	_, _, p = decodeDisplay(t, frame)
 	if frame[9] != 1 || !slices.Equal(p, next[:300]) {
 		t.Fatal("mixed runs did not round-trip")
@@ -153,7 +154,7 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 	for i := range 60 {
 		fb[i] = uint16(i)*213 + 17
 	}
-	f := enc.Encode(fb, nil, image.Rect(0, 0, 60, 1), 1, w)
+	f := enc.EncodeWithCodecs(fb, nil, image.Rect(0, 0, 60, 1), 1, w, CodecBitAll)
 	if f[9] != FrameCodecRaw {
 		t.Fatalf("small incompressible rect chose codec %d, want Raw (0)", f[9])
 	}
@@ -166,7 +167,7 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 			fb[y*w+x] = 0x1234
 		}
 	}
-	f = enc.Encode(fb, nil, image.Rect(0, 0, 128, 128), 2, w)
+	f = enc.EncodeWithCodecs(fb, nil, image.Rect(0, 0, 128, 128), 2, w, CodecBitAll)
 	if f[9] != FrameCodecRLE565 && f[9] != FrameCodecLZ4 {
 		t.Fatalf("uniform rect chose codec %d, want lossless RLE565 or LZ4", f[9])
 	}
@@ -179,7 +180,7 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 			fb[y*w+x] = uint16(x%8)*0x1111 + 0x0101
 		}
 	}
-	f = enc.Encode(fb, nil, image.Rect(0, 0, 48, 32), 3, w)
+	f = enc.EncodeWithCodecs(fb, nil, image.Rect(0, 0, 48, 32), 3, w, CodecBitAll)
 	if f[9] != FrameCodecLZ4 {
 		t.Fatalf("repeating pattern chose codec %d, want LZ4 (3)", f[9])
 	}
@@ -201,7 +202,7 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 			fb[y*w+x] = Pack565(r8, g8, b8)
 		}
 	}
-	f = enc.Encode(fb, nil, image.Rect(0, 0, 160, 160), 4, w)
+	f = enc.EncodeWithCodecs(fb, nil, image.Rect(0, 0, 160, 160), 4, w, CodecBitAll)
 	if f[9] != FrameCodecJPEG {
 		t.Fatalf("high-entropy 160x160 gradient chose codec %d, want JPEG (2)", f[9])
 	}
@@ -228,11 +229,11 @@ func BenchmarkFrameEncoderRLE(b *testing.B) {
 	var enc FrameEncoder
 	fb := make([]uint16, 360*360)
 	rect := image.Rect(0, 0, 360, 360)
-	enc.Encode(fb, nil, rect, 1, 360)
+	enc.EncodeWithCodecs(fb, nil, rect, 1, 360, CodecBitAll)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := range b.N {
-		_ = enc.Encode(fb, nil, rect, uint64(i), 360)
+		_ = enc.EncodeWithCodecs(fb, nil, rect, uint64(i), 360, CodecBitAll)
 	}
 }
 
@@ -245,11 +246,11 @@ func BenchmarkFrameEncoderLZ4(b *testing.B) {
 		}
 	}
 	rect := image.Rect(0, 0, 360, 360)
-	enc.Encode(fb, nil, rect, 1, 360)
+	enc.EncodeWithCodecs(fb, nil, rect, 1, 360, CodecBitAll)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := range b.N {
-		_ = enc.Encode(fb, nil, rect, uint64(i), 360)
+		_ = enc.EncodeWithCodecs(fb, nil, rect, uint64(i), 360, CodecBitAll)
 	}
 }
 
@@ -265,10 +266,10 @@ func BenchmarkFrameEncoderJPEG(b *testing.B) {
 		}
 	}
 	rect := image.Rect(0, 0, 160, 160)
-	enc.Encode(fb, nil, rect, 1, 360)
+	enc.EncodeWithCodecs(fb, nil, rect, 1, 360, CodecBitAll)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := range b.N {
-		_ = enc.Encode(fb, nil, rect, uint64(i), 360)
+		_ = enc.EncodeWithCodecs(fb, nil, rect, uint64(i), 360, CodecBitAll)
 	}
 }

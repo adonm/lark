@@ -121,16 +121,6 @@ func (c *pixelCanvas) rect(x, y, w, h int, col imagecolor.RGBA) {
 	}
 }
 
-func (c *pixelCanvas) strokeRect(x, y, w, h int, col imagecolor.RGBA) {
-	if w <= 0 || h <= 0 || col.A == 0 {
-		return
-	}
-	c.rect(x, y, w, 1, col)
-	c.rect(x, y+h-1, w, 1, col)
-	c.rect(x, y, 1, h, col)
-	c.rect(x+w-1, y, 1, h, col)
-}
-
 func (c *pixelCanvas) panel(x, y, w, h int, bg, border imagecolor.RGBA) {
 	if w < 2 || h < 2 {
 		return
@@ -140,41 +130,6 @@ func (c *pixelCanvas) panel(x, y, w, h int, bg, border imagecolor.RGBA) {
 	c.rect(x+1, y+h-1, w-2, 1, border)
 	c.rect(x, y+1, 1, h-2, border)
 	c.rect(x+w-1, y+1, 1, h-2, border)
-}
-
-func (c *pixelCanvas) line(x0, y0, x1, y1 int, col imagecolor.RGBA) {
-	dx := x1 - x0
-	if dx < 0 {
-		dx = -dx
-	}
-	dy := y1 - y0
-	if dy < 0 {
-		dy = -dy
-	}
-	sx := -1
-	if x0 < x1 {
-		sx = 1
-	}
-	sy := -1
-	if y0 < y1 {
-		sy = 1
-	}
-	err := dx - dy
-	for {
-		c.set(x0, y0, col)
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 > -dy {
-			err -= dy
-			x0 += sx
-		}
-		if e2 < dx {
-			err += dx
-			y0 += sy
-		}
-	}
 }
 
 func (c *pixelCanvas) blit(x, y int, src *image.RGBA) {
@@ -283,10 +238,6 @@ func (c *pixelCanvas) scaleNearest(scale int) *image.RGBA {
 		}
 	}
 	return out
-}
-
-func (c *pixelCanvas) text(x, y int, s string, f dogica.Font, col imagecolor.RGBA) {
-	drawTextPhysical(c.img, x, y, s, f, 1, col)
 }
 
 func lookupGlyph(f dogica.Font, r rune) dogica.Glyph {
