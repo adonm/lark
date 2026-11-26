@@ -29,6 +29,10 @@ import type { DcPeerTurn } from "./deltachat.ts";
 import type { SpeculationHandle, TurnDelta, TurnResult } from "./opencode.ts";
 import type { PortraitManager } from "./portraits.ts";
 import { drain, errMessage } from "./util.ts";
+import { nameMatches } from "./matching.ts";
+import { DeltaCapture, SpeechStream, sanitizeSpeech } from "./speech.ts";
+
+export { nameMatches, sanitizeSpeech };
 
 export type { TurnDelta, TurnResult };
 export type TurnHandle = SpeculationHandle;
@@ -164,161 +168,11 @@ export interface RouterOptions {
   log?: (line: string) => void;
 }
 
-function normalize(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
 function statusOf(state: Pick<TerminalState, "speaking" | "busy" | "listening">): string {
   if (state.speaking) return "speaking";
   if (state.busy) return "thinking";
   if (state.listening) return "listening";
   return "idle";
-}
-
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  const rows = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) rows[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    let previous = rows[0] ?? 0;
-    rows[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const current = rows[j] ?? 0;
-      rows[j] = Math.min(
-        (rows[j] ?? 0) + 1,
-        (rows[j - 1] ?? 0) + 1,
-        previous + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-      previous = current;
-    }
-  }
-  return rows[b.length] ?? a.length;
-}
-
-/** Fuzzy companion-name match in the first five words (edit distance ≤ 2). */
-export function nameMatches(transcript: string, name: string): boolean {
-  const target = normalize(name);
-  if (target === "") return false;
-  const words = normalize(transcript).split(" ").slice(0, 5);
-  for (const word of words) {
-    if (word === "") continue;
-    if (word === target) return true;
-    for (const part of target.split(" ")) {
-      if (part !== "" && levenshtein(word, part) <= 2) return true;
-    }
-  }
-  return false;
-}
-
-export function sanitizeSpeech(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/[*_#`>]+/g, "")
-    .replace(/\[silent\]/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-interface Sink {
-  push(text: string): void;
-}
-
-/** Accumulates deltas until a turn is promoted, then forwards them in order. */
-class DeltaCapture {
-  readonly #buffer: string[] = [];
-  #sink: Sink | undefined;
-
-  get buffered(): string {
-    return this.#buffer.join("");
-  }
-
-  push(text: string): void {
-    if (this.#sink === undefined) {
-      this.#buffer.push(text);
-    } else {
-      this.#sink.push(text);
-    }
-  }
-
-  commit(sink: Sink): void {
-    if (this.#sink !== undefined) return;
-    this.#sink = sink;
-    const pending = this.#buffer.join("");
-    this.#buffer.length = 0;
-    if (pending !== "") sink.push(pending);
-  }
-}
-
-class SpeechStream implements Sink {
-  readonly #edge: RouterEdge;
-  readonly #terminalId: string;
-  readonly #voice: string;
-  readonly #streamId: number;
-  #chain: Promise<void> = Promise.resolve();
-  #started = false;
-  #buffer = "";
-  #closed = false;
-
-  constructor(edge: RouterEdge, terminalId: string, voice: string, streamId: number) {
-    this.#edge = edge;
-    this.#terminalId = terminalId;
-    this.#voice = voice;
-    this.#streamId = streamId;
-  }
-
-  push(text: string): void {
-    if (this.#closed) return;
-    this.#buffer += text;
-    for (;;) {
-      const cut = this.#cut(this.#buffer);
-      if (cut < 0) return;
-      const chunk = this.#buffer.slice(0, cut).trim();
-      this.#buffer = this.#buffer.slice(cut);
-      if (chunk !== "") void this.#chunk(chunk);
-    }
-  }
-
-  #cut(buffer: string): number {
-    const sentence = /[.!?](?:["'’”)]*)\s/.exec(buffer);
-    if (sentence !== null) {
-      return (sentence.index ?? 0) + sentence[0].length;
-    }
-    if (buffer.length >= 140) {
-      const clause = /[,;:]\s/.exec(buffer.slice(40));
-      if (clause !== null) return 40 + (clause.index ?? 0) + clause[0].length;
-      const space = buffer.lastIndexOf(" ");
-      if (space > 60) return space + 1;
-    }
-    return -1;
-  }
-
-  #chunk(text: string): void {
-    const clean = sanitizeSpeech(text);
-    if (clean === "") return;
-    this.#chain = this.#chain.then(async () => {
-      if (!this.#started) {
-        this.#started = true;
-        await this.#edge.speakStart(this.#terminalId, this.#streamId, this.#voice);
-      }
-      this.#edge.speakChunk(this.#terminalId, this.#streamId, clean);
-    });
-  }
-
-  async end(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    const rest = sanitizeSpeech(this.#buffer.trim());
-    this.#buffer = "";
-    if (rest !== "") await this.#chain.then(async () => {
-      if (!this.#started) {
-        this.#started = true;
-        await this.#edge.speakStart(this.#terminalId, this.#streamId, this.#voice);
-      }
-      this.#edge.speakChunk(this.#terminalId, this.#streamId, rest);
-    });
-    await this.#chain;
-    if (this.#started) this.#edge.speakEnd(this.#terminalId, this.#streamId);
-  }
 }
 
 export class Router {

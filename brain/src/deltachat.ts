@@ -11,7 +11,17 @@ import { StdioDeltaChat } from "@deltachat/jsonrpc-client";
 import type { Companion, LarkDb } from "./db.ts";
 import { parseTwee, slugFromTitle } from "./stories.ts";
 import type { RemoteManager } from "./remote.ts";
+import {
+  contactKey,
+  contactName,
+  normalizeAddress,
+  parseSlashCommand,
+  runDcCommand,
+  welcomeText,
+} from "./dc_commands.ts";
 import { errMessage } from "./util.ts";
+
+export { contactName, parseSlashCommand } from "./dc_commands.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,23 +129,6 @@ export class DeltaChatError extends Error {
   }
 }
 
-function normalizeAddress(address: string): string {
-  return address.trim().toLowerCase();
-}
-
-function contactKey(contact: DcContact): string {
-  const address = normalizeAddress(contact.address);
-  return address === "" ? String(contact.id) : address;
-}
-
-export function contactName(contact: DcContact): string {
-  const display = contact.displayName.trim();
-  if (display !== "") return display;
-  const name = contact.name.trim();
-  if (name !== "") return name;
-  return contact.address.trim();
-}
-
 export function shortenDeltaChatInvite(raw: string): string {
   const index = raw.indexOf("#");
   if (index < 0) return raw;
@@ -148,31 +141,6 @@ export function shortenDeltaChatInvite(raw: string): string {
     kept.push(part);
   }
   return head + kept.join("&");
-}
-
-export function welcomeText(companion: Pick<Companion, "name" | "form">): string {
-  const name = companion.name.trim() === "" ? "Lark" : companion.name.trim();
-  const form = companion.form.trim();
-  const intro = form === "" ? `Hi! I'm ${name}.` : `Hi! I'm ${name}, ${form}.`;
-  return [
-    `${intro} Text me anytime — I'll read it out at home and reply.`,
-    "/say <words> — I'll say it out loud exactly",
-    "/private <words> — just between us",
-    "/stories — list interactive stories",
-    "/story <name> — open a story on my device",
-    "/remote — open my remote controls",
-    "/remote off — turn off my remote link",
-    "/help — this message",
-    "Send a .twee file to import a story. When listening mode is on, people at home can answer you out loud.",
-  ].join("\n");
-}
-
-export function parseSlashCommand(text: string): { name: string; arg: string } {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) return { name: "", arg: trimmed };
-  const space = trimmed.search(/[ \t\n\r]/);
-  if (space < 0) return { name: trimmed.toLowerCase(), arg: "" };
-  return { name: trimmed.slice(0, space).toLowerCase(), arg: trimmed.slice(space).trim() };
 }
 
 async function defaultDecodeVoice(path: string): Promise<string> {
@@ -306,7 +274,7 @@ export class DcService {
     this.#child = child;
     child.stderr.on("data", (chunk: Buffer) => this.#log(`deltachat-rpc-server: ${chunk.toString().trim()}`));
     const dc = new StdioDeltaChat(child.stdin, child.stdout, true);
-    const adapter = new StdioDcAdapter(dc as unknown as DcClient);
+    const adapter = stdioDcAdapter(dc as unknown as DcClient);
     void this.attach(adapter).catch((error: unknown) => {
       this.#log(`Delta Chat attach: ${errMessage(error)}`);
     });
@@ -685,84 +653,20 @@ export class DcService {
     contact: DcContact,
     command: { name: string; arg: string },
   ): Promise<{ handled: boolean; private: boolean; text: string }> {
-    const say = async (text: string): Promise<void> => {
-      await rpc.sendMsg(accountId, chatId, { text });
-    };
-    switch (command.name) {
-      case "/say":
-        if (command.arg === "") {
-          await say("Usage: /say <words>");
-          return { handled: true, private: false, text: "" };
-        }
-        await this.#options.onSay?.(companion.id, command.arg);
-        await say("Said it.");
-        return { handled: true, private: false, text: "" };
-      case "/private":
-        if (command.arg === "") {
-          await say("Usage: /private <words>");
-          return { handled: true, private: false, text: "" };
-        }
-        return { handled: false, private: true, text: command.arg };
-      case "/help":
-        await say(welcomeText(companion));
-        return { handled: true, private: false, text: "" };
-      case "/remote": {
-        const remote = this.#options.remote;
-        if (remote === undefined) {
-          await say("Remote controls unavailable.");
-          return { handled: true, private: false, text: "" };
-        }
-        const key = contactKey(contact);
-        if (command.arg.toLowerCase() === "off") {
-          await remote.revokeContact(companion.id, key);
-          await say("Remote controls off.");
-          return { handled: true, private: false, text: "" };
-        }
-        if (command.arg !== "") {
-          await say("Usage: /remote [off]");
-          return { handled: true, private: false, text: "" };
-        }
-        try {
-          const link = await remote.issue(companion.id, key, contactName(contact));
-          await say(link);
-        } catch (error) {
-          await say(error instanceof Error ? error.message : "Remote controls unavailable.");
-        }
-        return { handled: true, private: false, text: "" };
-      }
-      case "/stories": {
-        const stories = this.#db.listStories();
-        if (stories.length === 0) {
-          await say("No stories yet.");
-        } else {
-          await say(
-            ["Stories:", ...stories.map((s) => `- ${s.title} (${s.id}, ${s.passages} passages)`)].join("\n"),
-          );
-        }
-        return { handled: true, private: false, text: "" };
-      }
-      case "/story": {
-        if (command.arg === "") {
-          await say("Usage: /story <name>");
-          return { handled: true, private: false, text: "" };
-        }
-        const target = command.arg.toLowerCase();
-        const story = this.#db
-          .listStories()
-          .find((s) => s.id.toLowerCase() === target || s.title.toLowerCase() === target);
-        if (story === undefined) {
-          await say(`I couldn't find a story called “${command.arg}”.`);
-          return { handled: true, private: false, text: "" };
-        }
-        await this.#options.onStory?.(companion.id, story.id);
-        await say(`Opening “${story.title}”.`);
-        return { handled: true, private: false, text: "" };
-      }
-      default:
-        if (command.name === "") return { handled: false, private: false, text: command.arg };
-        await say("Unknown command. Try /say <words>, /private <words>, /stories, /story <name>, /remote, or /help.");
-        return { handled: true, private: false, text: "" };
-    }
+    return await runDcCommand(
+      {
+        db: this.#db,
+        ...(this.#options.remote === undefined ? {} : { remote: this.#options.remote }),
+        ...(this.#options.onSay === undefined ? {} : { onSay: this.#options.onSay }),
+        ...(this.#options.onStory === undefined ? {} : { onStory: this.#options.onStory }),
+      },
+      rpc,
+      accountId,
+      chatId,
+      companion,
+      contact,
+      command,
+    );
   }
 
   async sendText(accountId: number, chatId: number, text: string): Promise<void> {
@@ -826,33 +730,6 @@ export class DcService {
 
 // ---- @deltachat/jsonrpc-client adapter ------------------------------------
 
-interface RawContact {
-  id: number;
-  address: string;
-  displayName: string;
-  name: string;
-  isVerified: boolean;
-  isBot: boolean;
-  isBlocked: boolean;
-}
-
-interface RawMessage {
-  id: number;
-  chatId: number;
-  fromId: number;
-  text: string;
-  viewType: string;
-  file: string | null;
-  isInfo: boolean;
-  isBot: boolean;
-}
-
-interface RawChat {
-  id: number;
-  name: string;
-  isContactRequest: boolean;
-}
-
 interface IncomingEvent {
   kind: string;
   msgId?: number;
@@ -870,147 +747,72 @@ interface DcClient {
     batchSetConfig(id: number, config: Record<string, string | null>): Promise<null>;
     setConfig(id: number, key: string, value: string | null): Promise<null>;
     getConfig(id: number, key: string): Promise<string | null>;
-      getChatSecurejoinQrCode(id: number, chat: number | null): Promise<string>;
+    getChatSecurejoinQrCode(id: number, chat: number | null): Promise<string>;
     secureJoin(id: number, qr: string): Promise<number>;
-    getContacts(id: number, flags: number, query: string | null): Promise<RawContact[]>;
-    getContact(id: number, contact: number): Promise<RawContact>;
+    getContacts(id: number, flags: number, query: string | null): Promise<DcContact[]>;
+    getContact(id: number, contact: number): Promise<DcContact>;
     deleteContact(id: number, contact: number): Promise<null>;
     getChatIdByContactId(id: number, contact: number): Promise<number | null>;
     createChatByContactId(id: number, contact: number): Promise<number>;
     deleteChat(id: number, chat: number): Promise<null>;
-    getBasicChatInfo(id: number, chat: number): Promise<RawChat>;
-    getMessage(id: number, message: number): Promise<RawMessage>;
-    sendMsg(id: number, chat: number, data: { text?: string | null }): Promise<number>;
+    getBasicChatInfo(id: number, chat: number): Promise<DcBasicChat>;
+    getMessage(id: number, message: number): Promise<DcMessage>;
+    sendMsg(id: number, chat: number, data: { text?: string | null; viewtype?: string; file?: string }): Promise<number>;
   };
   on(event: string, listener: (accountId: number, event: IncomingEvent) => void): void;
   close(): void;
 }
 
-export class StdioDcAdapter implements DcRpc {
-  readonly #dc: DcClient;
-
-  constructor(dc: DcClient) {
-    this.#dc = dc;
-  }
-
-  subscribe(handlers: DcEventHandlers): void {
-    this.#dc.on("IncomingMsg", (accountId, event) => {
-      if (typeof event.msgId === "number") handlers.onIncomingMessage(accountId, event.msgId);
-    });
-    this.#dc.on("SecurejoinInviterProgress", (accountId, event) => {
-      if (typeof event.contactId !== "number") return;
-      if (typeof event.progress === "number" && event.progress < 1000) return;
-      handlers.onSecureJoinVerified(accountId, event.contactId);
-    });
-  }
-
-  async addAccount(): Promise<number> {
-    return await this.#dc.rpc.addAccount();
-  }
-
-  async removeAccount(accountId: number): Promise<void> {
-    await this.#dc.rpc.removeAccount(accountId);
-  }
-
-  async getAllAccountIds(): Promise<number[]> {
-    return await this.#dc.rpc.getAllAccountIds();
-  }
-
-  async startIoForAllAccounts(): Promise<void> {
-    await this.#dc.rpc.startIoForAllAccounts();
-  }
-
-  async addTransportFromQr(accountId: number, qr: string): Promise<void> {
-    await this.#dc.rpc.addTransportFromQr(accountId, qr);
-  }
-
-  async batchSetConfig(accountId: number, config: Record<string, string>): Promise<void> {
-    await this.#dc.rpc.batchSetConfig(accountId, config);
-  }
-
-  async setConfig(accountId: number, key: string, value: string | null): Promise<void> {
-    await this.#dc.rpc.setConfig(accountId, key, value);
-  }
-
-  async getConfig(accountId: number, key: string): Promise<string | null> {
-    return await this.#dc.rpc.getConfig(accountId, key);
-  }
-
-
-  async getChatSecurejoinQrCode(accountId: number, chatId: number | null): Promise<string> {
-    return await this.#dc.rpc.getChatSecurejoinQrCode(accountId, chatId);
-  }
-
-  async secureJoin(accountId: number, qr: string): Promise<number> {
-    return await this.#dc.rpc.secureJoin(accountId, qr);
-  }
-
-  async getContacts(accountId: number, listFlags: number, query: string | null): Promise<DcContact[]> {
-    return (await this.#dc.rpc.getContacts(accountId, listFlags, query)).map(toContact);
-  }
-
-  async getContact(accountId: number, contactId: number): Promise<DcContact> {
-    return toContact(await this.#dc.rpc.getContact(accountId, contactId));
-  }
-
-  async deleteContact(accountId: number, contactId: number): Promise<void> {
-    await this.#dc.rpc.deleteContact(accountId, contactId);
-  }
-
-  async getChatIdByContactId(accountId: number, contactId: number): Promise<number | null> {
-    return await this.#dc.rpc.getChatIdByContactId(accountId, contactId);
-  }
-
-  async createChatByContactId(accountId: number, contactId: number): Promise<number> {
-    return await this.#dc.rpc.createChatByContactId(accountId, contactId);
-  }
-
-  async deleteChat(accountId: number, chatId: number): Promise<void> {
-    await this.#dc.rpc.deleteChat(accountId, chatId);
-  }
-
-  async getBasicChatInfo(accountId: number, chatId: number): Promise<DcBasicChat> {
-    const chat = await this.#dc.rpc.getBasicChatInfo(accountId, chatId);
-    return { id: chat.id, name: chat.name, isContactRequest: chat.isContactRequest };
-  }
-
-  async getMessage(accountId: number, messageId: number): Promise<DcMessage> {
-    const message = await this.#dc.rpc.getMessage(accountId, messageId);
-    return {
-      id: message.id,
-      chatId: message.chatId,
-      fromId: message.fromId,
-      text: message.text,
-      viewType: message.viewType,
-      file: message.file,
-      isInfo: message.isInfo,
-      isBot: message.isBot,
-    };
-  }
-
-  async sendMsg(accountId: number, chatId: number, data: DcMessageData): Promise<number> {
-    return await this.#dc.rpc.sendMsg(accountId, chatId, {
-      text: data.text ?? null,
-      ...(data.viewtype === undefined ? {} : { viewtype: data.viewtype }),
-      ...(data.file === undefined ? {} : { file: data.file }),
-    });
-  }
-
-  close(): void {
-    this.#dc.close();
-  }
-}
-
-function toContact(raw: RawContact): DcContact {
-  return {
-    id: raw.id,
-    address: raw.address,
-    displayName: raw.displayName,
-    name: raw.name,
-    isVerified: raw.isVerified,
-    isBot: raw.isBot,
-    isBlocked: raw.isBlocked,
+/**
+ * Bridge the stdio JSON-RPC client to DcRpc. Pure RPCs fall through the proxy;
+ * only subscription, close, and the message/chat shapes the wire client models
+ * differently are overridden.
+ */
+export function stdioDcAdapter(dc: DcClient): DcRpc {
+  const overrides: Partial<DcRpc> = {
+    subscribe(handlers): void {
+      dc.on("IncomingMsg", (accountId, event) => {
+        if (typeof event.msgId === "number") handlers.onIncomingMessage(accountId, event.msgId);
+      });
+      dc.on("SecurejoinInviterProgress", (accountId, event) => {
+        if (typeof event.contactId !== "number") return;
+        if (typeof event.progress === "number" && event.progress < 1000) return;
+        handlers.onSecureJoinVerified(accountId, event.contactId);
+      });
+    },
+    close(): void {
+      dc.close();
+    },
+    async getBasicChatInfo(accountId, chatId): Promise<DcBasicChat> {
+      const chat = await dc.rpc.getBasicChatInfo(accountId, chatId);
+      return { id: chat.id, name: chat.name, isContactRequest: chat.isContactRequest };
+    },
+    async getMessage(accountId, messageId): Promise<DcMessage> {
+      const message = await dc.rpc.getMessage(accountId, messageId);
+      return {
+        id: message.id,
+        chatId: message.chatId,
+        fromId: message.fromId,
+        text: message.text,
+        viewType: message.viewType,
+        file: message.file,
+        isInfo: message.isInfo,
+        isBot: message.isBot,
+      };
+    },
+    async sendMsg(accountId, chatId, data): Promise<number> {
+      return await dc.rpc.sendMsg(accountId, chatId, {
+        text: data.text ?? null,
+        ...(data.viewtype === undefined ? {} : { viewtype: data.viewtype }),
+        ...(data.file === undefined ? {} : { file: data.file }),
+      });
+    },
   };
+  return new Proxy(overrides as DcRpc, {
+    get(target, property, receiver) {
+      if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
+      const value = Reflect.get(dc.rpc, property);
+      return typeof value === "function" ? value.bind(dc.rpc) : value;
+    },
+  });
 }
-
-

@@ -2,43 +2,37 @@
 // and the scoped /remote page. No web framework: explicit method/path switches,
 // strict JSON decoding, timing-safe admin auth and one SSE stream per remote
 // page keep the surface small and auditable.
-import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join, normalize } from "node:path";
 import type { LarkDb } from "./db.ts";
 import type { EdgeClient, EdgeHit } from "./edge_client.ts";
-import type { RemoteSnapshot, Router } from "./router.ts";
+import type { Router } from "./router.ts";
 import { planLibrary } from "./library.ts";
 import { errMessage, slugify } from "./util.ts";
 import {
   CAPTURE_DEFAULT_SECONDS,
-  CAPTURE_PAGE_SECONDS,
-  REMOTE_COOKIE,
   REMOTE_PATH,
-  RemoteError,
   type CaptureStore,
   type RemoteManager,
-  type RemoteTokenScope,
 } from "./remote.ts";
 import type { DcService } from "./deltachat.ts";
 import type { PortraitManager, PortraitSpec } from "./portraits.ts";
-
-export const REMOTE_CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:; media-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
-
-const JSON_LIMIT = 1 << 20;
-const REMOTE_POLL_MS = 750;
-const REMOTE_KEEPALIVE_MS = 15_000;
-
-const HERE = fileURLToPath(new URL(".", import.meta.url));
-const DEFAULT_REMOTE_DIR = resolve(HERE, "../../web/remote");
-
-const ONE_PIXEL_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-  "base64",
-);
+import {
+  REMOTE_CSP,
+  assertIdle,
+  boolean,
+  fail,
+  integer,
+  optionalText,
+  readJson,
+  sendBytes,
+  sendError,
+  sendJson,
+  text,
+  tokenMatches,
+} from "./http_common.ts";
+import { DEFAULT_REMOTE_DIR, createRemoteRoutes } from "./http_remote.ts";
 
 export interface HttpOptions {
   host: string;
@@ -63,133 +57,9 @@ export interface RunningHttp {
   close(): Promise<void>;
 }
 
-class HttpError extends Error {
-  readonly status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = "HttpError";
-    this.status = status;
-  }
-}
-
-function fail(status: number, message: string): HttpError {
-  return new HttpError(status, message);
-}
-
-function sha256(value: string): Buffer {
-  return createHash("sha256").update(value).digest();
-}
-
-function tokenMatches(header: string | string[] | undefined, expected: string): boolean {
-  if (expected === "" || typeof header !== "string") return false;
-  const left = sha256(header);
-  const right = sha256(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-function cookieValue(req: IncomingMessage, name: string): string | undefined {
-  const raw = req.headers.cookie;
-  if (raw === undefined) return undefined;
-  for (const part of raw.split(";")) {
-    const index = part.indexOf("=");
-    if (index < 0) continue;
-    if (part.slice(0, index).trim() !== name) continue;
-    return decodeURIComponent(part.slice(index + 1).trim());
-  }
-  return undefined;
-}
-
-function sendJson(res: ServerResponse, status: number, value: unknown): void {
-  const body = Buffer.from(JSON.stringify(value));
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": String(body.length),
-    "x-content-type-options": "nosniff",
-  });
-  res.end(body);
-}
-
-function sendError(res: ServerResponse, error: unknown): void {
-  const status =
-    error instanceof HttpError || error instanceof RemoteError
-      ? error.status
-      : error instanceof Error && /not found/i.test(error.message)
-        ? 404
-        : 502;
-  sendJson(res, status, { error: errMessage(error) });
-}
-
-function sendBytes(res: ServerResponse, status: number, kind: string, body: Buffer, extra: Record<string, string> = {}): void {
-  res.writeHead(status, {
-    "content-type": kind,
-    "content-length": String(body.length),
-    "x-content-type-options": "nosniff",
-    ...extra,
-  });
-  res.end(body);
-}
-
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
-    size += buffer.length;
-    if (size > JSON_LIMIT) throw fail(413, "Request body is too large");
-    chunks.push(buffer);
-  }
-  if (size === 0) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw fail(400, "Invalid JSON body");
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw fail(400, "Expected a JSON object");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function text(value: unknown, name: string, max = 2000): string {
-  if (typeof value !== "string") throw fail(400, `${name} must be a string`);
-  if (value.length > max) throw fail(400, `${name} is too long`);
-  return value;
-}
-
-function optionalText(value: unknown, name: string, max = 2000): string | undefined {
-  return value === undefined ? undefined : text(value, name, max);
-}
-
-function integer(value: unknown, name: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) throw fail(400, `${name} must be an integer`);
-  return value;
-}
-
-function boolean(value: unknown, name: string): boolean {
-  if (typeof value !== "boolean") throw fail(400, `${name} must be a boolean`);
-  return value;
-}
-
 function companionId(value: string): string {
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(value)) throw fail(400, "Invalid companion ID");
   return value.toLowerCase();
-}
-
-function requiredText(value: unknown, name: string, max: number, emptyError: string): string {
-  const trimmed = text(value, name, max).trim();
-  if (trimmed === "") throw fail(400, emptyError);
-  return trimmed;
-}
-
-function assertIdle(router: Router, companionId: string): void {
-  if (["listening", "thinking", "speaking"].includes(router.liveState(companionId))) {
-    throw fail(409, "The companion is busy; try again when the turn ends");
-  }
-}
-
-function okState(res: ServerResponse, router: Router, companionId: string, message: string): void {
-  sendJson(res, 200, { ok: true, message, state: router.snapshot(companionId) });
 }
 
 function slug(name: string): string {
@@ -233,48 +103,18 @@ function terminalEntry(db: LarkDb, router: Router, id: string): Record<string, u
   };
 }
 
-function remotePage(name: string, token: string): string {
-  const dir = DEFAULT_REMOTE_DIR;
-  let index = "";
-  try {
-    index = readFileSync(join(dir, "index.html"), "utf8");
-  } catch {
-    throw fail(500, "Remote page unavailable");
-  }
-  return index
-    .replaceAll("{{TOKEN}}", encodeURIComponent(token))
-    .replaceAll("{{TOKEN_HTML}}", token.replaceAll("&", "&amp;").replaceAll('"', "&#34;").replaceAll("<", "&lt;"))
-    .replaceAll("{{NAME}}", name.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
-}
-
-function authToken(req: IncomingMessage, query: URL): string {
-  const header = req.headers["x-lark-remote-token"];
-  if (typeof header === "string" && header !== "") return header;
-  const fromQuery = query.searchParams.get("token");
-  if (fromQuery !== null && fromQuery !== "") return fromQuery;
-  return cookieValue(req, REMOTE_COOKIE) ?? "";
-}
-
-function cursorFrom(raw: string): { beforeTs: number; beforeId: string } | undefined {
-  if (raw === "") return undefined;
-  let decoded: string;
-  try {
-    decoded = Buffer.from(raw, "base64url").toString("utf8");
-  } catch {
-    throw fail(400, "Invalid history cursor");
-  }
-  const index = decoded.indexOf(":");
-  if (index <= 0) throw fail(400, "Invalid history cursor");
-  const beforeTs = Number.parseInt(decoded.slice(0, index), 10);
-  const beforeId = decoded.slice(index + 1);
-  if (!Number.isInteger(beforeTs) || beforeId === "") throw fail(400, "Invalid history cursor");
-  return { beforeTs, beforeId };
-}
-
 export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
   const { db, router, remote, captures } = options;
   const remoteDir = options.remoteDir ?? DEFAULT_REMOTE_DIR;
   const libraryDir = options.libraryDir ?? join(options.dataDir, "library");
+  const remoteRoutes = createRemoteRoutes({
+    db,
+    router,
+    remote,
+    captures,
+    ...(options.portraits === undefined ? {} : { portraits: options.portraits }),
+    ...(options.remoteDir === undefined ? {} : { remoteDir: options.remoteDir }),
+  });
   const server = createServer((req, res) => {
     void handle(req, res).catch((error: unknown) => {
       if (!res.headersSent) sendError(res, error);
@@ -304,7 +144,7 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
     }
 
     if (path === `${REMOTE_PATH}` || path.startsWith(`${REMOTE_PATH}/`)) {
-      await handleRemote(req, res, url);
+      await remoteRoutes.handle(req, res, url);
       return;
     }
 
@@ -505,259 +345,6 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
     throw fail(404, "Not found");
   }
 
-  async function handleRemote(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    const path = url.pathname;
-    res.setHeader("referrer-policy", "no-referrer");
-    const raw = authToken(req, url);
-    const scope = remote.authorize(raw);
-    if (scope === undefined) throw fail(401, "Unauthorized");
-
-    if (path === REMOTE_PATH && req.method === "GET") {
-      const companion = db.getCompanion(scope.companionId);
-      const name = companion?.name ?? "Lark";
-      const body = Buffer.from(remotePage(name, raw));
-      res.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "content-length": String(body.length),
-        "content-security-policy": REMOTE_CSP,
-        "x-content-type-options": "nosniff",
-        "set-cookie": `${REMOTE_COOKIE}=${encodeURIComponent(raw)}; Path=${REMOTE_PATH}; HttpOnly; Secure; SameSite=Lax`,
-      });
-      res.end(body);
-      return;
-    }
-
-    if (path === `${REMOTE_PATH}/events` && req.method === "GET") {
-      await streamEvents(req, res, scope);
-      return;
-    }
-
-    if (path.startsWith(`${REMOTE_PATH}/pwa/`)) {
-      await servePwa(req, res, path, scope, raw);
-      return;
-    }
-
-    if (path.startsWith(`${REMOTE_PATH}/api/`)) {
-      await handleRemoteApi(req, res, path, scope);
-      return;
-    }
-    throw fail(404, "Not found");
-  }
-
-  async function servePwa(_req: IncomingMessage, res: ServerResponse, path: string, scope: RemoteTokenScope, raw: string): Promise<void> {
-    const companion = db.getCompanion(scope.companionId);
-    if (path === `${REMOTE_PATH}/pwa/manifest.webmanifest`) {
-      const manifest = {
-        name: companion?.name ?? "Lark",
-        short_name: companion?.name ?? "Lark",
-        start_url: `${REMOTE_PATH}?token=${encodeURIComponent(raw)}`,
-        scope: REMOTE_PATH,
-        display: "standalone",
-        background_color: "#6f5bd3",
-        theme_color: "#6f5bd3",
-        icons: [
-          { src: `${REMOTE_PATH}/pwa/icon-192.png`, sizes: "192x192", type: "image/png", purpose: "any" },
-          { src: `${REMOTE_PATH}/pwa/icon-512.png`, sizes: "512x512", type: "image/png", purpose: "any" },
-        ],
-      };
-      sendBytes(res, 200, "application/manifest+json", Buffer.from(JSON.stringify(manifest)), {
-        "content-security-policy": REMOTE_CSP,
-      });
-      return;
-    }
-    if (path === `${REMOTE_PATH}/pwa/icon-192.png` || path === `${REMOTE_PATH}/pwa/icon-512.png` || path === `${REMOTE_PATH}/pwa/maskable-512.png`) {
-      let body = ONE_PIXEL_PNG;
-      const portraitDir = options.portraits?.dirFor(companion?.portraitId ?? "");
-      if (portraitDir !== undefined) {
-        try {
-          body = readFileSync(join(portraitDir, "sheet.png"));
-        } catch {
-          body = ONE_PIXEL_PNG;
-        }
-      }
-      sendBytes(res, 200, "image/png", body, { "content-security-policy": REMOTE_CSP });
-      return;
-    }
-    throw fail(404, "Not found");
-  }
-
-  async function streamEvents(req: IncomingMessage, res: ServerResponse, scope: RemoteTokenScope): Promise<void> {
-    res.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-    });
-    res.write("retry: 2000\n\n");
-    let closed = false;
-    req.on("close", () => {
-      closed = true;
-    });
-    const initial = router.snapshot(scope.companionId);
-    const send = (event: string, value: unknown): boolean => {
-      if (closed) return false;
-      res.write(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`);
-      return true;
-    };
-    if (!send("state", initial)) return;
-    let key = snapshotKey(initial);
-    let captureKey = JSON.stringify(captures.status(scope.companionId));
-    if (!send("capture", captures.status(scope.companionId))) return;
-    const tick = setInterval(() => {
-      if (closed) return;
-      // Polling skips the base64 portrait: it is stable and expensive, and the
-      // page reuses the portrait from the initial state.
-      const snapshot = router.snapshot(scope.companionId, { includePortrait: false });
-      const nextKey = snapshotKey(snapshot);
-      if (nextKey !== key) {
-        key = nextKey;
-        if (!send("state", snapshot)) return;
-      }
-      const status = captures.status(scope.companionId);
-      const nextCaptureKey = JSON.stringify(status);
-      if (nextCaptureKey !== captureKey) {
-        captureKey = nextCaptureKey;
-        send("capture", status);
-      }
-    }, REMOTE_POLL_MS);
-    const keep = setInterval(() => {
-      if (closed) return;
-      res.write(": keep-alive\n\n");
-    }, REMOTE_KEEPALIVE_MS);
-    req.on("close", () => {
-      clearInterval(tick);
-      clearInterval(keep);
-      res.end();
-    });
-  }
-
-  async function handleRemoteApi(req: IncomingMessage, res: ServerResponse, path: string, scope: RemoteTokenScope): Promise<void> {
-    const method = req.method ?? "GET";
-    const companionId = scope.companionId;
-    const api = `${REMOTE_PATH}/api/`;
-    const name = path.slice(api.length);
-    if (name === "say" && method === "POST") {
-      const body = await readJson(req);
-      const message = requiredText(body.text, "text", 500, "Enter something to say");
-      await router.sayNow(companionId, message);
-      okState(res, router, companionId, "Said it.");
-      return;
-    }
-    if (name === "listen" && method === "POST") {
-      const body = await readJson(req);
-      await router.setListening(companionId, boolean(body.listening, "listening"));
-      okState(res, router, companionId, "Listening mode updated.");
-      return;
-    }
-    if (name === "volume" && method === "POST") {
-      const body = await readJson(req);
-      const terminal = requiredText(body.terminal, "terminal", 128, "Terminal is required");
-      const owned = router.onlineTerminals(companionId).some((state) => state.id === terminal) || db.getTerminal(terminal)?.companionId === companionId;
-      if (!owned) throw fail(403, "Terminal out of scope");
-      router.setVolume(terminal, integer(body.volume, "volume"));
-      okState(res, router, companionId, "Volume updated.");
-      return;
-    }
-    if (name === "voice" && method === "POST") {
-      const body = await readJson(req);
-      await router.setVoice(companionId, text(body.voice, "voice", 64), true);
-      okState(res, router, companionId, "Voice updated.");
-      return;
-    }
-    if (name === "story/open" || name === "story/restart") {
-      if (method !== "POST") throw fail(404, "Not found");
-      const body = await readJson(req);
-      const story = requiredText(body.story, "story", 64, "Missing story ID");
-      if (name.endsWith("restart")) await router.restartStory(companionId, story);
-      else await router.openStory(companionId, story, false);
-      okState(res, router, companionId, name.endsWith("restart") ? "Started over on device." : "Opened on device.");
-      return;
-    }
-    if (name === "history" && method === "GET") {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      const channelRaw = url.searchParams.get("channel") ?? "all";
-      if (!["all", "in_person", "deltachat"].includes(channelRaw)) throw fail(400, "Unknown history filter");
-      const limit = Math.max(1, Math.min(50, Number.parseInt(url.searchParams.get("limit") ?? "20", 10) || 20));
-      const q = (url.searchParams.get("q") ?? "").slice(0, 100);
-      const cursor = cursorFrom(url.searchParams.get("cursor") ?? "");
-      sendJson(res, 200, router.history(companionId, channelRaw as "all" | "in_person" | "deltachat", scope.contact, scope.contactName, q, limit, cursor));
-      return;
-    }
-    if (name === "capture" && method === "POST") {
-      const body = await readJson(req);
-      const seconds = body.seconds === undefined ? CAPTURE_PAGE_SECONDS : integer(body.seconds, "seconds");
-      assertIdle(router, companionId);
-      const started = await captures.start(companionId, seconds);
-      sendJson(res, 200, started);
-      return;
-    }
-    if (name === "captures" && method === "GET") {
-      sendJson(res, 200, { captures: captures.list(companionId) });
-      return;
-    }
-    if (name.startsWith("captures/")) {
-      const rest = name.slice("captures/".length);
-      if (rest.endsWith("/transcribe") && method === "POST") {
-        const capture = decodeURIComponent(rest.slice(0, -"/transcribe".length));
-        sendJson(res, 200, await captures.transcribe(companionId, capture));
-        return;
-      }
-      if (rest.endsWith(".wav") && method === "GET") {
-        serveCaptureWav(req, res, companionId, decodeURIComponent(rest.slice(0, -4)));
-        return;
-      }
-      if (method === "DELETE") {
-        captures.remove(companionId, decodeURIComponent(rest));
-        res.writeHead(204).end();
-        return;
-      }
-    }
-    if (name === "revoke" && method === "POST") {
-      await remote.revokeContact(companionId, scope.contact);
-      res.setHeader("set-cookie", `${REMOTE_COOKIE}=; Path=${REMOTE_PATH}; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
-      sendJson(res, 200, { ok: true, message: "Remote controls off." });
-      return;
-    }
-    throw fail(404, "Not found");
-  }
-
-  function serveCaptureWav(req: IncomingMessage, res: ServerResponse, companionId: string, capture: string): void {
-    let path: string;
-    try {
-      path = captures.resolvePath(companionId, capture);
-    } catch (error) {
-      sendError(res, error);
-      return;
-    }
-    const info = statSync(path);
-    const range = req.headers.range;
-    if (range === undefined) {
-      const body = readFileSync(path);
-      sendBytes(res, 200, "audio/wav", body, { "accept-ranges": "bytes" });
-      return;
-    }
-    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-    if (match === null) {
-      res.writeHead(416, { "content-range": `bytes */${info.size}` }).end();
-      return;
-    }
-    const start = match[1] === "" ? 0 : Number.parseInt(match[1] ?? "0", 10);
-    const end = match[2] === "" ? info.size - 1 : Math.min(info.size - 1, Number.parseInt(match[2] ?? "", 10));
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end) {
-      res.writeHead(416, { "content-range": `bytes */${info.size}` }).end();
-      return;
-    }
-    const body = readFileSync(path).subarray(start, end + 1);
-    res.writeHead(206, {
-      "content-type": "audio/wav",
-      "content-length": String(body.length),
-      "content-range": `bytes ${start}-${end}/${info.size}`,
-      "accept-ranges": "bytes",
-      "x-content-type-options": "nosniff",
-    });
-    res.end(body);
-  }
-
   async function handleOta(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
     if (req.method !== "GET") throw fail(404, "Not found");
     const root = join(options.dataDir, "ota");
@@ -791,17 +378,6 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
     },
   };
-}
-
-/** Snapshots differ by their portrait even when nothing visible changed. */
-function withoutPortrait(snapshot: RemoteSnapshot): RemoteSnapshot {
-  const copy = structuredClone(snapshot);
-  delete copy.companion.portrait;
-  return copy;
-}
-
-function snapshotKey(snapshot: RemoteSnapshot): string {
-  return JSON.stringify(withoutPortrait(snapshot));
 }
 
 function portraitSpec(raw: unknown): PortraitSpec {
