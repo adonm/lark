@@ -171,7 +171,8 @@ on/off toggle, per-terminal volume, story progress with Continue and Start over,
 history with filters and cursor paging, voice selection with an on-device
 preview, and a Diagnostics tab for opt-in microphone captures (15/30/60 s) with
 playback and transcription. History exposes in-person room messages and that
-contact's own Delta Chat messages; captures are room-wide and labelled as such.
+contact's whole Delta Chat conversation, including the companion's replies;
+other contacts stay hidden. Captures are room-wide and labelled as such.
 The page installs to a home screen with the companion's name and portrait.
 
 Each `/remote` request mints a fresh token and invalidates the previous one for

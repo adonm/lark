@@ -759,7 +759,13 @@ test("real Go edge + Node brain + stub Delta Chat end to end", { timeout: 180_00
     assert.ok(texts.includes("hello Greg"), "contact's own Delta Chat message is visible");
     assert.ok(texts.includes(FIXED_STT), "in-person voice turns are visible");
     assert.ok(!texts.some((text) => text.includes("hi from alex")), "another contact's message is hidden");
-    assert.ok(!texts.some((text) => text.includes("Hello Sam")), "companion replies are hidden");
+    // Both stub replies read the same, so the count proves only Sam's row is
+    // scoped into this token's history.
+    assert.equal(
+      texts.filter((text) => text.includes("Hello Sam")).length,
+      1,
+      "the companion's reply to this contact is visible and Alex's is hidden",
+    );
 
     const tunnels = (await (
       await fetch(`${base}/api/remote/tunnels`, { headers: { "x-lark-token": ADMIN_TOKEN } })

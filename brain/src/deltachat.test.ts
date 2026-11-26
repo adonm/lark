@@ -301,7 +301,11 @@ test("verified contact text round trip is text-only and recorded", async () => {
   assert.equal(rows.messages.length, 2);
   assert.equal(rows.messages[0]?.role, "user");
   assert.equal(rows.messages[0]?.sender, "Sam");
+  assert.equal(rows.messages[0]?.peer, "sam@example.org");
   assert.equal(rows.messages[1]?.role, "assistant");
+  assert.equal(rows.messages[1]?.peer, "sam@example.org");
+  assert.equal(h.db.getContactName("sam@example.org"), "Sam");
+  assert.ok((rows.messages[1]?.tsMs ?? 0) >= (rows.messages[0]?.tsMs ?? 0));
 });
 
 test("unverified, blocked, info, and peer messages are ignored", async () => {

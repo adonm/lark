@@ -46,7 +46,7 @@ test("schema exposes every table with stable column shapes", () => {
   for (const table of SCHEMA_TABLES) assert.ok(tables.includes(table), `missing ${table}`);
   assert.deepEqual(
     columns(db.raw(), "messages").map((column) => column.name),
-    ["id", "companion_id", "role", "sender", "text", "source", "card_title", "ts_ms", "channel"],
+    ["id", "companion_id", "role", "sender", "text", "source", "card_title", "ts_ms", "channel", "peer"],
   );
   assert.deepEqual(
     columns(db.raw(), "companions").map((column) => column.name),
@@ -212,6 +212,7 @@ function message(id: string, tsMs: number, extra: Partial<Message> = {}): Messag
     channel: "local",
     cardTitle: "",
     tsMs,
+    peer: "",
     ...extra,
   };
 }
@@ -242,4 +243,115 @@ test("history can be scoped to one remote contact", () => {
   assert.deepEqual(scoped.messages.map((m) => m.id), ["delta1"]);
   const all = db.listMessages({ companionId: "cake" });
   assert.deepEqual(all.messages.map((m) => m.id), ["local1", "delta1", "delta2"]);
+});
+
+test("remote history keeps both sides of the scoped Delta Chat chat", () => {
+  db.deleteMessages("cake");
+  db.appendMessage(message("room1", 3000, { channel: "in_person", source: "voice", sender: "Someone" }));
+  db.appendMessage(message("room2", 3001, { channel: "in_person", source: "voice", role: "assistant", sender: "Cake" }));
+  db.appendMessage(message("sam1", 3002, { channel: "deltachat", source: "deltachat", sender: "Sam", peer: "sam@example.org" }));
+  db.appendMessage(
+    message("sam2", 3003, {
+      channel: "deltachat",
+      source: "deltachat",
+      role: "assistant",
+      sender: "Cake",
+      peer: "sam@example.org",
+    }),
+  );
+  db.appendMessage(message("alex1", 3004, { channel: "deltachat", source: "deltachat", sender: "Alex", peer: "alex@example.org" }));
+  db.appendMessage(
+    message("alex2", 3005, {
+      channel: "deltachat",
+      source: "deltachat",
+      role: "assistant",
+      sender: "Cake",
+      peer: "alex@example.org",
+    }),
+  );
+
+  const all = db.listRemoteMessages({
+    companionId: "cake",
+    channel: "all",
+    contact: "sam@example.org",
+    contactName: "sam",
+    q: "",
+    limit: 20,
+  });
+  // Cake's reply to Alex is private too: both peer rows stay hidden.
+  assert.deepEqual(all.messages.map((m) => m.id), ["room1", "room2", "sam1", "sam2"]);
+
+  const onlyDc = db.listRemoteMessages({
+    companionId: "cake",
+    channel: "deltachat",
+    contact: "sam@example.org",
+    contactName: "sam",
+    q: "",
+    limit: 20,
+  });
+  assert.deepEqual(onlyDc.messages.map((m) => m.id), ["sam1", "sam2"]);
+});
+
+test("remote history attributes legacy Delta Chat rows when the token has no name", () => {
+  db.deleteMessages("cake");
+  // v1 rows predate `peer`; the token also omitted the display name, so only
+  // the address can be matched. The sibling row from another contact must not
+  // leak into the page.
+  db.appendMessage(message("legacy-sam", 4000, { channel: "deltachat", source: "deltachat", sender: "sam@example.org" }));
+  db.appendMessage(message("legacy-alex", 4001, { channel: "deltachat", source: "deltachat", sender: "alex@example.org" }));
+  const page = db.listRemoteMessages({
+    companionId: "cake",
+    channel: "deltachat",
+    contact: "sam@example.org",
+    contactName: "sam@example.org",
+    q: "",
+    limit: 20,
+  });
+  assert.deepEqual(page.messages.map((m) => m.id), ["legacy-sam"]);
+});
+
+test("legacy Delta Chat replies are attributed to the turn they answer", () => {
+  db.deleteMessages("cake");
+  db.setContactName("sam@example.org", "Sam");
+  db.setContactName("alex@example.org", "Alex");
+  db.setContactName("robin-1@example.org", "Robin");
+  db.setContactName("robin-2@example.org", "Robin");
+  const legacy = (id: string, tsMs: number, sender: string, role: "user" | "companion") =>
+    message(id, tsMs, { channel: "deltachat", source: "deltachat", sender, role: role as Message["role"] });
+  db.appendMessage(legacy("bridge-sam", 5000, "Sam", "user"));
+  db.appendMessage(legacy("bridge-sam-reply", 5002, "Cake", "companion"));
+  db.appendMessage(legacy("bridge-alex", 5004, "Alex", "user"));
+  db.appendMessage(legacy("bridge-alex-reply", 5006, "Cake", "companion"));
+  // Two contacts share a display name, so neither row is safe to attribute.
+  db.appendMessage(legacy("bridge-robin", 5008, "Robin", "user"));
+  db.appendMessage(legacy("bridge-robin-reply", 5010, "Cake", "companion"));
+
+  assert.equal(db.backfillLegacyPeers(), 4);
+  const scoped = (contact: string) =>
+    db
+      .listRemoteMessages({ companionId: "cake", channel: "deltachat", contact, contactName: contact, q: "", limit: 20 })
+      .messages.map((m) => m.id);
+  assert.deepEqual(scoped("sam@example.org"), ["bridge-sam", "bridge-sam-reply"]);
+  assert.deepEqual(scoped("alex@example.org"), ["bridge-alex", "bridge-alex-reply"]);
+  assert.deepEqual(scoped("robin-1@example.org"), []);
+  assert.equal(db.backfillLegacyPeers(), 0);
+});
+
+test("upgraded databases gain the peer column", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-db-migrate-"));
+  const path = join(dir, "legacy.db");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(
+    `CREATE TABLE messages (id TEXT PRIMARY KEY, companion_id TEXT NOT NULL, role TEXT NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, card_title TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL, channel TEXT NOT NULL DEFAULT '')`,
+  );
+  legacy.prepare(`INSERT INTO messages (id, companion_id, role, sender, text, source, ts_ms) VALUES ('m1', 'cake', 'user', 'Kate', 'hi', 'voice', 1)`).run();
+  legacy.close();
+  const upgraded = new LarkDb(path);
+  try {
+    assert.ok(columns(upgraded.raw(), "messages").some((column) => column.name === "peer"));
+    assert.equal(upgraded.listMessages({ companionId: "cake" }).messages[0]?.peer, "");
+  } finally {
+    upgraded.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

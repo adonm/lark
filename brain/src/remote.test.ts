@@ -201,6 +201,14 @@ test("v1 bare-hash links keep working after upgrade", () => {
   db.setMeta("remote_token:greg:sam@example.org", createHash("sha256").update(raw).digest("hex"));
   const remote = manager(dir, db, new FakeRunner().runner());
   assert.equal(remote.authorize(raw)?.companionId, "greg");
+  // A bare hash stored no display name; history rows use the name, not the
+  // address, so a name learned from Delta Chat must fill the gap.
+  assert.equal(remote.authorize(raw)?.contactName, "sam@example.org");
+  db.setContactName("Sam@Example.org", "Sam");
+  assert.equal(remote.authorize(raw)?.contactName, "Sam");
+
+  const restored = manager(dir, db, new FakeRunner().runner());
+  assert.equal(restored.authorize(raw)?.contactName, "Sam");
 });
 
 test("pruneCaptures enforces retention and the byte budget", async () => {
@@ -239,11 +247,11 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
   });
   const now = 1_760_000_000_000;
   const messages = [
-    { id: "m1", role: "user", sender: "Someone", text: "hello room", channel: "in_person", ts: now },
-    { id: "m2", role: "user", sender: "Sam", text: "hi from sam", channel: "deltachat", ts: now + 1000 },
-    { id: "m3", role: "assistant", sender: "Greg", text: "replying to Sam", channel: "deltachat", ts: now + 2000 },
-    { id: "m4", role: "user", sender: "Alex", text: "hi from alex", channel: "deltachat", ts: now + 3000 },
-    { id: "m5", role: "assistant", sender: "Greg", text: "I am here", channel: "in_person", ts: now + 4000 },
+    { id: "m1", role: "user", sender: "Someone", text: "hello room", channel: "in_person", ts: now, peer: "" },
+    { id: "m2", role: "user", sender: "Sam", text: "hi from sam", channel: "deltachat", ts: now + 1000, peer: "sam@example.org" },
+    { id: "m3", role: "assistant", sender: "Greg", text: "replying to Sam", channel: "deltachat", ts: now + 2000, peer: "sam@example.org" },
+    { id: "m4", role: "user", sender: "Alex", text: "hi from alex", channel: "deltachat", ts: now + 3000, peer: "alex@example.org" },
+    { id: "m5", role: "assistant", sender: "Greg", text: "I am here", channel: "in_person", ts: now + 4000, peer: "" },
   ] as const;
   for (const message of messages) {
     db.appendMessage({
@@ -256,6 +264,7 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
       channel: message.channel,
       cardTitle: "",
       tsMs: message.ts,
+      peer: message.peer,
     });
   }
   const edge = new FakeEdge();
@@ -354,14 +363,13 @@ test("HTTP admin, remote page, SSE, history, stories, captures and revoke", asyn
     await fetch(`${base}/remote/api/history?channel=all&limit=20`, { headers: { "x-lark-remote-token": token } })
   ).json()) as { items: Array<Record<string, unknown>> };
   const texts = all.items.map((item) => item.text);
-  assert.deepEqual(texts, ["hello room", "hi from sam", "I am here"]);
+  assert.deepEqual(texts, ["hello room", "hi from sam", "replying to Sam", "I am here"]);
   assert.ok(!texts.includes("hi from alex"));
-  assert.ok(!texts.includes("replying to Sam"));
 
   const onlyDc = (await (
     await fetch(`${base}/remote/api/history?channel=deltachat`, { headers: { "x-lark-remote-token": token } })
   ).json()) as { items: Array<Record<string, unknown>> };
-  assert.deepEqual(onlyDc.items.map((item) => item.text), ["hi from sam"]);
+  assert.deepEqual(onlyDc.items.map((item) => item.text), ["hi from sam", "replying to Sam"]);
 
   const search = (await (
     await fetch(`${base}/remote/api/history?q=room`, { headers: { "x-lark-remote-token": token } })

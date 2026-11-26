@@ -98,6 +98,8 @@ export interface DcPeerTurn {
   companionId: string;
   text: string;
   sender: string;
+  /** Lowercased contact address, stored on message rows to scope history. */
+  peer: string;
   private: boolean;
   accountId?: number;
   chatId?: number;
@@ -454,9 +456,16 @@ export class DcService {
         continue;
       }
       for (const contact of contacts) {
+        if (contact.id !== 1 && !contact.isBot && contact.address.trim() !== "") {
+          const name = contactName(contact);
+          if (name !== "") this.#db.setContactName(contact.address, name);
+        }
         await this.sendWelcomeIfNeeded(companion, companion.dcAccountId, contact);
       }
     }
+    // Names are known only after accounts sync, so legacy rows gain their
+    // contact identity here rather than at database open.
+    this.#db.backfillLegacyPeers();
   }
 
   async sendWelcomeIfNeeded(companion: Companion, accountId: number, contact: DcContact): Promise<void> {
@@ -554,6 +563,10 @@ export class DcService {
       if (text === "") return;
     }
     const sender = contactName(contact);
+    const peer = normalizeAddress(contact.address);
+    // v1 scoped links have no saved display name; remember it so a restored
+    // link can still match this contact's Delta Chat rows.
+    if (sender !== "") this.#db.setContactName(peer, sender);
     const file = message.file ?? "";
     if (!voice && file.toLowerCase().endsWith(".twee")) {
       await this.importTweeAttachment(rpc, accountId, message.chatId, sender, file);
@@ -580,12 +593,14 @@ export class DcService {
       channel: "deltachat",
       cardTitle: "",
       tsMs: userTs,
+      peer,
     });
     try {
       const reply = await this.#options.onTurn({
         companionId: companion.id,
         text,
         sender,
+        peer,
         private: privateTurn,
         accountId,
         chatId: message.chatId,
@@ -601,6 +616,7 @@ export class DcService {
         channel: "deltachat",
         cardTitle: "",
         tsMs: Math.max(this.#now(), userTs + 1),
+        peer,
       });
       await this.sendText(accountId, message.chatId, reply);
     } catch (error) {

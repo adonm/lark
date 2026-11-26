@@ -319,7 +319,7 @@
         el("label", { for: "hist-search", class: "visually-hidden", text: "Search history" }), qInput, el("button", { type: "submit", text: "Find" }),
       ]);
       const controls = el("section", { class: "card-box hist-controls" }, [
-        el("p", { class: "row-sub", text: "Shows in-person notes and only your own Delta Chat messages. Room recordings are under Diagnostics." }),
+        el("p", { class: "row-sub", text: "Shows in-person notes and your Delta Chat conversation with this contact. Room recordings are under Diagnostics." }),
         chips, searchForm,
       ]);
       root.append(controls, el("ul", { class: "hist-list" }), el("div", { id: "hist-footer" }));

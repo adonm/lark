@@ -248,7 +248,7 @@ export class RemoteManager {
       this.#tokens.set(meta.hash, {
         companionId,
         contact,
-        contactName: typeof meta.name === "string" ? meta.name : contact,
+        contactName: this.#contactName(contact, typeof meta.name === "string" ? meta.name : ""),
       });
     }
   }
@@ -277,12 +277,27 @@ export class RemoteManager {
     return next;
   }
 
+  /**
+   * v1 tokens carried no display name. Fall back to the name Delta Chat last
+   * reported for that address so restored links still match history rows,
+   * which store the display name rather than the address.
+   */
+  #contactName(contact: string, given: string): string {
+    const name = given.trim();
+    if (name !== "") return name;
+    return this.#db.getContactName(contact) ?? contact;
+  }
+
   authorize(raw: string): RemoteTokenScope | undefined {
     const trimmed = raw.trim();
     if (trimmed === "") return undefined;
     const hash = tokenHash(trimmed);
     for (const [stored, scope] of this.#tokens) {
-      if (safeEqualHex(stored, hash)) return scope;
+      if (!safeEqualHex(stored, hash)) continue;
+      // The Delta Chat contact may have been seen after startup, so fill in a
+      // name that a bare-hash v1 token could not store.
+      if (scope.contactName === scope.contact) scope.contactName = this.#contactName(scope.contact, "");
+      return scope;
     }
     return undefined;
   }
@@ -290,11 +305,13 @@ export class RemoteManager {
   /** Persist the replacement before retiring the previous link. */
   #storeToken(companionId: string, contact: string, contactName: string, raw: string): void {
     const hash = tokenHash(raw);
-    this.#db.setMeta(tokenKey(companionId, contact), JSON.stringify({ hash, name: contactName } satisfies TokenMeta));
+    const name = this.#contactName(contact, contactName);
+    if (name !== contact) this.#db.setContactName(contact, name);
+    this.#db.setMeta(tokenKey(companionId, contact), JSON.stringify({ hash, name } satisfies TokenMeta));
     for (const [oldHash, scope] of this.#tokens) {
       if (scope.companionId === companionId && scope.contact === contact) this.#tokens.delete(oldHash);
     }
-    this.#tokens.set(hash, { companionId, contact, contactName });
+    this.#tokens.set(hash, { companionId, contact, contactName: name });
   }
 
   async issue(companionId: string, contact: string, contactName: string): Promise<string> {

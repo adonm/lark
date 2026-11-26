@@ -75,8 +75,9 @@ variables and local CSS style the page. REST commands live under
 `/remote/api/…`; live state is one Server-Sent Events stream at
 `/remote/events`. A token is scoped to one companion and one contact, minted
 per request, and revoked by `/remote off` or `remote/api/revoke`. History
-exposes in-person room messages and that contact's own Delta Chat messages;
-room captures are room-wide and labelled. The Diagnostics tab starts an opt-in
+exposes in-person room messages and that contact's whole Delta Chat
+conversation, including the companion's replies; other contacts stay hidden.
+Room captures are room-wide and labelled. The Diagnostics tab starts an opt-in
 capture, lists it, transcribes to a `.txt` sidecar, streams the WAV with range
 support, and removes both files.
 

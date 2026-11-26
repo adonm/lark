@@ -102,6 +102,8 @@ interface ReplyContext {
   accountId: number;
   chatId: number;
   contact: string;
+  /** Lowercased Delta Chat address; scopes history to this conversation. */
+  peer: string;
   armedUntil: number;
 }
 
@@ -1019,6 +1021,7 @@ export class Router {
       channel: "in_person",
       cardTitle: "",
       tsMs: this.#now(),
+      peer: "",
     });
     if (spoken === "") {
       await this.#armListening(state);
@@ -1035,6 +1038,7 @@ export class Router {
       channel: "in_person",
       cardTitle: "",
       tsMs: this.#now(),
+      peer: "",
     });
     state.caption = spoken.slice(0, 120);
     state.speaking = true;
@@ -1060,6 +1064,7 @@ export class Router {
         channel: "deltachat",
         cardTitle: "",
         tsMs: this.#now(),
+        peer: reply.peer,
       });
     } catch (error) {
       this.#log(`reply routing: ${errMessage(error)}`);
@@ -1186,6 +1191,7 @@ export class Router {
           accountId: turn.accountId,
           chatId: turn.chatId,
           contact: turn.sender,
+          peer: turn.peer,
           armedUntil: 0,
         };
       }
@@ -1216,7 +1222,7 @@ export class Router {
       id: message.id,
       role: message.role,
       speaker:
-        message.role === "assistant"
+        message.role === "assistant" || String(message.role) === "companion"
           ? companion?.name ?? "Companion"
           : message.sender,
       channel: message.channel,

@@ -347,6 +347,7 @@ test("a device reply within the 60 s window is sent back to Delta Chat", async (
     companionId: "greg",
     text: "how is the garden",
     sender: "Sam",
+    peer: "sam@example.org",
     private: false,
     accountId: 1,
     chatId: 77,
@@ -365,6 +366,11 @@ test("a device reply within the 60 s window is sent back to Delta Chat", async (
   });
   await settle(20);
   assert.deepEqual(h.dc.sent.at(-1), { accountId: 1, chatId: 77, text: "The tomatoes are ripe." });
+  const routed = h.db
+    .listMessages({ companionId: "greg", channel: "deltachat", limit: 10 })
+    .messages.find((message) => message.text === "The tomatoes are ripe.");
+  assert.equal(routed?.peer, "sam@example.org");
+  assert.equal(routed?.role, "assistant");
 });
 
 test("volume, voice and unpair menus call shared commands", async () => {
