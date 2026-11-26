@@ -69,21 +69,28 @@ const (
 	evCaptureStop
 	evCaptureDone
 	evTTSStreamDone
+	evPCMStreamDone
+	evMetronome
+	evPlayTune
 	evPointer
 )
 
 type termEvent struct {
-	kind    evKind
-	start   proto.ProtoRecStart
-	end     proto.ProtoRecEnd
-	ack     proto.ProtoTTSAck
-	point   proto.ProtoPointer
-	screen  Screen
-	c       *ipcCommand
-	reply   chan any
-	frame   *frameBuilt
-	capture *captureState
-	tts     *ttsStream
+	kind     evKind
+	start    proto.ProtoRecStart
+	end      proto.ProtoRecEnd
+	ack      proto.ProtoTTSAck
+	point    proto.ProtoPointer
+	screen   Screen
+	c        *ipcCommand
+	reply    chan any
+	frame    *frameBuilt
+	capture  *captureState
+	tts      *ttsStream
+	pcmPlay  *pcmStream
+	streamID uint64
+	spec     audio.MetronomeSpec
+	data     []byte
 }
 
 // Terminal is one connected board. Its actor goroutine owns mode, revisions,
@@ -130,6 +137,7 @@ type Terminal struct {
 	capture *captureState
 
 	tts      *ttsStream
+	pcmPlay  *pcmStream
 	awaitAck uint64
 	turnSeq  uint64
 	asleep   atomic.Bool
@@ -196,6 +204,10 @@ func (t *Terminal) close() {
 		if t.tts != nil {
 			t.tts.cancel()
 			t.tts = nil
+		}
+		if t.pcmPlay != nil {
+			t.pcmPlay.cancel()
+			t.pcmPlay = nil
 		}
 		if t.capture != nil {
 			t.capture.cancel(cancelUser)
@@ -299,6 +311,17 @@ func (t *Terminal) handle(ev termEvent) {
 			t.mode = modeSpeaking
 			t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpEnd, AudioID: ev.tts.id}.Encode())
 		}
+	case evPCMStreamDone:
+		if t.pcmPlay == ev.pcmPlay {
+			t.pcmPlay = nil
+			t.awaitAck = ev.pcmPlay.id
+			t.mode = modeSpeaking
+			t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpEnd, AudioID: ev.pcmPlay.id}.Encode())
+		}
+	case evMetronome:
+		t.playMetronome(ev.streamID, ev.spec)
+	case evPlayTune:
+		t.playTune(ev.streamID, ev.data)
 	case evRender:
 		t.render(ev.screen, true)
 	case evFrameBuilt:
@@ -452,7 +475,7 @@ func (t *Terminal) render(s Screen, full bool) {
 
 func (t *Terminal) setModeFromScreen(s Screen) {
 	switch {
-	case t.awaitAck != 0 || t.tts != nil:
+	case t.awaitAck != 0 || t.tts != nil || t.pcmPlay != nil:
 		t.mode = modeSpeaking
 	case t.capture != nil && t.capture.listen:
 		t.mode = modeListening

@@ -23,7 +23,8 @@ package edge
 // Commands: terminal.render, terminal.speak_start, terminal.speak_chunk,
 // terminal.speak_end, terminal.filler, terminal.preview_voice,
 // terminal.stop_audio, terminal.chime, terminal.power, terminal.volume,
-// terminal.rec_start, terminal.rec_cancel, terminal.hits (RPC),
+// terminal.metronome, terminal.play_tune, terminal.rec_start,
+// terminal.rec_cancel, terminal.hits (RPC),
 // stt.transcribe (RPC), portrait.normalize (RPC), capture.start (RPC),
 // capture.stop (RPC), health (RPC).
 //
@@ -49,25 +50,31 @@ import (
 )
 
 type ipcCommand struct {
-	ID              string          `json:"id"`
-	Cmd             string          `json:"cmd"`
-	TerminalID      string          `json:"terminal_id"`
-	StreamID        uint64          `json:"stream_id"`
-	Voice           string          `json:"voice"`
-	Text            string          `json:"text"`
-	Path            string          `json:"path"`
-	Dir             string          `json:"dir"`
-	OutPath         string          `json:"out_path"`
-	Screen          json.RawMessage `json:"screen"`
-	CaptureID       string          `json:"capture_id"`
-	Seconds         int             `json:"seconds"`
-	ListenWindow    bool            `json:"listen_window"`
-	WindowS         int             `json:"window_s"`
-	FollowUpGraceMS int             `json:"follow_up_grace_ms"`
-	CompanionName   string          `json:"companion_name"`
-	Kind            string          `json:"kind"`
-	Level           int             `json:"level"`
-	Brightness      int             `json:"brightness"`
+	ID              string           `json:"id"`
+	Cmd             string           `json:"cmd"`
+	TerminalID      string           `json:"terminal_id"`
+	StreamID        uint64           `json:"stream_id"`
+	Voice           string           `json:"voice"`
+	Text            string           `json:"text"`
+	Path            string           `json:"path"`
+	Dir             string           `json:"dir"`
+	OutPath         string           `json:"out_path"`
+	Screen          json.RawMessage  `json:"screen"`
+	CaptureID       string           `json:"capture_id"`
+	Seconds         int              `json:"seconds"`
+	ListenWindow    bool             `json:"listen_window"`
+	WindowS         int              `json:"window_s"`
+	FollowUpGraceMS int              `json:"follow_up_grace_ms"`
+	CompanionName   string           `json:"companion_name"`
+	Kind            string           `json:"kind"`
+	Level           int              `json:"level"`
+	Brightness      int              `json:"brightness"`
+	BPM             int              `json:"bpm"`
+	Beats           int              `json:"beats"`
+	DurationS       int              `json:"duration_s"`
+	Tempo           int              `json:"tempo"`
+	Style           string           `json:"style"`
+	Notes           []audio.TuneNote `json:"notes"`
 }
 
 type ipcClient struct {
@@ -322,6 +329,31 @@ func (e *Edge) handleTerminalCommand(c *ipcClient, cmd ipcCommand) {
 		c.reply(cmd.ID, map[string]any{"ok": true})
 	case "terminal.chime":
 		t.event(evChime, func(ev *termEvent) { ev.c = &cmd })
+	case "terminal.metronome":
+		spec, err := audio.NewMetronomeSpec(cmd.BPM, cmd.Beats, cmd.DurationS)
+		if err != nil {
+			c.fail(cmd.ID, err)
+			return
+		}
+		id := cmd.StreamID
+		if id == 0 {
+			id = e.nextStream()
+		}
+		t.event(evMetronome, func(ev *termEvent) { ev.streamID, ev.spec = id, spec })
+		c.reply(cmd.ID, map[string]any{"ok": true, "stream_id": id})
+	case "terminal.play_tune":
+		spec := audio.TuneSpec{Tempo: cmd.Tempo, Style: cmd.Style, Notes: cmd.Notes}
+		pcm, err := audio.SynthesizeTune(spec)
+		if err != nil {
+			c.fail(cmd.ID, err)
+			return
+		}
+		id := cmd.StreamID
+		if id == 0 {
+			id = e.nextStream()
+		}
+		t.event(evPlayTune, func(ev *termEvent) { ev.streamID, ev.data = id, pcm })
+		c.reply(cmd.ID, map[string]any{"ok": true, "stream_id": id})
 	case "terminal.power":
 		t.event(evPower, func(ev *termEvent) { ev.c = &cmd })
 	case "terminal.volume":

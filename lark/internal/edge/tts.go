@@ -269,6 +269,113 @@ func (s *ttsStream) eventDone() {
 	s.t.event(evTTSStreamDone, func(ev *termEvent) { ev.tts = s })
 }
 
+// pcmStream plays generated PCM (metronome or tune) over the same TTS start /
+// PCM / end control path as speech. It paces chunks against a small lead so a
+// long metronome cannot overflow the queue, while Stop cancels immediately.
+type pcmStream struct {
+	t    *Terminal
+	id   uint64
+	ctx  context.Context
+	stop context.CancelFunc
+	done chan struct{}
+	once sync.Once
+}
+
+func (s *pcmStream) cancel() { s.once.Do(s.stop) }
+
+func (t *Terminal) startPCMStream(id uint64, produce func(context.Context) <-chan []byte) *pcmStream {
+	if t.tts != nil {
+		t.tts.cancel()
+		t.tts = nil
+	}
+	if t.pcmPlay != nil {
+		t.pcmPlay.cancel()
+		t.pcmPlay = nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &pcmStream{t: t, id: id, ctx: ctx, stop: cancel, done: make(chan struct{})}
+	t.pcmPlay = s
+	t.awaitAck = 0
+	t.mode = modeSpeaking
+	t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStart, AudioID: id}.Encode())
+	go s.run(produce(ctx))
+	return s
+}
+
+func (s *pcmStream) run(chunks <-chan []byte) {
+	defer close(s.done)
+	const lead = 200 * time.Millisecond
+	started := time.Now()
+	sent := 0
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case chunk, ok := <-chunks:
+			if !ok {
+				s.t.event(evPCMStreamDone, func(ev *termEvent) { ev.pcmPlay = s })
+				return
+			}
+			target := started.Add(time.Duration(sent) * time.Second / sampleRate)
+			if d := time.Until(target.Add(-lead)); d > 0 {
+				timer := time.NewTimer(d)
+				select {
+				case <-s.ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			if !s.t.pcm(chunk) {
+				s.cancel()
+				return
+			}
+			sent += len(chunk) / 2
+		}
+	}
+}
+
+func (t *Terminal) playMetronome(id uint64, spec audio.MetronomeSpec) {
+	t.startPCMStream(id, func(ctx context.Context) <-chan []byte {
+		chunks, err := audio.MetronomeStream(ctx, spec, 2048)
+		if err != nil {
+			closed := make(chan []byte)
+			close(closed)
+			return closed
+		}
+		return chunks
+	})
+}
+
+func (t *Terminal) playTune(id uint64, pcm []byte) {
+	t.startPCMStream(id, func(ctx context.Context) <-chan []byte {
+		return chunkPCM(ctx, pcm, 2048)
+	})
+}
+
+// chunkPCM slices an already-rendered buffer without copying it. The producer
+// honours ctx so a tune stops on the same tap as speech.
+func chunkPCM(ctx context.Context, pcm []byte, size int) <-chan []byte {
+	if size <= 0 {
+		size = 2048
+	}
+	out := make(chan []byte)
+	go func() {
+		defer close(out)
+		for len(pcm) > 0 {
+			n := min(size*2, len(pcm))
+			chunk := pcm[:n]
+			pcm = pcm[n:]
+			select {
+			case out <- chunk:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
+
 func (t *Terminal) handleAck(m proto.ProtoTTSAck) {
 	if t.awaitAck == 0 || m.AudioID != t.awaitAck {
 		return
@@ -289,8 +396,22 @@ func (t *Terminal) stopAudio(aborted bool) {
 		t.tts.cancel()
 		t.tts = nil
 	}
+	var pcmID uint64
+	if t.pcmPlay != nil {
+		pcmID = t.pcmPlay.id
+		t.pcmPlay.cancel()
+		t.pcmPlay = nil
+	}
 	id := t.awaitAck
 	t.awaitAck = 0
+	t.mode = modeIdle
+	if pcmID != 0 {
+		t.ctrl(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStop, AudioID: pcmID}.Encode())
+		t.e.emit("playback.done", map[string]any{
+			"terminal_id": t.id, "stream_id": pcmID, "aborted": aborted,
+			"underruns_delta": 0,
+		})
+	}
 	if id != 0 {
 		t.ctrl(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStop, AudioID: id}.Encode())
 		t.e.emit("playback.done", map[string]any{
@@ -298,5 +419,4 @@ func (t *Terminal) stopAudio(aborted bool) {
 			"underruns_delta": 0,
 		})
 	}
-	t.mode = modeIdle
 }

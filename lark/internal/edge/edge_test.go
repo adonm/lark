@@ -405,6 +405,77 @@ func TestEdgeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAudioStreamsAndStop(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-audio")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+
+	// A tune renders and streams at once, then ends; the firmware ack closes
+	// the playback with aborted=false.
+	r := b.rpc("tune-1", map[string]any{
+		"cmd": "terminal.play_tune", "terminal_id": "vocat-audio",
+		"tempo": 240, "style": "hum",
+		"notes": []map[string]any{{"note": "C4", "beats": 0.25}},
+	})
+	if r["ok"] != true || r["stream_id"] == nil {
+		t.Fatalf("play_tune reply = %v", r)
+	}
+	_, ctrl := hw.read(proto.MsgTTSCtrl)
+	if c, _ := proto.DecodeProtoTTSCtrl(ctrl); c.Op != proto.TtsOpStart {
+		t.Fatalf("tune start = %+v", c)
+	}
+	if _, pcm := hw.read(proto.MsgTTSPCM); len(pcm) == 0 {
+		t.Fatal("empty tune PCM")
+	}
+	_, ctrl = hw.read(proto.MsgTTSCtrl)
+	if c, _ := proto.DecodeProtoTTSCtrl(ctrl); c.Op != proto.TtsOpEnd {
+		t.Fatalf("tune end = %+v", c)
+	}
+	ack := proto.ProtoTTSAck{Aborted: 0, AudioID: uint64(r["stream_id"].(float64))}
+	if _, err := hw.conn.Write(proto.Pack(proto.MsgTTSAck, 0, ack.Encode())); err != nil {
+		t.Fatal(err)
+	}
+	if ev := b.waitFor("playback.done"); ev["aborted"] != false {
+		t.Fatalf("tune playback.done = %v", ev)
+	}
+
+	// A metronome is long-running; Stop must cancel it and report aborted.
+	r = b.rpc("metro-1", map[string]any{
+		"cmd": "terminal.metronome", "terminal_id": "vocat-audio",
+		"bpm": 120, "beats": 4, "duration_s": 30,
+	})
+	if r["ok"] != true {
+		t.Fatalf("metronome reply = %v", r)
+	}
+	_, ctrl = hw.read(proto.MsgTTSCtrl)
+	if c, _ := proto.DecodeProtoTTSCtrl(ctrl); c.Op != proto.TtsOpStart {
+		t.Fatalf("metronome start = %+v", c)
+	}
+	if _, pcm := hw.read(proto.MsgTTSPCM); len(pcm) == 0 {
+		t.Fatal("empty metronome PCM")
+	}
+	b.rpc("metro-stop", map[string]any{"cmd": "terminal.stop_audio", "terminal_id": "vocat-audio"})
+	_, ctrl = hw.read(proto.MsgTTSCtrl)
+	if c, _ := proto.DecodeProtoTTSCtrl(ctrl); c.Op != proto.TtsOpStop {
+		t.Fatalf("metronome stop = %+v", c)
+	}
+	if ev := b.waitFor("playback.done"); ev["aborted"] != true {
+		t.Fatalf("metronome playback.done = %v", ev)
+	}
+
+	// Invalid bounds are rejected before anything reaches the board.
+	r = b.rpc("metro-bad", map[string]any{
+		"cmd": "terminal.metronome", "terminal_id": "vocat-audio",
+		"bpm": 999, "beats": 4, "duration_s": 10,
+	})
+	if r["ok"] != false || r["error"] == nil {
+		t.Fatalf("invalid metronome reply = %v", r)
+	}
+}
+
 // TestUDPHotPathAllocs pins the zero-allocation RTP ingest path.
 func TestUDPHotPathAllocs(t *testing.T) {
 	e := startTestEdge(t)
