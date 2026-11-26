@@ -2,7 +2,9 @@
 // instance owns the model turns, the native tools, and the two request hooks
 // (state pruning and model failover). No listeners, no external server.
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { OpenCode } from "@opencode/sdk";
 import { Plugin, Model, Provider } from "@opencode/plugin";
 import type { Tool } from "@opencode/schema/tool";
@@ -44,6 +46,85 @@ export interface TestProvider {
   baseURL: string;
   apiKey?: string;
   models: readonly string[];
+}
+
+export type StoredCredentialValue =
+  | { type: "key"; key: string; metadata?: Record<string, unknown> }
+  | { type: "oauth"; methodID: string; refresh: string; access: string; expires: number; metadata?: Record<string, unknown> };
+
+export interface StoredCredential {
+  integrationID: string;
+  label: string;
+  value: StoredCredentialValue;
+}
+
+export function parseStoredCredential(raw: unknown): StoredCredentialValue | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const metadata = value.metadata !== null && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+    ? value.metadata as Record<string, unknown>
+    : undefined;
+  if (value.type === "key" && typeof value.key === "string") {
+    return { type: "key", key: value.key, ...(metadata === undefined ? {} : { metadata }) };
+  }
+  if (
+    value.type === "oauth" &&
+    typeof value.methodID === "string" &&
+    typeof value.refresh === "string" &&
+    typeof value.access === "string" &&
+    typeof value.expires === "number"
+  ) {
+    return {
+      type: "oauth",
+      methodID: value.methodID,
+      refresh: value.refresh,
+      access: value.access,
+      expires: value.expires,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Read active provider credentials from a live OpenCode store. Auth.json is
+ * legacy: current OpenCode keeps OAuth logins in its SQLite database, so a v1
+ * cutover would otherwise start the embedded host without the Zen credential.
+ */
+export function readOpenCodeCredentials(path: string, integrationID: string): StoredCredential[] {
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+  } catch {
+    return [];
+  }
+  try {
+    const rows = db
+      .prepare("SELECT integration_id, label, value FROM credential WHERE integration_id = ? AND active = 1 ORDER BY time_created DESC")
+      .all(integrationID) as Array<{ integration_id?: unknown; label?: unknown; value?: unknown }>;
+    const credentials: StoredCredential[] = [];
+    for (const row of rows) {
+      if (typeof row.integration_id !== "string") continue;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(String(row.value));
+      } catch {
+        continue;
+      }
+      const value = parseStoredCredential(raw);
+      if (value === undefined) continue;
+      credentials.push({
+        integrationID: row.integration_id,
+        label: typeof row.label === "string" ? row.label : "Default",
+        value,
+      });
+    }
+    return credentials;
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
 }
 
 export interface BrainOptions {
@@ -516,6 +597,9 @@ export class Brain {
     const options = this.#options;
     const directory = resolve(options.directory);
     const dataDir = resolve(options.dataDir);
+    // The user's live OpenCode data root, captured before the isolated XDG
+    // overrides below. Only the opencode provider credential is read from it.
+    const userDataHome = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
     mkdirSync(dataDir, { recursive: true });
     mkdirSync(join(dataDir, "config"), { recursive: true });
     mkdirSync(join(dataDir, "cache"), { recursive: true });
@@ -588,6 +672,25 @@ export class Brain {
       this.#restoreEnv();
       throw error;
     }
+    await this.#importCredentials(userDataHome);
+  }
+
+  async #importCredentials(userDataHome: string): Promise<void> {
+    // Tests and local benches register their own provider; they never read the
+    // operator's OpenCode store.
+    if (this.#options.provider !== undefined) return;
+    const oc = this.#requireOc();
+    const existing: Array<{ integrationID: string }> = await oc.credential.list().catch(() => []);
+    if (existing.some((credential) => credential.integrationID === "opencode")) return;
+    const source = join(resolve(userDataHome), "opencode", "opencode.db");
+    for (const credential of readOpenCodeCredentials(source, "opencode")) {
+      await oc.credential.create({
+        integrationID: credential.integrationID,
+        label: credential.label,
+        value: credential.value,
+        activate: true,
+      }).catch(() => undefined);
+    }
   }
 
   #requireOc(): Oc {
@@ -611,6 +714,18 @@ export class Brain {
       contextAfterMs: 0,
     });
     return session.id;
+  }
+
+  async sessionExists(sessionID: string): Promise<boolean> {
+    try {
+      await this.#requireOc().sessions.get({ sessionID });
+      return true;
+    } catch (error) {
+      // A transient failure must not discard a healthy session; only a
+      // definite "not found" resets the binding.
+      if (/session not found/i.test(error instanceof Error ? error.message : String(error))) return false;
+      return true;
+    }
   }
 
   /** Refresh the per-session instruction entry; no `form` is ever sent. */

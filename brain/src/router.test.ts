@@ -201,6 +201,27 @@ test("a committed turn streams speech and speculation is promoted", async () => 
   assert.equal(h.edge.lastScreen()?.status, "idle");
 });
 
+test("a stale v1 session binding is replaced on the next turn", async () => {
+  const h = harness();
+  h.db.putSession({ companionId: "greg", sessionId: "ses_from_v1", updatedAt: 1, contractHash: "", contextAfterMs: 0 });
+  h.brain.missingSessions.add("ses_from_v1");
+  h.brain.nextTurn("Fresh session reply.", ["Fresh session reply."]);
+  await connect(h);
+  h.edge.emit("turn.commit", {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "hello greg",
+    speech_at_ms: 0,
+    listen_window: false,
+    audio_ms: 500,
+  });
+  await settle(20);
+  assert.deepEqual(h.brain.sessions, [{ id: "greg", name: "Greg", personality: "dry" }]);
+  assert.equal(h.db.getSession("greg"), undefined, "the stale row is dropped");
+  assert.equal(h.brain.inputs.at(-1)?.sessionID, "sess-greg");
+  assert.match(h.edge.spoken.map((chunk) => chunk.text).join(" "), /Fresh session/);
+});
+
 test("a mismatched commit aborts speculation and runs a fresh turn", async () => {
   const h = harness();
   await connect(h);

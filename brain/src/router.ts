@@ -66,6 +66,8 @@ export interface TurnHandle {
 
 export interface TurnBrain {
   createSession(companion: { id: string; name: string; personality: string }): Promise<string>;
+  /** False when a stored session disappeared with an old OpenCode store. */
+  sessionExists(sessionID: string): Promise<boolean>;
   runTurn(input: { sessionID: string; text: string }): AsyncGenerator<TurnDelta, TurnResult>;
   startSpeculate(input: { sessionID: string; text: string }, onDelta?: (delta: string) => void): TurnHandle;
 }
@@ -1052,9 +1054,14 @@ export class Router {
 
   // ---- voice turns --------------------------------------------------------
 
-  #sessionFor(companionId: string): Promise<string> {
+  async #sessionFor(companionId: string): Promise<string> {
     const stored = this.#db.getSession(companionId);
-    if (stored !== undefined) return Promise.resolve(stored.sessionId);
+    if (stored !== undefined) {
+      if (await this.#brain.sessionExists(stored.sessionId)) return stored.sessionId;
+      // The session table survives a v1 cutover, but its ids belong to the old
+      // OpenCode store. Drop the stale binding and start a fresh session.
+      this.#db.deleteSession(companionId);
+    }
     const companion = this.#db.getCompanion(companionId);
     if (companion === undefined) return Promise.reject(new Error(`companion ${companionId} not found`));
     return this.#brain.createSession({ id: companion.id, name: companion.name, personality: companion.personality });

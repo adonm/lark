@@ -14,6 +14,7 @@ import {
   createBrain,
   parseAgentMarkdown,
   parseModelSpec,
+  readOpenCodeCredentials,
   stripState,
 } from "./opencode.ts";
 import { TimerScheduler } from "./timers.ts";
@@ -307,10 +308,35 @@ test("model specs and agent markdown parse strictly", () => {
   ]);
 });
 
+test("provider credentials are imported from the live OpenCode store", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-credential-store-"));
+  const path = join(dir, "opencode.db");
+  const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE credential (id TEXT PRIMARY KEY, integration_id TEXT, label TEXT, value TEXT, active INTEGER, time_created INTEGER)");
+  const insert = db.prepare("INSERT INTO credential VALUES (?, ?, ?, ?, ?, ?)");
+  insert.run("cred_a", "opencode", "Default", JSON.stringify({
+    type: "oauth", methodID: "zen", refresh: "r", access: "a", expires: 1_800_000_000,
+  }), 1, 2);
+  insert.run("cred_b", "opencode", "Old", JSON.stringify({ type: "key", key: "k" }), 0, 1);
+  insert.run("cred_c", "github-copilot", "OAuth", JSON.stringify({ type: "oauth", methodID: "gh", refresh: "r", access: "a", expires: 1 }), 1, 3);
+  insert.run("cred_d", "opencode", "Broken", "not json", 1, 4);
+  db.close();
+
+  const credentials = readOpenCodeCredentials(path, "opencode");
+  assert.deepEqual(credentials, [{
+    integrationID: "opencode",
+    label: "Default",
+    value: { type: "oauth", methodID: "zen", refresh: "r", access: "a", expires: 1_800_000_000 },
+  }]);
+  assert.deepEqual(readOpenCodeCredentials(join(dir, "missing.db"), "opencode"), []);
+});
+
 test("in-process startup, companion instruction, and streaming deltas", async () => {
   model.reset();
   const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
   assert.equal(db.getSession("cake")?.sessionId, sessionID);
+  assert.equal(await brain.sessionExists(sessionID), true);
+  assert.equal(await brain.sessionExists("ses_missing_from_old_store"), false);
   const entries = await brain.sessionInstructions(sessionID);
   const companion = entries.find((entry) => entry.key === "lark.companion");
   assert.deepEqual(companion?.value, { id: "cake", name: "Cake", personality: "a curious cat" });
