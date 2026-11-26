@@ -13,7 +13,7 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 ### Breaking Changes
 - The single `lark` server binary is gone. `lark-edge.service` (Go) owns terminals, speech models, capture DSP, OTA push, and bulk library builds; `lark-brain.service` (Node 26) owns HTTP, SQLite, Delta Chat, stories, timers, and embedded OpenCode.
 - `lark-opencode.service` is removed. OpenCode runs in-process inside the brain through `@opencode/sdk`; there is no loopback `:49375` API, Basic-auth password, or `LARK_OPENCODE_URL`/`LARK_OPENCODE_PASSWORD` setting.
-- OpenCode models are code defaults in `brain/src/opencode.ts`; the generated `opencode.jsonc`, `config/opencode/` plugins, and `setup-opencode-config.py` no longer exist. The brain imports the `opencode` provider entry from the user's OpenCode `auth.json` once.
+- OpenCode models are code defaults in `brain/src/opencode.ts`; the generated `opencode.jsonc`, `config/opencode/` plugins, and `setup-opencode-config.py` no longer exist. The brain imports the user's active `opencode` provider credential once, from `auth.json` or from the OpenCode SQLite store when the OAuth login lives only there.
 - The local library no longer provisions itself on server launch. `lark library --plan` reads the plan; `lark library --download --build` provisions through `lark-edge`.
 - Removed CLI commands: `serve`, `mcp`, `sim`, `device`, `stt-bench`. Kept: `status`, `doctor`, `companions`, `terminals`, `tunnels`, `capture`, `library`, `ota`, `deploy`.
 - The Go live/QA/bench suites and their stub/fixture harness are removed. The gate now runs the TypeScript brain, including a real Go-edge ↔ TS-brain cross-process test.
@@ -33,7 +33,7 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
    ./scripts/setup-host.sh
    ```
    It builds and installs `lark-edge`, runs `npm ci` for the brain, installs the `lark` CLI wrapper, renders and starts `lark-edge.service` and `lark-brain.service`, removes the retired unit files, and strips the old OpenCode password/URL keys from `lark.env`.
-4. No database migration and no firmware flash. The brain creates the same schema the v1 server used and opens the existing `lark.db`.
+4. No database migration and no firmware flash. The brain creates the same schema the v1 server used and opens the existing `lark.db`; stale v1 OpenCode session ids are replaced on the next turn.
 5. If you kept a custom `lark.env`, recheck it: `LARK_OPENCODE_*` and `OPENCODE_SERVER_PASSWORD` are ignored and removed; `LARK_DATA_DIR`, `LARK_EDGE_SOCK`, `LARK_DC_RPC_BIN`, and `LARK_REPO_DIR` are set by the units.
 
 ### Verification
