@@ -564,8 +564,8 @@ func TestUDPHotPathAllocs(t *testing.T) {
 	// Install a capture with preallocated slots but no consumer, then isolate
 	// the last-packet copy into a slot.
 	cap := newCapture(term, false, 20*time.Second, "")
-	term.cap.Store(cap)
-	t.Cleanup(func() { term.cap.Store(nil) })
+	term.capture.pending.Store(cap)
+	t.Cleanup(func() { term.capture.pending.Store(nil) })
 	remote := netip.MustParseAddrPort("127.0.0.1:40000")
 	pkt := make([]byte, proto.RtpPacketBytes)
 	pkt[0] = proto.RtpVersionByte

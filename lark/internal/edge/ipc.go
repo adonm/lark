@@ -271,10 +271,10 @@ func (e *Edge) handleCommand(c *ipcClient, cmd ipcCommand) {
 		list := make([]map[string]any, 0, len(terms))
 		for _, t := range terms {
 			list = append(list, map[string]any{
-				"terminal_id": t.id,
+				"terminal_id": t.info.id,
 				"connected":   t.native() != nil,
 				"reconnects":  t.reconnects(),
-				"firmware":    t.firmware,
+				"firmware":    t.info.firmware,
 			})
 		}
 		c.reply(cmd.ID, map[string]any{

@@ -111,13 +111,13 @@ func (t *Terminal) renderWorker() {
 	var rev uint64
 	for {
 		select {
-		case <-t.done:
+		case <-t.life.done:
 			return
-		case job := <-t.jobs:
+		case job := <-t.life.jobs:
 			img, hits, actions, err := t.draw(job.screen, job.mode)
 			if err != nil || img == nil {
 				if err != nil {
-					t.logf("lark-edge: render %s: %v", t.id, err)
+					t.logf("lark-edge: render %s: %v", t.info.id, err)
 				}
 				continue
 			}
@@ -143,7 +143,7 @@ func (t *Terminal) renderWorker() {
 			if rect.Empty() {
 				rect = image.Rect(0, 0, 1, 1)
 			}
-			codecs := t.codecs
+			codecs := t.info.codecs
 			if codecs == 0 {
 				codecs = pixel.CodecBitAll
 			}
@@ -157,10 +157,10 @@ func (t *Terminal) renderWorker() {
 			bufs.commit()
 			prevGrade = grade
 			select {
-			case t.events <- termEvent{kind: evFrameBuilt, frame: &frameBuilt{
+			case t.life.events <- termEvent{kind: evFrameBuilt, frame: &frameBuilt{
 				gen: job.gen, rev: rev, payload: payload, hits: hits, actions: actions,
 			}}:
-			case <-t.done:
+			case <-t.life.done:
 				return
 			}
 		}
@@ -168,7 +168,7 @@ func (t *Terminal) renderWorker() {
 }
 
 func (t *Terminal) draw(s Screen, mode terminalMode) (*image.RGBA, []pixel.HitBox, map[string]pixel.Action, error) {
-	spec := pixel.SpecForGeometry(t.width, t.height, t.shape)
+	spec := pixel.SpecForGeometry(t.info.width, t.info.height, t.info.shape)
 	bg, poses, th := t.assets(s.PortraitDir)
 	status := s.Status
 	if status == "" {
@@ -243,7 +243,7 @@ func (t *Terminal) assets(dir string) (*image.RGBA, [4]*image.RGBA, pixel.Theme)
 	if dir == "" {
 		return nil, pixel.PlaceholderPoses(), pixel.PlaceholderTheme()
 	}
-	e := t.e
+	e := t.deps.e
 	e.assetMu.Lock()
 	if a := e.assets[dir]; a != nil && a.dir == dir {
 		e.assetMu.Unlock()

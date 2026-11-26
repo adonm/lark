@@ -188,7 +188,7 @@ func (s *ttsStream) synthesize(scratch *[]float32, text string) []byte {
 	if pcm, ok := s.t.cache.Get(key); ok {
 		return pcm
 	}
-	tts := s.t.e.models.synthesizer()
+	tts := s.t.deps.e.models.synthesizer()
 	if tts == nil {
 		return nil
 	}
@@ -209,26 +209,26 @@ func (t *Terminal) speakStart(ev termEvent) {
 	if ev.c == nil {
 		return
 	}
-	if t.tts != nil {
-		t.tts.cancel()
-		t.tts = nil
+	if t.playback.tts != nil {
+		t.playback.tts.cancel()
+		t.playback.tts = nil
 	}
 	voice := t.voice(ev.c.Voice)
 	id := ev.c.StreamID
 	if id == 0 {
-		id = t.e.nextStream()
+		id = t.deps.e.nextStream()
 	}
 	s := newTTSStream(t, id, voice)
-	t.tts = s
-	t.awaitAck = 0
-	t.mode = modeSpeaking
+	t.playback.tts = s
+	t.playback.awaitAck = 0
+	t.screen.mode = modeSpeaking
 	t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStart, AudioID: id}.Encode())
 	go s.run()
 }
 
 func (t *Terminal) playEphemeral(voiceID, text string, pinned bool) {
 	voice := t.voice(voiceID)
-	id := t.e.nextStream()
+	id := t.deps.e.nextStream()
 	s := newTTSStream(t, id, voice)
 	if pcm, ok := t.cache.Get(clipKey(voice.ID, text)); ok && len(pcm) > 0 {
 		t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStart, AudioID: id}.Encode())
@@ -238,12 +238,12 @@ func (t *Terminal) playEphemeral(voiceID, text string, pinned bool) {
 			pcm = pcm[n:]
 		}
 		t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpEnd, AudioID: id}.Encode())
-		t.awaitAck = id
+		t.playback.awaitAck = id
 		return
 	}
-	t.tts = s
-	t.awaitAck = 0
-	t.mode = modeSpeaking
+	t.playback.tts = s
+	t.playback.awaitAck = 0
+	t.screen.mode = modeSpeaking
 	t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStart, AudioID: id}.Encode())
 	go func() {
 		pcm := s.synthesize(new([]float32), text)
@@ -284,19 +284,19 @@ type pcmStream struct {
 func (s *pcmStream) cancel() { s.once.Do(s.stop) }
 
 func (t *Terminal) startPCMStream(id uint64, produce func(context.Context) <-chan []byte) *pcmStream {
-	if t.tts != nil {
-		t.tts.cancel()
-		t.tts = nil
+	if t.playback.tts != nil {
+		t.playback.tts.cancel()
+		t.playback.tts = nil
 	}
-	if t.pcmPlay != nil {
-		t.pcmPlay.cancel()
-		t.pcmPlay = nil
+	if t.playback.pcm != nil {
+		t.playback.pcm.cancel()
+		t.playback.pcm = nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &pcmStream{t: t, id: id, ctx: ctx, stop: cancel, done: make(chan struct{})}
-	t.pcmPlay = s
-	t.awaitAck = 0
-	t.mode = modeSpeaking
+	t.playback.pcm = s
+	t.playback.awaitAck = 0
+	t.screen.mode = modeSpeaking
 	t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStart, AudioID: id}.Encode())
 	go s.run(produce(ctx))
 	return s
@@ -377,45 +377,45 @@ func chunkPCM(ctx context.Context, pcm []byte, size int) <-chan []byte {
 }
 
 func (t *Terminal) handleAck(m proto.ProtoTTSAck) {
-	if t.awaitAck == 0 || m.AudioID != t.awaitAck {
+	if t.playback.awaitAck == 0 || m.AudioID != t.playback.awaitAck {
 		return
 	}
-	id := t.awaitAck
-	t.awaitAck = 0
-	if t.mode == modeSpeaking {
-		t.mode = modeIdle
+	id := t.playback.awaitAck
+	t.playback.awaitAck = 0
+	if t.screen.mode == modeSpeaking {
+		t.screen.mode = modeIdle
 	}
-	t.e.emit("playback.done", map[string]any{
-		"terminal_id": t.id, "stream_id": id, "aborted": m.Aborted != 0,
+	t.deps.e.emit("playback.done", map[string]any{
+		"terminal_id": t.info.id, "stream_id": id, "aborted": m.Aborted != 0,
 		"underruns_delta": 0,
 	})
 }
 
 func (t *Terminal) stopAudio(aborted bool) {
-	if t.tts != nil {
-		t.tts.cancel()
-		t.tts = nil
+	if t.playback.tts != nil {
+		t.playback.tts.cancel()
+		t.playback.tts = nil
 	}
 	var pcmID uint64
-	if t.pcmPlay != nil {
-		pcmID = t.pcmPlay.id
-		t.pcmPlay.cancel()
-		t.pcmPlay = nil
+	if t.playback.pcm != nil {
+		pcmID = t.playback.pcm.id
+		t.playback.pcm.cancel()
+		t.playback.pcm = nil
 	}
-	id := t.awaitAck
-	t.awaitAck = 0
-	t.mode = modeIdle
+	id := t.playback.awaitAck
+	t.playback.awaitAck = 0
+	t.screen.mode = modeIdle
 	if pcmID != 0 {
 		t.ctrl(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStop, AudioID: pcmID}.Encode())
-		t.e.emit("playback.done", map[string]any{
-			"terminal_id": t.id, "stream_id": pcmID, "aborted": aborted,
+		t.deps.e.emit("playback.done", map[string]any{
+			"terminal_id": t.info.id, "stream_id": pcmID, "aborted": aborted,
 			"underruns_delta": 0,
 		})
 	}
 	if id != 0 {
 		t.ctrl(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStop, AudioID: id}.Encode())
-		t.e.emit("playback.done", map[string]any{
-			"terminal_id": t.id, "stream_id": id, "aborted": aborted,
+		t.deps.e.emit("playback.done", map[string]any{
+			"terminal_id": t.info.id, "stream_id": id, "aborted": aborted,
 			"underruns_delta": 0,
 		})
 	}

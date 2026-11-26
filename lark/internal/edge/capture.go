@@ -132,8 +132,8 @@ func (c *captureState) getSlot() []byte {
 }
 
 func (t *Terminal) beginCapture(listen bool, windowS int, followUp bool, name string) {
-	if t.capture != nil {
-		t.capture.cancel(cancelUser)
+	if t.capture.active != nil {
+		t.capture.active.cancel(cancelUser)
 	}
 	limit := 20 * time.Second
 	if windowS > 0 {
@@ -148,24 +148,24 @@ func (t *Terminal) beginCapture(listen bool, windowS int, followUp bool, name st
 	}
 	c.session = uint16(t.nextTurn())
 	var flags uint8
-	if t.caps&proto.CapBridgeEndpoint != 0 {
+	if t.info.caps&proto.CapBridgeEndpoint != 0 {
 		flags |= proto.RecTargetBridgeE
 	}
 	if listen {
 		flags |= proto.RecTargetListen
 	}
 	t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: proto.RecOpStart, Flags: flags, Session: c.session}.Encode())
-	t.capture = c
-	t.cap.Store(c)
-	t.mode = modeListening
+	t.capture.active = c
+	t.capture.pending.Store(c)
+	t.screen.mode = modeListening
 	if !listen {
-		t.mode = modeRecording
+		t.screen.mode = modeRecording
 	}
 	go c.run()
 }
 
 func (t *Terminal) ingestRTP(pcm []byte, at time.Time) {
-	c := t.cap.Load()
+	c := t.capture.pending.Load()
 	if c == nil {
 		return
 	}
@@ -189,7 +189,7 @@ func (c *captureState) run() {
 		c.runDevice()
 		return
 	}
-	vad := c.t.e.models.newVAD()
+	vad := c.t.deps.e.models.newVAD()
 	if vad == nil {
 		vad = &energyVAD{}
 	}
@@ -316,8 +316,8 @@ func (c *captureState) run() {
 				if !speechAt.IsZero() {
 					speechMS = speechAt.UnixMilli()
 				}
-				c.t.e.emit("turn.speculate", map[string]any{
-					"terminal_id": c.t.id, "seq": specSeq, "transcript": result.text,
+				c.t.deps.e.emit("turn.speculate", map[string]any{
+					"terminal_id": c.t.info.id, "seq": specSeq, "transcript": result.text,
 					"speech_at_ms": speechMS,
 				})
 			}
@@ -406,7 +406,7 @@ func (c *captureState) commit(u *utterance, cached string, cachedN int, speechAt
 func (c *captureState) commitText(text string, u *utterance, speechAt time.Time, seq uint64, spec bool) {
 	_ = spec
 	if isFillerTranscript(text) {
-		c.t.e.emit("turn.not_caught", map[string]any{"terminal_id": c.t.id})
+		c.t.deps.e.emit("turn.not_caught", map[string]any{"terminal_id": c.t.info.id})
 		return
 	}
 	if seq == 0 {
@@ -416,8 +416,8 @@ func (c *captureState) commitText(text string, u *utterance, speechAt time.Time,
 	if !speechAt.IsZero() {
 		speechMS = speechAt.UnixMilli()
 	}
-	c.t.e.emit("turn.commit", map[string]any{
-		"terminal_id": c.t.id, "seq": seq, "transcript": text,
+	c.t.deps.e.emit("turn.commit", map[string]any{
+		"terminal_id": c.t.info.id, "seq": seq, "transcript": text,
 		"speech_at_ms": speechMS, "listen_window": c.listen,
 		"audio_ms": pcmDuration(len(u.pcm)).Milliseconds(),
 	})
@@ -427,8 +427,8 @@ func (c *captureState) emitCancel(seq uint64, reason string) {
 	if seq == 0 {
 		return
 	}
-	c.t.e.emit("turn.cancel", map[string]any{
-		"terminal_id": c.t.id, "seq": seq, "reason": reason,
+	c.t.deps.e.emit("turn.cancel", map[string]any{
+		"terminal_id": c.t.info.id, "seq": seq, "reason": reason,
 	})
 }
 
@@ -440,7 +440,7 @@ func (c *captureState) finish() {
 		}
 		c.t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: op, Session: c.session}.Encode())
 	}
-	if c.t.cap.CompareAndSwap(c, nil) {
+	if c.t.capture.pending.CompareAndSwap(c, nil) {
 		c.t.event(evCaptureDone, func(ev *termEvent) { ev.capture = c })
 	}
 	c.cancelFn()
@@ -450,8 +450,8 @@ func (c *captureState) runDevice() {
 	var pcm []byte
 	var progressAt time.Time
 	start := time.Now()
-	c.t.e.emit("capture.progress", map[string]any{
-		"terminal_id": c.t.id, "capture_id": c.captureID, "remaining_s": c.seconds,
+	c.t.deps.e.emit("capture.progress", map[string]any{
+		"terminal_id": c.t.info.id, "capture_id": c.captureID, "remaining_s": c.seconds,
 	})
 	for {
 		select {
@@ -467,8 +467,8 @@ func (c *captureState) runDevice() {
 			if time.Since(progressAt) >= time.Second {
 				progressAt = time.Now()
 				remaining := c.seconds - int(time.Since(start).Seconds())
-				c.t.e.emit("capture.progress", map[string]any{
-					"terminal_id": c.t.id, "capture_id": c.captureID, "remaining_s": max(0, remaining),
+				c.t.deps.e.emit("capture.progress", map[string]any{
+					"terminal_id": c.t.info.id, "capture_id": c.captureID, "remaining_s": max(0, remaining),
 				})
 			}
 		case reason := <-c.cancelCh:
@@ -482,13 +482,13 @@ func (c *captureState) runDevice() {
 func (c *captureState) writeWAV(pcm []byte) {
 	err := writeWAVAtomic(c.outPath, pcm)
 	fields := map[string]any{
-		"terminal_id": c.t.id, "capture_id": c.captureID, "path": c.outPath,
+		"terminal_id": c.t.info.id, "capture_id": c.captureID, "path": c.outPath,
 		"seconds": pcmDuration(len(pcm)).Seconds(),
 	}
 	if err != nil {
 		fields["error"] = err.Error()
 	}
-	c.t.e.emit("capture.done", fields)
+	c.t.deps.e.emit("capture.done", fields)
 }
 
 func writeWAVAtomic(path string, pcm []byte) error {
@@ -517,7 +517,7 @@ func writeWAVAtomic(path string, pcm []byte) error {
 var errNoSTT = errors.New("STT unavailable")
 
 func (t *Terminal) transcribe(ctx context.Context, pcm []byte, probe bool) (string, error) {
-	stt := t.e.models.transcriber()
+	stt := t.deps.e.models.transcriber()
 	if stt == nil {
 		return "", errNoSTT
 	}
@@ -530,7 +530,7 @@ func (t *Terminal) transcribe(ctx context.Context, pcm []byte, probe bool) (stri
 }
 
 func (t *Terminal) predict(pcm []byte) float32 {
-	td := t.e.models.turnDetector()
+	td := t.deps.e.models.turnDetector()
 	if td == nil || len(pcm) < sampleRate/2*2 {
 		return -1
 	}
@@ -542,7 +542,7 @@ func (t *Terminal) predict(pcm []byte) float32 {
 }
 
 func (t *Terminal) recStartEvent(m proto.ProtoRecStart) {
-	if t.capture != nil {
+	if t.capture.active != nil {
 		return
 	}
 	listen := m.Target == "listen"
@@ -550,27 +550,27 @@ func (t *Terminal) recStartEvent(m proto.ProtoRecStart) {
 }
 
 func (t *Terminal) recEndEvent(m proto.ProtoRecEnd) {
-	if t.capture == nil {
+	if t.capture.active == nil {
 		return
 	}
 	if m.Cancelled != 0 {
-		t.capture.cancel(cancelUser)
+		t.capture.active.cancel(cancelUser)
 	} else {
-		t.capture.cancel(cancelSend)
+		t.capture.active.cancel(cancelSend)
 	}
 }
 
 func (t *Terminal) startDeviceCapture(cmd *ipcCommand) {
-	if t.capture != nil {
-		t.capture.cancel(cancelUser)
+	if t.capture.active != nil {
+		t.capture.active.cancel(cancelUser)
 	}
 	c := newCapture(t, false, time.Duration(cmd.Seconds)*time.Second, "")
 	c.device = true
 	c.captureID = cmd.CaptureID
 	c.outPath = cmd.OutPath
 	c.seconds = cmd.Seconds
-	t.capture = c
-	t.cap.Store(c)
-	t.mode = modeRecording
+	t.capture.active = c
+	t.capture.pending.Store(c)
+	t.screen.mode = modeRecording
 	go c.run()
 }

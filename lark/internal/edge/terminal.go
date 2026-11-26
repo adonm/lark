@@ -93,9 +93,8 @@ type termEvent struct {
 	data     []byte
 }
 
-// Terminal is one connected board. Its actor goroutine owns mode, revisions,
-// hit boxes, capture and playback state; the TCP write loop owns the socket.
-type Terminal struct {
+// terminalInfo is the immutable identity and capability snapshot from HELLO.
+type terminalInfo struct {
 	id          string
 	board       string
 	firmware    string
@@ -107,22 +106,35 @@ type Terminal struct {
 	codecs      uint8
 	caps        uint32
 	token       [proto.ResumeTokenLen]byte
+}
 
+// terminalDeps are read-only process handles, not terminal state.
+type terminalDeps struct {
 	e   *Edge
 	srv *terminalServer
+}
 
-	mu   sync.RWMutex
-	ip   string
-	ssrc uint32
-	conn atomic.Pointer[nativeConn]
+// terminalConn keeps the socket, peer address and SSRC under one lock.
+type terminalConn struct {
+	mu     sync.RWMutex // guards ip and ssrc
+	ip     string
+	ssrc   uint32
+	native atomic.Pointer[nativeConn]
+}
 
+// terminalLife owns goroutine lifecycle: queues, cancellation and close-once.
+type terminalLife struct {
 	events    chan termEvent
 	jobs      chan renderJob
 	done      chan struct{}
 	closed    atomic.Bool
 	replaced  atomic.Bool
 	lastTouch atomic.Int64
+	closeOnce sync.Once
+}
 
+// terminalScreen is owned by the actor goroutine and the render worker.
+type terminalScreen struct {
 	mode         terminalMode
 	rev          uint64
 	nativeRev    uint16
@@ -130,64 +142,87 @@ type Terminal struct {
 	hasActionRev bool
 	hits         []pixel.HitBox
 	actions      map[string]pixel.Action
-	screen       Screen
-	screenKind   string
-	renderGen    uint64
+	page         Screen
+	kind         string
+	gen          uint64
+}
 
-	cap     atomic.Pointer[captureState]
-	capture *captureState
+// terminalCapture holds the active recording and the lock-free done probe.
+type terminalCapture struct {
+	active  *captureState
+	pending atomic.Pointer[captureState]
+}
 
+// terminalPlayback tracks TTS/PCM streams and the acknowledgement they expect.
+type terminalPlayback struct {
 	tts      *ttsStream
-	pcmPlay  *pcmStream
+	pcm      *pcmStream
 	awaitAck uint64
 	turnSeq  uint64
 	asleep   atomic.Bool
+}
 
-	cache     *clipCache
-	closeOnce sync.Once
+// Terminal is one connected board. Its actor goroutine owns the render,
+// capture and playback groups; the TCP write loop owns the socket.
+type Terminal struct {
+	info     terminalInfo
+	deps     terminalDeps
+	conn     terminalConn
+	life     terminalLife
+	screen   terminalScreen
+	capture  terminalCapture
+	playback terminalPlayback
+
+	cache *clipCache
 }
 
 func (s *terminalServer) newTerminal(h proto.TerminalHello, remoteIP netip.Addr) *Terminal {
 	t := &Terminal{
-		id: h.TerminalID, board: h.Board, firmware: h.Firmware,
-		companionID: h.CompanionID, width: int(h.Width), height: int(h.Height),
-		shape: "round", display: h.DisplayFormats, codecs: h.FrameCodecs, caps: h.CapsMask,
-		e: s.e, srv: s, events: make(chan termEvent, 128),
-		jobs: make(chan renderJob, 1), done: make(chan struct{}),
-		token: randomToken(),
+		info: terminalInfo{
+			id: h.TerminalID, board: h.Board, firmware: h.Firmware,
+			companionID: h.CompanionID, width: int(h.Width), height: int(h.Height),
+			shape: "round", display: h.DisplayFormats, codecs: h.FrameCodecs, caps: h.CapsMask,
+			token: randomToken(),
+		},
+		deps: terminalDeps{e: s.e, srv: s},
+		life: terminalLife{
+			events: make(chan termEvent, 128),
+			jobs:   make(chan renderJob, 1),
+			done:   make(chan struct{}),
+		},
 	}
-	if h.Shape == proto.ShapeRect || t.width != t.height {
-		t.shape = "rect"
+	if h.Shape == proto.ShapeRect || t.info.width != t.info.height {
+		t.info.shape = "rect"
 	}
-	t.mu.Lock()
-	t.ip = remoteIP.String()
-	t.mu.Unlock()
+	t.conn.mu.Lock()
+	t.conn.ip = remoteIP.String()
+	t.conn.mu.Unlock()
 	t.cache = s.e.clipCache()
 	return t
 }
 
 func (t *Terminal) start(nc *nativeConn, srv *terminalServer) {
-	t.conn.Store(nc)
+	t.conn.native.Store(nc)
 	go t.actor()
 	go t.renderWorker()
 }
 
 func (t *Terminal) attach(nc *nativeConn) {
-	t.conn.Store(nc)
+	t.conn.native.Store(nc)
 	t.touchNow()
 	select {
-	case t.events <- termEvent{kind: evNone}:
+	case t.life.events <- termEvent{kind: evNone}:
 	default:
 	}
-	t.e.emit("terminal.connected", t.connectedEvent())
+	t.deps.e.emit("terminal.connected", t.connectedEvent())
 }
 
 func (t *Terminal) detach(c *nativeConn) {
-	if t.conn.CompareAndSwap(c, nil) {
+	if t.conn.native.CompareAndSwap(c, nil) {
 		// A replaced or closing terminal must not report a disconnect after its
 		// successor already connected under the same id.
-		if !t.closed.Load() && !t.replaced.Load() {
-			t.e.emit("terminal.disconnected", map[string]any{"terminal_id": t.id})
+		if !t.life.closed.Load() && !t.life.replaced.Load() {
+			t.deps.e.emit("terminal.disconnected", map[string]any{"terminal_id": t.info.id})
 		}
 	}
 	// Keep the actor and resume token warm for the protocol's resume window.
@@ -198,44 +233,44 @@ func (t *Terminal) detach(c *nativeConn) {
 	})
 }
 
-func (t *Terminal) native() *nativeConn { return t.conn.Load() }
+func (t *Terminal) native() *nativeConn { return t.conn.native.Load() }
 
-func (t *Terminal) isClosed() bool { return t.closed.Load() }
+func (t *Terminal) isClosed() bool { return t.life.closed.Load() }
 
 func (t *Terminal) close() {
-	t.closeOnce.Do(func() {
-		t.closed.Store(true)
-		close(t.done)
-		if t.tts != nil {
-			t.tts.cancel()
-			t.tts = nil
+	t.life.closeOnce.Do(func() {
+		t.life.closed.Store(true)
+		close(t.life.done)
+		if t.playback.tts != nil {
+			t.playback.tts.cancel()
+			t.playback.tts = nil
 		}
-		if t.pcmPlay != nil {
-			t.pcmPlay.cancel()
-			t.pcmPlay = nil
+		if t.playback.pcm != nil {
+			t.playback.pcm.cancel()
+			t.playback.pcm = nil
 		}
-		if t.capture != nil {
-			t.capture.cancel(cancelUser)
-			t.capture = nil
+		if t.capture.active != nil {
+			t.capture.active.cancel(cancelUser)
+			t.capture.active = nil
 		}
 		if nc := t.native(); nc != nil {
 			nc.close()
 		}
-		if t.srv != nil {
-			t.mu.RLock()
-			ssrc := t.ssrc
-			t.mu.RUnlock()
-			t.srv.dropPeer(ssrc)
+		if t.deps.srv != nil {
+			t.conn.mu.RLock()
+			ssrc := t.conn.ssrc
+			t.conn.mu.RUnlock()
+			t.deps.srv.dropPeer(ssrc)
 		}
-		t.e.unregister(t)
+		t.deps.e.unregister(t)
 	})
 }
 
-func (t *Terminal) touch()    { t.lastTouch.Store(time.Now().UnixNano()) }
+func (t *Terminal) touch()    { t.life.lastTouch.Store(time.Now().UnixNano()) }
 func (t *Terminal) touchNow() { t.touch() }
 
 func (t *Terminal) pingInterval() time.Duration {
-	if t.asleep.Load() {
+	if t.playback.asleep.Load() {
 		return 30 * time.Second
 	}
 	return 12 * time.Second
@@ -243,38 +278,38 @@ func (t *Terminal) pingInterval() time.Duration {
 
 func (t *Terminal) welcomePayload(udpPort uint16) []byte {
 	var flags uint8
-	if t.caps&proto.CapBridgeEndpoint != 0 {
+	if t.info.caps&proto.CapBridgeEndpoint != 0 {
 		flags |= proto.WelcomeFlagBridgeEP
 	}
 	return proto.ProtoWelcome{
 		ProtoVersion: proto.ProtoVersion1, Flags: flags, UdpPort: udpPort,
-		Ssrc: t.ssrc, MaxMsgBytes: proto.ProtoMaxPayload, ResumeWindowMS: proto.ResumeWindowMS,
-		ResumeToken: t.token, TerminalID: t.id, CompanionID: t.companionID,
+		Ssrc: t.conn.ssrc, MaxMsgBytes: proto.ProtoMaxPayload, ResumeWindowMS: proto.ResumeWindowMS,
+		ResumeToken: t.info.token, TerminalID: t.info.id, CompanionID: t.info.companionID,
 	}.Encode()
 }
 
 func (t *Terminal) reconnects() uint64 {
-	if t.srv == nil {
+	if t.deps.srv == nil {
 		return 0
 	}
-	return t.srv.reconnectsFor(t.id)
+	return t.deps.srv.reconnectsFor(t.info.id)
 }
 
 func (t *Terminal) connectedEvent() map[string]any {
-	t.mu.RLock()
-	ip := t.ip
-	t.mu.RUnlock()
+	t.conn.mu.RLock()
+	ip := t.conn.ip
+	t.conn.mu.RUnlock()
 	return map[string]any{
-		"terminal_id": t.id, "board": t.board, "firmware": t.firmware,
-		"width": t.width, "height": t.height, "shape": t.shape, "ip": ip,
+		"terminal_id": t.info.id, "board": t.info.board, "firmware": t.info.firmware,
+		"width": t.info.width, "height": t.info.height, "shape": t.info.shape, "ip": ip,
 		"reconnects": t.reconnects(),
 	}
 }
 
 func (t *Terminal) telemetry(m proto.ProtoTelemetry) {
-	t.asleep.Store(m.Flags&1 != 0)
-	t.e.emit("terminal.telemetry", map[string]any{
-		"terminal_id": t.id, "wifi_rssi": int(m.WifiRssi), "battery_pct": int(m.BatteryPct),
+	t.playback.asleep.Store(m.Flags&1 != 0)
+	t.deps.e.emit("terminal.telemetry", map[string]any{
+		"terminal_id": t.info.id, "wifi_rssi": int(m.WifiRssi), "battery_pct": int(m.BatteryPct),
 		"charging": m.Charging != 0, "cpu_pct": int(m.CpuPct),
 		"free_heap": m.FreeHeap, "uptime_s": m.UptimeS,
 	})
@@ -290,8 +325,8 @@ func (t *Terminal) event(kind evKind, fill func(*termEvent)) {
 		fill(&ev)
 	}
 	select {
-	case t.events <- ev:
-	case <-t.done:
+	case t.life.events <- ev:
+	case <-t.life.done:
 	}
 }
 
@@ -299,9 +334,9 @@ func (t *Terminal) actor() {
 	defer t.close()
 	for {
 		select {
-		case <-t.done:
+		case <-t.life.done:
 			return
-		case ev := <-t.events:
+		case ev := <-t.life.events:
 			t.handle(ev)
 		}
 	}
@@ -318,17 +353,17 @@ func (t *Terminal) handle(ev termEvent) {
 	case evTTSAck:
 		t.handleAck(ev.ack)
 	case evTTSStreamDone:
-		if t.tts == ev.tts {
-			t.tts = nil
-			t.awaitAck = ev.tts.id
-			t.mode = modeSpeaking
+		if t.playback.tts == ev.tts {
+			t.playback.tts = nil
+			t.playback.awaitAck = ev.tts.id
+			t.screen.mode = modeSpeaking
 			t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpEnd, AudioID: ev.tts.id}.Encode())
 		}
 	case evPCMStreamDone:
-		if t.pcmPlay == ev.pcmPlay {
-			t.pcmPlay = nil
-			t.awaitAck = ev.pcmPlay.id
-			t.mode = modeSpeaking
+		if t.playback.pcm == ev.pcmPlay {
+			t.playback.pcm = nil
+			t.playback.awaitAck = ev.pcmPlay.id
+			t.screen.mode = modeSpeaking
 			t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpEnd, AudioID: ev.pcmPlay.id}.Encode())
 		}
 	case evMetronome:
@@ -342,12 +377,12 @@ func (t *Terminal) handle(ev termEvent) {
 	case evSpeakStart:
 		t.speakStart(ev)
 	case evSpeakChunk:
-		if t.tts != nil {
-			t.tts.push(ev.c.Text)
+		if t.playback.tts != nil {
+			t.playback.tts.push(ev.c.Text)
 		}
 	case evSpeakEnd:
-		if t.tts != nil {
-			t.tts.endInput()
+		if t.playback.tts != nil {
+			t.playback.tts.endInput()
 		}
 	case evStopAudio:
 		t.stopAudio(true)
@@ -358,23 +393,23 @@ func (t *Terminal) handle(ev termEvent) {
 	case evPower:
 		level := uint8(max(0, min(100, ev.c.Brightness)))
 		if level == 0 {
-			t.asleep.Store(true)
+			t.playback.asleep.Store(true)
 		} else {
-			t.asleep.Store(false)
+			t.playback.asleep.Store(false)
 		}
 		t.ctrl(proto.MsgPower, proto.ProtoPower{Level: level}.Encode())
 	case evVolume:
 		level := max(0, min(100, ev.c.Level))
 		t.ctrl(proto.MsgVolume, proto.ProtoVolume{
-			Level: uint8(level), Persist: 1, TerminalID: t.id, CompanionID: t.companionID,
+			Level: uint8(level), Persist: 1, TerminalID: t.info.id, CompanionID: t.info.companionID,
 		}.Encode())
 	case evFiller:
 		t.playEphemeral(ev.c.Voice, "Mm-hmm.", true)
 	case evPreview:
 		t.playEphemeral(ev.c.Voice, "Hi, this is how I sound.", true)
 	case evRecCancel:
-		if t.capture != nil {
-			t.capture.cancel(cancelUser)
+		if t.capture.active != nil {
+			t.capture.active.cancel(cancelUser)
 		}
 	case evRecBegin:
 		if ev.c != nil {
@@ -387,13 +422,13 @@ func (t *Terminal) handle(ev termEvent) {
 			t.startDeviceCapture(ev.c)
 		}
 	case evCaptureStop:
-		if t.capture != nil {
-			t.capture.cancel(cancelUser)
+		if t.capture.active != nil {
+			t.capture.active.cancel(cancelUser)
 		}
 	case evCaptureDone:
-		if t.capture == ev.capture {
-			t.capture = nil
-			t.mode = modeIdle
+		if t.capture.active == ev.capture {
+			t.capture.active = nil
+			t.screen.mode = modeIdle
 		}
 	case evClose:
 		t.close()
@@ -401,14 +436,14 @@ func (t *Terminal) handle(ev termEvent) {
 }
 
 func (t *Terminal) handlePointer(m proto.ProtoPointer) {
-	if m.Kind != proto.PtrTap || len(t.hits) == 0 {
+	if m.Kind != proto.PtrTap || len(t.screen.hits) == 0 {
 		return
 	}
-	id := pixel.HitID(t.hits, int(m.X), int(m.Y))
+	id := pixel.HitID(t.screen.hits, int(m.X), int(m.Y))
 	if id == "" {
 		return
 	}
-	act := t.actions[id]
+	act := t.screen.actions[id]
 	if act.Kind == "" {
 		act.Kind = id
 	}
@@ -416,18 +451,18 @@ func (t *Terminal) handlePointer(m proto.ProtoPointer) {
 	case "listen":
 		t.beginCapture(false, 0, true, "")
 	case "rec-send":
-		if t.capture != nil {
-			t.capture.cancel(cancelSend)
+		if t.capture.active != nil {
+			t.capture.active.cancel(cancelSend)
 		}
 	case "rec-cancel":
-		if t.capture != nil {
-			t.capture.cancel(cancelUser)
+		if t.capture.active != nil {
+			t.capture.active.cancel(cancelUser)
 		}
 	case "stop", "listen-stop":
 		t.stopAudio(true)
 	}
-	t.e.emit("pointer.action", map[string]any{
-		"terminal_id": t.id, "action": id, "value": act.Value,
+	t.deps.e.emit("pointer.action", map[string]any{
+		"terminal_id": t.info.id, "action": id, "value": act.Value,
 	})
 }
 
@@ -470,56 +505,56 @@ func (t *Terminal) render(s Screen, full bool) {
 	if s.Kind == "" {
 		return
 	}
-	t.screen = s
-	t.screenKind = s.Kind
+	t.screen.page = s
+	t.screen.kind = s.Kind
 	t.setModeFromScreen(s)
-	t.renderGen++
-	job := renderJob{gen: t.renderGen, screen: s, mode: t.mode, full: full}
+	t.screen.gen++
+	job := renderJob{gen: t.screen.gen, screen: s, mode: t.screen.mode, full: full}
 	select {
-	case t.jobs <- job:
+	case t.life.jobs <- job:
 	default:
 		select {
-		case <-t.jobs:
+		case <-t.life.jobs:
 		default:
 		}
-		t.jobs <- job
+		t.life.jobs <- job
 	}
 }
 
 func (t *Terminal) setModeFromScreen(s Screen) {
 	switch {
-	case t.awaitAck != 0 || t.tts != nil || t.pcmPlay != nil:
-		t.mode = modeSpeaking
-	case t.capture != nil && t.capture.listen:
-		t.mode = modeListening
-	case t.capture != nil:
-		t.mode = modeRecording
+	case t.playback.awaitAck != 0 || t.playback.tts != nil || t.playback.pcm != nil:
+		t.screen.mode = modeSpeaking
+	case t.capture.active != nil && t.capture.active.listen:
+		t.screen.mode = modeListening
+	case t.capture.active != nil:
+		t.screen.mode = modeRecording
 	case s.Kind == "menu" || s.Kind == "list":
-		t.mode = modeMenu
+		t.screen.mode = modeMenu
 	case s.Kind == "reader":
-		t.mode = modeStory
+		t.screen.mode = modeStory
 	default:
-		t.mode = modeIdle
+		t.screen.mode = modeIdle
 	}
 }
 
 func (t *Terminal) commitFrame(fb *frameBuilt) {
-	if fb == nil || fb.gen != t.renderGen || t.isClosed() {
+	if fb == nil || fb.gen != t.screen.gen || t.isClosed() {
 		return
 	}
-	t.rev = fb.rev
-	t.nativeRev = uint16(fb.rev)
-	t.hits = fb.hits
-	t.actions = fb.actions
-	t.actionRev = t.nativeRev
-	t.hasActionRev = true
+	t.screen.rev = fb.rev
+	t.screen.nativeRev = uint16(fb.rev)
+	t.screen.hits = fb.hits
+	t.screen.actions = fb.actions
+	t.screen.actionRev = t.screen.nativeRev
+	t.screen.hasActionRev = true
 	t.frame(fb.payload)
 }
 
 func (t *Terminal) replyHits(reply chan any) {
 	resp := map[string]any{
-		"rev": t.nativeRev, "screen": t.screenKind, "mode": t.mode.String(),
-		"hits": t.hits,
+		"rev": t.screen.nativeRev, "screen": t.screen.kind, "mode": t.screen.mode.String(),
+		"hits": t.screen.hits,
 	}
 	if reply != nil {
 		reply <- resp
@@ -551,9 +586,9 @@ func (t *Terminal) voice(id string) audio.Voice {
 }
 
 func (t *Terminal) nextTurn() uint64 {
-	t.turnSeq++
-	return t.turnSeq
+	t.playback.turnSeq++
+	return t.playback.turnSeq
 }
 
 // logf avoids importing log in every helper file.
-func (t *Terminal) logf(format string, args ...any) { t.e.logf(format, args...) }
+func (t *Terminal) logf(format string, args ...any) { t.deps.e.logf(format, args...) }

@@ -181,7 +181,7 @@ func (c *nativeConn) writeLoop() {
 			continue
 		}
 		select {
-		case <-c.t.done:
+		case <-c.t.life.done:
 			return
 		case msg := <-c.ctrlOut:
 			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
@@ -217,7 +217,7 @@ func (c *nativeConn) close() {
 		last = msgName(uint8(v - 1))
 	}
 	c.t.logf("terminal.disconnected id=%s ip=%s reason=%s last_msg=%s duration=%s reconnects=%d",
-		c.t.id, c.remoteIP, c.sessionReason(), last, time.Since(c.started).Round(time.Millisecond),
+		c.t.info.id, c.remoteIP, c.sessionReason(), last, time.Since(c.started).Round(time.Millisecond),
 		c.t.reconnects())
 }
 
@@ -423,10 +423,10 @@ func (s *terminalServer) serve(conn net.Conn) {
 		frameNotify: make(chan struct{}, 1),
 	}
 	if !isResume {
-		t.mu.Lock()
-		t.ip = remoteIP.String()
-		t.ssrc = ssrc
-		t.mu.Unlock()
+		t.conn.mu.Lock()
+		t.conn.ip = remoteIP.String()
+		t.conn.ssrc = ssrc
+		t.conn.mu.Unlock()
 		// A fresh HELLO is authoritative: the board rebooted (or its old TCP
 		// session is half-open), so replace any warm or live session at once
 		// instead of making it wait out the resume window.
@@ -441,14 +441,14 @@ func (s *terminalServer) serve(conn net.Conn) {
 		_ = nc.writePacket(proto.MsgWelcome, t.welcomePayload(s.udpPort))
 		nc.t.touch()
 		s.e.logf("terminal.connected id=%s ip=%s board=%s fw=%s reconnects=%d",
-			t.id, remoteIP, t.board, t.firmware, reconnects)
+			t.info.id, remoteIP, t.info.board, t.info.firmware, reconnects)
 		s.e.emit("terminal.connected", t.connectedEvent())
 	} else {
-		t.mu.Lock()
-		old := t.ssrc
-		t.ip = remoteIP.String()
-		t.ssrc = ssrc
-		t.mu.Unlock()
+		t.conn.mu.Lock()
+		old := t.conn.ssrc
+		t.conn.ip = remoteIP.String()
+		t.conn.ssrc = ssrc
+		t.conn.mu.Unlock()
 		if old != 0 {
 			s.dropPeer(old)
 		}
@@ -456,7 +456,7 @@ func (s *terminalServer) serve(conn net.Conn) {
 		t.attach(nc)
 		_ = nc.writePacket(proto.MsgWelcome, t.welcomePayload(s.udpPort))
 		s.e.logf("terminal.connected id=%s ip=%s board=%s fw=%s reconnects=%d resume=true",
-			t.id, remoteIP, t.board, t.firmware, reconnects)
+			t.info.id, remoteIP, t.info.board, t.info.firmware, reconnects)
 	}
 
 	nc.writeWG.Add(1)
@@ -482,7 +482,7 @@ func (s *terminalServer) serve(conn net.Conn) {
 }
 
 func disconnectReason(err error, t *Terminal) string {
-	if t.isClosed() || t.replaced.Load() {
+	if t.isClosed() || t.life.replaced.Load() {
 		return "replaced"
 	}
 	switch {

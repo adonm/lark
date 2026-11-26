@@ -1,60 +1,39 @@
 // Voice turns, device menus, listening policy, story reader and companion
 // state. The router is the only place that knows how edge events map to a
 // companion; HTTP, Delta Chat and the CLI all call the same methods here.
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+//
+// Lifecycle, state and the public facade live in this file. Voice/turn policy
+// is in router_voice.ts, and every screen/menu/story action is in router_ui.ts;
+// both modules receive a small context object from the constructor.
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  EdgeCaptureDone,
-  EdgeCommit,
   EdgeEventMap,
-  EdgePlayback,
   EdgePointer,
-  EdgeSpeculate,
-  EdgeTerminal,
   EdgeTelemetry,
+  EdgeTerminal,
   Screen,
-  ScreenChoice,
-  ScreenItem,
   TuneNote,
 } from "./edge_client.ts";
 import type { SongMatch } from "./song_id.ts";
 import type { Companion, LarkDb, Message, StoryRow } from "./db.ts";
-import {
-  evalPassage,
-  flagsMap,
-  flagsSlice,
-  matchChoice,
-  parseTwee,
-  type Story,
-  type StoryValue,
-} from "./stories.ts";
+import { parseTwee, type Story } from "./stories.ts";
 import type { DcPeerTurn } from "./deltachat.ts";
 import type { SpeculationHandle, TurnDelta, TurnResult } from "./opencode.ts";
 import type { PortraitManager } from "./portraits.ts";
-import { drain, errMessage } from "./util.ts";
 import { nameMatches } from "./matching.ts";
-import { DeltaCapture, SpeechStream, sanitizeSpeech } from "./speech.ts";
+import { sanitizeSpeech } from "./speech.ts";
+import { statusOf, type TerminalState } from "./router_internal.ts";
+import * as ui from "./router_ui.ts";
+import * as voice from "./router_voice.ts";
 
 export { nameMatches, sanitizeSpeech };
+export { VOICES } from "./router_ui.ts";
+export { FOLLOW_UP_GRACE_MS, LISTEN_WINDOW_MS, REPLY_CONTEXT_MS } from "./router_voice.ts";
 
 export type { TurnDelta, TurnResult };
 export type TurnHandle = SpeculationHandle;
 
-export const VOICES = [
-  { id: "af_heart", name: "Heart" },
-  { id: "bm_fable", name: "Fable" },
-  { id: "bf_lily", name: "Lily" },
-  { id: "bm_george", name: "George" },
-  { id: "af_bella", name: "Bella" },
-  { id: "am_puck", name: "Puck" },
-  { id: "bf_alice", name: "Alice" },
-  { id: "bf_isabella", name: "Isabella" },
-] as const;
-
-export const LISTEN_WINDOW_MS = 30_000;
-export const FOLLOW_UP_GRACE_MS = 10_000;
-export const REPLY_CONTEXT_MS = 60_000;
 export const NOT_CAUGHT_LINE = "I didn't catch that.";
 const PORTRAIT_PATH = "/remote/api/portrait";
 
@@ -94,48 +73,6 @@ export interface RouterDc {
   unpairContact(companionId: string, contactId: number): Promise<void>;
   pairInvite(companionId: string): Promise<string>;
   accountForCompanion(companionId: string): number;
-}
-
-interface StoryRun {
-  id: string;
-  story: Story;
-  passage: number;
-  flags: StoryValue[];
-  title: string;
-  body: string;
-  choices: Array<{ label: string; target: number }>;
-  page: number;
-}
-
-interface ReplyContext {
-  accountId: number;
-  chatId: number;
-  contact: string;
-  /** Lowercased Delta Chat address; scopes history to this conversation. */
-  peer: string;
-  armedUntil: number;
-}
-
-interface TerminalState {
-  id: string;
-  companionId: string;
-  info: EdgeTerminal;
-  telemetry?: EdgeTelemetry;
-  listening: boolean;
-  listeningSince: number;
-  page: number;
-  drawer: string;
-  story?: StoryRun;
-  busy: boolean;
-  speaking: boolean;
-  caption: string;
-  audio?: "metronome" | "tune" | "identify";
-  audioStreamId?: number;
-  reply?: ReplyContext;
-  previousBrightness: number;
-  listenTimer?: ReturnType<typeof setTimeout>;
-  speculation?: { transcript: string; stream: DeltaCapture; handle: TurnHandle };
-  turn?: AbortController;
 }
 
 export interface RemoteTerminal {
@@ -183,17 +120,6 @@ export interface RouterOptions {
   log?: (line: string) => void;
 }
 
-function isSessionNotFound(error: unknown): boolean {
-  return /session not found/i.test(errMessage(error));
-}
-
-function statusOf(state: Pick<TerminalState, "speaking" | "busy" | "listening">): string {
-  if (state.speaking) return "speaking";
-  if (state.busy) return "thinking";
-  if (state.listening) return "listening";
-  return "idle";
-}
-
 export class Router {
   readonly #db: LarkDb;
   readonly #edge: RouterEdge;
@@ -210,6 +136,8 @@ export class Router {
   readonly #portraitCache = new Map<string, boolean>();
   readonly #storyCache = new Map<string, { updatedAt: number; story: Story }>();
   readonly #subscribers = new Set<() => void>();
+  readonly #ui: ui.UiContext;
+  readonly #voice: voice.VoiceContext;
   #streamSeq = 0;
   #closed = false;
 
@@ -222,6 +150,37 @@ export class Router {
     this.#identify = options.identifySong;
     this.#now = options.now ?? (() => Date.now());
     this.#log = options.log ?? (() => undefined);
+    this.#ui = {
+      db: this.#db,
+      edge: this.#edge,
+      dc: this.#dc,
+      portraits: this.#portraits,
+      terminals: () => this.#terminals.values(),
+      now: this.#now,
+      log: this.#log,
+      notify: () => this.#notifyStateChange(),
+      clearPortraitCache: () => this.#portraitCache.clear(),
+      storySummaries: (companionId) => this.storySummaries(companionId),
+      parseStory: (row) => this.#parseStory(row),
+      armListening: (state, startRec) => voice.armListening(this.#voice, state, startRec),
+    };
+    this.#voice = {
+      db: this.#db,
+      edge: this.#edge,
+      brain: this.#brain,
+      dc: this.#dc,
+      identifySong: this.#identify,
+      terminals: () => this.#terminals.values(),
+      terminal: (terminalId) => this.#terminals.get(terminalId),
+      onlineTerminals: (companionId) => this.onlineTerminals(companionId),
+      now: this.#now,
+      log: this.#log,
+      notify: () => this.#notifyStateChange(),
+      closed: () => this.#closed,
+      renderHome: (state, status, caption) => ui.renderHome(this.#ui, state, status, caption),
+      spokenStoryChoice: (state, transcript) => ui.spokenStoryChoice(this.#ui, state, transcript),
+      nextStream: () => ++this.#streamSeq,
+    };
     this.#bind();
   }
 
@@ -244,14 +203,14 @@ export class Router {
       void this.#pointer(event).catch((error: unknown) => this.#log(`pointer: ${String(error)}`));
     });
     this.#edge.on("turn.speculate", (event) => {
-      void this.#speculate(event).catch((error: unknown) => this.#log(`speculate: ${String(error)}`));
+      void voice.speculate(this.#voice, event).catch((error: unknown) => this.#log(`speculate: ${String(error)}`));
     });
     this.#edge.on("turn.commit", (event) => {
-      void this.#commit(event).catch((error: unknown) => this.#log(`commit: ${String(error)}`));
+      void voice.commit(this.#voice, event).catch((error: unknown) => this.#log(`commit: ${String(error)}`));
     });
-    this.#edge.on("turn.cancel", (event) => void this.#cancel(event.terminal_id, event.reason));
+    this.#edge.on("turn.cancel", (event) => void voice.cancel(this.#voice, event.terminal_id, event.reason));
     this.#edge.on("turn.not_caught", (event) => void this.speakPhrase(event.terminal_id, NOT_CAUGHT_LINE));
-    this.#edge.on("playback.done", (event) => void this.#playbackDone(event));
+    this.#edge.on("playback.done", (event) => void voice.playbackDone(this.#voice, event));
   }
 
   get models(): Map<string, string> {
@@ -406,7 +365,7 @@ export class Router {
         companion: { id: companionId, name: "Lark", form: "", voice: "af_heart", listening: false, live_state: "offline" },
         terminals: [],
         stories: [],
-        voices: VOICES.map((voice) => ({ ...voice })),
+        voices: ui.VOICES.map((voice) => ({ ...voice })),
       };
     }
     const portraitUrl = this.#portraitUrl(companion);
@@ -428,7 +387,7 @@ export class Router {
         progress: story.progress,
         ...(story.passage === undefined ? {} : { passage: story.passage }),
       })),
-      voices: VOICES.map((voice) => ({ ...voice })),
+      voices: ui.VOICES.map((voice) => ({ ...voice })),
     };
   }
 
@@ -487,8 +446,8 @@ export class Router {
     });
     this.#db.setTerminalVolume(info.terminal_id, this.#db.getTerminalVolume(info.terminal_id));
     const companion = this.#db.getCompanion(companionId);
-    if (companion !== undefined && companion.listening) await this.#armListening(state);
-    else await this.#renderHome(state, "idle");
+    if (companion !== undefined && companion.listening) await voice.armListening(this.#voice, state);
+    else await ui.renderHome(this.#ui, state, "idle");
     this.#notifyStateChange();
   }
 
@@ -520,742 +479,30 @@ export class Router {
     }
   }
 
-  #portraitDir(companion: Companion | undefined): string | undefined {
-    if (companion === undefined || companion.portraitId === "") return undefined;
-    return this.#portraits?.dirFor(companion.portraitId);
-  }
-
-  async #renderHome(state: TerminalState, status: string, caption = state.caption): Promise<void> {
-    const companion = this.#db.getCompanion(state.companionId);
-    if (companion === undefined) return;
-    state.caption = caption;
-    await this.#edge.render(state.id, {
-      kind: "home",
-      portrait_dir: this.#portraitDir(companion),
-      companion_name: companion.name,
-      companion_form: companion.form,
-      status,
-      caption,
-      listen_window: state.listening,
-    });
-  }
-
-  async refreshCompanion(companionId: string): Promise<void> {
-    // A completed portrait replaces the sheet behind a new id; drop the cached
-    // data URLs so a same-id rewrite is also picked up.
-    this.#portraitCache.clear();
-    for (const state of this.#terminals.values()) {
-      if (state.companionId !== companionId) continue;
-      if (state.drawer === "") await this.#renderHome(state, statusOf(state));
-    }
-    this.#notifyStateChange();
-  }
-
-  // ---- pointer and menus --------------------------------------------------
-
   async #pointer(event: EdgePointer): Promise<void> {
     const state = this.#terminals.get(event.terminal_id);
     if (state === undefined) return;
-    const companion = this.#db.getCompanion(state.companionId);
-    if (companion === undefined) return;
-    const hit = event.action;
-    const value = event.value;
-
-    if (hit === "listen") {
-      // The edge opens the tap-to-talk capture itself; re-issuing rec_start
-      // here would cancel the window while the speaker is already talking.
-      await this.#armListening(state, false);
-      this.#edge.chime(state.id, "tap");
-      return;
-    }
-    if (hit === "listen-stop" || hit === "stop") {
-      const identifying = state.audio === "identify";
-      state.listening = false;
-      state.audio = undefined;
-      state.audioStreamId = undefined;
-      if (identifying) await this.#edge.captureStop(state.id).catch(() => undefined);
-      await this.#edge.stopAudio(state.id);
-      await this.#renderHome(state, "idle");
-      this.#notifyStateChange();
-      return;
-    }
-    if (hit === "menu") {
-      state.drawer = "menu";
-      state.page = 0;
-      await this.#renderDrawer(state);
-      return;
-    }
-    if (hit === "menu-back" || hit === "pair-close") {
-      if (state.drawer === "pair") this.#edge.power(state.id, state.previousBrightness);
-      if (state.drawer === "story-reader") {
-        state.story = undefined;
-        state.drawer = "stories";
-      } else if (state.drawer === "menu") {
-        state.drawer = "";
-        await this.#renderHome(state, statusOf(state));
-        return;
-      } else if (["volume", "pair", "unpair", "stats"].includes(state.drawer)) {
-        state.drawer = "more";
-        state.page = 0;
-      } else {
-        state.drawer = "menu";
-        state.page = 0;
-      }
-      await this.#renderDrawer(state);
-      return;
-    }
-    if (hit === "menu-prev" || hit === "menu-next" || hit === "menu-page") {
-      const parsed = Number.parseInt(value === "" ? hit.replace("menu-", "") : value, 10);
-      state.page = Number.isFinite(parsed) ? Math.max(0, parsed) : Math.max(0, state.page - 1);
-      if (state.story !== undefined && state.drawer === "story-reader") {
-        state.story.page = state.page;
-        await this.#renderStory(state);
-        await this.#saveStoryProgress(state);
-      } else {
-        await this.#renderDrawer(state);
-      }
-      return;
-    }
-    if (hit.startsWith("choice-")) {
-      const index = Number.parseInt(hit.slice("choice-".length), 10);
-      if (Number.isFinite(index)) await this.#chooseStory(state, index);
-      return;
-    }
-    if (hit === "vol-up" || hit === "vol-down") {
-      const delta = hit === "vol-up" ? 10 : -10;
-      const level = Math.max(0, Math.min(100, this.#db.getTerminalVolume(state.id) + delta));
-      this.#db.setTerminalVolume(state.id, level);
-      this.#edge.volume(state.id, level);
-      await this.#renderVolume(state, level);
-      this.#notifyStateChange();
-      return;
-    }
-    if (state.drawer === "volume" || hit.startsWith("volume")) {
-      await this.#renderVolume(state, this.#db.getTerminalVolume(state.id));
-      return;
-    }
-    const actionValue = value !== "" ? value : hit.startsWith("menu-") ? hit.slice("menu-".length) : hit;
-    if (
-      actionValue === "talk" ||
-      actionValue === "stories" ||
-      actionValue === "memories" ||
-      actionValue === "voice" ||
-      actionValue === "more" ||
-      actionValue === "volume" ||
-      actionValue === "pair" ||
-      actionValue === "unpair" ||
-      actionValue === "stats"
-    ) {
-      state.drawer = actionValue;
-      state.page = 0;
-      await this.#renderDrawer(state);
-      return;
-    }
-    if (state.drawer === "voice") {
-      const voiceId = value !== "" ? value : hit;
-      await this.setVoice(companion.id, voiceId, true);
-      await this.#renderVoice(state);
-      return;
-    }
-    if (state.drawer === "stories") {
-      const story = this.#db.listStories().find((row) => row.id === hit || row.id === value);
-      if (story !== undefined) {
-        await this.openStory(companion.id, story.id, false);
-        return;
-      }
-    }
-    if (state.drawer === "unpair" && (hit.startsWith("unpair-") || value !== "")) {
-      const contactId = Number.parseInt(value !== "" ? value : hit.replace("unpair-", ""), 10);
-      if (Number.isFinite(contactId)) await this.#unpair(state, contactId);
-      return;
-    }
-    if (state.drawer === "memories" || state.drawer === "talk") {
-      await this.#renderDetail(state, hit);
-      return;
-    }
-    if (actionValue === "companion" || actionValue === "dismiss" || actionValue === "close-card") {
-      state.drawer = "";
-      await this.#renderHome(state, statusOf(state));
-    }
+    await ui.handlePointer(this.#ui, state, event.action, event.value);
   }
 
-  async #renderDrawer(state: TerminalState): Promise<void> {
-    const companion = this.#db.getCompanion(state.companionId);
-    if (companion === undefined) return;
-    switch (state.drawer) {
-      case "menu":
-        await this.#edge.render(state.id, { kind: "menu", page: state.page });
-        return;
-      case "more":
-        await this.#edge.render(state.id, {
-          kind: "list",
-          title: "More",
-          page: state.page,
-          items: [
-            { id: "volume", label: "Volume", detail: `${this.#db.getTerminalVolume(state.id)}%`, icon: "volume" },
-            { id: "pair", label: "Pair", detail: "Scan my code", icon: "pair" },
-            { id: "unpair", label: "Unpair", detail: "Remove a contact", icon: "unpair" },
-            { id: "stats", label: "Stats", detail: "Device and brain", icon: "stats" },
-          ],
-        });
-        return;
-      case "volume":
-        await this.#renderVolume(state, this.#db.getTerminalVolume(state.id));
-        return;
-      case "voice":
-        await this.#renderVoice(state);
-        return;
-      case "stats":
-        await this.#edge.render(state.id, {
-          kind: "stats",
-          rows: this.#statsRows(state),
-        });
-        return;
-      case "pair": {
-        if (this.#dc === undefined) {
-          await this.#renderDetail(state, "pair", "Pairing unavailable", "Delta Chat is not running.");
-          return;
-        }
-        state.previousBrightness = 100;
-        this.#edge.power(state.id, 100);
-        try {
-          const invite = await this.#dc.pairInvite(companion.id);
-          await this.#edge.render(state.id, {
-            kind: "pair_qr",
-            companion_name: companion.name,
-            invite,
-          });
-        } catch (error) {
-          await this.#renderDetail(state, "pair", "Pairing unavailable", errMessage(error));
-        }
-        return;
-      }
-      case "unpair": {
-        const contacts = this.#dc === undefined ? [] : await this.#dc.listPairedContacts(companion.id);
-        await this.#edge.render(state.id, {
-          kind: "list",
-          title: "Unpair",
-          page: state.page,
-          items: contacts.map((contact) => ({
-            id: `unpair-${contact.id}`,
-            label: contact.name,
-            detail: contact.address,
-            icon: "unpair",
-            action: "unpair-contact",
-            value: String(contact.id),
-          })),
-        });
-        return;
-      }
-      case "talk":
-        await this.#edge.render(state.id, {
-          kind: "list",
-          title: "Talk to…",
-          page: state.page,
-          items: this.#db
-            .listCompanions()
-            .filter((peer) => peer.id !== companion.id)
-            .map((peer) => ({
-              id: `talk-${peer.id}`,
-              label: peer.name,
-              detail: peer.form,
-              icon: "talk",
-              action: "talk-select",
-              value: peer.id,
-            })),
-        });
-        return;
-      case "memories":
-        await this.#edge.render(state.id, {
-          kind: "list",
-          title: "Memories",
-          page: state.page,
-          items: this.#memories(companion.id),
-        });
-        return;
-      case "stories":
-        await this.#edge.render(state.id, {
-          kind: "list",
-          title: "Stories",
-          page: state.page,
-          items: this.storySummaries(companion.id).map((story) => ({
-            id: story.id,
-            label: story.title,
-            detail: story.progress >= 100 ? "Finished" : story.progress > 0 ? `${story.progress}%` : `${story.passages} passages`,
-            icon: "books",
-            action: "story-open",
-            value: story.id,
-          })),
-        });
-        return;
-      default:
-        state.drawer = "menu";
-        await this.#edge.render(state.id, { kind: "menu", page: 0 });
-    }
-  }
-
-  async #renderVolume(state: TerminalState, level: number): Promise<void> {
-    this.#edge.volume(state.id, level);
-    await this.#edge.render(state.id, { kind: "volume", level, page: state.page });
-  }
-
-  async #renderVoice(state: TerminalState): Promise<void> {
-    const companion = this.#db.getCompanion(state.companionId);
-    await this.#edge.render(state.id, {
-      kind: "voice",
-      current: companion?.voice ?? "af_heart",
-      page: state.page,
-      voices: VOICES.map((voice) => ({ id: voice.id, label: voice.name })),
-    });
-  }
-
-  #memories(companionId: string): ScreenItem[] {
-    const rows = [...this.#db.listMemory("shared"), ...this.#db.listMemory(`companion:${companionId}`)];
-    return rows.slice(0, 24).map((row) => ({
-      id: `memory-${row.scope}-${row.key}`,
-      label: row.key,
-      detail: typeof row.value === "string" ? row.value.slice(0, 80) : JSON.stringify(row.value).slice(0, 80),
-      icon: "memories",
-    }));
-  }
-
-  #statsRows(state: TerminalState): Array<{ title: string; text: string }> {
-    const companion = this.#db.getCompanion(state.companionId);
-    const rows = [
-      { title: "Companion", text: companion?.name ?? "—" },
-      { title: "Voice", text: companion?.voice === "" ? "Heart" : companion?.voice ?? "—" },
-      { title: "Terminal", text: state.info.board === "" ? state.id : `${state.info.board} · ${state.info.firmware}` },
-      { title: "Volume", text: `${this.#db.getTerminalVolume(state.id)}%` },
-      { title: "Timers", text: String(this.#db.countTimers(state.companionId)) },
-      { title: "Stories", text: String(this.#db.listStories().length) },
-    ];
-    if (state.telemetry !== undefined) {
-      rows.push(
-        { title: "Battery", text: `${state.telemetry.battery_pct}%${state.telemetry.charging ? " charging" : ""}` },
-        { title: "Wi-Fi", text: `${state.telemetry.wifi_rssi} dBm` },
-      );
-    }
-    return rows;
-  }
-
-  async #renderDetail(state: TerminalState, id: string, heading?: string, body?: string): Promise<void> {
-    let title = heading ?? "Details";
-    let text = body ?? "";
-    if (id.startsWith("memory-")) {
-      const row = [...this.#db.listMemory("shared"), ...this.#db.listMemory(`companion:${state.companionId}`)].find(
-        (memory) => `memory-${memory.scope}-${memory.key}` === id,
-      );
-      if (row !== undefined) {
-        title = row.key;
-        text = typeof row.value === "string" ? row.value : JSON.stringify(row.value, null, 2);
-      }
-    } else if (id.startsWith("talk-")) {
-      const peer = this.#db.getCompanion(id.slice("talk-".length));
-      if (peer !== undefined) {
-        title = peer.name;
-        text = peer.form === "" ? "Say hello on the device." : peer.form;
-      }
-    }
-    await this.#edge.render(state.id, { kind: "detail", title, heading: title, body: text });
-  }
-
-  async #unpair(state: TerminalState, contactId: number): Promise<void> {
-    if (this.#dc === undefined) return;
-    try {
-      await this.#dc.unpairContact(state.companionId, contactId);
-      this.#edge.chime(state.id, "tap");
-    } catch (error) {
-      this.#log(`unpair: ${errMessage(error)}`);
-    }
-    state.drawer = "unpair";
-    await this.#renderDrawer(state);
+  async refreshCompanion(companionId: string): Promise<void> {
+    await ui.refreshCompanion(this.#ui, companionId);
   }
 
   // ---- stories ------------------------------------------------------------
 
   async openStory(companionId: string, storyId: string, restart: boolean): Promise<void> {
-    const row = this.#db.getStory(storyId);
-    if (row === undefined) throw new Error(`story ${storyId} not found`);
-    const story = this.#parseStory(row);
-    let passage = story.start;
-    let flags = flagsSlice(story);
-    let page = 0;
-    const progress = restart ? undefined : this.#db.getStoryProgress(companionId, storyId);
-    if (progress !== undefined) {
-      const index = story.byName.get(progress.passage);
-      if (index !== undefined) {
-        passage = index;
-        flags = flagsSlice(story, progress.flags);
-        page = Math.max(0, progress.page);
-      }
-    }
-    if (restart) this.#db.deleteStoryProgress(companionId, storyId);
-    const evaluated = evalPassage(story, passage, flags);
-    const run: StoryRun = {
-      id: row.id,
-      story,
-      passage,
-      flags,
-      title: story.title,
-      body: evaluated.text,
-      choices: evaluated.choices,
-      page,
-    };
-    for (const state of this.#terminals.values()) {
-      if (state.companionId !== companionId) continue;
-      state.story = run;
-      state.drawer = "story-reader";
-      state.page = page;
-      await this.#edge.stopAudio(state.id);
-      await this.#renderStory(state);
-      await this.#saveStoryProgress(state);
-    }
-    this.#notifyStateChange();
+    await ui.openStory(this.#ui, companionId, storyId, restart);
   }
 
   async restartStory(companionId: string, storyId: string): Promise<void> {
     await this.openStory(companionId, storyId, true);
   }
 
-  async #renderStory(state: TerminalState): Promise<void> {
-    const run = state.story;
-    if (run === undefined) return;
-    const companion = this.#db.getCompanion(state.companionId);
-    const choices: ScreenChoice[] = run.choices.map((choice, index) => ({
-      id: `choice-${index}`,
-      label: choice.label,
-      value: String(choice.target),
-    }));
-    await this.#edge.render(state.id, {
-      kind: "reader",
-      portrait_dir: this.#portraitDir(companion),
-      title: run.title,
-      body: run.body,
-      choices,
-      page: run.page,
-    });
-  }
-
-  async #chooseStory(state: TerminalState, index: number): Promise<void> {
-    const run = state.story;
-    if (run === undefined) return;
-    const choice = run.choices[index];
-    if (choice === undefined) return;
-    const evaluated = evalPassage(run.story, choice.target, run.flags);
-    run.passage = choice.target;
-    run.body = evaluated.text;
-    run.choices = evaluated.choices;
-    run.page = 0;
-    state.page = 0;
-    await this.#renderStory(state);
-    await this.#saveStoryProgress(state);
-  }
-
-  async #saveStoryProgress(state: TerminalState): Promise<void> {
-    const run = state.story;
-    if (run === undefined) return;
-    const passage = run.story.passages[run.passage];
-    this.#db.saveStoryProgress({
-      companionId: state.companionId,
-      storyId: run.id,
-      passage: passage?.name ?? "",
-      page: run.page,
-      flags: flagsMap(run.story, run.flags),
-      updatedAt: this.#now(),
-    });
-    this.#notifyStateChange();
-  }
-
-  async #spokenStoryChoice(state: TerminalState, transcript: string): Promise<boolean> {
-    const run = state.story;
-    if (run === undefined || run.choices.length === 0) return false;
-    const result = matchChoice(transcript, run.choices);
-    if (!result.matched) return false;
-    await this.#chooseStory(state, result.index);
-    return true;
-  }
-
-  // ---- voice turns --------------------------------------------------------
-
-  async #sessionFor(companionId: string): Promise<string> {
-    // The sessions table is authoritative. A stale id from an old OpenCode
-    // store is only discovered when prompt fails, then #runTurn rebinds.
-    const stored = this.#db.getSession(companionId);
-    if (stored !== undefined) return stored.sessionId;
-    const companion = this.#db.getCompanion(companionId);
-    if (companion === undefined) return Promise.reject(new Error(`companion ${companionId} not found`));
-    return this.#brain.createSession({ id: companion.id, name: companion.name, personality: companion.personality });
-  }
-
-  async #runTurn(
-    companionId: string,
-    text: string,
-    onDelta?: (delta: string) => void,
-  ): Promise<TurnResult> {
-    const sessionID = await this.#sessionFor(companionId);
-    try {
-      return await drain(this.#brain.runTurn({ sessionID, text }), (delta) => onDelta?.(delta.text));
-    } catch (error) {
-      if (!isSessionNotFound(error)) throw error;
-      // The persisted session predates this OpenCode store. Drop it and retry
-      // once with a fresh session; every later turn trusts the table again.
-      this.#db.deleteSession(companionId);
-      const fresh = await this.#sessionFor(companionId);
-      return await drain(this.#brain.runTurn({ sessionID: fresh, text }), (delta) => onDelta?.(delta.text));
-    }
-  }
-
-  async #speculate(event: EdgeSpeculate): Promise<void> {
-    const state = this.#terminals.get(event.terminal_id);
-    if (state === undefined || state.busy || state.drawer === "story-reader" || event.transcript.trim() === "") return;
-    state.speculation?.handle.abort();
-    const sessionID = await this.#sessionFor(state.companionId);
-    const capture = new DeltaCapture();
-    const handle = this.#brain.startSpeculate({ sessionID, text: event.transcript.trim() }, (delta) => capture.push(delta));
-    state.speculation = { transcript: event.transcript.trim(), stream: capture, handle };
-    void handle.result.catch(() => undefined);
-  }
-
-  async #commit(event: EdgeCommit): Promise<void> {
-    const state = this.#terminals.get(event.terminal_id);
-    if (state === undefined || this.#closed || state.busy) return;
-    const companion = this.#db.getCompanion(state.companionId);
-    if (companion === undefined) return;
-    state.listening = false;
-    this.#notifyStateChange();
-
-    // A silent story reader uses spoken choice matching and never synthesizes
-    // the passage itself.
-    if (state.drawer === "story-reader") {
-      const advanced = await this.#spokenStoryChoice(state, event.transcript);
-      if (advanced) return;
-      if (/\b(stop|menu|home)\b/i.test(event.transcript)) {
-        state.story = undefined;
-        state.drawer = "";
-        await this.#renderHome(state, "idle");
-      }
-      return;
-    }
-
-    if (event.listen_window && companion.listening) {
-      const elapsed = this.#now() - state.listeningSince;
-      if (elapsed > FOLLOW_UP_GRACE_MS && !nameMatches(event.transcript, companion.name)) {
-        await this.#armListening(state);
-        return;
-      }
-    }
-
-    const transcript = event.transcript.trim();
-    if (transcript === "" || /^\[silent\]$/i.test(transcript)) {
-      await this.#armListening(state);
-      return;
-    }
-
-    state.busy = true;
-    this.#notifyStateChange();
-    await this.#renderHome(state, "thinking");
-    this.#edge.chime(state.id, "think");
-
-    const speculation = state.speculation;
-    state.speculation = undefined;
-    const matching = speculation !== undefined && speculation.transcript === transcript;
-    if (speculation !== undefined && !matching) speculation.handle.abort();
-
-    const controller = new AbortController();
-    state.turn = controller;
-    const speech = new SpeechStream(this.#edge, state.id, companion.voice === "" ? "af_heart" : companion.voice, ++this.#streamSeq);
-    const capture = matching ? speculation.stream : new DeltaCapture();
-    if (matching) speculation.handle.promote();
-    // Both paths stream through the same sentence splitter: promotion flushes
-    // the speculative text already produced, a fresh turn forwards live deltas.
-    capture.commit(speech);
-
-    let full = "";
-    try {
-      if (matching) {
-        const result = await speculation.handle.result;
-        full = result.text;
-      } else {
-        const result = await this.#runTurn(state.companionId, transcript, (delta) => capture.push(delta));
-        full = result.text;
-      }
-    } catch (error) {
-      if (matching && isSessionNotFound(error)) {
-        // The speculative turn found a stale binding; rebind and run once.
-        this.#db.deleteSession(state.companionId);
-        try {
-          const result = await this.#runTurn(state.companionId, transcript, (delta) => capture.push(delta));
-          full = result.text;
-        } catch (retryError) {
-          if (!controller.signal.aborted) this.#log(`turn: ${errMessage(retryError)}`);
-        }
-      } else if (!controller.signal.aborted) {
-        this.#log(`turn: ${errMessage(error)}`);
-      }
-    } finally {
-      state.turn = undefined;
-      state.busy = false;
-      this.#notifyStateChange();
-    }
-    await speech.end();
-
-    const spoken = sanitizeSpeech(full);
-    this.#db.appendMessage({
-      id: `turn:${state.id}:${this.#now()}:user`,
-      companionId: state.companionId,
-      role: "user",
-      sender: "Someone",
-      text: transcript,
-      source: "voice",
-      channel: "in_person",
-      cardTitle: "",
-      tsMs: this.#now(),
-      peer: "",
-    });
-    if (spoken === "") {
-      await this.#armListening(state);
-      return;
-    }
-
-    this.#db.appendMessage({
-      id: `turn:${state.id}:${this.#now()}:reply`,
-      companionId: state.companionId,
-      role: "assistant",
-      sender: companion.name,
-      text: full,
-      source: "voice",
-      channel: "in_person",
-      cardTitle: "",
-      tsMs: this.#now(),
-      peer: "",
-    });
-    state.caption = spoken.slice(0, 120);
-    state.speaking = true;
-    this.#notifyStateChange();
-    await this.#renderHome(state, "speaking", state.caption);
-
-    if (state.reply !== undefined && this.#now() <= state.reply.armedUntil) {
-      await this.#routeReply(state, full);
-    }
-  }
-
-  async #routeReply(state: TerminalState, text: string): Promise<void> {
-    const reply = state.reply;
-    if (reply === undefined || this.#dc === undefined) return;
-    try {
-      await this.#dc.sendText(reply.accountId, reply.chatId, text);
-      this.#db.appendMessage({
-        id: `dc:${reply.accountId}:${reply.chatId}:${this.#now()}:reply`,
-        companionId: state.companionId,
-        role: "assistant",
-        sender: this.#db.getCompanion(state.companionId)?.name ?? "Companion",
-        text,
-        source: "deltachat",
-        channel: "deltachat",
-        cardTitle: "",
-        tsMs: this.#now(),
-        peer: reply.peer,
-      });
-      this.#notifyStateChange();
-    } catch (error) {
-      this.#log(`reply routing: ${errMessage(error)}`);
-    }
-  }
-
-  async #playbackDone(event: EdgePlayback): Promise<void> {
-    const state = this.#terminals.get(event.terminal_id);
-    if (state === undefined) return;
-    // Identify has no playback stream; a stale stop event must not close the
-    // listening screen. A replaced metronome/tune stream is likewise ignored.
-    if (state.audio === "identify") return;
-    if (state.audioStreamId !== undefined && event.stream_id !== state.audioStreamId) return;
-    state.audio = undefined;
-    state.audioStreamId = undefined;
-    state.speaking = false;
-    if (event.aborted) {
-      state.busy = false;
-      await this.#renderHome(state, "idle");
-      this.#notifyStateChange();
-      return;
-    }
-    const companion = this.#db.getCompanion(state.companionId);
-    if (state.reply !== undefined) {
-      state.reply.armedUntil = this.#now() + REPLY_CONTEXT_MS;
-    }
-    if (companion?.listening === true) await this.#armListening(state);
-    else await this.#renderHome(state, "idle");
-    this.#notifyStateChange();
-  }
-
-  async #cancel(terminalId: string, reason: string): Promise<void> {
-    const state = this.#terminals.get(terminalId);
-    if (state === undefined) return;
-    state.speculation?.handle.abort(new Error(reason));
-    state.speculation = undefined;
-    state.turn?.abort();
-    state.turn = undefined;
-    state.busy = false;
-    state.speaking = false;
-    state.listening = false;
-    await this.#renderHome(state, "idle");
-    this.#notifyStateChange();
-  }
-
-  async #armListening(state: TerminalState, startRec = true): Promise<void> {
-    if (this.#closed) return;
-    const companion = this.#db.getCompanion(state.companionId);
-    if (state.listenTimer !== undefined) clearTimeout(state.listenTimer);
-    state.listening = true;
-    state.listeningSince = this.#now();
-    state.drawer = "";
-    state.story = undefined;
-    await this.#renderHome(state, "listening");
-    if (startRec) {
-      try {
-        await this.#edge.recStart(state.id, {
-          listenWindow: true,
-          windowS: Math.round(LISTEN_WINDOW_MS / 1000),
-          followUpGraceMs: FOLLOW_UP_GRACE_MS,
-          companionName: companion?.name ?? "",
-        });
-      } catch (error) {
-        this.#log(`listen arm: ${errMessage(error)}`);
-      }
-    }
-    state.listenTimer = setTimeout(() => {
-      state.listenTimer = undefined;
-      if (state.listening && !state.busy && !state.speaking) {
-        state.listening = false;
-        void this.#renderHome(state, "idle").catch(() => undefined);
-      }
-    }, LISTEN_WINDOW_MS + 2000);
-    state.listenTimer.unref();
-    this.#notifyStateChange();
-  }
-
   // ---- music and song identification --------------------------------------
 
-  #audioTerminal(companionId: string): TerminalState {
-    const state = this.onlineTerminals(companionId)[0];
-    if (state === undefined) throw new Error("terminal is offline");
-    return state;
-  }
-
   async audioMetronome(companionId: string, bpm: number, beats: number, durationS: number): Promise<Record<string, unknown>> {
-    const state = this.#audioTerminal(companionId);
-    await this.#edge.stopAudio(state.id);
-    const caption = `Metronome · ${bpm} BPM (${beats}/4)`;
-    state.audio = "metronome";
-    state.audioStreamId = undefined;
-    state.speaking = true;
-    state.listening = false;
-    state.drawer = "";
-    state.story = undefined;
-    await this.#renderHome(state, "speaking", caption);
-    const streamId = await this.#edge.metronome(state.id, bpm, beats, durationS);
-    state.audioStreamId = streamId;
-    this.#notifyStateChange();
-    return { terminal_id: state.id, caption, bpm, beats, duration_s: durationS, stream_id: streamId };
+    return await voice.audioMetronome(this.#voice, companionId, bpm, beats, durationS);
   }
 
   async audioTune(
@@ -1265,110 +512,29 @@ export class Router {
     notes: TuneNote[],
     title?: string,
   ): Promise<Record<string, unknown>> {
-    const state = this.#audioTerminal(companionId);
-    await this.#edge.stopAudio(state.id);
-    const caption = title === undefined || title === "" ? `Tune · ${style}` : `Tune · ${title} (${style})`;
-    state.audio = "tune";
-    state.audioStreamId = undefined;
-    state.speaking = true;
-    state.listening = false;
-    state.drawer = "";
-    state.story = undefined;
-    await this.#renderHome(state, "speaking", caption);
-    const streamId = await this.#edge.playTune(state.id, tempo, style, notes);
-    state.audioStreamId = streamId;
-    this.#notifyStateChange();
-    return { terminal_id: state.id, caption, tempo, style, notes: notes.length, stream_id: streamId };
+    return await voice.audioTune(this.#voice, companionId, tempo, style, notes, title);
   }
 
   async audioIdentify(companionId: string, seconds: number): Promise<SongMatch & Record<string, unknown>> {
-    const state = this.#audioTerminal(companionId);
-    if (this.#identify === undefined) throw new Error("song recognition is unavailable");
-    const dir = mkdtempSync(join(tmpdir(), "lark-song-"));
-    const wav = join(dir, "capture.wav");
-    try {
-      await this.#edge.stopAudio(state.id);
-      state.audio = "identify";
-      state.audioStreamId = undefined;
-      state.speaking = false;
-      state.listening = true;
-      state.drawer = "";
-      state.story = undefined;
-      await this.#renderHome(state, "listening", "Listening to music...");
-      const captured = new Promise<EdgeCaptureDone>((resolve, reject) => {
-        let off: () => void = () => undefined;
-        const timer = setTimeout(() => {
-          off();
-          reject(new Error("music capture timed out"));
-        }, (seconds + 8) * 1000);
-        off = this.#edge.on("capture.done", (event) => {
-          if (event.terminal_id !== state.id || event.path !== wav) return;
-          clearTimeout(timer);
-          off();
-          resolve(event);
-        });
-      });
-      await this.#edge.captureStart(state.id, wav, seconds);
-      const done = await captured;
-      if (done.error !== undefined && done.error !== "") throw new Error(done.error);
-      return { ...(await this.#identify(wav)), terminal_id: state.id, seconds };
-    } finally {
-      state.audio = undefined;
-      state.audioStreamId = undefined;
-      state.listening = false;
-      await this.#renderHome(state, "idle", "").catch(() => undefined);
-      rmSync(dir, { recursive: true, force: true });
-      this.#notifyStateChange();
-    }
+    return await voice.audioIdentify(this.#voice, companionId, seconds);
   }
 
   async audioStop(companionId: string): Promise<Record<string, unknown>> {
-    const state = this.#audioTerminal(companionId);
-    const stopped = state.audio !== undefined;
-    if (state.audio === "identify") await this.#edge.captureStop(state.id).catch(() => undefined);
-    state.audio = undefined;
-    state.audioStreamId = undefined;
-    state.listening = false;
-    state.speaking = false;
-    await this.#edge.stopAudio(state.id);
-    await this.#renderHome(state, "idle", "");
-    this.#notifyStateChange();
-    return { terminal_id: state.id, stopped };
+    return await voice.audioStop(this.#voice, companionId);
   }
 
   // ---- shared commands ----------------------------------------------------
 
   async sayNow(companionId: string, text: string): Promise<void> {
-    const state = this.onlineTerminals(companionId)[0];
-    if (state === undefined) return;
-    await this.speakPhrase(state.id, text);
+    await voice.sayNow(this.#voice, companionId, text);
   }
 
   async speakPhrase(terminalId: string, text: string): Promise<void> {
-    const state = this.#terminals.get(terminalId);
-    if (state === undefined) return;
-    const companion = this.#db.getCompanion(state.companionId);
-    const stream = new SpeechStream(this.#edge, terminalId, companion?.voice === "" ? "af_heart" : companion?.voice ?? "af_heart", ++this.#streamSeq);
-    stream.push(text);
-    await stream.end();
-    state.speaking = true;
-    state.caption = sanitizeSpeech(text).slice(0, 120);
-    this.#notifyStateChange();
-    await this.#renderHome(state, "speaking", state.caption);
+    await voice.speakPhrase(this.#voice, terminalId, text);
   }
 
   async setListening(companionId: string, listening: boolean): Promise<void> {
-    this.#db.patchCompanion(companionId, { listening });
-    for (const state of this.#terminals.values()) {
-      if (state.companionId !== companionId) continue;
-      if (listening) await this.#armListening(state);
-      else {
-        state.listening = false;
-        await this.#edge.recCancel(state.id);
-        await this.#renderHome(state, "idle");
-      }
-    }
-    this.#notifyStateChange();
+    await voice.setListening(this.#voice, companionId, listening);
   }
 
   setVolume(terminalId: string, level: number): void {
@@ -1379,39 +545,11 @@ export class Router {
   }
 
   async setVoice(companionId: string, voiceId: string, preview: boolean): Promise<void> {
-    if (!VOICES.some((voice) => voice.id === voiceId)) throw new Error("Unknown voice");
-    this.#db.patchCompanion(companionId, { voice: voiceId });
-    for (const state of this.#terminals.values()) {
-      if (state.companionId !== companionId) continue;
-      if (preview) this.#edge.previewVoice(state.id, voiceId);
-      if (state.drawer === "voice") await this.#renderVoice(state);
-    }
-    this.#notifyStateChange();
+    await ui.setVoice(this.#ui, companionId, voiceId, preview);
   }
 
   async notifyDcTurn(turn: DcPeerTurn & { accountId?: number; chatId?: number }): Promise<string | undefined> {
-    const companion = this.#db.getCompanion(turn.companionId);
-    if (companion === undefined) return undefined;
-    const state = this.onlineTerminals(turn.companionId)[0];
-    if (state !== undefined && !turn.private) {
-      if (turn.accountId !== undefined && turn.chatId !== undefined) {
-        state.reply = {
-          accountId: turn.accountId,
-          chatId: turn.chatId,
-          contact: turn.sender,
-          peer: turn.peer,
-          armedUntil: 0,
-        };
-      }
-      await this.speakPhrase(state.id, `Message from ${turn.sender}: ${turn.text}`);
-    }
-    try {
-      const result = await this.#runTurn(turn.companionId, `${turn.sender} via Delta Chat: ${turn.text}`);
-      return sanitizeSpeech(result.text);
-    } catch (error) {
-      this.#log(`dc turn: ${errMessage(error)}`);
-      return undefined;
-    }
+    return await voice.notifyDcTurn(this.#voice, turn);
   }
 
   history(companionId: string, channel: "all" | "in_person" | "deltachat", contact: string, q: string, limit: number, cursor?: { beforeTs: number; beforeId: string }): { items: Array<Record<string, unknown>>; has_more: boolean; next_cursor?: string } {

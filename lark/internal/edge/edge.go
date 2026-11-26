@@ -205,21 +205,21 @@ func (e *Edge) Terminals() []*Terminal {
 func (e *Edge) install(t *Terminal) *Terminal {
 	e.terminalsMu.Lock()
 	defer e.terminalsMu.Unlock()
-	old := e.terminals[t.id]
+	old := e.terminals[t.info.id]
 	if old != nil {
-		old.replaced.Store(true)
+		old.life.replaced.Store(true)
 	}
-	e.terminals[t.id] = t
+	e.terminals[t.info.id] = t
 	return old
 }
 
 func (e *Edge) unregister(t *Terminal) {
 	e.terminalsMu.Lock()
-	if e.terminals[t.id] == t {
-		delete(e.terminals, t.id)
+	if e.terminals[t.info.id] == t {
+		delete(e.terminals, t.info.id)
 	}
 	e.terminalsMu.Unlock()
-	e.emit("terminal.disconnected", map[string]any{"terminal_id": t.id})
+	e.emit("terminal.disconnected", map[string]any{"terminal_id": t.info.id})
 }
 
 func (e *Edge) clipCache() *clipCache { return e.cache }
