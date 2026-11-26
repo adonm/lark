@@ -90,20 +90,42 @@
     return data;
   }
 
-  async function runCommand(path, body, pendingMsg, btn) {
+  function ensure(root, selector, build) {
+    const existing = root.querySelector(selector);
+    if (existing) return existing;
+    root.replaceChildren();
+    const node = build();
+    if (!node.parentNode) root.appendChild(node);
+    return node;
+  }
+
+  // One pending/banner lifecycle for every remote action. Capture commands use
+  // the options to disable their button, mutate local state, and re-render the
+  // diagnostics panel instead of the whole page.
+  async function runCommand(path, body, pendingMsg, btn, options) {
+    const opts = options || {};
     clearPending();
-    if (btn) { pendingBtn = btn; btn.classList.add("is-pending"); btn.setAttribute("aria-busy", "true"); }
+    if (btn) {
+      pendingBtn = btn;
+      btn.classList.add("is-pending");
+      btn.setAttribute("aria-busy", "true");
+      if (opts.disable) btn.disabled = true;
+    }
     if (pendingMsg) showBanner(pendingMsg, "info");
+    if (opts.before) opts.before();
     try {
-      const data = await call(path, body);
-      showBanner(data.message || "Done.", "ok");
-      clearPending();
-      renderAll();
+      const data = await call(path, body, opts.method);
+      if (opts.after) opts.after(data);
+      showBanner(opts.message ? opts.message(data) : data.message || "Done.", "ok");
       return data;
     } catch (err) {
-      showBanner(err.message || "Failed.", "error");
+      showBanner(opts.errorMessage || err.message || "Failed.", "error");
+      return undefined;
     } finally {
       clearPending();
+      if (opts.disable && btn) btn.disabled = false;
+      if (opts.finish) opts.finish();
+      (opts.render || renderAll)();
     }
   }
 
@@ -149,9 +171,7 @@
 
   function renderStatus() {
     const root = document.getElementById("body-status");
-    let quick = root.querySelector("section.status-quick");
-    if (!quick) {
-      root.replaceChildren();
+    const quick = ensure(root, "section.status-quick", () => {
       const sayInput = el("input", { id: "say-input", type: "text", placeholder: "Say something aloud…", maxlength: 500 });
       const sayBtn = el("button", { type: "submit", text: "Say" });
       const sayForm = el("form", { class: "inline-form", onsubmit: (e) => {
@@ -168,13 +188,14 @@
           runCommand("listen", { listening: on }, on ? "Listening on…" : "Listening off…", listenBtn);
         },
       });
-      quick = el("section", { class: "card-box status-quick" }, [
+      const quick = el("section", { class: "card-box status-quick" }, [
         el("div", { class: "row-title", text: "Quick actions" }), sayForm,
         el("div", { class: "row-sub", text: "Listening mode" }), listenBtn,
         el("div", { id: "volume-rows", class: "volume-rows" }),
       ]);
       root.append(quick, el("p", { class: "section-label", text: "Devices" }), el("div", { id: "device-list", class: "panel-list" }));
-    }
+      return quick;
+    });
     const listenBtn = quick.querySelector(".pill-btn");
     if (listenBtn) listenBtn.setAttribute("aria-pressed", state.companion.listening ? "true" : "false");
     const volumes = quick.querySelector("#volume-rows");
@@ -220,12 +241,7 @@
 
   function renderStories() {
     const root = document.getElementById("body-stories");
-    let list = root.querySelector(".panel-list.stories");
-    if (!list) {
-      root.replaceChildren();
-      list = el("div", { class: "panel-list stories" });
-      root.appendChild(list);
-    }
+    const list = ensure(root, ".panel-list.stories", () => el("div", { class: "panel-list stories" }));
     const keys = new Set(state.stories.map((s) => s.name));
     prune(list, "article.story-card", keys);
     list.querySelector(".empty")?.remove();
@@ -290,9 +306,7 @@
 
   function renderHistory() {
     const root = document.getElementById("body-history");
-    let controls = root.querySelector("section.hist-controls");
-    if (!controls) {
-      root.replaceChildren();
+    const controls = ensure(root, "section.hist-controls", () => {
       const chips = el("div", { class: "pill-group", role: "group", "aria-label": "Filter by channel" });
       for (const ch of HISTORY_CHANNELS) {
         const btn = el("button", { type: "button", class: "pill-btn", "aria-pressed": "false", text: ch.label });
@@ -304,12 +318,13 @@
       const searchForm = el("form", { class: "inline-form", onsubmit: (e) => { e.preventDefault(); hist.q = qInput.value.trim(); loadHistory(false); } }, [
         el("label", { for: "hist-search", class: "visually-hidden", text: "Search history" }), qInput, el("button", { type: "submit", text: "Find" }),
       ]);
-      controls = el("section", { class: "card-box hist-controls" }, [
+      const controls = el("section", { class: "card-box hist-controls" }, [
         el("p", { class: "row-sub", text: "Shows in-person notes and only your own Delta Chat messages. Room recordings are under Diagnostics." }),
         chips, searchForm,
       ]);
       root.append(controls, el("ul", { class: "hist-list" }), el("div", { id: "hist-footer" }));
-    }
+      return controls;
+    });
     for (const btn of controls.querySelectorAll(".pill-btn")) {
       btn.setAttribute("aria-pressed", hist.channel === btn.dataset.channel ? "true" : "false");
     }
@@ -379,65 +394,50 @@
   }
 
   async function startCapture(btn) {
-    clearPending();
-    pendingBtn = btn;
-    btn.classList.add("is-pending");
-    btn.setAttribute("aria-busy", "true");
-    btn.disabled = true;
-    showBanner("Starting capture…", "info");
-    try {
-      const data = await call("capture", { seconds: cap.duration });
-      cap.active = { name: data.name, seconds: data.seconds, started_at: data.started_at };
-      cap.event = { state: "recording", name: data.name, seconds: data.seconds, remaining: data.seconds, started_at: data.started_at };
-      showBanner(`Recording ${data.seconds} s…`, "info");
-    } catch (err) {
-      showBanner(err.message || "Could not start the capture.", "error");
-    } finally {
-      clearPending();
-      renderDiagnostics();
-    }
+    await runCommand("capture", { seconds: cap.duration }, "Starting capture…", btn, {
+      disable: true,
+      render: renderDiagnostics,
+      errorMessage: "Could not start the capture.",
+      after: (data) => {
+        cap.active = { name: data.name, seconds: data.seconds, started_at: data.started_at };
+        cap.event = { state: "recording", name: data.name, seconds: data.seconds, remaining: data.seconds, started_at: data.started_at };
+      },
+      message: (data) => `Recording ${data.seconds} s…`,
+    });
   }
 
   async function transcribeCapture(name, btn) {
     const item = cap.items.find((c) => c.name === name);
-    if (item) item.computing = true;
-    clearPending();
-    pendingBtn = btn;
-    btn.classList.add("is-pending");
-    btn.setAttribute("aria-busy", "true");
-    btn.disabled = true;
-    renderDiagnostics();
-    showBanner("Transcribing…", "info");
-    try {
-      const data = await call("captures/" + encodeURIComponent(name) + "/transcribe", {});
-      if (item) item.transcript = data.transcript || "";
-      showBanner("Transcript ready.", "ok");
-    } catch (err) {
-      showBanner(err.message || "Could not transcribe the capture.", "error");
-    } finally {
-      if (item) item.computing = false;
-      clearPending();
-      renderDiagnostics();
-    }
+    const computing = item ? item.computing : false;
+    await runCommand("captures/" + encodeURIComponent(name) + "/transcribe", {}, "Transcribing…", btn, {
+      disable: true,
+      render: renderDiagnostics,
+      errorMessage: "Could not transcribe the capture.",
+      before: () => {
+        if (item) item.computing = true;
+        renderDiagnostics();
+      },
+      after: (data) => {
+        if (item) item.transcript = data.transcript || "";
+      },
+      message: () => "Transcript ready.",
+      finish: () => {
+        if (item) item.computing = computing;
+      },
+    });
   }
 
   async function deleteCapture(name, btn) {
-    clearPending();
-    pendingBtn = btn;
-    btn.classList.add("is-pending");
-    btn.setAttribute("aria-busy", "true");
-    btn.disabled = true;
-    showBanner("Deleting capture…", "info");
-    try {
-      await call("captures/" + encodeURIComponent(name), undefined, "DELETE");
-      cap.items = cap.items.filter((c) => c.name !== name);
-      showBanner("Capture deleted.", "ok");
-    } catch (err) {
-      showBanner(err.message || "Could not delete the capture.", "error");
-    } finally {
-      clearPending();
-      renderDiagnostics();
-    }
+    await runCommand("captures/" + encodeURIComponent(name), undefined, "Deleting capture…", btn, {
+      method: "DELETE",
+      disable: true,
+      render: renderDiagnostics,
+      errorMessage: "Could not delete the capture.",
+      after: () => {
+        cap.items = cap.items.filter((c) => c.name !== name);
+      },
+      message: () => "Capture deleted.",
+    });
   }
 
   function captureEventText() {
@@ -453,9 +453,7 @@
 
   function renderDiagnostics() {
     const root = document.getElementById("body-diagnostics");
-    let card = root.querySelector("section.capture-card");
-    if (!card) {
-      root.replaceChildren();
+    const card = ensure(root, "section.capture-card", () => {
       const durations = el("div", { class: "pill-group", role: "group", "aria-label": "Capture duration" });
       for (const seconds of [15, 30, 60]) {
         const btn = el("button", { type: "button", class: "pill-btn", text: `${seconds} s` });
@@ -465,7 +463,7 @@
       }
       const start = el("button", { type: "button", id: "capture-start", class: "btn-compact", text: "Start capture" });
       start.addEventListener("click", () => startCapture(start));
-      card = el("section", { class: "card-box capture-card" }, [
+      const card = el("section", { class: "card-box capture-card" }, [
         el("div", { class: "row-title", text: "Capture microphone" }),
         el("div", { class: "row-sub", text: "Records this companion's microphone through the normal listening path." }),
         durations, start,
@@ -474,7 +472,8 @@
         el("p", { class: "capture-privacy", text: "Room audio stays on this server and is served only to the holder of this scoped link; it is never uploaded to a third party." }),
       ]);
       root.append(card, el("p", { class: "section-label", text: "Recent captures" }), el("div", { id: "capture-list", class: "panel-list" }));
-    }
+      return card;
+    });
     for (const btn of card.querySelectorAll(".pill-btn")) {
       btn.setAttribute("aria-pressed", Number(btn.dataset.seconds) === cap.duration ? "true" : "false");
     }
@@ -533,10 +532,8 @@
 
   function renderSettings() {
     const root = document.getElementById("body-settings");
-    let section = root.querySelector("section.voice-section");
-    if (!section) {
-      root.replaceChildren();
-      section = el("section", { class: "card-box voice-section" }, [
+    const section = ensure(root, "section.voice-section", () => {
+      const section = el("section", { class: "card-box voice-section" }, [
         el("div", { class: "row-title", text: "Voice" }), el("div", { class: "row-sub", text: "Tap a voice to save and preview it on the device." }),
         el("div", { class: "voice-grid", role: "group", "aria-label": "Voice selection" }),
       ]);
@@ -548,7 +545,8 @@
         el("div", { class: "row-title", text: "This link" }),
         el("div", { class: "row-sub", text: "Ask the companion for /remote again to get a fresh link." }), revoke,
       ]));
-    }
+      return section;
+    });
     const grid = section.querySelector(".voice-grid");
     const keys = new Set(state.voices.map((v) => v.id));
     prune(grid, ".voice-btn", keys);

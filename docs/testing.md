@@ -91,7 +91,7 @@ before the full run.
 | Step | Warm | Cold |
 | --- | --- | --- |
 | shell | 0.5 s | 0.5 s |
-| brain (typecheck + 75 tests) | 19.3 s | 19.6 s |
+| brain (typecheck + 83 tests) | 19.3 s | 19.6 s |
 | python | 0.0 s | 0.0 s |
 | vet (+ `go mod verify`) | 0.5 s | 0.6 s |
 | go-race | 0.0 s | 6.1 s |

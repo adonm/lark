@@ -15,8 +15,8 @@ source_rev=bcb639faa4c74a2300ba19e30360cb2355b1663a
 # Bump when the CMake flags or patches below change; a stale cache is rebuilt.
 cache_rev=1
 
-verify() { printf '%s  %s\n' "$1" "$2" | sha256sum --check --status; }
-download() { curl --fail --silent --show-error --location --output "$1" "$2"; }
+# shellcheck source=scripts/lib/fetch.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/fetch.sh"
 
 if [[ -f $build/cache-rev && $(<"$build/cache-rev") == "$cache_rev-$source_rev" &&
     -f $build/native/lib/libtranscribe.a ]] &&
@@ -38,10 +38,10 @@ if ! use_spirv_headers; then
 fi
 
 rm -rf -- "$build/source" "$build/build" "$build/native" "$build/cache-rev"
-if ! [[ -f $build/source.tar.gz ]] || ! verify "$source_sha" "$build/source.tar.gz"; then
+if ! [[ -f $build/source.tar.gz ]] || ! verify_sha256 "$source_sha" "$build/source.tar.gz"; then
     rm -f -- "$build/source.tar.gz"
-    download "$build/source.tar.gz" "https://codeload.github.com/anomalyco/transcribe.cpp/tar.gz/$source_rev"
-    if ! verify "$source_sha" "$build/source.tar.gz"; then
+    if ! download_verified "https://codeload.github.com/anomalyco/transcribe.cpp/tar.gz/$source_rev" \
+        "$build/source.tar.gz" "$source_sha"; then
         printf 'transcribe.cpp source archive failed SHA-256 verification.\n' >&2
         exit 1
     fi
@@ -58,13 +58,13 @@ cmake --install "$build/build" --prefix "$build/native"
 printf '%s' "$cache_rev-$source_rev" > "$build/cache-rev"
 
 mkdir -p -- "$models"
-if [[ -f $models/$model ]] && verify "$model_sha" "$models/$model"; then
+if [[ -f $models/$model ]] && verify_sha256 "$model_sha" "$models/$model"; then
     exit 0
 fi
 stage=$(mktemp -d "$models/.$model.XXXXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-download "$stage/$model" "https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/$model_rev/$model?download=true"
-if ! verify "$model_sha" "$stage/$model"; then
+if ! download_verified "https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/$model_rev/$model?download=true" \
+    "$stage/$model" "$model_sha"; then
     printf 'Parakeet model failed SHA-256 verification.\n' >&2
     exit 1
 fi

@@ -3,6 +3,8 @@ set -euo pipefail
 umask 077
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/fetch.sh
+source "$REPO_DIR/scripts/lib/fetch.sh"
 config=${XDG_CONFIG_HOME:-$HOME/.config}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 data=$data_home/lark
@@ -68,10 +70,9 @@ install_kokoro() (
     stage=$(mktemp -d "$models/.$name.XXXXXXXX")
     trap 'rm -rf -- "$stage"' EXIT
     archive="$stage/$name.tar.bz2"
-    curl --fail --silent --show-error --location \
+    if ! download_verified \
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$name.tar.bz2" \
-        --output "$archive"
-    if ! printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check --status; then
+        "$archive" "$checksum"; then
         printf 'Kokoro model archive failed SHA-256 verification.\n' >&2
         return 1
     fi
@@ -82,43 +83,35 @@ install_kokoro
 
 install_silero() (
     local name=silero_vad_v5.onnx checksum=6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396
-    local models="$data/stt-models" destination staged
+    local models="$data/stt-models" destination
     destination="$models/$name"
-    verify() { printf '%s  %s\n' "$checksum" "$1" | sha256sum --check --status; }
-    if [[ -f "$destination" ]] && verify "$destination"; then
+    if [[ -f "$destination" ]] && verify_sha256 "$checksum" "$destination"; then
         return 0
     fi
     mkdir -p -- "$models"
-    staged=$(mktemp "$models/.$name.XXXXXXXX")
-    trap 'rm -f -- "$staged"' EXIT
-    curl --fail --silent --show-error --location --output "$staged" \
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$name"
-    if ! verify "$staged"; then
+    if ! download_verified \
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$name" \
+        "$destination" "$checksum"; then
         printf 'Silero v5 model failed SHA-256 verification.\n' >&2
         return 1
     fi
-    mv -fT -- "$staged" "$destination"
 )
 install_silero
 
 install_smart_turn() (
     local name=smart-turn-v3.2-cpu.onnx checksum=2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f
-    local models="$data/stt-models" destination staged
+    local models="$data/stt-models" destination
     destination="$models/$name"
-    verify() { printf '%s  %s\n' "$checksum" "$1" | sha256sum --check --status; }
-    if [[ -f "$destination" ]] && verify "$destination"; then
+    if [[ -f "$destination" ]] && verify_sha256 "$checksum" "$destination"; then
         return 0
     fi
     mkdir -p -- "$models"
-    staged=$(mktemp "$models/.$name.XXXXXXXX")
-    trap 'rm -f -- "$staged"' EXIT
-    curl --fail --silent --show-error --location --output "$staged" \
-        "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/$name"
-    if ! verify "$staged"; then
+    if ! download_verified \
+        "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/$name" \
+        "$destination" "$checksum"; then
         printf 'Smart Turn v3.2 model failed SHA-256 verification.\n' >&2
         return 1
     fi
-    mv -fT -- "$staged" "$destination"
 )
 install_smart_turn
 if "$models_only"; then
@@ -138,8 +131,7 @@ install_deltachat_rpc() (
             return 1
             ;;
     esac
-    verify() { printf '%s  %s\n' "$checksum" "$1" | sha256sum --check --status; }
-    if [[ -x "$dest" ]] && verify "$dest"; then
+    if [[ -x "$dest" ]] && verify_sha256 "$checksum" "$dest"; then
         return 0
     fi
     install -d -m 700 -- "$bin_dir"
@@ -147,7 +139,7 @@ install_deltachat_rpc() (
     trap 'rm -f -- "$staged"' EXIT
     url="https://github.com/chatmail/core/releases/download/$version/deltachat-rpc-server-$arch"
     curl --fail --silent --show-error --location --output "$staged" "$url"
-    if ! verify "$staged"; then
+    if ! verify_sha256 "$checksum" "$staged"; then
         printf 'deltachat-rpc-server failed SHA-256 verification.\n' >&2
         return 1
     fi
