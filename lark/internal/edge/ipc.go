@@ -355,8 +355,6 @@ func (e *Edge) handleTerminalCommand(c *ipcClient, cmd ipcCommand) {
 	case "capture.stop":
 		t.event(evCaptureStop, nil)
 		c.reply(cmd.ID, map[string]any{"ok": true})
-	case "device.ota":
-		c.fail(cmd.ID, errors.New("device.ota is handled by the lark-edge ota subcommand"))
 	default:
 		c.fail(cmd.ID, fmt.Errorf("unknown cmd %q", cmd.Cmd))
 	}

@@ -126,22 +126,6 @@ func (m *Models) snapshot() map[string]any {
 	return out
 }
 
-func (m *Models) stateOf(name string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.state[name]
-}
-
-func (m *Models) states() map[string]string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]string, len(m.state))
-	for k, v := range m.state {
-		out[k] = v
-	}
-	return out
-}
-
 func (m *Models) transcriber() Transcriber {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

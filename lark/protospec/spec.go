@@ -445,18 +445,6 @@ func tokenSample() []byte {
 	return b
 }
 
-// MessageForType returns the message with the given type byte.
-func MessageForType(t uint8) (Message, bool) {
-	for _, m := range Messages {
-		if m.TypeByte == t {
-			return m, true
-		}
-	}
-	return Message{}, false
-}
-
-func CName(name string) string { return snakeUpper(name) }
-
 func snakeUpper(s string) string {
 	var out []byte
 	for i := 0; i < len(s); i++ {

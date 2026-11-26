@@ -74,12 +74,10 @@ const (
 
 type termEvent struct {
 	kind    evKind
-	hello   proto.TerminalHello
 	start   proto.ProtoRecStart
 	end     proto.ProtoRecEnd
 	ack     proto.ProtoTTSAck
 	point   proto.ProtoPointer
-	tele    proto.ProtoTelemetry
 	screen  Screen
 	c       *ipcCommand
 	reply   chan any

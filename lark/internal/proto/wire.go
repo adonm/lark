@@ -1,6 +1,6 @@
-// Package proto is the generated v1 terminal wire protocol shared by the
-// legacy bridge and the real-time edge. Go generate renders proto_gen.go from
-// lark/protospec/spec.go; only the envelope helpers below are hand-written.
+// Package proto is the generated v1 terminal wire protocol spoken by the
+// real-time edge. Go generate renders proto_gen.go from lark/protospec/spec.go;
+// only the envelope helpers below are hand-written.
 package proto
 
 import (
@@ -24,18 +24,6 @@ func Pack(msgType uint8, seq uint16, payload []byte) []byte {
 	binary.LittleEndian.PutUint32(pkt[4:8], uint32(len(payload)))
 	copy(pkt[ProtoHeaderSize:], payload)
 	return pkt
-}
-
-// Unpack decodes one complete envelope from b.
-func Unpack(b []byte) (msgType uint8, seq uint16, payload []byte, ok bool) {
-	if len(b) < ProtoHeaderSize || b[0] != ProtoMagic {
-		return 0, 0, nil, false
-	}
-	length := binary.LittleEndian.Uint32(b[4:8])
-	if length > ProtoMaxPayload || len(b) < ProtoHeaderSize+int(length) {
-		return 0, 0, nil, false
-	}
-	return b[1], binary.LittleEndian.Uint16(b[2:4]), b[ProtoHeaderSize : ProtoHeaderSize+int(length)], true
 }
 
 // ReadFrame reads one envelope from r. The payload buffer is freshly allocated

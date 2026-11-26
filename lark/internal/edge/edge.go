@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const (
@@ -304,16 +303,4 @@ func (e *Edge) ensureOpen() error {
 		return fmt.Errorf("edge: %w", errClosed)
 	}
 	return nil
-}
-
-// waitIdle is a test helper: wait until no terminal exists or timeout.
-func (e *Edge) waitIdle(timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if len(e.Terminals()) == 0 {
-			return true
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	return false
 }
