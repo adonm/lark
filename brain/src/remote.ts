@@ -15,11 +15,6 @@ const execFileAsync = promisify(execFile);
 export const REMOTE_PATH = "/remote";
 export const REMOTE_COOKIE = "lark_remote";
 export const REMOTE_TUNNEL_TIMEOUT_MS = 90_000;
-export const CAPTURE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
-export const CAPTURE_MAX_BYTES = 1 << 30;
-export const CAPTURE_DONE_WINDOW_MS = 20_000;
-export const CAPTURE_DEFAULT_SECONDS = 15;
-export const CAPTURE_PAGE_SECONDS = 60;
 
 export interface RemoteTokenScope {
   companionId: string;
@@ -140,22 +135,13 @@ interface TokenMeta {
 
 interface StoredRoute {
   companionId?: unknown;
-  companion_id?: unknown;
   routeName?: unknown;
-  route_name?: unknown;
   url?: unknown;
   localPort?: unknown;
-  local_port?: unknown;
   profile?: unknown;
   createdAt?: unknown;
-  created_at?: unknown;
 }
 
-/**
- * v1 stored routes with snake_case fields; accept both spellings so upgraded
- * databases keep their tunnels instead of minting a new one per restart.
- * Remove the v1 names once v1 databases are no longer upgraded in place.
- */
 function decodeRoute(raw: string): RemoteRoute | undefined {
   let value: StoredRoute;
   try {
@@ -163,10 +149,7 @@ function decodeRoute(raw: string): RemoteRoute | undefined {
   } catch {
     return undefined;
   }
-  const companionId = value.companionId ?? value.companion_id;
-  const routeName = value.routeName ?? value.route_name;
-  const localPort = value.localPort ?? value.local_port;
-  const createdAt = value.createdAt ?? value.created_at;
+  const { companionId, routeName, localPort, createdAt } = value;
   if (typeof companionId !== "string" || companionId.trim() === "") return undefined;
   if (typeof value.url !== "string" || !value.url.startsWith("https://")) return undefined;
   if (typeof routeName !== "string" || routeName === "") return undefined;
@@ -245,21 +228,12 @@ export class RemoteManager {
       }
       if (typeof meta.hash !== "string" || meta.hash.length !== 64) continue;
       if (this.#db.getCompanion(companionId) === undefined) continue;
-      this.#tokens.set(meta.hash, {
-        companionId,
-        contact,
-        contactName: this.#contactName(contact, typeof meta.name === "string" ? meta.name : ""),
-      });
+      const name = typeof meta.name === "string" ? meta.name.trim() : "";
+      this.#tokens.set(meta.hash, { companionId, contact, contactName: name === "" ? contact : name });
     }
   }
 
-  /**
-   * v1 stored the hash as a bare string; those links keep working, only the
-   * contact name is missing until the link is reissued. Remove this fallback
-   * once v1 databases are no longer upgraded in place.
-   */
   #decodeTokenMeta(raw: string): TokenMeta | undefined {
-    if (/^[0-9a-f]{64}$/i.test(raw)) return { hash: raw };
     try {
       return JSON.parse(raw) as TokenMeta;
     } catch {
@@ -277,26 +251,12 @@ export class RemoteManager {
     return next;
   }
 
-  /**
-   * v1 tokens carried no display name. Fall back to the name Delta Chat last
-   * reported for that address so restored links still match history rows,
-   * which store the display name rather than the address.
-   */
-  #contactName(contact: string, given: string): string {
-    const name = given.trim();
-    if (name !== "") return name;
-    return this.#db.getContactName(contact) ?? contact;
-  }
-
   authorize(raw: string): RemoteTokenScope | undefined {
     const trimmed = raw.trim();
     if (trimmed === "") return undefined;
     const hash = tokenHash(trimmed);
     for (const [stored, scope] of this.#tokens) {
       if (!safeEqualHex(stored, hash)) continue;
-      // The Delta Chat contact may have been seen after startup, so fill in a
-      // name that a bare-hash v1 token could not store.
-      if (scope.contactName === scope.contact) scope.contactName = this.#contactName(scope.contact, "");
       return scope;
     }
     return undefined;
@@ -305,8 +265,8 @@ export class RemoteManager {
   /** Persist the replacement before retiring the previous link. */
   #storeToken(companionId: string, contact: string, contactName: string, raw: string): void {
     const hash = tokenHash(raw);
-    const name = this.#contactName(contact, contactName);
-    if (name !== contact) this.#db.setContactName(contact, name);
+    const given = contactName.trim();
+    const name = given === "" ? contact : given;
     this.#db.setMeta(tokenKey(companionId, contact), JSON.stringify({ hash, name } satisfies TokenMeta));
     for (const [oldHash, scope] of this.#tokens) {
       if (scope.companionId === companionId && scope.contact === contact) this.#tokens.delete(oldHash);
@@ -445,6 +405,3 @@ export class RemoteManager {
     this.#tokens.clear();
   }
 }
-
-// Capture storage and pruning live in capture.ts; re-exported for callers.
-export * from "./capture.ts";

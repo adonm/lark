@@ -1414,12 +1414,11 @@ export class Router {
     }
   }
 
-  history(companionId: string, channel: "all" | "in_person" | "deltachat", contact: string, contactName: string, q: string, limit: number, cursor?: { beforeTs: number; beforeId: string }): { items: Array<Record<string, unknown>>; has_more: boolean; next_cursor?: string } {
+  history(companionId: string, channel: "all" | "in_person" | "deltachat", contact: string, q: string, limit: number, cursor?: { beforeTs: number; beforeId: string }): { items: Array<Record<string, unknown>>; has_more: boolean; next_cursor?: string } {
     const page = this.#db.listRemoteMessages({
       companionId,
       channel,
       contact,
-      contactName,
       q,
       limit,
       ...(cursor === undefined ? {} : { cursor }),

@@ -265,10 +265,10 @@ resume. Downloaded dumps are deleted after indexing.
 
 ## Upgrading
 
-Lark carries no backwards-compatibility shims at runtime. The v1 database opens
-unchanged: `brain/src/db.ts` creates the same schema, so the cutover has zero
-schema migration and zero firmware flash. Every breaking database, config,
-protocol, or API change after that is documented as a changelog entry in
+Lark carries no backwards-compatibility shims at runtime. A v1 database gets
+the one-time documented v2 normalization before the brain opens it; after that
+the schema is fixed and firmware needs no flash. Every breaking database,
+config, protocol, or API change is documented as a changelog entry in
 [`.opencode/skills/lark-upgrade/references/changelog.md`](.opencode/skills/lark-upgrade/references/changelog.md)
 and executed by OpenCode using the
 [`.opencode/skills/lark-upgrade/SKILL.md`](.opencode/skills/lark-upgrade/SKILL.md)

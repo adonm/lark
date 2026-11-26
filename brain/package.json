@@ -17,5 +17,10 @@
   "devDependencies": {
     "@types/node": "^26.6.10",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "yerpc": {
+      "typescript": "$typescript"
+    }
   }
 }

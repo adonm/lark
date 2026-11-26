@@ -1,6 +1,6 @@
-// Typed access to the Lark household database. The schema is kept at byte
-// parity with the existing Go server's `~/.local/share/lark/lark.db` so a
-// database moves between the two runtimes without a migration.
+// Typed access to the Lark household database. This module owns the v2 schema;
+// the one-time v1 normalization lives in the upgrade changelog, not in runtime
+// code.
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 export const SCHEMA_STATEMENTS = [
@@ -148,8 +148,6 @@ export interface RemoteHistoryQuery {
   channel: RemoteHistoryChannel;
   /** Lowercased Delta Chat address of the scoped contact. */
   contact: string;
-  /** Lowercased display name at issue time. */
-  contactName: string;
   q: string;
   limit: number;
   cursor?: MessageCursor;
@@ -379,18 +377,6 @@ export class LarkDb {
     this.#db.exec("PRAGMA foreign_keys = ON");
     this.#db.exec("PRAGMA temp_store = MEMORY");
     for (const statement of SCHEMA_STATEMENTS) this.#db.exec(statement);
-    this.#migrate();
-  }
-
-  /**
-   * v2 added `peer` after v1 databases were already in use, so upgraded
-   * databases need the column appended instead of recreated.
-   */
-  #migrate(): void {
-    const columns = this.#stmt(`PRAGMA table_info(messages)`).all();
-    if (!columns.some((column) => String(column.name) === "peer")) {
-      this.#db.exec(`ALTER TABLE messages ADD COLUMN peer TEXT NOT NULL DEFAULT ''`);
-    }
   }
 
   #stmt(sql: string): StatementSync {
@@ -451,83 +437,6 @@ export class LarkDb {
     return this.#stmt(`SELECT key FROM meta WHERE key LIKE ? ORDER BY key`)
       .all(pattern)
       .map((row) => String(row.key));
-  }
-
-  /**
-   * Delta Chat message rows store the contact's display name, not the address,
-   * so keep the current name per address. v1 scoped links were saved without a
-   * name and would otherwise fall back to the address and match no rows.
-   */
-  setContactName(address: string, name: string): void {
-    const key = address.trim().toLowerCase();
-    const value = name.trim();
-    if (key === "" || value === "") return;
-    this.setMeta(`contact_name:${key}`, value);
-  }
-
-  getContactName(address: string): string | undefined {
-    const value = this.getMeta(`contact_name:${address.trim().toLowerCase()}`)?.trim() ?? "";
-    return value === "" ? undefined : value;
-  }
-
-  /**
-   * v1 (and early v2) Delta Chat rows stored only the display name, so the
-   * contact behind a reply was lost. Fill `peer` from a uniquely named contact,
-   * then attribute a reply to the user row it immediately follows. Idempotent;
-   * ambiguous names and interleaved chats stay unattributed rather than leak.
-   */
-  backfillLegacyPeers(): number {
-    const names = new Map<string, string | null>();
-    for (const key of this.listMetaKeys("contact_name:%")) {
-      const address = key.slice("contact_name:".length);
-      const name = this.getMeta(key)?.trim().toLowerCase() ?? "";
-      if (name === "") continue;
-      for (const alias of [address, name]) {
-        const seen = names.get(alias);
-        names.set(alias, seen === undefined || seen === address ? address : null);
-      }
-    }
-    if (names.size === 0) return 0;
-
-    const replyWindowMs = 5 * 60 * 1000;
-    let updated = 0;
-    this.transaction(() => {
-      const rows = this.#stmt(
-          `SELECT id, companion_id, role, sender, ts_ms FROM messages
-           WHERE channel = 'deltachat' AND peer = ''
-           ORDER BY companion_id, ts_ms, id`,
-        )
-        .all();
-      let companion = "";
-      let pairPeer = "";
-      let pairTs = 0;
-      for (const row of rows) {
-        const rowCompanion = String(row.companion_id);
-        if (rowCompanion !== companion) {
-          companion = rowCompanion;
-          pairPeer = "";
-        }
-        const role = String(row.role);
-        const ts = num(row.ts_ms as number | bigint | null);
-        let peer = "";
-        if (role === "user") {
-          peer = names.get(String(row.sender).trim().toLowerCase()) ?? "";
-        } else if (pairPeer !== "" && ts >= pairTs && ts - pairTs <= replyWindowMs) {
-          peer = pairPeer;
-        }
-        if (peer !== "") {
-          this.#stmt(`UPDATE messages SET peer = ? WHERE id = ?`).run(peer, String(row.id));
-          updated++;
-        }
-        if (role === "user") {
-          pairPeer = peer;
-          pairTs = ts;
-        } else {
-          pairPeer = "";
-        }
-      }
-    });
-    return updated;
   }
 
   // ---- companions -------------------------------------------------------
@@ -782,29 +691,22 @@ export class LarkDb {
    * Remote-page history: in-person room notes plus the scoped contact's whole
    * Delta Chat conversation, including the companion's replies. Rows keep the
    * contact address in `peer` so other contacts' private chat stays hidden.
-   * Legacy rows predate `peer`; only their user turns can be attributed, by
-   * matching the address or the display name recorded at issue time.
+   * A row without a peer is never attributed by sender name, because two
+   * contacts can share one display name.
    */
   listRemoteMessages(query: RemoteHistoryQuery): MessagePage {
     const limit = Math.max(1, Math.min(50, Math.trunc(query.limit)));
     let sql = `SELECT * FROM messages WHERE companion_id = ?`;
     const args: (string | number)[] = [query.companionId.toLowerCase()];
     const contact = query.contact.toLowerCase();
-    const name = query.contactName.trim().toLowerCase();
-    let peerClause = `(LOWER(peer) = ? OR (peer = '' AND role = 'user' AND LOWER(sender) = ?))`;
-    let peerArgs: string[] = [contact, contact];
-    if (name !== "" && name !== contact) {
-      peerClause = `(LOWER(peer) = ? OR (peer = '' AND role = 'user' AND LOWER(sender) IN (?, ?)))`;
-      peerArgs = [contact, contact, name];
-    }
     if (query.channel === "in_person") {
       sql += ` AND channel = 'in_person'`;
     } else if (query.channel === "deltachat") {
-      sql += ` AND channel = 'deltachat' AND ${peerClause}`;
-      args.push(...peerArgs);
+      sql += ` AND channel = 'deltachat' AND LOWER(peer) = ?`;
+      args.push(contact);
     } else {
-      sql += ` AND (channel = 'in_person' OR (channel = 'deltachat' AND ${peerClause}))`;
-      args.push(...peerArgs);
+      sql += ` AND (channel = 'in_person' OR (channel = 'deltachat' AND LOWER(peer) = ?))`;
+      args.push(contact);
     }
     if (query.q !== "") {
       const pattern = `%${escapeLike(query.q.toLowerCase())}%`;

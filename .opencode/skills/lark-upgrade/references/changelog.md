@@ -4,6 +4,28 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-27 — separate library provisioner and one-time v2 metadata normalization
+
+### Affects
+- Host: `lark-edge`, new `lark-library`, and `~/.local/share/lark/lark.db` meta rows.
+- Devices: no firmware change.
+
+### Breaking Changes
+- `lark-edge library` is gone. `lark library --download|--build` now runs the separate `lark-library` binary that `lark deploy` installs next to the edge.
+- The brain no longer reads v1 metadata shapes. Before starting it against an old database, convert every `remote_route:*` row to camelCase (`companionId`, `routeName`, `url`, `localPort`, `profile`, `createdAt`) and every `remote_token:*` row to `{"hash": "<unchanged sha256>", "name": "<display name>"}`. Preserve hashes and URLs verbatim so issued `/remote` links keep working.
+- Delta Chat history rows must carry the contact address in `messages.peer`; rows without it stay hidden rather than guessing from a display name.
+
+### Upgrade Steps
+1. Back up `lark.db`, then normalize the rows above while the brain is stopped.
+2. Run `PRAGMA integrity_check;` and require `ok`.
+3. Run `lark deploy` to install both binaries.
+
+### Verification
+- `lark library --plan` works and `ls ~/.local/share/lark/lark-library` exists.
+- Restored `/remote` links authorize, and history shows both sides of the scoped chat.
+
+---
+
 ## 2026-11-26 — firmware 0.22.0: instant reconnect and link reliability
 
 ### Affects

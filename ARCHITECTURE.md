@@ -122,9 +122,9 @@ binaries to `~/.local/share/lark/` and symlinks this wrapper next to them.
 ## Data model
 
 `~/.local/share/lark/lark.db`, SQLite WAL. Private (`0700` directory, `0600`
-file). `brain/src/db.ts` creates the same schema as the v1 Go server, byte for
-byte, so an existing database opens with no migration. Breaking storage changes
-are documented in the changelog and applied while services are stopped.
+file). `brain/src/db.ts` creates the v2 schema; a v1 database is normalized once
+at cutover as documented in the changelog. Breaking storage changes are
+documented there and applied while services are stopped.
 
 | Table | Purpose |
 | --- | --- |

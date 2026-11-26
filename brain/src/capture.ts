@@ -3,13 +3,14 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { EdgeCaptureDone, EdgeCaptureProgress } from "./edge_client.ts";
-import {
-  CAPTURE_DONE_WINDOW_MS,
-  CAPTURE_MAX_BYTES,
-  CAPTURE_RETENTION_MS,
-  RemoteError,
-} from "./remote.ts";
+import { RemoteError } from "./remote.ts";
 import { errMessage } from "./util.ts";
+
+export const CAPTURE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+export const CAPTURE_MAX_BYTES = 1 << 30;
+export const CAPTURE_DONE_WINDOW_MS = 20_000;
+export const CAPTURE_DEFAULT_SECONDS = 15;
+export const CAPTURE_PAGE_SECONDS = 60;
 
 // ---- captures ---------------------------------------------------------------
 

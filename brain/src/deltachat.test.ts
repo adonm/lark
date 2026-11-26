@@ -304,7 +304,6 @@ test("verified contact text round trip is text-only and recorded", async () => {
   assert.equal(rows.messages[0]?.peer, "sam@example.org");
   assert.equal(rows.messages[1]?.role, "assistant");
   assert.equal(rows.messages[1]?.peer, "sam@example.org");
-  assert.equal(h.db.getContactName("sam@example.org"), "Sam");
   assert.ok((rows.messages[1]?.tsMs ?? 0) >= (rows.messages[0]?.tsMs ?? 0));
 });
 

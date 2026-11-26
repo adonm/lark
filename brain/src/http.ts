@@ -10,12 +10,8 @@ import type { EdgeClient, EdgeHit } from "./edge_client.ts";
 import type { Router } from "./router.ts";
 import { planLibrary } from "./library.ts";
 import { errMessage, slugify } from "./util.ts";
-import {
-  CAPTURE_DEFAULT_SECONDS,
-  REMOTE_PATH,
-  type CaptureStore,
-  type RemoteManager,
-} from "./remote.ts";
+import { CAPTURE_DEFAULT_SECONDS, type CaptureStore } from "./capture.ts";
+import { REMOTE_PATH, type RemoteManager } from "./remote.ts";
 import type { DcService } from "./deltachat.ts";
 import type { PortraitManager, PortraitSpec } from "./portraits.ts";
 import {

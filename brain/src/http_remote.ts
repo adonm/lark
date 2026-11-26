@@ -7,11 +7,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LarkDb } from "./db.ts";
 import type { RemoteSnapshot, Router } from "./router.ts";
+import { CAPTURE_PAGE_SECONDS, type CaptureStore } from "./capture.ts";
 import {
-  CAPTURE_PAGE_SECONDS,
   REMOTE_COOKIE,
   REMOTE_PATH,
-  type CaptureStore,
   type RemoteManager,
   type RemoteTokenScope,
 } from "./remote.ts";
@@ -341,7 +340,7 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
       const limit = Math.max(1, Math.min(50, Number.parseInt(url.searchParams.get("limit") ?? "20", 10) || 20));
       const q = (url.searchParams.get("q") ?? "").slice(0, 100);
       const cursor = cursorFrom(url.searchParams.get("cursor") ?? "");
-      sendJson(res, 200, router.history(companionId, channelRaw as "all" | "in_person" | "deltachat", scope.contact, scope.contactName, q, limit, cursor));
+      sendJson(res, 200, router.history(companionId, channelRaw as "all" | "in_person" | "deltachat", scope.contact, q, limit, cursor));
       return;
     }
     if (name === "capture" && method === "POST") {

@@ -6,12 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { LarkDb } from "./db.ts";
 import { Router } from "./router.ts";
+import { CaptureStore, pruneCaptures } from "./capture.ts";
 import {
-  CaptureStore,
   REMOTE_COOKIE,
   RemoteManager,
   parseRouteOutput,
-  pruneCaptures,
   resolveTunnelBin,
   type TunnelRunner,
 } from "./remote.ts";
@@ -97,21 +96,24 @@ test("opentunnel resolves from ~/.local/bin when PATH omits it", () => {
   assert.equal(resolveTunnelBin({ PATH: "/usr/bin:/bin" }, () => false), undefined);
 });
 
-test("v1 route rows restore and re-point at the current port", async () => {
+test("restored routes re-point at the current port", async () => {
   const dir = mkdtempSync(join(tmpdir(), "lark-remote-route-v1-"));
   const db = new LarkDb(join(dir, "lark.db"));
   db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
-  const raw = "legacy-link-token";
-  db.setMeta("remote_token:greg:sam@example.org", createHash("sha256").update(raw).digest("hex"));
+  const raw = "restored-link-token";
+  db.setMeta(
+    "remote_token:greg:sam@example.org",
+    JSON.stringify({ hash: createHash("sha256").update(raw).digest("hex"), name: "Sam" }),
+  );
   db.setMeta(
     "remote_route:greg",
     JSON.stringify({
-      companion_id: "greg",
-      route_name: "ac3ff219f43efff5",
+      companionId: "greg",
+      routeName: "ac3ff219f43efff5",
       url: "https://ac3ff219f43efff5.skpi5vnitjyt.opentunnel.xyz",
-      local_port: 33197,
-      profile: "lark-legacy",
-      created_at: "2026-11-23T00:52:39.542079897Z",
+      localPort: 33197,
+      profile: "lark-restored",
+      createdAt: "2026-11-23T00:52:39.542079897Z",
     }),
   );
   const fake = new FakeRunner();
@@ -121,7 +123,7 @@ test("v1 route rows restore and re-point at the current port", async () => {
 
   const link = await remote.issue("greg", "sam@example.org", "Sam");
   assert.match(link, /^https:\/\/ac3ff219f43efff5\.skpi5vnitjyt\.opentunnel\.xyz\/remote\?token=/);
-  assert.deepEqual(fake.calls[0], ["route", "add", "127.0.0.1:8765", "--name", "ac3ff219f43efff5", "--profile", "lark-legacy"]);
+  assert.deepEqual(fake.calls[0], ["route", "add", "127.0.0.1:8765", "--name", "ac3ff219f43efff5", "--profile", "lark-restored"]);
   const stored = JSON.parse(db.getMeta("remote_route:greg") ?? "{}") as { companionId?: string; localPort?: number };
   assert.equal(stored.companionId, "greg");
   assert.equal(stored.localPort, 8765);
@@ -194,22 +196,27 @@ test("scoped links survive a brain restart", async () => {
   await second.close();
 });
 
-test("v1 bare-hash links keep working after upgrade", () => {
+test("bare-hash tokens and snake_case routes are ignored", async () => {
   const dir = mkdtempSync(join(tmpdir(), "lark-remote-legacy-"));
   const db = new LarkDb(join(dir, "lark.db"));
   db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
   const raw = "legacy-link-token";
   db.setMeta("remote_token:greg:sam@example.org", createHash("sha256").update(raw).digest("hex"));
+  db.setMeta(
+    "remote_route:greg",
+    JSON.stringify({
+      companion_id: "greg",
+      route_name: "greg-tunnel",
+      url: "https://greg-tunnel.opentunnel.test",
+      local_port: 8765,
+      profile: "lark-legacy",
+      created_at: "2026-11-22T00:00:00Z",
+    }),
+  );
   const remote = manager(dir, db, new FakeRunner().runner());
-  assert.equal(remote.authorize(raw)?.companionId, "greg");
-  // A bare hash stored no display name; history rows use the name, not the
-  // address, so a name learned from Delta Chat must fill the gap.
-  assert.equal(remote.authorize(raw)?.contactName, "sam@example.org");
-  db.setContactName("Sam@Example.org", "Sam");
-  assert.equal(remote.authorize(raw)?.contactName, "Sam");
-
-  const restored = manager(dir, db, new FakeRunner().runner());
-  assert.equal(restored.authorize(raw)?.contactName, "Sam");
+  assert.equal(remote.authorize(raw), undefined);
+  assert.deepEqual(remote.listTunnels(), []);
+  await remote.close();
 });
 
 test("pruneCaptures enforces retention and the byte budget", async () => {
