@@ -303,6 +303,9 @@ type utterance struct {
 	vadLen       int
 	preScan      int
 	speechOffset time.Duration
+	// gen advances whenever the buffer restarts over discarded pre-roll, so a
+	// reusable probe scratch knows its cached prefix is no longer valid.
+	gen uint64
 }
 
 func utteranceBytes(span time.Duration) int { return sampleRate * 2 * int(span/time.Second) }
@@ -358,6 +361,7 @@ func (u *utterance) flushPreRoll() {
 	}
 	u.speechOffset += pcmDuration(u.preScan) - pcmDuration(u.preLen)
 	u.pcm = u.pcm[:0]
+	u.gen++
 	first := min(u.preLen, listenPreRollBytes-u.preHead)
 	u.pcm = append(u.pcm, u.preRoll[u.preHead:u.preHead+first]...)
 	if first < u.preLen {

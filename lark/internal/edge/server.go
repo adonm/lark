@@ -35,7 +35,8 @@ type nativeConn struct {
 	pcmOut  chan outMsg
 
 	frameMu      sync.Mutex
-	pendingFrame *outMsg
+	pendingFrame outMsg
+	framePending bool
 	frameNotify  chan struct{}
 	txSeq        uint16
 
@@ -102,7 +103,10 @@ func (c *nativeConn) enqueueFrame(payload []byte) {
 		return
 	}
 	c.frameMu.Lock()
-	c.pendingFrame = &outMsg{proto.MsgFrame, payload}
+	// Only the newest frame matters; reuse the slot instead of allocating a
+	// fresh outMsg for every render.
+	c.pendingFrame = outMsg{proto.MsgFrame, payload}
+	c.framePending = true
 	c.frameMu.Unlock()
 	select {
 	case c.frameNotify <- struct{}{}:
@@ -113,11 +117,12 @@ func (c *nativeConn) enqueueFrame(payload []byte) {
 func (c *nativeConn) takeFrame() (outMsg, bool) {
 	c.frameMu.Lock()
 	defer c.frameMu.Unlock()
-	if c.pendingFrame == nil {
+	if !c.framePending {
 		return outMsg{}, false
 	}
-	msg := *c.pendingFrame
-	c.pendingFrame = nil
+	msg := c.pendingFrame
+	c.pendingFrame = outMsg{}
+	c.framePending = false
 	return msg, true
 }
 

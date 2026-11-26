@@ -79,9 +79,34 @@ type assetEntry struct {
 	theme pixel.Theme
 }
 
+// frameBuffers keeps the previous RGB565 frame and one scratch frame per
+// terminal. renderWorker fills the scratch, diffs against the front, encodes,
+// then swaps; resizing replaces both and forces a full frame.
+type frameBuffers struct {
+	front []uint16
+	back  []uint16
+	w, h  int
+	valid bool
+}
+
+func (b *frameBuffers) scratch(w, h int) []uint16 {
+	if b.back == nil || b.w != w || b.h != h {
+		b.front = make([]uint16, w*h)
+		b.back = make([]uint16, w*h)
+		b.w, b.h = w, h
+		b.valid = false
+	}
+	return b.back
+}
+
+func (b *frameBuffers) commit() {
+	b.front, b.back = b.back, b.front
+	b.valid = true
+}
+
 func (t *Terminal) renderWorker() {
 	enc := new(pixel.FrameEncoder)
-	var prev []uint16
+	var bufs frameBuffers
 	var prevGrade pixel.GradeKey
 	var rev uint64
 	for {
@@ -98,21 +123,21 @@ func (t *Terminal) renderWorker() {
 			}
 			b := img.Bounds()
 			w, h := b.Dx(), b.Dy()
-			fb := make([]uint16, w*h)
+			fb := bufs.scratch(w, h)
 			for y := 0; y < h; y++ {
 				for x := 0; x < w; x++ {
 					c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
 					fb[y*w+x] = pixel.Pack565(c.R, c.G, c.B)
 				}
 			}
-			pixel.ReleaseImage(img)
 			grade := pixel.GradeAt(time.Now(), time.Local)
 			rev++
-			rect := pixel.DirtyRect(prev, fb, w, h)
-			if job.full || prev == nil {
+			rect := pixel.DirtyRect(bufs.front, fb, w, h)
+			if job.full || !bufs.valid {
 				rect = image.Rect(0, 0, w, h)
 			}
 			if rect.Empty() && grade == prevGrade {
+				pixel.ReleaseImage(img)
 				continue
 			}
 			if rect.Empty() {
@@ -122,11 +147,14 @@ func (t *Terminal) renderWorker() {
 			if codecs == 0 {
 				codecs = pixel.CodecBitAll
 			}
-			if !job.full && prev != nil {
+			if !job.full && bufs.valid {
 				codecs &^= 1 << 3 // JPEG is only worthwhile for whole scenes.
 			}
-			payload := enc.EncodeWithCodecs(fb, nil, rect, rev, w, codecs)
-			prev = fb
+			// Keep the rendered RGBA alive through encoding so JPEG can use it
+			// directly instead of converting RGB565 back to RGBA.
+			payload := enc.EncodeWithCodecs(fb, img, rect, rev, w, codecs)
+			pixel.ReleaseImage(img)
+			bufs.commit()
 			prevGrade = grade
 			select {
 			case t.events <- termEvent{kind: evFrameBuilt, frame: &frameBuilt{

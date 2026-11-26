@@ -85,7 +85,20 @@ type Engine struct {
 	outData []float32
 	inTen   *ort.Tensor[float32]
 	outTen  *ort.Tensor[float32]
-	mel     *whisperMel
+}
+
+// melScratch owns the large FFT/mel working set plus the model input. Feature
+// extraction runs outside Engine.mu, so concurrent callers need separate
+// scratch rather than serializing the whole mel pass behind ONNX.
+type melScratch struct {
+	mel whisperMel
+	out []float32
+}
+
+var melScratchPool = sync.Pool{
+	New: func() any {
+		return &melScratch{mel: *newWhisperMel(), out: make([]float32, smartTurnMels*smartTurnFrames)}
+	},
 }
 
 func Open(path string, threads int) (*Engine, error) {
@@ -140,7 +153,6 @@ func Open(path string, threads int) (*Engine, error) {
 		outData: outData,
 		inTen:   inTen,
 		outTen:  outTen,
-		mel:     newWhisperMel(),
 	}, nil
 }
 
@@ -162,12 +174,18 @@ func (e *Engine) Close() {
 }
 
 func (e *Engine) PredictPCM16(pcm []byte) (float32, error) {
+	scratch := melScratchPool.Get().(*melScratch)
+	// The expensive mel/FFT pass is independent of the ONNX session and runs
+	// before the lock so a slow inference does not serialize feature work.
+	scratch.mel.extractPCM16(pcm, scratch.out)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.session == nil {
+		melScratchPool.Put(scratch)
 		return 0, errors.New("smart-turn closed")
 	}
-	e.mel.extractPCM16(pcm, e.inData)
+	copy(e.inData, scratch.out)
+	melScratchPool.Put(scratch)
 	if err := e.session.Run([]ort.Value{e.inTen}, []ort.Value{e.outTen}); err != nil {
 		return 0, err
 	}

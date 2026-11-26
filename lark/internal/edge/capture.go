@@ -32,6 +32,41 @@ type probeResult struct {
 	err  error
 }
 
+type smartTurnRequest struct {
+	at  time.Duration
+	pcm []byte
+}
+
+type smartTurnResult struct {
+	at   time.Duration
+	prob float32
+}
+
+// Smart Turn only looks at the last eight seconds, so the async predictor
+// copies just that tail instead of the whole utterance.
+const smartTurnWindowBytes = sampleRate * 2 * 8
+
+// probeScratch grows one clip across probes instead of allocating a fresh
+// utterance copy every 250 ms. Only one probe runs at a time, and a new fill
+// happens after the previous result arrives, so the worker never reads a
+// buffer that is being rewritten. The generation catches the listening
+// pre-roll reset that restarts the utterance buffer.
+type probeScratch struct {
+	buf []byte
+	gen uint64
+	n   int
+}
+
+func (p *probeScratch) fill(pcm []byte, n int, gen uint64) []byte {
+	if gen != p.gen || n < p.n || len(p.buf) != p.n {
+		p.buf = append(p.buf[:0], pcm[:n]...)
+	} else if n > p.n {
+		p.buf = append(p.buf, pcm[p.n:n]...)
+	}
+	p.gen, p.n = gen, n
+	return p.buf
+}
+
 // captureState is one open microphone window. The RTP hot path writes packets
 // through cap.packets; only this goroutine reads them.
 type captureState struct {
@@ -164,19 +199,28 @@ func (c *captureState) run() {
 		probeAt   time.Duration
 		probeN    int
 		probeText string
+		scratch   probeScratch
 		specSeq   uint64
 		specAt    time.Duration
 		specLive  bool
-		smartAt   time.Duration = -1
-		smartProb float32       = -1
-		speechAt  time.Time
-		lastTick  time.Time
+		// smartProb belongs to smartProbAt; -1 means no prediction for the
+		// current pause yet. A busy worker keeps its buffer untouched until the
+		// result returns, so predicting never races the RTP packet loop.
+		smartProb   float32       = -1
+		smartProbAt time.Duration = -1
+		smartBusy   bool
+		smartBuf    []byte
+		speechAt    time.Time
+		lastTick    time.Time
 	)
 	probeCtx, cancelProbes := context.WithCancel(c.ctx)
 	defer cancelProbes()
 
+	// STT and Smart Turn run off the packet loop. Reusing one probe buffer is
+	// safe because the result channel gates the next launch: the goroutine has
+	// finished reading before the capture goroutine writes a new clip.
 	launchProbe := func(n int, at time.Duration) {
-		clip := append([]byte(nil), u.pcm[:n]...)
+		clip := scratch.fill(u.pcm, n, u.gen)
 		ch := make(chan probeResult, 1)
 		probeCh = ch
 		ctx := probeCtx
@@ -186,17 +230,56 @@ func (c *captureState) run() {
 		}()
 	}
 
+	smartReq := make(chan smartTurnRequest, 1)
+	smartRes := make(chan smartTurnResult, 1)
+	go func() {
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case req := <-smartReq:
+				prob := c.t.predict(req.pcm)
+				select {
+				case smartRes <- smartTurnResult{at: req.at, prob: prob}:
+				case <-c.ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	requestSmartTurn := func() {
+		if smartBusy {
+			return
+		}
+		if len(u.pcm) > smartTurnWindowBytes {
+			smartBuf = append(smartBuf[:0], u.pcm[len(u.pcm)-smartTurnWindowBytes:]...)
+		} else {
+			smartBuf = append(smartBuf[:0], u.pcm...)
+		}
+		select {
+		case smartReq <- smartTurnRequest{at: u.policy.lastVoicedAt, pcm: smartBuf}:
+			smartBusy = true
+		default:
+		}
+	}
+
 	classify := func(at time.Duration) decision {
 		if u.policy.voiced && !u.policy.inVoice {
 			silence := at - u.policy.lastVoicedAt
-			if silence >= endpointSpecQuiet && smartAt != u.policy.lastVoicedAt {
-				smartAt = u.policy.lastVoicedAt
-				smartProb = c.t.predict(u.pcm)
+			if silence >= endpointSpecQuiet && smartProbAt != u.policy.lastVoicedAt {
+				requestSmartTurn()
 			}
 		}
-		return u.policy.classify(at, endpointCap+c.grace, c.limit, smartProb, c.listen)
+		prob := float32(-1)
+		if smartProbAt == u.policy.lastVoicedAt {
+			prob = smartProb
+		}
+		return u.policy.classify(at, endpointCap+c.grace, c.limit, prob, c.listen)
 	}
 
+	poll := time.NewTimer(endpointFrame)
+	defer poll.Stop()
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -213,6 +296,10 @@ func (c *captureState) run() {
 				c.commit(u, probeText, probeN, speechAt, specSeq, specLive)
 				return
 			}
+		case result := <-smartRes:
+			smartBusy = false
+			smartProbAt = result.at
+			smartProb = result.prob
 		case result := <-probeCh:
 			probeCh = nil
 			if result.err != nil || result.text == "" {
@@ -271,7 +358,14 @@ func (c *captureState) run() {
 				return
 			}
 			lastTick = pkt.at
-		case <-time.After(20 * time.Millisecond):
+		case <-poll.C:
+			if !poll.Stop() {
+				select {
+				case <-poll.C:
+				default:
+				}
+			}
+			poll.Reset(endpointFrame)
 			if len(c.packets) > 0 {
 				continue
 			}

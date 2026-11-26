@@ -212,6 +212,46 @@ func TestFrameCodecsAndSmartSelector(t *testing.T) {
 	}
 }
 
+// The renderer hands the freshly drawn RGBA image straight to the JPEG
+// encoder. Encode from deliberately noisy RGB565 and verify the output follows
+// the RGBA source, not the framebuffer.
+func TestJPEGUsesRGVAPassthrough(t *testing.T) {
+	t.Parallel()
+	var enc FrameEncoder
+	const w = 360
+	fb := make([]uint16, w*w)
+	var rng uint32 = 0x9e3779b9
+	for i := range fb {
+		rng = rng*1664525 + 1013904223
+		fb[i] = uint16(rng >> 16)
+	}
+	rect := image.Rect(0, 0, 160, 160)
+	img := image.NewRGBA(rect)
+	for i := 0; i < len(img.Pix); i += 4 {
+		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = 200, 30, 40, 255
+	}
+	frame := enc.EncodeWithCodecs(fb, img, rect, 7, w, CodecBitAll)
+	if frame[9] != FrameCodecJPEG {
+		t.Fatalf("codec = %d, want JPEG", frame[9])
+	}
+	_, _, got := decodeDisplay(t, frame)
+	for i, v := range got {
+		r := int((v >> 11) & 0x1f << 3)
+		g := int((v >> 5) & 0x3f << 2)
+		b := int(v & 0x1f << 3)
+		if abs(r-200) > 8 || abs(g-30) > 8 || abs(b-40) > 8 {
+			t.Fatalf("pixel %d = rgb(%d,%d,%d), want the RGBA source", i, r, g, b)
+		}
+	}
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 func BenchmarkDirtyRect(b *testing.B) {
 	prev := make([]uint16, 360*360)
 	next := make([]uint16, 360*360)
