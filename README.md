@@ -211,7 +211,7 @@ interruptions and permission failures do not switch models.
 
 ## Agent tools
 
-The agent gets five native tools from `lark.tools`:
+The agent gets six native tools from `lark.tools`:
 
 | Tool | Purpose |
 | --- | --- |
@@ -220,6 +220,12 @@ The agent gets five native tools from `lark.tools`:
 | `lark_story` | Create, update, get, or delete a validated Twee 3 story. |
 | `lark_library` | Search, read, list, or import from the local text library (`simple`, `enwiki`, `gutenberg`); answers in milliseconds with no page fetch. |
 | `lark_emit` | Send spoken intercom and a card, play notes, or play a named sound (`sfx` or `chime`). |
+| `lark_audio` | Sample-exact metronome, short hum/chime/pluck tune, key-free identification of nearby music, or stop. |
+
+`lark_audio.identify` records a 7 s 16 kHz WAV, fingerprints it locally with the
+pinned MIT `shazamio-core` WASM module, asks Shazam's public discovery endpoint
+once, and deletes the capture in `finally`. No API key or extra binary is
+needed; `lark doctor` fails if the recognizer cannot load.
 
 With `companion_id`, `lark_state` returns `me.companion`, `me.terminals`, and
 `me.contacts`. Read persistent values as `memory[scope][key].value`; write them

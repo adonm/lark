@@ -158,6 +158,9 @@ mv -f -- "$build_tmp" "$lark_bin"
 trap - EXIT
 
 (cd "$REPO_DIR/brain" && npm ci --no-audit --no-fund)
+# Song recognition is a pinned MIT WASM package, not a system binary.
+(cd "$REPO_DIR/brain" && node -e 'require.resolve("shazamio-core")') ||
+    { echo 'shazamio-core is missing; song recognition will be unavailable.' >&2; exit 1; }
 
 mkdir -p -- "$units" "$config/lark"
 wrap="$data/lark"

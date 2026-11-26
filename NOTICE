@@ -24,6 +24,9 @@ Speech:
   https://huggingface.co/pipecat-ai/smart-turn-v3
 * onnxruntime_go — MIT.
   https://github.com/yalue/onnxruntime_go
+* shazamio-core WASM port — MIT. Local Shazam fingerprint generation; matches
+  are requested from Shazam's public discovery service.
+  https://github.com/inrixia/shazamio-core
 * Parakeet Unified EN 0.6B Q8_0 GGUF — the quantizer's pinned model
   card labels the conversion CC BY 4.0; NVIDIA lists the NVIDIA Open
   Model License Agreement for the base model. Consult both before

@@ -45,6 +45,12 @@ The agent gets these native tools:
 | `lark_story` | Create, update, read, or delete a validated Twee 3 story. |
 | `lark_library` | Search/read/list/import from the local text library. |
 | `lark_emit` | Intercom, speak on a terminal, play notes or a named sound. |
+| `lark_audio` | Metronome, short hum/chime/pluck tune, nearby-song identification, stop. |
+
+`lark_audio.identify` fingerprints a 7 s capture locally with the MIT
+`shazamio-core` WASM module, makes one key-free Shazam discovery request, and
+unlinks the capture WAV in `finally`. The Go edge renders metronome and tune
+PCM sample-exactly and streams it through the same interruptible TTS path.
 
 A `deep` subagent (`opencode/claude-sonnet-5-5#high` by default) handles
 multi-step plans, hard questions, and stories. The primary companion model is
@@ -100,7 +106,7 @@ in `hello` so the edge owns endpointing.
 | `brain/src/` | Node 26 TypeScript brain: HTTP, DB, router, Delta Chat, OpenCode, stories, library reader, timers, portraits, remote controls, CLI, cross-process E2E. |
 | `lark/cmd/lark-edge/` | Edge entry point, OTA push command, deterministic fake models for the E2E test. |
 | `lark/internal/edge/` | Terminal server, IPC, capture/utterance loop, TTS prefetch, WAV, models. |
-| `lark/internal/audio/` | WAV/PCM synthesis and resampling, melody/SFX, Smart Turn, Parakeet STT, Kokoro TTS. |
+| `lark/internal/audio/` | WAV/PCM synthesis and resampling, metronome/tune synth, Smart Turn, Parakeet STT, Kokoro TTS. |
 | `lark/internal/pixel/` | Canvas, icons, screens, scene/menu layout, portrait normalization, LUT grades, frame encoder. |
 | `lark/internal/proto/` | Generated v1 terminal wire codec shared by edge and firmware. |
 | `lark/internal/library/` | FTS5 downloads, index builders, search/read, story-text import, disk planner, `library` CLI. |
