@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { LarkDb } from "./db.ts";
@@ -12,6 +12,7 @@ import {
   RemoteManager,
   parseRouteOutput,
   pruneCaptures,
+  resolveTunnelBin,
   type TunnelRunner,
 } from "./remote.ts";
 import { startHttp, type RunningHttp } from "./http.ts";
@@ -68,8 +69,80 @@ test("tunnel route parsing accepts only public DNS names", () => {
     routeName: "greg",
     url: "https://greg.opentunnel.test",
   });
+  // A fresh tunnel prints creation progress before the URL line.
+  assert.deepEqual(
+    parseRouteOutput(
+      [
+        "Creating tunnel...",
+        "Generating private key...",
+        "Tunnel is ready.",
+        "Added route e663c0b73f47773f → 127.0.0.1:8765",
+        "https://e663c0b73f47773f.z6jvv6sl42pr.opentunnel.xyz",
+      ].join("\n"),
+    ),
+    {
+      routeName: "e663c0b73f47773f",
+      url: "https://e663c0b73f47773f.z6jvv6sl42pr.opentunnel.xyz",
+    },
+  );
   assert.equal(parseRouteOutput("https://localhost\n"), undefined);
   assert.equal(parseRouteOutput("not a url"), undefined);
+});
+
+test("opentunnel resolves from ~/.local/bin when PATH omits it", () => {
+  const bin = join(homedir(), ".local", "bin", process.platform === "win32" ? "opentunnel.exe" : "opentunnel");
+  assert.equal(resolveTunnelBin({ PATH: "/usr/local/sbin:/usr/local/bin:/usr/bin" }, (path) => path === bin), bin);
+  assert.equal(resolveTunnelBin({ PATH: "/usr/bin", LARK_OPENTUNNEL_BIN: "/opt/bin/opentunnel" }, () => false), "/opt/bin/opentunnel");
+  assert.equal(resolveTunnelBin({ PATH: "/usr/bin:/bin" }, () => false), undefined);
+});
+
+test("v1 route rows restore and re-point at the current port", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-remote-route-v1-"));
+  const db = new LarkDb(join(dir, "lark.db"));
+  db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
+  const raw = "legacy-link-token";
+  db.setMeta("remote_token:greg:sam@example.org", createHash("sha256").update(raw).digest("hex"));
+  db.setMeta(
+    "remote_route:greg",
+    JSON.stringify({
+      companion_id: "greg",
+      route_name: "ac3ff219f43efff5",
+      url: "https://ac3ff219f43efff5.skpi5vnitjyt.opentunnel.xyz",
+      local_port: 33197,
+      profile: "lark-legacy",
+      created_at: "2026-11-23T00:52:39.542079897Z",
+    }),
+  );
+  const fake = new FakeRunner();
+  const remote = manager(dir, db, fake.runner());
+  assert.equal(remote.listTunnels()[0]?.url, "https://ac3ff219f43efff5.skpi5vnitjyt.opentunnel.xyz");
+  assert.equal(remote.authorize(raw)?.companionId, "greg");
+
+  const link = await remote.issue("greg", "sam@example.org", "Sam");
+  assert.match(link, /^https:\/\/ac3ff219f43efff5\.skpi5vnitjyt\.opentunnel\.xyz\/remote\?token=/);
+  assert.deepEqual(fake.calls[0], ["route", "add", "127.0.0.1:8765", "--name", "ac3ff219f43efff5", "--profile", "lark-legacy"]);
+  const stored = JSON.parse(db.getMeta("remote_route:greg") ?? "{}") as { companionId?: string; localPort?: number };
+  assert.equal(stored.companionId, "greg");
+  assert.equal(stored.localPort, 8765);
+
+  await remote.issue("greg", "sam@example.org", "Sam");
+  assert.equal(fake.calls.length, 1);
+});
+
+test("route-add failures keep the CLI error in the log", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-remote-route-error-"));
+  const db = new LarkDb(join(dir, "lark.db"));
+  db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
+  const logs: string[] = [];
+  const remote = new RemoteManager({
+    db,
+    localPort: 8765,
+    now: () => 1_760_000_000_000,
+    log: (line) => logs.push(line),
+    runner: async () => ({ stdout: "Creating tunnel...\nTunnel is ready.\n", stderr: "spawn opentunnel ENOENT", code: 1 }),
+  });
+  await assert.rejects(remote.issue("greg", "sam@example.org", "Sam"), { name: "RemoteError", status: 502 });
+  assert.ok(logs.some((line) => line.includes("spawn opentunnel ENOENT")));
 });
 
 test("token rotation persists the new link before retiring the old one", async () => {

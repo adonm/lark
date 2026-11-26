@@ -14,7 +14,7 @@ import { Library } from "./library.ts";
 import { TimerScheduler, type Timer } from "./timers.ts";
 import { DcService } from "./deltachat.ts";
 import { PortraitManager } from "./portraits.ts";
-import { RemoteManager, CaptureStore } from "./remote.ts";
+import { RemoteManager, CaptureStore, resolveTunnelBin } from "./remote.ts";
 import { Router } from "./router.ts";
 import { startHttp, type RunningHttp } from "./http.ts";
 import { errMessage } from "./util.ts";
@@ -91,7 +91,7 @@ export function configFromEnv(): RuntimeConfig {
   const directory = resolve(env("LARK_DIRECTORY", process.cwd()));
   const port = Number.parseInt(env("LARK_PORT", "8765"), 10);
   const dcBin = env("LARK_DC_RPC_BIN") || (existsSync("/usr/local/bin/deltachat-rpc-server") ? "/usr/local/bin/deltachat-rpc-server" : "deltachat-rpc-server");
-  const tunnelBin = env("LARK_OPENTUNNEL_BIN") || "opentunnel";
+  const tunnelBin = resolveTunnelBin();
   return {
     directory,
     dataDir,

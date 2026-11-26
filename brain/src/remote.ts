@@ -4,6 +4,9 @@
 // previous token is retired, so a failed rotation never breaks a live link.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import type { LarkDb } from "./db.ts";
 
@@ -54,6 +57,15 @@ function tokenHash(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
+/** The CLI's failure text, or the start of its stdout when it said nothing. */
+function firstLine(...chunks: string[]): string {
+  for (const chunk of chunks) {
+    const trimmed = chunk.trim();
+    if (trimmed !== "") return trimmed.split("\n")[0]?.trim() ?? "";
+  }
+  return "no output";
+}
+
 function safeEqualHex(a: string, b: string): boolean {
   const left = Buffer.from(a, "hex");
   const right = Buffer.from(b, "hex");
@@ -84,6 +96,28 @@ export function defaultTunnelRunner(bin: string): TunnelRunner {
   };
 }
 
+const TUNNEL_BIN = process.platform === "win32" ? "opentunnel.exe" : "opentunnel";
+
+/**
+ * Locate the tunnel CLI. systemd user units inherit a PATH without
+ * ~/.local/bin, where opentunnel installs itself, so check that directory even
+ * when the caller's PATH does not list it.
+ */
+export function resolveTunnelBin(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string | undefined {
+  const explicit = (env.LARK_OPENTUNNEL_BIN ?? "").trim();
+  if (explicit !== "") return explicit;
+  for (const dir of (env.PATH ?? "").split(delimiter)) {
+    if (dir === "") continue;
+    const candidate = join(dir, TUNNEL_BIN);
+    if (exists(candidate)) return candidate;
+  }
+  const local = join(homedir(), ".local", "bin", TUNNEL_BIN);
+  return exists(local) ? local : undefined;
+}
+
 // The tunnel CLI prints a public HTTPS URL on creation. Accept only a normal
 // DNS name so a malformed line cannot inject markup into the link reply.
 const ROUTE_URL = /https:\/\/[a-z0-9.-]+/g;
@@ -102,6 +136,51 @@ export function parseRouteOutput(raw: string): { routeName: string; url: string 
 interface TokenMeta {
   hash: string;
   name?: string;
+}
+
+interface StoredRoute {
+  companionId?: unknown;
+  companion_id?: unknown;
+  routeName?: unknown;
+  route_name?: unknown;
+  url?: unknown;
+  localPort?: unknown;
+  local_port?: unknown;
+  profile?: unknown;
+  createdAt?: unknown;
+  created_at?: unknown;
+}
+
+/**
+ * v1 stored routes with snake_case fields; accept both spellings so upgraded
+ * databases keep their tunnels instead of minting a new one per restart.
+ * Remove the v1 names once v1 databases are no longer upgraded in place.
+ */
+function decodeRoute(raw: string): RemoteRoute | undefined {
+  let value: StoredRoute;
+  try {
+    value = JSON.parse(raw) as StoredRoute;
+  } catch {
+    return undefined;
+  }
+  const companionId = value.companionId ?? value.companion_id;
+  const routeName = value.routeName ?? value.route_name;
+  const localPort = value.localPort ?? value.local_port;
+  const createdAt = value.createdAt ?? value.created_at;
+  if (typeof companionId !== "string" || companionId.trim() === "") return undefined;
+  if (typeof value.url !== "string" || !value.url.startsWith("https://")) return undefined;
+  if (typeof routeName !== "string" || routeName === "") return undefined;
+  if (typeof value.profile !== "string" || value.profile === "") return undefined;
+  if (typeof localPort !== "number" || !Number.isInteger(localPort)) return undefined;
+  if (typeof createdAt !== "string") return undefined;
+  return {
+    companionId: companionId.trim().toLowerCase(),
+    routeName,
+    url: value.url,
+    localPort,
+    profile: value.profile,
+    createdAt,
+  };
 }
 
 export class RemoteError extends Error {
@@ -141,14 +220,13 @@ export class RemoteManager {
     for (const key of this.#db.listMetaKeys("remote_route:%")) {
       const raw = this.#db.getMeta(key);
       if (raw === undefined) continue;
-      try {
-        const route = JSON.parse(raw) as RemoteRoute;
-        if (typeof route.companionId === "string" && typeof route.url === "string" && this.#db.getCompanion(route.companionId) !== undefined) {
-          this.#routes.set(route.companionId, route);
-        }
-      } catch {
+      const route = decodeRoute(raw);
+      if (route === undefined) {
         this.#log(`remote: ignoring malformed ${key}`);
+        continue;
       }
+      if (this.#db.getCompanion(route.companionId) === undefined) continue;
+      this.#routes.set(route.companionId, route);
     }
     // Links survive a brain restart: only the hash is stored, so the plaintext
     // token remains with the contact's phone and the scoped URL keeps working.
@@ -229,12 +307,18 @@ export class RemoteManager {
     }
     return await this.#withLock(id, async () => {
       let route = this.#routes.get(id);
+      if (route !== undefined && route.localPort !== this.#localPort) {
+        route = await this.#repoint(id, route);
+      }
       if (route === undefined) {
         const profile = `lark-${randomBytes(12).toString("hex")}`;
         const result = await this.#runner?.(["route", "add", `127.0.0.1:${this.#localPort}`, "--profile", profile]);
         if (result === undefined) throw new RemoteError(503, "Remote controls unavailable");
         const parsed = parseRouteOutput(result.stdout);
         if (parsed === undefined) {
+          // A missing binary or a failed enable leaves no URL on stdout, and the
+          // CLI's own message is the only clue; keep it in the journal.
+          this.#log(`open tunnel route add for ${id}: ${firstLine(result.stderr, result.stdout)}`);
           throw new RemoteError(502, "OpenTunnel did not return a usable remote URL");
         }
         if (result.code !== 0) {
@@ -257,6 +341,28 @@ export class RemoteManager {
       this.#storeToken(id, peer, contactName, raw);
       return `${route.url.replace(/\/+$/, "")}${REMOTE_PATH}?token=${encodeURIComponent(raw)}`;
     });
+  }
+
+  /** Point a restored route at the port this brain listens on, keeping its URL. */
+  async #repoint(companionId: string, route: RemoteRoute): Promise<RemoteRoute> {
+    const result = await this.#runner?.([
+      "route",
+      "add",
+      `127.0.0.1:${this.#localPort}`,
+      "--name",
+      route.routeName,
+      "--profile",
+      route.profile,
+    ]);
+    if (result === undefined) throw new RemoteError(503, "Remote controls unavailable");
+    if (result.code !== 0) {
+      this.#log(`open tunnel route update for ${companionId}: ${firstLine(result.stderr, result.stdout)}`);
+      throw new RemoteError(502, "OpenTunnel could not update the remote route");
+    }
+    const updated: RemoteRoute = { ...route, localPort: this.#localPort };
+    this.#db.setMeta(routeKey(companionId), JSON.stringify(updated));
+    this.#routes.set(companionId, updated);
+    return updated;
   }
 
   async issueLocal(companionId: string, contact: string, contactName: string): Promise<string> {
