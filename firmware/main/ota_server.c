@@ -23,6 +23,7 @@
 #include "power.h"
 #include "sdkconfig.h"
 #include "telemetry.h"
+#include "telemetry_logic.h"
 #include "wifi.h"
 #include "net_client.h"
 #include "proto.h"
@@ -116,7 +117,7 @@ static esp_err_t status_get(httpd_req_t *request)
     int len = snprintf(json, sizeof(json),
              "{\"device\":\"%s\",\"character\":\"%s\",\"mac\":\"%s\",\"ip\":\"%s\",\"wifi_rssi\":%d,"
              "\"free_heap\":%zu,\"min_free_heap\":%zu,\"free_psram\":%zu,\"uptime_s\":%" PRIu64 ",\"cpu_pct\":%u,"
-             "\"firmware\":\"%s\",\"running_partition\":\"%s\","
+             "\"firmware\":\"%s\",\"running_partition\":\"%s\",\"reset_reason\":\"%s\","
              "\"board\":\"" BOARD_NAME "\",\"width\":%d,\"height\":%d,\"has_battery\":%s,"
              "\"volume\":%d,\"battery_pct\":%s,\"battery_mv\":%s,\"charging\":%s,\"sleeping\":%s,\"connected\":%s,"
              "\"ota_pending\":%s"
@@ -124,6 +125,7 @@ static esp_err_t status_get(httpd_req_t *request)
              device_id, wifi_character(), device_mac, ip, hw.wifi_rssi,
              hw.free_heap, hw.min_free_heap, hw.free_psram, hw.uptime_s, hw.cpu_pct,
              esp_app_get_description()->version, running->label,
+             telemetry_reset_reason((int)esp_reset_reason()),
              FRAME_WIDTH, FRAME_HEIGHT, BOARD_HAS_BATTERY ? "true" : "false",
              audio_get_volume(), pct, mv, BOARD_HAS_BATTERY ? (battery.charging ? "true" : "false") : "null",
              display_is_sleeping() ? "true" : "false", net_client_connected() ? "true" : "false",

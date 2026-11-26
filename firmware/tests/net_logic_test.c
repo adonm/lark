@@ -13,30 +13,27 @@ static void test_backoff_needs_welcome_to_reset(void)
         net_backoff_failed(&b);
         assert(net_backoff_delay_ms(&b) == want[i]);
     }
-    assert(!net_backoff_stopped(&b));
 
     // A drop before WELCOME keeps the grown delay; only WELCOME restarts it.
     net_backoff_failed(&b);
     assert(net_backoff_delay_ms(&b) == NET_BACKOFF_MAX_MS);
     net_backoff_connected(&b);
     assert(net_backoff_delay_ms(&b) == NET_BACKOFF_MIN_MS);
-    assert(!net_backoff_stopped(&b));
 }
 
-static void test_terminal_reject_stops_until_reinit(void)
+static void test_terminal_reject_backs_off_but_keeps_retrying(void)
 {
     net_backoff_t b;
     net_backoff_init(&b);
-    net_backoff_rejected(&b, true);
-    assert(net_backoff_stopped(&b));
+    for (int i = 0; i < 8; ++i) {
+        net_backoff_rejected(&b);
+        assert(net_backoff_delay_ms(&b) <= NET_BACKOFF_MAX_MS);
+    }
+    // Bad token/version never halts the board; it settles at the 30 s cap and
+    // recovers as soon as the server accepts a WELCOME.
+    assert(net_backoff_delay_ms(&b) == NET_BACKOFF_MAX_MS);
     net_backoff_connected(&b);
-    net_backoff_failed(&b);
-    assert(net_backoff_stopped(&b));
-
-    net_backoff_init(&b);
-    net_backoff_rejected(&b, false);
-    assert(!net_backoff_stopped(&b));
-    assert(net_backoff_delay_ms(&b) == 2000);
+    assert(net_backoff_delay_ms(&b) == NET_BACKOFF_MIN_MS);
 }
 
 static void test_upload_drops_until_limit(void)
@@ -90,7 +87,7 @@ static void test_ack_newest_stream_wins(void)
 int main(void)
 {
     test_backoff_needs_welcome_to_reset();
-    test_terminal_reject_stops_until_reinit();
+    test_terminal_reject_backs_off_but_keeps_retrying();
     test_upload_drops_until_limit();
     test_ack_newest_stream_wins();
     puts("PASS reconnect backoff, upload drops and TTS ack policy");

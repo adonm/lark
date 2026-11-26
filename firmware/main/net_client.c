@@ -28,17 +28,27 @@
 #include "proto.h"
 #include "sdkconfig.h"
 #include "telemetry.h"
+#include "telemetry_logic.h"
 #include "wake_gate.h"
 #include "wifi.h"
 
 enum {
-    STATUS_MS = 5000,
     WAKE_POLL_MS = 50,
     ACK_RETRY_MS = 20,
     INPUT_CAP = 24,
     TCP_BUF_BYTES = 64 * 1024,
     UDP_BUF_BYTES = 16 * 1024,
     CONNECT_TIMEOUT_MS = 5000,
+    // Above the Wi-Fi PS wake budget, so a modem-sleep wake never turns a
+    // healthy control frame into a false session failure.
+    SEND_TIMEOUT_MS = 2000,
+    RECV_TIMEOUT_MS = 5000,
+    TCP_KEEP_IDLE_S = 15,
+    TCP_KEEP_INTVL_S = 5,
+    TCP_KEEP_CNT = 3,
+    // Every client-to-server payload is a control message; frames only travel
+    // the other way. One stack buffer makes header+payload a single send.
+    TX_FRAME_CAP = 1024,
 };
 
 _Static_assert(FRAME_PACKET_CAP >= FRAME_HEADER_SIZE + FRAME_PIXELS * sizeof(uint16_t),
@@ -108,9 +118,11 @@ static atomic_uint socket_session, ready_session;
 static atomic_uint_fast64_t rec_ctrl_us;
 static atomic_bool rec_first_rtp;
 static uint32_t next_session;
+static uint32_t tcp_sessions;
 static uint16_t tx_seq;
 static net_backoff_t backoff;
-static bool reject_terminal;
+static atomic_bool session_broken;
+static bool session_rejected;
 static portMUX_TYPE ack_lock = portMUX_INITIALIZER_UNLOCKED;
 static net_ack_t pending_ack;
 static bool has_resume_token;
@@ -148,13 +160,24 @@ bool net_client_wait_connected(uint32_t timeout_ms)
     return net_client_connected();
 }
 
+static void note_net_errno(int err)
+{
+    if (err) atomic_store_explicit(&telemetry_io.last_net_errno, err, memory_order_relaxed);
+}
+
+// A failed or short send leaves the stream desynchronised. Never try another
+// frame on it: mark it broken so run_session closes and reconnects at once.
 static bool send_all_tcp(int fd, const void *data, size_t len)
 {
     const uint8_t *p = data;
     size_t sent = 0;
     while (sent < len) {
         int n = lwip_send(fd, p + sent, len - sent, 0);
-        if (n <= 0) return false;
+        if (n <= 0) {
+            note_net_errno(errno);
+            atomic_store_explicit(&session_broken, true, memory_order_relaxed);
+            return false;
+        }
         sent += (size_t)n;
     }
     return true;
@@ -165,10 +188,17 @@ static bool send_tcp_frame(uint32_t session, uint8_t type, const void *payload, 
     if (!atomic_load(&wifi_online) || !session || session != net_client_session()) return false;
     if (require_ready && session != atomic_load(&ready_session)) return false;
     if (tcp_fd < 0 || len > LARK_PROTO_MAX_PAYLOAD) return false;
+    if (atomic_load_explicit(&session_broken, memory_order_relaxed)) return false;
+    if (len > TX_FRAME_CAP) {
+        note_net_errno(EMSGSIZE);
+        atomic_store_explicit(&session_broken, true, memory_order_relaxed);
+        return false;
+    }
 
-    uint8_t hdr[LARK_PROTO_HDR_SIZE];
-    lark_pack_hdr(hdr, type, tx_seq++, len);
-    return send_all_tcp(tcp_fd, hdr, sizeof(hdr)) && (!len || send_all_tcp(tcp_fd, payload, len));
+    uint8_t buf[LARK_PROTO_HDR_SIZE + TX_FRAME_CAP];
+    lark_pack_hdr(buf, type, tx_seq++, len);
+    if (len) memcpy(buf + LARK_PROTO_HDR_SIZE, payload, len);
+    return send_all_tcp(tcp_fd, buf, LARK_PROTO_HDR_SIZE + len);
 }
 
 static void wake_service(void)
@@ -453,7 +483,9 @@ static void send_status(uint32_t session)
         .battery_pct = (int16_t)(BOARD_HAS_BATTERY ? battery.pct : -1),
         .charging = (uint8_t)(BOARD_HAS_BATTERY && battery.charging ? 1 : 0),
         .cpu_pct = (uint8_t)(hw.cpu_pct > 100 ? 100 : hw.cpu_pct),
-        .flags = 0,
+        // Lets the edge slow its keepalive and the brain avoid waking a
+        // sleeping panel for every status tick.
+        .flags = display_is_sleeping() ? LARK_TELEMETRY_SLEEPING : 0,
         .pad = 0,
         .free_heap = (uint32_t)hw.free_heap,
         .uptime_s = (uint32_t)hw.uptime_s,
@@ -503,12 +535,12 @@ static void handle_handshake(uint32_t session, uint8_t type, const uint8_t *payl
     char msg[128];
     if (!lark_decode_reject(payload, len, &reject, msg, sizeof(msg))) return;
     ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reject.reason, msg);
+    session_rejected = true;
     if (reject.reason == LARK_REJECT_UNKNOWN_TERMINAL) {
         has_resume_token = false;
-    } else if (reject.reason == LARK_REJECT_BAD_TOKEN || reject.reason == LARK_REJECT_BAD_VERSION) {
-        // Retrying cannot fix a wrong token or protocol version.
-        reject_terminal = true;
     }
+    // Bad token or protocol version keeps retrying with bounded backoff: a
+    // transient server misconfiguration heals without a physical power cycle.
 }
 
 static void handle_display(uint32_t session, uint8_t type, const uint8_t *payload, uint32_t len)
@@ -652,24 +684,15 @@ static bool recv_exact(int fd, uint8_t *dst, size_t len)
             got += (size_t)n;
             continue;
         }
-        if (n == 0) return false;
-        if (errno == EINTR) continue;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            int waited = 0;
-            while (waited < 5000) {
-                if (!atomic_load(&wifi_online)) return false;
-                fd_set rfds;
-                FD_ZERO(&rfds);
-                FD_SET(fd, &rfds);
-                struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
-                int rc = lwip_select(fd + 1, &rfds, NULL, NULL, &tv);
-                if (rc > 0) break;
-                if (rc < 0) return false;
-                waited += 200;
-            }
-            if (waited >= 5000) return false;
-            continue;
+        if (n == 0) {
+            // Peer closed mid-frame; report it as a reset for /status.
+            note_net_errno(ECONNRESET);
+            return false;
         }
+        if (errno == EINTR) continue;
+        // SO_RCVTIMEO bounds every recv, so EAGAIN means the 5 s mid-frame
+        // stall guard fired rather than a transient scheduling hiccup.
+        note_net_errno(errno);
         return false;
     }
     return true;
@@ -677,6 +700,7 @@ static bool recv_exact(int fd, uint8_t *dst, size_t len)
 
 static void close_sockets(void)
 {
+    atomic_store_explicit(&session_broken, false, memory_order_relaxed);
     int tfd = tcp_fd;
     tcp_fd = -1;
     if (tfd >= 0) lwip_close(tfd);
@@ -704,8 +728,14 @@ static int open_tcp_socket(const struct sockaddr_in *remote)
     if (fd < 0) return -1;
     int one = 1;
     int buf = TCP_BUF_BYTES;
+    int keep_idle = TCP_KEEP_IDLE_S;
+    int keep_intvl = TCP_KEEP_INTVL_S;
+    int keep_cnt = TCP_KEEP_CNT;
     lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     lwip_setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+    lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &keep_idle, sizeof(keep_idle));
+    lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &keep_intvl, sizeof(keep_intvl));
+    lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &keep_cnt, sizeof(keep_cnt));
     lwip_setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof(buf));
     lwip_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
 
@@ -730,8 +760,18 @@ static int open_tcp_socket(const struct sockaddr_in *remote)
         }
     }
     lwip_fcntl(fd, F_SETFL, flags);
-    struct timeval snd_tv = { .tv_sec = 0, .tv_usec = 500000 };
+    struct timeval snd_tv = {
+        .tv_sec = SEND_TIMEOUT_MS / 1000,
+        .tv_usec = (SEND_TIMEOUT_MS % 1000) * 1000,
+    };
+    struct timeval rcv_tv = {
+        .tv_sec = RECV_TIMEOUT_MS / 1000,
+        .tv_usec = (RECV_TIMEOUT_MS % 1000) * 1000,
+    };
     lwip_setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+    // Without this, recv_exact blocks forever on a half-open socket and its
+    // 5 s mid-frame stall guard never fires.
+    lwip_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
     return fd;
 }
 
@@ -769,6 +809,7 @@ static bool open_connection(uint32_t *out_session)
     uint16_t local_udp_port = 0;
     int ufd = tfd >= 0 ? open_udp_socket(&local_udp_port) : -1;
     if (tfd < 0 || ufd < 0) {
+        note_net_errno(errno);
         if (tfd >= 0) lwip_close(tfd);
         if (ufd >= 0) lwip_close(ufd);
         return false;
@@ -779,6 +820,8 @@ static bool open_connection(uint32_t *out_session)
 
     tcp_fd = tfd;
     tx_seq = 0;
+    session_rejected = false;
+    atomic_store_explicit(&session_broken, false, memory_order_relaxed);
 
     portENTER_CRITICAL(&udp_lock);
     udp_fd = ufd;
@@ -791,6 +834,9 @@ static bool open_connection(uint32_t *out_session)
     if (!send_hello(session, local_udp_port)) {
         close_sockets();
         return false;
+    }
+    if (tcp_sessions++) {
+        atomic_fetch_add_explicit(&telemetry_io.reconnects, 1, memory_order_relaxed);
     }
     *out_session = session;
     return true;
@@ -830,9 +876,11 @@ static void drain_ctrl(void)
 
 static void run_session(uint32_t session)
 {
-    int64_t after_status = esp_timer_get_time() / 1000 + STATUS_MS;
+    int interval = telemetry_status_interval_ms(display_is_sleeping());
+    int64_t after_status = esp_timer_get_time() / 1000 + interval;
 
-    while (atomic_load(&wifi_online) && tcp_fd >= 0 && !reject_terminal) {
+    while (atomic_load(&wifi_online) && tcp_fd >= 0 &&
+           !atomic_load_explicit(&session_broken, memory_order_relaxed)) {
         drain_wake_socket();
         drain_ctrl();
         input_t input;
@@ -842,8 +890,12 @@ static void run_session(uint32_t session)
         int64_t now = esp_timer_get_time() / 1000;
         if (ready_socket_session() && now >= after_status) {
             send_status(session);
-            after_status = now + STATUS_MS;
+            interval = telemetry_status_interval_ms(display_is_sleeping());
+            after_status = now + interval;
         }
+        // A failed send desynchronised the stream; do not select on it or send
+        // another frame, just return so the service loop reconnects.
+        if (atomic_load_explicit(&session_broken, memory_order_relaxed)) return;
 
         fd_set rfds;
         FD_ZERO(&rfds);
@@ -855,13 +907,16 @@ static void run_session(uint32_t session)
         }
         int64_t rem_ms = after_status - now;
         if (rem_ms < 1) rem_ms = 1;
-        if (rem_ms > STATUS_MS) rem_ms = STATUS_MS;
+        if (rem_ms > interval) rem_ms = interval;
         if (ack_waiting && rem_ms > ACK_RETRY_MS) rem_ms = ACK_RETRY_MS;
         // Without the wake socket, inputs only arrive via this timeout.
         if (wake_rx_fd < 0 && rem_ms > WAKE_POLL_MS) rem_ms = WAKE_POLL_MS;
         struct timeval tv = { .tv_sec = (time_t)(rem_ms / 1000), .tv_usec = (suseconds_t)((rem_ms % 1000) * 1000) };
         int ready = lwip_select(maxfd + 1, &rfds, NULL, NULL, &tv);
-        if (ready < 0) return;
+        if (ready < 0) {
+            note_net_errno(errno);
+            return;
+        }
         if (!FD_ISSET(tcp_fd, &rfds)) continue;
 
         uint8_t hbuf[LARK_PROTO_HDR_SIZE];
@@ -899,15 +954,8 @@ static void service_task(void *arg)
             }
             continue;
         }
-        if (net_backoff_stopped(&backoff)) {
-            // A wrong token or protocol version cannot heal by retrying; wait
-            // for a reboot or a config change. Wifi events only wake this wait.
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            continue;
-        }
         init_wake_sockets();
         uint32_t session = 0;
-        reject_terminal = false;
         if (!open_connection(&session)) {
             close_sockets();
             int delay = net_backoff_delay_ms(&backoff);
@@ -918,16 +966,18 @@ static void service_task(void *arg)
 
         run_session(session);
         bool welcomed = ready_socket_session() == session;
+        bool rejected = session_rejected;
         close_sockets();
-        if (reject_terminal) {
-            net_backoff_rejected(&backoff, true);
-        } else if (welcomed) {
+        if (welcomed) {
             // WELCOME already reset the delay; retry a healthy session quickly.
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
         } else {
             int delay = net_backoff_delay_ms(&backoff);
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(delay));
-            net_backoff_failed(&backoff);
+            // Rejects are bounded too: a bad token or version keeps retrying
+            // at the 30 s cap so a server-side fix recovers without a reboot.
+            if (rejected) net_backoff_rejected(&backoff);
+            else net_backoff_failed(&backoff);
         }
     }
 }

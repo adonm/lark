@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 static void test_cpu_pct(void)
 {
@@ -16,6 +17,24 @@ static void test_cpu_pct(void)
     assert(telemetry_cpu_pct(1000, 990) == 1);
     assert(telemetry_cpu_pct(1000, 1) == 100);
     assert(telemetry_cpu_pct(1000, 2000) == 0);
+}
+
+static void test_reset_reason_and_cadence(void)
+{
+    assert(strcmp(telemetry_reset_reason(1), "poweron") == 0);
+    assert(strcmp(telemetry_reset_reason(3), "sw") == 0);
+    assert(strcmp(telemetry_reset_reason(4), "panic") == 0);
+    assert(strcmp(telemetry_reset_reason(6), "task_wdt") == 0);
+    assert(strcmp(telemetry_reset_reason(9), "brownout") == 0);
+    assert(strcmp(telemetry_reset_reason(11), "usb") == 0);
+    assert(strcmp(telemetry_reset_reason(12), "jtag") == 0);
+    assert(strcmp(telemetry_reset_reason(0), "other") == 0);
+    assert(strcmp(telemetry_reset_reason(2), "other") == 0);
+
+    assert(telemetry_status_interval_ms(false) == 5000);
+    assert(telemetry_status_interval_ms(true) == 15000);
+    // The sleeping cadence must stay inside the edge's 75 s read deadline.
+    assert(telemetry_status_interval_ms(true) < 75000);
 }
 
 static void test_gap_duration(void)
@@ -48,7 +67,8 @@ static void test_gap_duration(void)
 int main(void)
 {
     test_cpu_pct();
+    test_reset_reason_and_cadence();
     test_gap_duration();
-    puts("PASS CPU sampling and TTS gap-duration accounting");
+    puts("PASS CPU sampling, reset reasons, cadence and TTS gap accounting");
     return 0;
 }

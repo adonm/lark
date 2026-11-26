@@ -76,5 +76,9 @@ telemetry_t telemetry_read(void)
         .frame_flush_us = atomic_load_explicit(&telemetry_io.frame_flush_us, memory_order_relaxed),
         .tts_rms = atomic_load_explicit(&telemetry_io.tts_rms, memory_order_relaxed),
         .tts_samples = atomic_load_explicit(&telemetry_io.tts_samples, memory_order_relaxed),
+        .wifi_disconnects = atomic_load_explicit(&telemetry_io.wifi_disconnects, memory_order_relaxed),
+        .reconnects = atomic_load_explicit(&telemetry_io.reconnects, memory_order_relaxed),
+        .last_wifi_reason = atomic_load_explicit(&telemetry_io.last_wifi_reason, memory_order_relaxed),
+        .last_net_errno = atomic_load_explicit(&telemetry_io.last_net_errno, memory_order_relaxed),
     };
 }

@@ -4,6 +4,30 @@ Newest first; apply bottom-up (oldest entry to the newest) from the installation
 
 ---
 
+## 2026-11-26 — firmware 0.22.0: instant reconnect and link reliability
+
+### Affects
+- Devices: firmware `0.22.0` on vocat and box3.
+- Host: `lark-edge` and `lark-brain` rebuild. No config, database or wire-format change.
+
+### Breaking Changes
+- None. The protocol version and every wire byte are unchanged; `/status` only gains fields.
+
+### How to Detect
+- `GET /status` lacks `reset_reason`, `wifi_disconnects`, `reconnects` or `last_net_errno`, or reports firmware below `0.22.0`.
+- After a board reboot, `lark doctor` takes 30–105 s to show it online and `journalctl --user -u lark-edge` reports `RejectOccupied`.
+
+### Upgrade Steps
+1. Deploy the server: `lark deploy`.
+2. OTA each board with `lark ota --no-build <ip>`; add `--board box3` for a BOX-3.
+
+### Verification
+- `/status` reports `firmware: "0.22.0"`, `reset_reason`, `wifi_disconnects`, `reconnects`, `last_net_errno`, `connected: true` and `ota_pending: false`.
+- A board reset reconnects in about 1 s with `terminal.connected ... reconnects=N` in the edge journal and no `RejectOccupied`.
+- A sleeping board sends telemetry every 15 s; awake boards keep 5 s.
+
+---
+
 ## 2026-11-26 — v2: Go edge + TypeScript brain
 
 ### Affects

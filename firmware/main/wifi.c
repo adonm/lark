@@ -13,6 +13,7 @@
 #include "esp_wifi.h"
 #include "mdns.h"
 #include "sdkconfig.h"
+#include "telemetry.h"
 
 static const char *TAG = "wifi";
 static esp_netif_t *sta;
@@ -108,6 +109,8 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *event = data;
         ESP_LOGW(TAG, "Disconnected (reason=%u); reconnecting", event->reason);
+        atomic_fetch_add_explicit(&telemetry_io.wifi_disconnects, 1, memory_order_relaxed);
+        atomic_store_explicit(&telemetry_io.last_wifi_reason, (int)event->reason, memory_order_relaxed);
         state_cb(false, NULL);
         schedule_retry();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {

@@ -6,12 +6,11 @@ void net_backoff_init(net_backoff_t *backoff)
 {
     if (!backoff) return;
     backoff->delay_ms = NET_BACKOFF_MIN_MS;
-    backoff->stopped = false;
 }
 
 void net_backoff_failed(net_backoff_t *backoff)
 {
-    if (!backoff || backoff->stopped) return;
+    if (!backoff) return;
     int current = backoff->delay_ms < NET_BACKOFF_MIN_MS ? NET_BACKOFF_MIN_MS : backoff->delay_ms;
     if (current >= NET_BACKOFF_MAX_MS || current > NET_BACKOFF_STEP_AT_MS) {
         backoff->delay_ms = NET_BACKOFF_MAX_MS;
@@ -27,24 +26,14 @@ void net_backoff_connected(net_backoff_t *backoff)
     backoff->delay_ms = NET_BACKOFF_MIN_MS;
 }
 
-void net_backoff_rejected(net_backoff_t *backoff, bool terminal)
+void net_backoff_rejected(net_backoff_t *backoff)
 {
-    if (!backoff) return;
-    if (terminal) {
-        backoff->stopped = true;
-        return;
-    }
     net_backoff_failed(backoff);
 }
 
 int net_backoff_delay_ms(const net_backoff_t *backoff)
 {
     return backoff ? backoff->delay_ms : NET_BACKOFF_MIN_MS;
-}
-
-bool net_backoff_stopped(const net_backoff_t *backoff)
-{
-    return backoff && backoff->stopped;
 }
 
 void net_upload_init(net_upload_t *upload)

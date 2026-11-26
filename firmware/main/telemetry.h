@@ -13,21 +13,28 @@ typedef struct {
     uint32_t last_frame_rev, display_flush_ms, input_drops, audio_underruns, audio_drops;
     uint32_t rec_start_us, tts_first_us, tts_gap_ms, ptr_send_us, frame_flush_us;
     uint32_t tts_rms, tts_samples;
+    uint32_t wifi_disconnects, reconnects;
+    int32_t last_wifi_reason, last_net_errno;
 } telemetry_t;
 
 extern struct telemetry_io {
     atomic_uint last_frame_rev, display_flush_ms, input_drops, audio_underruns, audio_drops;
     atomic_uint rec_start_us, tts_first_us, tts_gap_ms, ptr_send_us, frame_flush_us;
     atomic_uint tts_rms, tts_samples;
+    atomic_uint wifi_disconnects, reconnects;
+    atomic_int last_wifi_reason, last_net_errno;
 } telemetry_io;
 
 #define TELEMETRY_IO_JSON ",\"last_frame_rev\":%" PRIu32 ",\"display_flush_ms\":%" PRIu32 \
     ",\"input_drops\":%" PRIu32 ",\"audio_underruns\":%" PRIu32 ",\"audio_drops\":%" PRIu32 \
     ",\"rec_start_us\":%" PRIu32 ",\"tts_first_us\":%" PRIu32 ",\"tts_gap_ms\":%" PRIu32 \
     ",\"ptr_send_us\":%" PRIu32 ",\"frame_flush_us\":%" PRIu32 \
-    ",\"tts_rms\":%" PRIu32 ",\"tts_samples\":%" PRIu32
+    ",\"tts_rms\":%" PRIu32 ",\"tts_samples\":%" PRIu32 \
+    ",\"wifi_disconnects\":%" PRIu32 ",\"last_wifi_reason\":%" PRId32 \
+    ",\"reconnects\":%" PRIu32 ",\"last_net_errno\":%" PRId32
 #define TELEMETRY_IO_VALUES(hw) (hw).last_frame_rev, (hw).display_flush_ms, (hw).input_drops, \
     (hw).audio_underruns, (hw).audio_drops, (hw).rec_start_us, (hw).tts_first_us, (hw).tts_gap_ms, \
-    (hw).ptr_send_us, (hw).frame_flush_us, (hw).tts_rms, (hw).tts_samples
+    (hw).ptr_send_us, (hw).frame_flush_us, (hw).tts_rms, (hw).tts_samples, \
+    (hw).wifi_disconnects, (hw).last_wifi_reason, (hw).reconnects, (hw).last_net_errno
 
 telemetry_t telemetry_read(void);

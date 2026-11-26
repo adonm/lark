@@ -32,6 +32,8 @@ const (
 	HelloFlagIfFree = 1
 	// welcome flags
 	WelcomeFlagBridgeEP = 1 << 0
+	// telemetry flags
+	TelemetryFlagSleeping = 1 << 0
 	// HELLO capability bits
 	CapBattery        = 1 << 0
 	CapDrag           = 1 << 4

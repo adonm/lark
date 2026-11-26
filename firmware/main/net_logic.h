@@ -14,11 +14,10 @@ enum {
     NET_UPLOAD_FAIL_LIMIT = 50,
 };
 
-// A bad token or protocol version makes retrying pointless until a reboot or a
-// config change, so that reject stops the state machine.
+// Backoff is always bounded. A bad token or protocol version keeps retrying,
+// because a server-side misconfiguration can heal without a board reboot.
 typedef struct {
     int delay_ms;
-    bool stopped;
 } net_backoff_t;
 
 void net_backoff_init(net_backoff_t *backoff);
@@ -29,11 +28,11 @@ void net_backoff_failed(net_backoff_t *backoff);
 // Only a WELCOME proves the token and protocol were accepted.
 void net_backoff_connected(net_backoff_t *backoff);
 
-// A terminal reject stops retries; any other reject backs off like a failure.
-void net_backoff_rejected(net_backoff_t *backoff, bool terminal);
+// Any reject, including a terminal one, backs off like a failure, capped at
+// NET_BACKOFF_MAX_MS.
+void net_backoff_rejected(net_backoff_t *backoff);
 
 int net_backoff_delay_ms(const net_backoff_t *backoff);
-bool net_backoff_stopped(const net_backoff_t *backoff);
 
 typedef struct {
     unsigned failures;

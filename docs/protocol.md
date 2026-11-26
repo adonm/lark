@@ -308,6 +308,7 @@ Length-prefixed string fields follow the fixed prefix in table order.
 | `shapeRect` | `LARK_SHAPE_RECT` | 1 |
 | `helloFlagIfFree` | `—` | 1 |
 | `welcomeFlagBridgeEP` | `LARK_WELCOME_FLAG_BRIDGE_EP` | 1 << 0 |
+| `telemetryFlagSleeping` | `LARK_TELEMETRY_SLEEPING` | 1 << 0 |
 | `capBattery` | `LARK_CAP_BATTERY` | 1 << 0 |
 | `capDrag` | `LARK_CAP_DRAG` | 1 << 4 |
 | `capPointerRev` | `LARK_CAP_POINTER_REV` | 1 << 5 |

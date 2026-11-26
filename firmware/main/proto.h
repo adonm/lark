@@ -38,6 +38,9 @@ enum {
     // welcome flags
     LARK_WELCOME_FLAG_BRIDGE_EP = 1u << 0,
 
+    // telemetry flags
+    LARK_TELEMETRY_SLEEPING = 1u << 0,
+
     // HELLO capability bits
     LARK_CAP_BATTERY = 1u << 0,
     LARK_CAP_DRAG = 1u << 4,

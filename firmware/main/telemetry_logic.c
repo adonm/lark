@@ -1,5 +1,28 @@
 #include "telemetry_logic.h"
 
+const char *telemetry_reset_reason(int reason)
+{
+    switch (reason) {
+    case 1: return "poweron";    // ESP_RST_POWERON
+    case 3: return "sw";         // ESP_RST_SW
+    case 4: return "panic";      // ESP_RST_PANIC
+    case 5: return "int_wdt";    // ESP_RST_INT_WDT
+    case 6: return "task_wdt";   // ESP_RST_TASK_WDT
+    case 7: return "wdt";        // ESP_RST_WDT
+    case 8: return "deepsleep";  // ESP_RST_DEEPSLEEP
+    case 9: return "brownout";   // ESP_RST_BROWNOUT
+    case 10: return "sdio";      // ESP_RST_SDIO
+    case 11: return "usb";       // ESP_RST_USB
+    case 12: return "jtag";      // ESP_RST_JTAG
+    default: return "other";
+    }
+}
+
+int telemetry_status_interval_ms(bool sleeping)
+{
+    return sleeping ? TELEMETRY_STATUS_SLEEPING_MS : TELEMETRY_STATUS_AWAKE_MS;
+}
+
 unsigned telemetry_cpu_pct(uint64_t capacity_us, uint64_t idle_us)
 {
     if (!capacity_us || idle_us >= capacity_us) return 0;

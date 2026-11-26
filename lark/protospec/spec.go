@@ -385,6 +385,8 @@ var Constants = []Const{
 
 	{Go: "welcomeFlagBridgeEP", C: "LARK_WELCOME_FLAG_BRIDGE_EP", Flag: true, Bit: 0, Doc: "welcome flags"},
 
+	{Go: "telemetryFlagSleeping", C: "LARK_TELEMETRY_SLEEPING", Flag: true, Bit: 0, Doc: "telemetry flags"},
+
 	{Go: "capBattery", C: "LARK_CAP_BATTERY", Flag: true, Bit: 0, Doc: "HELLO capability bits"},
 	{Go: "capDrag", C: "LARK_CAP_DRAG", Flag: true, Bit: 4},
 	{Go: "capPointerRev", C: "LARK_CAP_POINTER_REV", Flag: true, Bit: 5},
