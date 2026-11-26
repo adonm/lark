@@ -199,14 +199,18 @@ func (e *Edge) Terminals() []*Terminal {
 	return out
 }
 
-func (e *Edge) register(t *Terminal) bool {
+// install makes t the live terminal for its id and returns the previous one,
+// which the caller closes after this returns. The old terminal is marked
+// replaced first so a concurrent detach cannot emit a stale disconnect.
+func (e *Edge) install(t *Terminal) *Terminal {
 	e.terminalsMu.Lock()
 	defer e.terminalsMu.Unlock()
-	if _, exists := e.terminals[t.id]; exists {
-		return false
+	old := e.terminals[t.id]
+	if old != nil {
+		old.replaced.Store(true)
 	}
 	e.terminals[t.id] = t
-	return true
+	return old
 }
 
 func (e *Edge) unregister(t *Terminal) {

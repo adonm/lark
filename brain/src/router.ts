@@ -222,8 +222,16 @@ export class Router {
     this.#edge.on("ready", (event) => {
       for (const [name, state] of Object.entries(event.models)) this.#models.set(name, state.state);
     });
-    this.#edge.on("terminal.connected", (event) => void this.#connected(event));
-    this.#edge.on("terminal.disconnected", (event) => void this.#disconnected(event.terminal_id));
+    this.#edge.on("terminal.connected", (event) => {
+      this.#log(
+        `terminal.connected id=${event.terminal_id} board=${event.board} fw=${event.firmware} ip=${event.ip} reconnects=${event.reconnects ?? 0}`,
+      );
+      void this.#connected(event);
+    });
+    this.#edge.on("terminal.disconnected", (event) => {
+      this.#log(`terminal.disconnected id=${event.terminal_id}`);
+      void this.#disconnected(event.terminal_id);
+    });
     this.#edge.on("terminal.telemetry", (event) => this.#telemetry(event));
     this.#edge.on("pointer.action", (event) => {
       void this.#pointer(event).catch((error: unknown) => this.#log(`pointer: ${String(error)}`));
@@ -403,6 +411,7 @@ export class Router {
       terminals: [...this.#terminals.values()].map((state) => ({
         id: state.id,
         companion_id: state.companionId,
+        reconnects: state.info.reconnects ?? 0,
         listening: state.listening,
         busy: state.busy,
         speaking: state.speaking,

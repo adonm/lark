@@ -405,6 +405,78 @@ func TestEdgeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDetachedTerminalReconnectsImmediately(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-reconnect")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+
+	// The board goes away but stays inside the 30 s resume window.
+	hw.close()
+	b.waitFor("terminal.disconnected")
+
+	// A fresh HELLO (board rebooted, so it has no resume token) is accepted at
+	// once instead of being rejected as occupied by the warm terminal.
+	hw2 := dialHardware(t, e, "vocat-reconnect")
+	defer hw2.close()
+	ev := b.waitFor("terminal.connected")
+	if ev["reconnects"] != float64(1) {
+		t.Fatalf("reconnects = %v, want 1", ev["reconnects"])
+	}
+	term := e.Terminal("vocat-reconnect")
+	if term == nil || term.native() == nil {
+		t.Fatal("reconnected terminal is not attached")
+	}
+	if term.reconnects() != 1 {
+		t.Fatalf("terminal reconnects = %d, want 1", term.reconnects())
+	}
+	if _, err := hw2.conn.Write(proto.Pack(proto.MsgPing, 0, []byte{1, 2, 3, 4})); err != nil {
+		t.Fatal(err)
+	}
+	hw2.read(proto.MsgPong)
+}
+
+func TestLiveTerminalReplacedByFreshHello(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-halfopen")
+	b.waitFor("terminal.connected")
+
+	// The old session is still open from the server's point of view (a
+	// half-open TCP after a board reboot). The fresh HELLO must take over.
+	hw2 := dialHardware(t, e, "vocat-halfopen")
+	defer hw2.close()
+	ev := b.waitFor("terminal.connected")
+	if ev["reconnects"] != float64(1) {
+		t.Fatalf("reconnects = %v, want 1", ev["reconnects"])
+	}
+
+	// The old socket is closed cleanly by the server.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_ = hw.conn.SetReadDeadline(deadline)
+		if _, err := hw.br.ReadByte(); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("old terminal socket stayed open")
+		}
+	}
+
+	// The replacement session is fully live.
+	term := e.Terminal("vocat-halfopen")
+	if term == nil || term.native() == nil {
+		t.Fatal("replacement terminal is not attached")
+	}
+	if _, err := hw2.conn.Write(proto.Pack(proto.MsgPing, 0, []byte{5, 6, 7, 8})); err != nil {
+		t.Fatal(err)
+	}
+	hw2.read(proto.MsgPong)
+}
+
 func TestAudioStreamsAndStop(t *testing.T) {
 	e := startTestEdge(t)
 	b := dialBrain(t, e)

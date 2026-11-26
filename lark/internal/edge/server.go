@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -28,6 +29,7 @@ type nativeConn struct {
 	conn     net.Conn
 	remoteIP netip.Addr
 	ssrc     uint32
+	started  time.Time
 
 	ctrlOut chan outMsg
 	pcmOut  chan outMsg
@@ -40,8 +42,33 @@ type nativeConn struct {
 	rtp   atomic.Uint32 // high 16 bits: seen flag; low 16: last sequence
 	drops atomic.Uint64
 
+	lastMsg atomic.Uint32 // last received message type + 1
+
+	reasonMu sync.Mutex
+	reason   string
+
 	closed  atomic.Bool
 	writeWG sync.WaitGroup
+}
+
+// setReason records the first cause that ends this session so close logs it.
+func (c *nativeConn) setReason(reason string) {
+	c.reasonMu.Lock()
+	if c.reason == "" {
+		c.reason = reason
+	}
+	c.reasonMu.Unlock()
+}
+
+func (c *nativeConn) noteMsg(msgType uint8) { c.lastMsg.Store(uint32(msgType) + 1) }
+
+func (c *nativeConn) sessionReason() string {
+	c.reasonMu.Lock()
+	defer c.reasonMu.Unlock()
+	if c.reason == "" {
+		return "closed"
+	}
+	return c.reason
 }
 
 func (c *nativeConn) enqueueCtrl(msgType uint8, payload []byte) bool {
@@ -111,7 +138,7 @@ func (c *nativeConn) nextMsg() (outMsg, bool, bool) {
 	return outMsg{}, false, false
 }
 
-func (c *nativeConn) writePacket(msgType uint8, payload []byte) bool {
+func (c *nativeConn) writePacket(msgType uint8, payload []byte) error {
 	var hdr [proto.ProtoHeaderSize]byte
 	hdr[0] = proto.ProtoMagic
 	hdr[1] = msgType
@@ -121,7 +148,7 @@ func (c *nativeConn) writePacket(msgType uint8, payload []byte) bool {
 	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	bufs := net.Buffers{hdr[:], payload}
 	_, err := bufs.WriteTo(c.conn)
-	return err == nil
+	return err
 }
 
 func (c *nativeConn) writeLoop() {
@@ -134,12 +161,16 @@ func (c *nativeConn) writeLoop() {
 			return
 		}
 		if msg, isPCM, ok := c.nextMsg(); ok {
-			if !c.writePacket(msg.msgType, msg.payload) {
+			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
+				c.setReason("write: " + err.Error())
 				return
 			}
 			if isPCM {
-				if frame, ok := c.takeFrame(); ok && !c.writePacket(frame.msgType, frame.payload) {
-					return
+				if frame, ok := c.takeFrame(); ok {
+					if err := c.writePacket(frame.msgType, frame.payload); err != nil {
+						c.setReason("write: " + err.Error())
+						return
+					}
 				}
 			}
 			continue
@@ -148,18 +179,21 @@ func (c *nativeConn) writeLoop() {
 		case <-c.t.done:
 			return
 		case msg := <-c.ctrlOut:
-			if !c.writePacket(msg.msgType, msg.payload) {
+			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
+				c.setReason("write: " + err.Error())
 				return
 			}
 		case msg := <-c.pcmOut:
-			if !c.writePacket(msg.msgType, msg.payload) {
+			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
+				c.setReason("write: " + err.Error())
 				return
 			}
 		case <-c.frameNotify:
 		case <-ping.C:
 			var ts [4]byte
 			binary.LittleEndian.PutUint32(ts[:], uint32(time.Now().UnixMilli()))
-			if !c.writePacket(proto.MsgPing, ts[:]) {
+			if err := c.writePacket(proto.MsgPing, ts[:]); err != nil {
+				c.setReason("ping: " + err.Error())
 				return
 			}
 			ping.Reset(c.t.pingInterval())
@@ -173,6 +207,37 @@ func (c *nativeConn) close() {
 	}
 	_ = c.conn.Close()
 	c.t.detach(c)
+	last := "-"
+	if v := c.lastMsg.Load(); v != 0 {
+		last = msgName(uint8(v - 1))
+	}
+	c.t.logf("terminal.disconnected id=%s ip=%s reason=%s last_msg=%s duration=%s reconnects=%d",
+		c.t.id, c.remoteIP, c.sessionReason(), last, time.Since(c.started).Round(time.Millisecond),
+		c.t.reconnects())
+}
+
+func msgName(msgType uint8) string {
+	switch msgType {
+	case proto.MsgHello:
+		return "hello"
+	case proto.MsgResume:
+		return "resume"
+	case proto.MsgTelemetry:
+		return "telemetry"
+	case proto.MsgPointer:
+		return "pointer"
+	case proto.MsgRecStart:
+		return "rec_start"
+	case proto.MsgRecEnd:
+		return "rec_end"
+	case proto.MsgTTSAck:
+		return "tts_ack"
+	case proto.MsgPing:
+		return "ping"
+	case proto.MsgPong:
+		return "pong"
+	}
+	return fmt.Sprintf("0x%02x", msgType)
 }
 
 type terminalServer struct {
@@ -182,9 +247,34 @@ type terminalServer struct {
 
 	peers sync.Map // uint32 SSRC -> *Terminal; lock-free RTP lookup
 
+	// Reconnect counts outlive Terminal objects: a board that re-HELLOs inside
+	// or after the resume window still belongs to the same physical device.
+	statMu     sync.Mutex
+	known      map[string]bool
+	reconnects map[string]uint64
+
 	closed  atomic.Bool
 	wg      sync.WaitGroup
 	udpPort uint16
+}
+
+func (s *terminalServer) trackConnect(id string, resume bool) uint64 {
+	s.statMu.Lock()
+	defer s.statMu.Unlock()
+	if s.reconnects == nil {
+		s.reconnects = make(map[string]uint64)
+	}
+	if resume || s.known[id] {
+		s.reconnects[id]++
+	}
+	s.known[id] = true
+	return s.reconnects[id]
+}
+
+func (s *terminalServer) reconnectsFor(id string) uint64 {
+	s.statMu.Lock()
+	defer s.statMu.Unlock()
+	return s.reconnects[id]
 }
 
 func newTerminalServer(e *Edge, addr string) (*terminalServer, error) {
@@ -208,7 +298,9 @@ func newTerminalServer(e *Edge, addr string) (*terminalServer, error) {
 	_ = udp.SetWriteBuffer(256 << 10)
 	s := &terminalServer{
 		e: e, tcp: tcp, udp: udp,
-		udpPort: uint16(udp.LocalAddr().(*net.UDPAddr).Port),
+		known:      make(map[string]bool),
+		reconnects: make(map[string]uint64),
+		udpPort:    uint16(udp.LocalAddr().(*net.UDPAddr).Port),
 	}
 	return s, nil
 }
@@ -278,6 +370,7 @@ func (s *terminalServer) serve(conn net.Conn) {
 
 	var t *Terminal
 	var isResume bool
+	var reconnects uint64
 	switch msgType {
 	case proto.MsgHello:
 		hello, ok := proto.DecodeTerminalHello(payload)
@@ -293,6 +386,7 @@ func (s *terminalServer) serve(conn net.Conn) {
 			writeReject(conn, proto.RejectBadToken, "invalid token")
 			return
 		}
+		reconnects = s.trackConnect(hello.TerminalID, false)
 		t = s.newTerminal(hello, remoteIP)
 	case proto.MsgResume:
 		resume, ok := proto.DecodeTerminalResume(payload)
@@ -309,6 +403,7 @@ func (s *terminalServer) serve(conn net.Conn) {
 			writeReject(conn, proto.RejectUnknownTerminal, "unknown terminal")
 			return
 		}
+		reconnects = s.trackConnect(resume.TerminalID, true)
 		isResume = true
 	default:
 		writeReject(conn, proto.RejectBadVersion, "expected hello or resume")
@@ -317,7 +412,7 @@ func (s *terminalServer) serve(conn net.Conn) {
 
 	ssrc := randomSSRC()
 	nc := &nativeConn{
-		t: t, conn: conn, remoteIP: remoteIP, ssrc: ssrc,
+		t: t, conn: conn, remoteIP: remoteIP, ssrc: ssrc, started: time.Now(),
 		ctrlOut:     make(chan outMsg, 64),
 		pcmOut:      make(chan outMsg, 192),
 		frameNotify: make(chan struct{}, 1),
@@ -327,14 +422,21 @@ func (s *terminalServer) serve(conn net.Conn) {
 		t.ip = remoteIP.String()
 		t.ssrc = ssrc
 		t.mu.Unlock()
-		if !s.e.register(t) {
-			writeReject(conn, proto.RejectOccupied, "terminal already connected")
-			return
+		// A fresh HELLO is authoritative: the board rebooted (or its old TCP
+		// session is half-open), so replace any warm or live session at once
+		// instead of making it wait out the resume window.
+		if old := s.e.install(t); old != nil {
+			if onc := old.native(); onc != nil {
+				onc.setReason("replaced")
+			}
+			old.close()
 		}
 		t.start(nc, s)
 		s.addPeer(ssrc, t)
 		_ = nc.writePacket(proto.MsgWelcome, t.welcomePayload(s.udpPort))
 		nc.t.touch()
+		s.e.logf("terminal.connected id=%s ip=%s board=%s fw=%s reconnects=%d",
+			t.id, remoteIP, t.board, t.firmware, reconnects)
 		s.e.emit("terminal.connected", t.connectedEvent())
 	} else {
 		t.mu.Lock()
@@ -348,6 +450,8 @@ func (s *terminalServer) serve(conn net.Conn) {
 		s.addPeer(ssrc, t)
 		t.attach(nc)
 		_ = nc.writePacket(proto.MsgWelcome, t.welcomePayload(s.udpPort))
+		s.e.logf("terminal.connected id=%s ip=%s board=%s fw=%s reconnects=%d resume=true",
+			t.id, remoteIP, t.board, t.firmware, reconnects)
 	}
 
 	nc.writeWG.Add(1)
@@ -356,13 +460,37 @@ func (s *terminalServer) serve(conn net.Conn) {
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
 		msgType, _, payload, err := proto.ReadFrame(br)
-		if err != nil || t.isClosed() {
+		if err != nil {
+			nc.setReason(disconnectReason(err, t))
 			nc.close()
 			return
 		}
+		if t.isClosed() {
+			nc.setReason("replaced")
+			nc.close()
+			return
+		}
+		nc.noteMsg(msgType)
 		t.touch()
 		s.handleTCP(t, nc, msgType, payload)
 	}
+}
+
+func disconnectReason(err error, t *Terminal) string {
+	if t.isClosed() || t.replaced.Load() {
+		return "replaced"
+	}
+	switch {
+	case errors.Is(err, io.EOF):
+		return "EOF"
+	case errors.Is(err, net.ErrClosed):
+		return "closed"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "i/o timeout"
+	}
+	return err.Error()
 }
 
 func (s *terminalServer) addPeer(ssrc uint32, t *Terminal) { s.peers.Store(ssrc, t) }

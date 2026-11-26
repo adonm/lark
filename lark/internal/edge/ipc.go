@@ -267,8 +267,18 @@ func (e *Edge) handleCommand(c *ipcClient, cmd ipcCommand) {
 	}
 	switch cmd.Cmd {
 	case "health":
+		terms := e.Terminals()
+		list := make([]map[string]any, 0, len(terms))
+		for _, t := range terms {
+			list = append(list, map[string]any{
+				"terminal_id": t.id,
+				"connected":   t.native() != nil,
+				"reconnects":  t.reconnects(),
+				"firmware":    t.firmware,
+			})
+		}
 		c.reply(cmd.ID, map[string]any{
-			"models": e.models.snapshot(), "terminals": len(e.Terminals()),
+			"models": e.models.snapshot(), "terminals": len(terms), "terminal_list": list,
 		})
 	case "stt.transcribe":
 		text, err := e.transcribeFile(cmd.Path)

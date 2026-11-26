@@ -120,6 +120,7 @@ type Terminal struct {
 	jobs      chan renderJob
 	done      chan struct{}
 	closed    atomic.Bool
+	replaced  atomic.Bool
 	lastTouch atomic.Int64
 
 	mode         terminalMode
@@ -183,7 +184,11 @@ func (t *Terminal) attach(nc *nativeConn) {
 
 func (t *Terminal) detach(c *nativeConn) {
 	if t.conn.CompareAndSwap(c, nil) {
-		t.e.emit("terminal.disconnected", map[string]any{"terminal_id": t.id})
+		// A replaced or closing terminal must not report a disconnect after its
+		// successor already connected under the same id.
+		if !t.closed.Load() && !t.replaced.Load() {
+			t.e.emit("terminal.disconnected", map[string]any{"terminal_id": t.id})
+		}
 	}
 	// Keep the actor and resume token warm for the protocol's resume window.
 	time.AfterFunc(proto.ResumeWindowMS*time.Millisecond, func() {
@@ -248,6 +253,13 @@ func (t *Terminal) welcomePayload(udpPort uint16) []byte {
 	}.Encode()
 }
 
+func (t *Terminal) reconnects() uint64 {
+	if t.srv == nil {
+		return 0
+	}
+	return t.srv.reconnectsFor(t.id)
+}
+
 func (t *Terminal) connectedEvent() map[string]any {
 	t.mu.RLock()
 	ip := t.ip
@@ -255,6 +267,7 @@ func (t *Terminal) connectedEvent() map[string]any {
 	return map[string]any{
 		"terminal_id": t.id, "board": t.board, "firmware": t.firmware,
 		"width": t.width, "height": t.height, "shape": t.shape, "ip": ip,
+		"reconnects": t.reconnects(),
 	}
 }
 

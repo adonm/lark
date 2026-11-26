@@ -23,6 +23,8 @@ export interface EdgeTerminal {
   height: number;
   shape: string;
   ip: string;
+  /** Reconnects since boot; older edges omit it. */
+  reconnects?: number;
 }
 
 export interface EdgeTelemetry {
