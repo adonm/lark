@@ -15,14 +15,36 @@ function dataDir(): string {
   return process.env.LARK_DATA_DIR ?? join(homedir(), ".local", "share", "lark");
 }
 
-function token(): string {
-  if (process.env.LARK_TOKEN !== undefined && process.env.LARK_TOKEN !== "") return process.env.LARK_TOKEN;
-  const path = join(dataDir(), "token");
+export function envFileToken(): string {
+  const config = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  let text: string;
   try {
-    return readFileSync(path, "utf8").trim();
+    text = readFileSync(join(config, "lark", "lark.env"), "utf8");
   } catch {
     return "";
   }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("LARK_TOKEN=")) continue;
+    let value = trimmed.slice("LARK_TOKEN=".length).trim();
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return "";
+}
+
+export function token(): string {
+  if (process.env.LARK_TOKEN !== undefined && process.env.LARK_TOKEN !== "") return process.env.LARK_TOKEN;
+  const path = join(dataDir(), "token");
+  try {
+    const stored = readFileSync(path, "utf8").trim();
+    if (stored !== "") return stored;
+  } catch {
+    // Fall back to the unit's environment file so the CLI works after setup.
+  }
+  return envFileToken();
 }
 
 function baseUrl(): string {
