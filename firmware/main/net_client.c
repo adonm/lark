@@ -1,10 +1,8 @@
 #include "net_client.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <inttypes.h>
 #include <stdatomic.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,35 +18,21 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "media.h"
 #include "net_logic.h"
+#include "net_transport.h"
 #include "power.h"
 #include "proto.h"
 #include "sdkconfig.h"
 #include "telemetry.h"
 #include "telemetry_logic.h"
-#include "wake_gate.h"
 #include "wifi.h"
 
 enum {
     WAKE_POLL_MS = 50,
     ACK_RETRY_MS = 20,
     INPUT_CAP = 24,
-    TCP_BUF_BYTES = 64 * 1024,
-    UDP_BUF_BYTES = 16 * 1024,
-    CONNECT_TIMEOUT_MS = 5000,
-    // Above the Wi-Fi PS wake budget, so a modem-sleep wake never turns a
-    // healthy control frame into a false session failure.
-    SEND_TIMEOUT_MS = 2000,
-    RECV_TIMEOUT_MS = 5000,
-    TCP_KEEP_IDLE_S = 15,
-    TCP_KEEP_INTVL_S = 5,
-    TCP_KEEP_CNT = 3,
-    // Every client-to-server payload is a control message; frames only travel
-    // the other way. One stack buffer makes header+payload a single send.
-    TX_FRAME_CAP = 1024,
 };
 
 _Static_assert(FRAME_PACKET_CAP >= FRAME_HEADER_SIZE + FRAME_PIXELS * sizeof(uint16_t),
@@ -97,18 +81,6 @@ static portMUX_TYPE input_lock = portMUX_INITIALIZER_UNLOCKED;
 static input_t inputs[INPUT_CAP], pending_drag;
 static unsigned input_head, input_count, drag_after;
 
-static portMUX_TYPE udp_lock = portMUX_INITIALIZER_UNLOCKED;
-static int tcp_fd = -1;
-static int udp_fd = -1;
-static int wake_rx_fd = -1;
-static int wake_tx_fd = -1;
-static wake_gate_t wake_gate;
-static struct sockaddr_in bridge_udp_addr;
-static uint32_t active_ssrc;
-static uint16_t rtp_rec_seq;
-static uint32_t rtp_rec_ts;
-static _Alignas(4) uint8_t rtp_pkt[LARK_RTP_PACKET_BYTES];
-
 static uint8_t *rx_buffer;
 static bool tts_accepted;
 static audio_tts_splitter_t tts_split;
@@ -119,9 +91,7 @@ static atomic_uint_fast64_t rec_ctrl_us;
 static atomic_bool rec_first_rtp;
 static uint32_t next_session;
 static uint32_t tcp_sessions;
-static uint16_t tx_seq;
 static net_backoff_t backoff;
-static atomic_bool session_broken;
 static bool session_rejected;
 static portMUX_TYPE ack_lock = portMUX_INITIALIZER_UNLOCKED;
 static net_ack_t pending_ack;
@@ -160,86 +130,17 @@ bool net_client_wait_connected(uint32_t timeout_ms)
     return net_client_connected();
 }
 
-static void note_net_errno(int err)
-{
-    if (err) atomic_store_explicit(&telemetry_io.last_net_errno, err, memory_order_relaxed);
-}
-
-// A failed or short send leaves the stream desynchronised. Never try another
-// frame on it: mark it broken so run_session closes and reconnects at once.
-static bool send_all_tcp(int fd, const void *data, size_t len)
-{
-    const uint8_t *p = data;
-    size_t sent = 0;
-    while (sent < len) {
-        int n = lwip_send(fd, p + sent, len - sent, 0);
-        if (n <= 0) {
-            note_net_errno(errno);
-            atomic_store_explicit(&session_broken, true, memory_order_relaxed);
-            return false;
-        }
-        sent += (size_t)n;
-    }
-    return true;
-}
-
 static bool send_tcp_frame(uint32_t session, uint8_t type, const void *payload, uint32_t len, bool require_ready)
 {
     if (!atomic_load(&wifi_online) || !session || session != net_client_session()) return false;
     if (require_ready && session != atomic_load(&ready_session)) return false;
-    if (tcp_fd < 0 || len > LARK_PROTO_MAX_PAYLOAD) return false;
-    if (atomic_load_explicit(&session_broken, memory_order_relaxed)) return false;
-    if (len > TX_FRAME_CAP) {
-        note_net_errno(EMSGSIZE);
-        atomic_store_explicit(&session_broken, true, memory_order_relaxed);
-        return false;
-    }
-
-    uint8_t buf[LARK_PROTO_HDR_SIZE + TX_FRAME_CAP];
-    lark_pack_hdr(buf, type, tx_seq++, len);
-    if (len) memcpy(buf + LARK_PROTO_HDR_SIZE, payload, len);
-    return send_all_tcp(tcp_fd, buf, LARK_PROTO_HDR_SIZE + len);
+    return net_transport_send(type, payload, len);
 }
 
 static void wake_service(void)
 {
     if (service) xTaskNotifyGive(service);
-    if (wake_tx_fd >= 0 && wake_gate_request(&wake_gate)) {
-        uint8_t b = 1;
-        if (lwip_send(wake_tx_fd, &b, sizeof(b), 0) <= 0) {
-            // Retry on the next request instead of coalescing into a lost datagram.
-            wake_gate_clear(&wake_gate);
-        }
-    }
-}
-
-static void init_wake_sockets(void)
-{
-    if (wake_rx_fd >= 0) return;
-    int rfd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    int tfd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (rfd < 0 || tfd < 0) {
-        if (rfd >= 0) lwip_close(rfd);
-        if (tfd >= 0) lwip_close(tfd);
-        return;
-    }
-    struct sockaddr_in addr = {
-        .sin_family = AF_INET,
-        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-        .sin_port = 0,
-    };
-    socklen_t alen = sizeof(addr);
-    if (lwip_bind(rfd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
-        lwip_getsockname(rfd, (struct sockaddr *)&addr, &alen) != 0 ||
-        lwip_connect(tfd, (const struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        lwip_close(rfd);
-        lwip_close(tfd);
-        return;
-    }
-    lwip_fcntl(rfd, F_SETFL, lwip_fcntl(rfd, F_GETFL, 0) | O_NONBLOCK);
-    lwip_fcntl(tfd, F_SETFL, lwip_fcntl(tfd, F_GETFL, 0) | O_NONBLOCK);
-    wake_rx_fd = rfd;
-    wake_tx_fd = tfd;
+    net_transport_kick();
 }
 
 static bool enqueue_session(input_t input)
@@ -351,7 +252,7 @@ static bool drain_ack_retry(void)
 
 int16_t *net_client_rec_buf(void)
 {
-    return (int16_t *)(rtp_pkt + LARK_RTP_HDR_SIZE);
+    return net_transport_rtp_buf();
 }
 
 static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, size_t samples)
@@ -359,35 +260,12 @@ static bool send_rtp_audio(uint32_t session, uint8_t pt, const int16_t *pcm, siz
     if (!samples || samples > LARK_RTP_SAMPLES || !ready_socket_session() || session != net_client_session()) {
         return false;
     }
-    int fd = -1;
-    struct sockaddr_in dst;
-    uint32_t ssrc = 0, ts = 0;
-    uint16_t seq = 0;
-
-    portENTER_CRITICAL(&udp_lock);
-    if (udp_fd >= 0 && active_ssrc != 0 && bridge_udp_addr.sin_port != 0) {
-        fd = udp_fd;
-        dst = bridge_udp_addr;
-        ssrc = active_ssrc;
-        seq = rtp_rec_seq++;
-        ts = rtp_rec_ts;
-        rtp_rec_ts += (uint32_t)samples;
-    }
-    portEXIT_CRITICAL(&udp_lock);
-
-    if (fd < 0) return false;
-    size_t bytes = samples * sizeof(int16_t);
-    lark_rtp_encode(rtp_pkt, pt, seq, ts, ssrc);
-    if (pcm != (const int16_t *)(rtp_pkt + LARK_RTP_HDR_SIZE)) {
-        memcpy(rtp_pkt + LARK_RTP_HDR_SIZE, pcm, bytes);
-    }
-    int sent = lwip_sendto(fd, rtp_pkt, LARK_RTP_HDR_SIZE + bytes, 0, (const struct sockaddr *)&dst, sizeof(dst));
-    if (sent == (int)(LARK_RTP_HDR_SIZE + bytes) &&
-        atomic_exchange_explicit(&rec_first_rtp, false, memory_order_relaxed)) {
+    bool sent = net_transport_send_rtp(pt, pcm, samples);
+    if (sent && atomic_exchange_explicit(&rec_first_rtp, false, memory_order_relaxed)) {
         uint64_t dt = (uint64_t)esp_timer_get_time() - atomic_load_explicit(&rec_ctrl_us, memory_order_relaxed);
         atomic_store_explicit(&telemetry_io.rec_start_us, (unsigned)dt, memory_order_relaxed);
     }
-    return sent == (int)(LARK_RTP_HDR_SIZE + bytes);
+    return sent;
 }
 
 bool net_client_rec_pcm(uint32_t session, const int16_t *pcm, size_t samples)
@@ -516,12 +394,7 @@ static void handle_handshake(uint32_t session, uint8_t type, const uint8_t *payl
         memcpy(resume_token, w.resume_token, LARK_RESUME_TOKEN_LEN);
         has_resume_token = true;
         resume_deadline_us = esp_timer_get_time() + (int64_t)w.resume_window_ms * 1000LL;
-        portENTER_CRITICAL(&udp_lock);
-        bridge_udp_addr.sin_port = htons(w.udp_port);
-        active_ssrc = w.ssrc;
-        rtp_rec_seq = 0;
-        rtp_rec_ts = 0;
-        portEXIT_CRITICAL(&udp_lock);
+        net_transport_set_udp_peer(w.udp_port, w.ssrc);
         atomic_store(&ready_session, session);
         net_backoff_connected(&backoff);
         if (hello_sem) xSemaphoreGive(hello_sem);
@@ -674,45 +547,9 @@ static void handle_tcp_message(uint32_t session, uint8_t type, const uint8_t *pa
     }
 }
 
-static bool recv_exact(int fd, uint8_t *dst, size_t len)
-{
-    size_t got = 0;
-    while (got < len) {
-        if (!atomic_load(&wifi_online)) return false;
-        int n = lwip_recv(fd, dst + got, len - got, 0);
-        if (n > 0) {
-            got += (size_t)n;
-            continue;
-        }
-        if (n == 0) {
-            // Peer closed mid-frame; report it as a reset for /status.
-            note_net_errno(ECONNRESET);
-            return false;
-        }
-        if (errno == EINTR) continue;
-        // SO_RCVTIMEO bounds every recv, so EAGAIN means the 5 s mid-frame
-        // stall guard fired rather than a transient scheduling hiccup.
-        note_net_errno(errno);
-        return false;
-    }
-    return true;
-}
-
 static void close_sockets(void)
 {
-    atomic_store_explicit(&session_broken, false, memory_order_relaxed);
-    int tfd = tcp_fd;
-    tcp_fd = -1;
-    if (tfd >= 0) lwip_close(tfd);
-
-    portENTER_CRITICAL(&udp_lock);
-    int ufd = udp_fd;
-    udp_fd = -1;
-    active_ssrc = 0;
-    memset(&bridge_udp_addr, 0, sizeof(bridge_udp_addr));
-    portEXIT_CRITICAL(&udp_lock);
-    if (ufd >= 0) lwip_close(ufd);
-
+    net_transport_close();
     if (atomic_exchange(&socket_session, 0)) {
         atomic_store(&ready_session, 0);
         tts_accepted = false;
@@ -722,113 +559,17 @@ static void close_sockets(void)
     }
 }
 
-static int open_tcp_socket(const struct sockaddr_in *remote)
-{
-    int fd = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (fd < 0) return -1;
-    int one = 1;
-    int buf = TCP_BUF_BYTES;
-    int keep_idle = TCP_KEEP_IDLE_S;
-    int keep_intvl = TCP_KEEP_INTVL_S;
-    int keep_cnt = TCP_KEEP_CNT;
-    lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    lwip_setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
-    lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &keep_idle, sizeof(keep_idle));
-    lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &keep_intvl, sizeof(keep_intvl));
-    lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &keep_cnt, sizeof(keep_cnt));
-    lwip_setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof(buf));
-    lwip_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
-
-    int flags = lwip_fcntl(fd, F_GETFL, 0);
-    lwip_fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int rc = lwip_connect(fd, (const struct sockaddr *)remote, sizeof(*remote));
-    if (rc < 0 && errno != EINPROGRESS) {
-        lwip_close(fd);
-        return -1;
-    }
-    if (rc < 0) {
-        fd_set wfds;
-        FD_ZERO(&wfds);
-        FD_SET(fd, &wfds);
-        struct timeval tv = { .tv_sec = CONNECT_TIMEOUT_MS / 1000, .tv_usec = 0 };
-        int err = 0;
-        socklen_t elen = sizeof(err);
-        if (lwip_select(fd + 1, NULL, &wfds, NULL, &tv) <= 0 ||
-            lwip_getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) {
-            lwip_close(fd);
-            return -1;
-        }
-    }
-    lwip_fcntl(fd, F_SETFL, flags);
-    struct timeval snd_tv = {
-        .tv_sec = SEND_TIMEOUT_MS / 1000,
-        .tv_usec = (SEND_TIMEOUT_MS % 1000) * 1000,
-    };
-    struct timeval rcv_tv = {
-        .tv_sec = RECV_TIMEOUT_MS / 1000,
-        .tv_usec = (RECV_TIMEOUT_MS % 1000) * 1000,
-    };
-    lwip_setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
-    // Without this, recv_exact blocks forever on a half-open socket and its
-    // 5 s mid-frame stall guard never fires.
-    lwip_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
-    return fd;
-}
-
-static int open_udp_socket(uint16_t *local_port)
-{
-    int fd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (fd < 0) return -1;
-    int buf = UDP_BUF_BYTES;
-    lwip_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
-    struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = 0 };
-    socklen_t blen = sizeof(bind_addr);
-    if (lwip_bind(fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) != 0 ||
-        lwip_getsockname(fd, (struct sockaddr *)&bind_addr, &blen) != 0) {
-        lwip_close(fd);
-        return -1;
-    }
-    lwip_fcntl(fd, F_SETFL, lwip_fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    *local_port = ntohs(bind_addr.sin_port);
-    return fd;
-}
-
 static bool open_connection(uint32_t *out_session)
 {
-    char port_str[8];
-    snprintf(port_str, sizeof(port_str), "%u", bridge_port);
-    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
-    struct addrinfo *res = NULL;
-    if (lwip_getaddrinfo(bridge_host, port_str, &hints, &res) != 0 || !res) {
-        return false;
-    }
-    struct sockaddr_in remote = *(const struct sockaddr_in *)res->ai_addr;
-    lwip_freeaddrinfo(res);
+    struct sockaddr_in remote;
+    if (!net_transport_resolve(bridge_host, bridge_port, &remote)) return false;
 
-    int tfd = open_tcp_socket(&remote);
     uint16_t local_udp_port = 0;
-    int ufd = tfd >= 0 ? open_udp_socket(&local_udp_port) : -1;
-    if (tfd < 0 || ufd < 0) {
-        note_net_errno(errno);
-        if (tfd >= 0) lwip_close(tfd);
-        if (ufd >= 0) lwip_close(ufd);
-        return false;
-    }
+    if (!net_transport_open(&remote, &local_udp_port)) return false;
 
     if (++next_session == 0) ++next_session;
     uint32_t session = next_session;
-
-    tcp_fd = tfd;
-    tx_seq = 0;
     session_rejected = false;
-    atomic_store_explicit(&session_broken, false, memory_order_relaxed);
-
-    portENTER_CRITICAL(&udp_lock);
-    udp_fd = ufd;
-    bridge_udp_addr = remote;
-    bridge_udp_addr.sin_port = 0;
-    active_ssrc = 0;
-    portEXIT_CRITICAL(&udp_lock);
 
     atomic_store(&socket_session, session);
     if (!send_hello(session, local_udp_port)) {
@@ -840,20 +581,6 @@ static bool open_connection(uint32_t *out_session)
     }
     *out_session = session;
     return true;
-}
-
-static int wake_recv(void *ctx, void *buf, size_t len)
-{
-    return lwip_recv((int)(intptr_t)ctx, buf, len, 0);
-}
-
-static void drain_wake_socket(void)
-{
-    if (wake_rx_fd < 0) {
-        wake_gate_clear(&wake_gate);
-        return;
-    }
-    wake_gate_drain(&wake_gate, wake_recv, (void *)(intptr_t)wake_rx_fd);
 }
 
 static void drain_ctrl(void)
@@ -879,9 +606,8 @@ static void run_session(uint32_t session)
     int interval = telemetry_status_interval_ms(display_is_sleeping());
     int64_t after_status = esp_timer_get_time() / 1000 + interval;
 
-    while (atomic_load(&wifi_online) && tcp_fd >= 0 &&
-           !atomic_load_explicit(&session_broken, memory_order_relaxed)) {
-        drain_wake_socket();
+    while (atomic_load(&wifi_online) && net_transport_tcp_fd() >= 0 && !net_transport_broken()) {
+        net_transport_drain_wake();
         drain_ctrl();
         input_t input;
         while (next_input(&input)) send_input(&input);
@@ -895,46 +621,48 @@ static void run_session(uint32_t session)
         }
         // A failed send desynchronised the stream; do not select on it or send
         // another frame, just return so the service loop reconnects.
-        if (atomic_load_explicit(&session_broken, memory_order_relaxed)) return;
+        if (net_transport_broken()) return;
 
+        int tcp = net_transport_tcp_fd();
+        int wake_fd = net_transport_wake_fd();
         fd_set rfds;
         FD_ZERO(&rfds);
-        FD_SET(tcp_fd, &rfds);
-        int maxfd = tcp_fd;
-        if (wake_rx_fd >= 0) {
-            FD_SET(wake_rx_fd, &rfds);
-            if (wake_rx_fd > maxfd) maxfd = wake_rx_fd;
+        FD_SET(tcp, &rfds);
+        int maxfd = tcp;
+        if (wake_fd >= 0) {
+            FD_SET(wake_fd, &rfds);
+            if (wake_fd > maxfd) maxfd = wake_fd;
         }
         int64_t rem_ms = after_status - now;
         if (rem_ms < 1) rem_ms = 1;
         if (rem_ms > interval) rem_ms = interval;
         if (ack_waiting && rem_ms > ACK_RETRY_MS) rem_ms = ACK_RETRY_MS;
         // Without the wake socket, inputs only arrive via this timeout.
-        if (wake_rx_fd < 0 && rem_ms > WAKE_POLL_MS) rem_ms = WAKE_POLL_MS;
+        if (wake_fd < 0 && rem_ms > WAKE_POLL_MS) rem_ms = WAKE_POLL_MS;
         struct timeval tv = { .tv_sec = (time_t)(rem_ms / 1000), .tv_usec = (suseconds_t)((rem_ms % 1000) * 1000) };
         int ready = lwip_select(maxfd + 1, &rfds, NULL, NULL, &tv);
         if (ready < 0) {
-            note_net_errno(errno);
+            atomic_store_explicit(&telemetry_io.last_net_errno, errno, memory_order_relaxed);
             return;
         }
-        if (!FD_ISSET(tcp_fd, &rfds)) continue;
+        if (!FD_ISSET(tcp, &rfds)) continue;
 
         uint8_t hbuf[LARK_PROTO_HDR_SIZE];
-        if (!recv_exact(tcp_fd, hbuf, sizeof(hbuf))) return;
+        if (!net_transport_recv_exact(hbuf, sizeof(hbuf), &wifi_online)) return;
         lark_hdr_t hdr;
         if (!lark_unpack_hdr(hbuf, &hdr)) {
             ESP_LOGW(TAG, "Invalid TCP frame header");
             return;
         }
         if (hdr.length <= FRAME_PACKET_CAP) {
-            if (hdr.length && !recv_exact(tcp_fd, rx_buffer, hdr.length)) return;
+            if (hdr.length && !net_transport_recv_exact(rx_buffer, hdr.length, &wifi_online)) return;
             handle_tcp_message(session, hdr.type, rx_buffer, hdr.length);
         } else {
             // Drain oversized non-frame payloads cleanly in chunks.
             uint32_t rem = hdr.length;
             while (rem > 0) {
                 uint32_t chunk = rem > FRAME_PACKET_CAP ? FRAME_PACKET_CAP : rem;
-                if (!recv_exact(tcp_fd, rx_buffer, chunk)) return;
+                if (!net_transport_recv_exact(rx_buffer, chunk, &wifi_online)) return;
                 if (hdr.type == LARK_MSG_TTS_PCM) receive_tts_pcm(rx_buffer, chunk);
                 rem -= chunk;
             }
@@ -954,7 +682,7 @@ static void service_task(void *arg)
             }
             continue;
         }
-        init_wake_sockets();
+        net_transport_init_wake();
         uint32_t session = 0;
         if (!open_connection(&session)) {
             close_sockets();
