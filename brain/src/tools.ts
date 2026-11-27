@@ -224,7 +224,7 @@ export interface AudioOps {
   stop(companionId: string): Promise<Record<string, unknown>>;
 }
 
-interface ToolDeps {
+export interface ToolDeps {
   db: LarkDb;
   library?: Library;
   timers?: TimerScheduler;
@@ -235,17 +235,32 @@ interface ToolDeps {
   setCompanion: (sessionID: string, companion: CompanionInstruction) => Promise<void>;
 }
 
+export interface NativeTool {
+  name: string;
+  description: string;
+  input: ToolSchema;
+  options: { codemode: boolean };
+  execute: (input: unknown, context: { sessionID: string; signal: AbortSignal }) => Promise<{ content: string }>;
+}
+
+/** The native tools in registration order; the plugin and tests share it. */
+export function nativeTools(deps: ToolDeps): NativeTool[] {
+  return [
+    stateTool(deps),
+    patchTool(deps),
+    storyTool(deps),
+    libraryTool(deps),
+    emitTool(deps),
+    audioTool(deps),
+  ];
+}
+
 export function toolPlugin(deps: ToolDeps): Plugin.Plugin {
   return Plugin.define({
     id: "lark.tools",
     async setup(ctx) {
       await ctx.tool.transform((editor) => {
-        editor.add(stateTool(deps));
-        editor.add(patchTool(deps));
-        editor.add(storyTool(deps));
-        editor.add(libraryTool(deps));
-        editor.add(emitTool(deps));
-        editor.add(audioTool(deps));
+        for (const tool of nativeTools(deps)) editor.add(tool);
       });
     },
   });
