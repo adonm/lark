@@ -103,8 +103,9 @@ in `hello` so the edge owns endpointing.
 | Path | Contents |
 | --- | --- |
 | `brain/src/` | Node 26 TypeScript brain: HTTP, DB, router, Delta Chat, OpenCode, stories, library reader, timers, portraits, remote controls, CLI, cross-process E2E. |
-| `lark/cmd/lark-edge/` | Edge entry point, OTA push command, deterministic fake models for the E2E test. |
+| `lark/cmd/lark-edge/` | Edge entry point and deterministic fake models for the E2E test. |
 | `lark/cmd/lark-library/` | Standalone library provisioner entry point. |
+| `lark/cmd/lark-ops/` | Host device operations: the OTA firmware build, upload, and confirmation command. |
 | `lark/internal/edge/` | Terminal server, IPC, capture/utterance loop, TTS prefetch, WAV, models. |
 | `lark/internal/audio/` | WAV/PCM synthesis and resampling, metronome/tune synth, Smart Turn, Parakeet STT, Kokoro TTS. |
 | `lark/internal/pixel/` | Canvas, icons, screens, scene/menu layout, portrait normalization, LUT grades, frame encoder. |
@@ -115,9 +116,9 @@ in `hello` so the edge owns endpointing.
 | `web/remote-ui/` | Headless-Chromium Playwright suite for that page. |
 
 `scripts/lark` is the operator CLI: most commands call the brain's loopback
-HTTP API; `ota` routes to `lark-edge`, `library --download|--build` routes to
-`lark-library`, and `deploy` runs `scripts/setup-host.sh`. Setup installs both
-binaries to `~/.local/share/lark/` and symlinks this wrapper next to them.
+HTTP API; `ota` routes to `lark-ops`, `library --download|--build` routes to
+`lark-library`, and `deploy` runs `scripts/setup-host.sh`. Setup installs all
+three binaries to `~/.local/share/lark/` and symlinks this wrapper next to them.
 
 ## Data model
 

@@ -32,8 +32,8 @@ the boards. Boards draw a fallback face offline.
    ./scripts/setup-host.sh
    ```
 
-   Setup compiles `lark-edge` with in-process Vulkan STT to
-   `~/.local/share/lark/lark-edge`, runs `npm ci` for the TypeScript brain,
+   Setup compiles `lark-edge`, `lark-library`, and `lark-ops` into
+   `~/.local/share/lark/`, runs `npm ci` for the TypeScript brain,
    SHA-256-pins the Parakeet Q8_0 GGUF, Silero v5, and FP32
    `kokoro-multi-lang-v1_0` pack, downloads `deltachat-rpc-server`, and installs
    and starts `lark-edge.service` and `lark-brain.service`. It retires the v1
@@ -45,7 +45,7 @@ the boards. Boards draw a fallback face offline.
 
    Rebuild and restart from the checkout with
    `~/.local/share/lark/lark deploy`. It reuses the cached Parakeet build,
-   reinstalls `lark-edge` atomically, refreshes the units, and restarts both
+   reinstalls the binaries atomically, refreshes the units, and restarts both
    services. Setup remains the first-install path.
 
    Voice models need a Vulkan GPU, not an X display. Lark recognizes English
@@ -332,7 +332,7 @@ Kokoro starts synthesizing sentences while OpenCode streams its reply.
 
 Use `lark status`, `lark doctor`, `lark companions`, `lark terminals`,
 `lark tunnels`, `lark capture`, `lark library`, `lark ota`, and `lark deploy`
-from the CLI. `lark` routes HTTP commands to the brain, `ota` to `lark-edge`,
+from the CLI. `lark` routes HTTP commands to the brain, `ota` to `lark-ops`,
 and `library --download|--build` to `lark-library`.
 
 | Device · port 80 | Request → response |

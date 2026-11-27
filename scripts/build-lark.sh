@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Shared release build for `lark deploy` and scripts/setup-host.sh.
-# Sourcing this file defines lark_build; running it builds the real-time edge
-# and the library provisioner. The TypeScript brain runs from the checkout via
-# node.
+# Sourcing this file defines lark_build; running it builds the real-time edge,
+# the library provisioner, and the host device OTA command. The TypeScript
+# brain runs from the checkout via node.
 #
 # The Parakeet bridge build is cached in ~/.cache/lark/parakeet-native, so a
 # redeploy reuses the compiled native libraries instead of a fresh CMake build.
@@ -10,9 +10,9 @@ set -euo pipefail
 umask 077
 
 lark_build() {
-    local edge=${1-} library=${2-}
-    if [[ -z $edge || -z $library ]]; then
-        printf 'Usage: %s EDGE_OUTPUT LIBRARY_OUTPUT\n' "$0" >&2
+    local edge=${1-} library=${2-} ops=${3-}
+    if [[ -z $edge || -z $library || -z $ops ]]; then
+        printf 'Usage: %s EDGE_OUTPUT LIBRARY_OUTPUT OPS_OUTPUT\n' "$0" >&2
         return 2
     fi
     local repo data_home data cache stt_stage native
@@ -26,7 +26,7 @@ lark_build() {
     local GO_BIN
     GO_BIN=$(resolve_go)
     install -d -m 700 -- "$cache"
-    for path in "$edge" "$library"; do
+    for path in "$edge" "$library" "$ops"; do
         if [[ ! -d $(dirname -- "$path") ]]; then
             mkdir -p -- "$(dirname -- "$path")"
         fi
@@ -74,7 +74,11 @@ lark_build() {
         cd -- "$repo/lark"
         CGO_ENABLED=1 "$GO_BIN" build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o "$library" ./cmd/lark-library
     )
-    chmod 700 -- "$edge" "$library"
+    (
+        cd -- "$repo/lark"
+        CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags="-s -w" -o "$ops" ./cmd/lark-ops
+    )
+    chmod 700 -- "$edge" "$library" "$ops"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

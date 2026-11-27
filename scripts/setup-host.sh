@@ -150,14 +150,17 @@ install_deltachat_rpc
 
 lark_bin="$data/lark-edge"
 library_bin="$data/lark-library"
+ops_bin="$data/lark-ops"
 build_tmp=$(mktemp "$lark_bin.XXXXXXXX")
 library_tmp=$(mktemp "$library_bin.XXXXXXXX")
-trap 'rm -f -- "$build_tmp" "$library_tmp"' EXIT
+ops_tmp=$(mktemp "$ops_bin.XXXXXXXX")
+trap 'rm -f -- "$build_tmp" "$library_tmp" "$ops_tmp"' EXIT
 # shellcheck source=scripts/build-lark.sh
 source "$REPO_DIR/scripts/build-lark.sh"
-lark_build "$build_tmp" "$library_tmp"
+lark_build "$build_tmp" "$library_tmp" "$ops_tmp"
 mv -f -- "$build_tmp" "$lark_bin"
 mv -f -- "$library_tmp" "$library_bin"
+mv -f -- "$ops_tmp" "$ops_bin"
 trap - EXIT
 
 (cd "$REPO_DIR/brain" && npm ci --no-audit --no-fund)

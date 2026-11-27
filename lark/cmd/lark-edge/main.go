@@ -15,14 +15,9 @@ import (
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	if len(os.Args) > 1 && os.Args[1] == "ota" {
-		if err := runOTA(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	// Bulk Wikipedia/Gutenberg provisioning lives in lark-library so this
-	// binary keeps SQLite and the downloaders out of its footprint.
+	// Bulk Wikipedia/Gutenberg provisioning lives in lark-library and OTA in
+	// lark-ops so this binary keeps SQLite, the downloaders, and net/http out
+	// of its footprint.
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}

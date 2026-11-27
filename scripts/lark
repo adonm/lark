@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
 # Operator CLI. Most commands talk to the running brain over its loopback HTTP
-# API; OTA runs in the compiled edge and library downloads/builds in the
-# separate lark-library provisioner.
+# API; OTA runs in the compiled lark-ops binary and library downloads/builds in
+# the separate lark-library provisioner.
 set -euo pipefail
 
 self=$(readlink -f -- "${BASH_SOURCE[0]}")
 repo=${LARK_REPO_DIR:-$(cd -- "$(dirname -- "$self")/.." && pwd)}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 
-edge=${LARK_EDGE_BIN:-}
-if [[ -z $edge ]]; then
-    for candidate in "$data_home/lark/lark-edge" "$repo/lark-edge"; do
-        if [[ -x $candidate ]]; then edge=$candidate; break; fi
-    done
-fi
-if [[ -z $edge ]] && command -v lark-edge >/dev/null; then
-    edge=$(command -v lark-edge)
-fi
 library=${LARK_LIBRARY_BIN:-}
 if [[ -z $library ]]; then
     for candidate in "$data_home/lark/lark-library" "$repo/lark-library"; do
@@ -26,24 +17,33 @@ fi
 if [[ -z $library ]] && command -v lark-library >/dev/null; then
     library=$(command -v lark-library)
 fi
-need_edge() {
-    if [[ -z $edge ]]; then
-        printf 'lark: cannot find the lark-edge binary; run scripts/setup-host.sh or set LARK_EDGE_BIN\n' >&2
-        exit 1
-    fi
-}
+ops=${LARK_OPS_BIN:-}
+if [[ -z $ops ]]; then
+    for candidate in "$data_home/lark/lark-ops" "$repo/lark-ops"; do
+        if [[ -x $candidate ]]; then ops=$candidate; break; fi
+    done
+fi
+if [[ -z $ops ]] && command -v lark-ops >/dev/null; then
+    ops=$(command -v lark-ops)
+fi
 need_library() {
     if [[ -z $library ]]; then
         printf 'lark: cannot find the lark-library binary; run scripts/setup-host.sh or set LARK_LIBRARY_BIN\n' >&2
         exit 1
     fi
 }
+need_ops() {
+    if [[ -z $ops ]]; then
+        printf 'lark: cannot find the lark-ops binary; run scripts/setup-host.sh or set LARK_OPS_BIN\n' >&2
+        exit 1
+    fi
+}
 
 case ${1-} in
     ota)
-        need_edge
+        need_ops
         shift
-        exec "$edge" ota "$@"
+        exec "$ops" ota "$@"
         ;;
     deploy)
         shift

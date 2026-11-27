@@ -80,7 +80,7 @@ and hygiene passes. Run the full gate before push.
   transcribe, or delete them, and they are never used as fixtures.
 - `lark library --plan` prints the disk-aware plan as JSON;
   `lark library --download --build` runs bulk provisioning in `lark-library`.
-- `lark ota <ip|host>` builds and pushes firmware from `lark-edge`; add
+- `lark ota <ip|host>` builds and pushes firmware from `lark-ops`; add
   `--no-build` to reuse the image.
 
 ## Measured timings
