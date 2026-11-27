@@ -84,8 +84,8 @@
   <text x="446" y="152" class="body">320 × 240 rectangular touch panel · USB power</text>
   <text x="446" y="169" class="small mono">box3-…</text>
 
-  <path d="M221 180 L221 226" class="arrow" marker-end="url(#a)"/>
-  <path d="M639 226 L639 180" class="arrow" marker-end="url(#a)"/>
+  <path d="M221 182 L221 230" class="arrow" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path d="M639 182 L639 230" class="arrow" marker-start="url(#a)" marker-end="url(#a)"/>
   <text x="430" y="200" text-anchor="middle" class="small">TCP 8766 · frames, control, touch, telemetry</text>
   <text x="430" y="216" text-anchor="middle" class="small">UDP 8766 · RTP mic, 20 ms packets</text>
 
@@ -110,9 +110,8 @@
   <text x="48" y="368" class="small">Owns endpointing, capture DSP, playback queueing, and frame encoding.</text>
   <text x="48" y="388" class="small mono">$LARK_DATA_DIR/edge.sock · 0600</text>
 
-  <path d="M283 408 L283 448" class="arrow" marker-end="url(#a)"/>
-  <path d="M283 494 L283 454" class="arrow" marker-end="url(#a)"/>
-  <text x="298" y="434" class="small">Unix socket · NDJSON</text>
+  <path d="M283 410 L283 496" class="arrow" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text x="298" y="456" class="small">Unix socket · NDJSON</text>
 
   <rect x="32" y="500" width="500" height="136" class="box brain"/>
   <text x="48" y="526" class="label">lark-brain · Node 26 TypeScript</text>
