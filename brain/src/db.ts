@@ -1,6 +1,4 @@
-// Typed access to the Lark household database. This module owns the v2 schema;
-// the one-time v1 normalization lives in the upgrade changelog, not in runtime
-// code.
+// Typed access to the Lark household database. This module owns the schema.
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 export const SCHEMA_STATEMENTS = [

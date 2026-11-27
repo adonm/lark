@@ -1,5 +1,5 @@
 // Package edge is Lark's real-time media edge: the latency-critical silicon
-// path only. It speaks the firmware's existing v1 binary protocol on TCP/UDP,
+// path only. It speaks the firmware's binary protocol on TCP/UDP,
 // renders screens with internal/pixel, runs speech DSP with internal/audio,
 // and exposes a small NDJSON command/event API to the TypeScript brain over a
 // Unix socket.

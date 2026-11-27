@@ -97,7 +97,7 @@ test("opentunnel resolves from ~/.local/bin when PATH omits it", () => {
 });
 
 test("restored routes re-point at the current port", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "lark-remote-route-v1-"));
+  const dir = mkdtempSync(join(tmpdir(), "lark-remote-route-"));
   const db = new LarkDb(join(dir, "lark.db"));
   db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
   const raw = "restored-link-token";
@@ -196,11 +196,11 @@ test("scoped links survive a brain restart", async () => {
   await second.close();
 });
 
-test("bare-hash tokens and snake_case routes are ignored", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "lark-remote-legacy-"));
+test("unrecognised token formats are ignored", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lark-remote-unrecognised-"));
   const db = new LarkDb(join(dir, "lark.db"));
   db.upsertCompanion({ id: "greg", name: "Greg", configured: true });
-  const raw = "legacy-link-token";
+  const raw = "unrecognised-link-token";
   db.setMeta("remote_token:greg:sam@example.org", createHash("sha256").update(raw).digest("hex"));
   db.setMeta(
     "remote_route:greg",
@@ -209,7 +209,7 @@ test("bare-hash tokens and snake_case routes are ignored", async () => {
       route_name: "greg-tunnel",
       url: "https://greg-tunnel.opentunnel.test",
       local_port: 8765,
-      profile: "lark-legacy",
+      profile: "lark-unrecognised",
       created_at: "2026-11-22T00:00:00Z",
     }),
   );

@@ -1,7 +1,6 @@
 /build/
 /build-box3/
 /managed_components/
-/boards/box3/build/
 /boards/box3/managed_components/
 /boards/box3/sdkconfig
 /boards/box3/sdkconfig.old

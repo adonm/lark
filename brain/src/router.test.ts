@@ -206,10 +206,10 @@ test("a committed turn streams speech and speculation is promoted", async () => 
   assert.equal(h.edge.lastScreen()?.status, "idle");
 });
 
-test("a stale v1 session binding is replaced on the next turn", async () => {
+test("a stale stored session binding is replaced", async () => {
   const h = harness();
-  h.db.putSession({ companionId: "greg", sessionId: "ses_from_v1", updatedAt: 1, contractHash: "", contextAfterMs: 0 });
-  h.brain.missingSessions.add("ses_from_v1");
+  h.db.putSession({ companionId: "greg", sessionId: "ses_stale", updatedAt: 1, contractHash: "", contextAfterMs: 0 });
+  h.brain.missingSessions.add("ses_stale");
   h.brain.nextTurn("Fresh session reply.", ["Fresh session reply."]);
   await connect(h);
   h.edge.emit("turn.commit", {

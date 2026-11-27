@@ -1,4 +1,4 @@
-// Package proto is the generated v1 terminal wire protocol spoken by the
+// Package proto is the generated terminal wire protocol spoken by the
 // real-time edge. Go generate renders proto_gen.go from lark/protospec/spec.go;
 // only the envelope helpers below are hand-written.
 package proto

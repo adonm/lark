@@ -19,7 +19,7 @@ const EDGE_TOKEN = "e2e-edge-token";
 const ADMIN_TOKEN = "e2e-admin-token";
 const FIXED_STT = "set a timer for one minute";
 
-// ---- v1 terminal protocol ---------------------------------------------------
+// ---- terminal protocol ------------------------------------------------------
 
 const MSG_HELLO = 0x01;
 const MSG_PING = 0x0f;

@@ -1,6 +1,4 @@
-// Twee 3 subset used by Lark stories. This replaces the removed Go
-// lark/internal/stories package (parse, compile, validate, eval, voice
-// matching); a story authored against the v1 server parses identically here.
+// Twee 3 subset used by Lark stories.
 import { slugify } from "./util.ts";
 
 export const MAX_PASSAGES = 64;
