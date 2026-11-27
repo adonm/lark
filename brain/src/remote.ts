@@ -1,7 +1,7 @@
 // Scoped remote links, lazy OpenTunnel routes, and local microphone captures.
 // A token is bound to one companion and one Delta Chat contact, persisted only
 // as a SHA-256 hash. Tunnels are raised on first use and persisted before the
-// previous token is retired, so a failed rotation never breaks a live link.
+// previous token is replaced, so a failed rotation never breaks a live link.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";

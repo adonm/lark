@@ -144,13 +144,14 @@ func (b *brain) rpc(id string, fields map[string]any) map[string]any {
 }
 
 type hardware struct {
-	t    *testing.T
-	conn net.Conn
-	br   *bufio.Reader
-	ssrc uint32
-	seq  uint16
-	port uint16
-	addr *net.UDPAddr
+	t     *testing.T
+	conn  net.Conn
+	br    *bufio.Reader
+	ssrc  uint32
+	seq   uint16
+	port  uint16
+	addr  *net.UDPAddr
+	token [proto.ResumeTokenLen]byte
 }
 
 func dialHardware(t *testing.T, e *Edge, id string) *hardware {
@@ -184,7 +185,7 @@ func dialHardware(t *testing.T, e *Edge, id string) *hardware {
 		t.Fatal("decode welcome")
 	}
 	ua, _ := net.ResolveUDPAddr("udp", e.UDPAddr().String())
-	return &hardware{t: t, conn: conn, br: br, ssrc: w.Ssrc, port: w.UdpPort, addr: ua}
+	return &hardware{t: t, conn: conn, br: br, ssrc: w.Ssrc, port: w.UdpPort, addr: ua, token: w.ResumeToken}
 }
 
 func (h *hardware) close() { h.conn.Close() }
@@ -436,6 +437,95 @@ func TestDetachedTerminalReconnectsImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 	hw2.read(proto.MsgPong)
+}
+
+type resumeAttempt struct {
+	conn    net.Conn
+	br      *bufio.Reader
+	msgType uint8
+	payload []byte
+}
+
+func dialResume(t *testing.T, e *Edge, id string, token [proto.ResumeTokenLen]byte) resumeAttempt {
+	t.Helper()
+	conn, err := net.Dial("tcp", e.TCPAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	r := proto.TerminalResume{ProtoVersion: proto.ProtoVersion1, ResumeToken: token, TerminalID: id}
+	if _, err := conn.Write(proto.Pack(proto.MsgResume, 0, r.Encode())); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	msgType, _, payload, err := proto.ReadFrame(br)
+	if err != nil {
+		t.Fatalf("resume read: %v", err)
+	}
+	return resumeAttempt{conn: conn, br: br, msgType: msgType, payload: payload}
+}
+
+func TestResumeRequiresIssuedToken(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-resume")
+	b.waitFor("terminal.connected")
+	token := hw.token
+
+	// Warm session: a wrong token must not claim or disturb it.
+	hw.close()
+	b.waitFor("terminal.disconnected")
+	bad := token
+	bad[0] ^= 0xff
+	rejected := dialResume(t, e, "vocat-resume", bad)
+	defer rejected.conn.Close()
+	if rejected.msgType != proto.MsgReject {
+		t.Fatalf("wrong-token resume type = 0x%02x, want reject", rejected.msgType)
+	}
+	if len(rejected.payload) == 0 || rejected.payload[0] != proto.RejectUnknownTerminal {
+		t.Fatalf("wrong-token reject = %v", rejected.payload)
+	}
+	if term := e.Terminal("vocat-resume"); term == nil || term.native() != nil || term.isClosed() {
+		t.Fatal("wrong-token resume disturbed the warm terminal")
+	}
+
+	unknown := dialResume(t, e, "vocat-nobody", token)
+	defer unknown.conn.Close()
+	if unknown.msgType != proto.MsgReject {
+		t.Fatalf("unknown-terminal resume type = 0x%02x, want reject", unknown.msgType)
+	}
+	if len(unknown.payload) == 0 || unknown.payload[0] != proto.RejectUnknownTerminal {
+		t.Fatalf("unknown-terminal reject = %v", unknown.payload)
+	}
+
+	// The issued token resumes the warm session.
+	hw2 := dialResume(t, e, "vocat-resume", token)
+	if hw2.msgType != proto.MsgWelcome {
+		t.Fatalf("issued-token resume type = 0x%02x, want welcome", hw2.msgType)
+	}
+	if ev := b.waitFor("terminal.connected"); ev["reconnects"] != float64(1) {
+		t.Fatalf("reconnects = %v, want 1", ev["reconnects"])
+	}
+	term := e.Terminal("vocat-resume")
+	if term == nil || term.native() == nil {
+		t.Fatal("issued-token resume did not attach")
+	}
+
+	// Live session: a wrong token must not replace the attached connection.
+	rejectedLive := dialResume(t, e, "vocat-resume", bad)
+	defer rejectedLive.conn.Close()
+	if rejectedLive.msgType != proto.MsgReject || rejectedLive.payload[0] != proto.RejectUnknownTerminal {
+		t.Fatalf("live wrong-token resume = 0x%02x %v", rejectedLive.msgType, rejectedLive.payload)
+	}
+	if _, err := hw2.conn.Write(proto.Pack(proto.MsgPing, 0, []byte{9, 8, 7, 6})); err != nil {
+		t.Fatal(err)
+	}
+	_ = hw2.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	msgType, _, _, err := proto.ReadFrame(hw2.br)
+	if err != nil || msgType != proto.MsgPong {
+		t.Fatalf("live session ping = 0x%02x err=%v", msgType, err)
+	}
 }
 
 func TestLiveTerminalReplacedByFreshHello(t *testing.T) {

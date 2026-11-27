@@ -434,6 +434,13 @@ func (s *terminalServer) serve(conn net.Conn) {
 			writeReject(conn, proto.RejectUnknownTerminal, "unknown terminal")
 			return
 		}
+		if subtle.ConstantTimeCompare(resume.ResumeToken[:], t.info.token[:]) != 1 {
+			// UNKNOWN_TERMINAL makes firmware discard its token and send a
+			// fresh, token-authenticated HELLO. The live or warm session is
+			// left untouched.
+			writeReject(conn, proto.RejectUnknownTerminal, "invalid resume token")
+			return
+		}
 		reconnects = s.trackConnect(resume.TerminalID, true)
 		isResume = true
 	default:
@@ -557,7 +564,7 @@ func (s *terminalServer) handleTCP(t *Terminal, nc *nativeConn, msgType uint8, p
 			t.event(evTTSAck, func(ev *termEvent) { ev.ack = m })
 		}
 	default:
-		// Unknown device messages are ignored forward-compatibly.
+		// Unknown device messages are ignored so firmware may add kinds.
 	}
 }
 

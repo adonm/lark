@@ -386,7 +386,7 @@ export class LarkDb {
     return statement;
   }
 
-  /** Escape hatch for tests and migration tooling; never used by tool code. */
+  /** Test-only escape hatch; tool code goes through the typed methods. */
   raw(): DatabaseSync {
     return this.#db;
   }
