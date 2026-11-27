@@ -1,6 +1,7 @@
 // Shared HTTP primitives for the admin and remote routes: strict JSON
 // decoding, bounded text fields, and one JSON/bytes error shape.
 import { createHash, timingSafeEqual } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Router } from "./router.ts";
 import { RemoteError } from "./remote.ts";
@@ -75,6 +76,60 @@ export function sendBytes(res: ServerResponse, status: number, kind: string, bod
     ...extra,
   });
   res.end(body);
+}
+
+export interface CachedAsset {
+  mtimeMs: number;
+  size: number;
+  etag: string;
+  body: Buffer;
+}
+
+export interface CachedAssetOptions {
+  file: string;
+  cache: Map<string, CachedAsset>;
+  kind: string;
+  /** Extra response headers, always alongside the derived etag. */
+  headers: Record<string, string>;
+  /** 404 message when the file is missing or unreadable. */
+  notFound?: string;
+  /** Wrap read errors as 404s with this message instead of surfacing a 502. */
+  readNotFound?: string;
+  /** Portrait sheets are one file; drop the previous entry on a rewrite. */
+  exclusive?: boolean;
+}
+
+/** Stat, revalidate and serve one disk-backed asset with a cheap ETag. */
+export function serveCachedAsset(req: IncomingMessage, res: ServerResponse, options: CachedAssetOptions): void {
+  let info;
+  try {
+    info = statSync(options.file);
+  } catch {
+    throw fail(404, options.notFound ?? "Not found");
+  }
+  const etag = `"${Math.floor(info.mtimeMs)}-${info.size}"`;
+  let cached = options.cache.get(options.file);
+  if (cached === undefined || cached.mtimeMs !== info.mtimeMs || cached.size !== info.size) {
+    let body: Buffer;
+    if (options.readNotFound === undefined) {
+      body = readFileSync(options.file);
+    } else {
+      try {
+        body = readFileSync(options.file);
+      } catch {
+        throw fail(404, options.readNotFound);
+      }
+    }
+    if (options.exclusive === true) options.cache.clear();
+    cached = { mtimeMs: info.mtimeMs, size: info.size, etag, body };
+    options.cache.set(options.file, cached);
+  }
+  const headers = { etag, ...options.headers };
+  if (req.headers["if-none-match"] === cached.etag) {
+    res.writeHead(304, headers).end();
+    return;
+  }
+  sendBytes(res, 200, options.kind, cached.body, headers);
 }
 
 export async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {

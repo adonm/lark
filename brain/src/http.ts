@@ -2,7 +2,7 @@
 // and the scoped /remote page. No web framework: explicit method/path switches,
 // strict JSON decoding, timing-safe admin auth and one SSE stream per remote
 // page keep the surface small and auditable.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import type { LarkDb } from "./db.ts";
@@ -25,8 +25,10 @@ import {
   sendBytes,
   sendError,
   sendJson,
+  serveCachedAsset,
   text,
   tokenMatches,
+  type CachedAsset,
 } from "./http_common.ts";
 import { DEFAULT_REMOTE_DIR, createRemoteRoutes } from "./http_remote.ts";
 
@@ -123,34 +125,16 @@ export async function startHttp(options: HttpOptions): Promise<RunningHttp> {
   }
 
   // Revalidate with a cheap stat+ETag, not a disk read on every page view.
-  const assetCache = new Map<string, { mtimeMs: number; size: number; etag: string; body: Buffer }>();
+  const assetCache = new Map<string, CachedAsset>();
 
   function sendPublicAsset(req: IncomingMessage, res: ServerResponse, path: string): void {
     const name = path.slice(`${REMOTE_PATH}/`.length);
-    const file = join(remoteDir, name);
-    let info;
-    try {
-      info = statSync(file);
-    } catch {
-      throw fail(404, "Not found");
-    }
-    const etag = `"${Math.floor(info.mtimeMs)}-${info.size}"`;
-    let cached = assetCache.get(file);
-    if (cached === undefined || cached.mtimeMs !== info.mtimeMs || cached.size !== info.size) {
-      cached = { mtimeMs: info.mtimeMs, size: info.size, etag, body: readFileSync(file) };
-      assetCache.set(file, cached);
-    }
-    const kind = extname(name) === ".css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
-    const headers = {
-      etag: cached.etag,
-      "cache-control": "no-cache",
-      "content-security-policy": REMOTE_CSP,
-    };
-    if (req.headers["if-none-match"] === cached.etag) {
-      res.writeHead(304, headers).end();
-      return;
-    }
-    sendBytes(res, 200, kind, cached.body, headers);
+    serveCachedAsset(req, res, {
+      file: join(remoteDir, name),
+      cache: assetCache,
+      kind: extname(name) === ".css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
+      headers: { "cache-control": "no-cache", "content-security-policy": REMOTE_CSP },
+    });
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

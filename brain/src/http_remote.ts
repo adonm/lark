@@ -28,7 +28,9 @@ import {
   sendBytes,
   sendError,
   sendJson,
+  serveCachedAsset,
   text,
+  type CachedAsset,
 } from "./http_common.ts";
 
 // Burst mutations (a turn updates listening, busy, messages and speech) share
@@ -111,7 +113,7 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
   const portraits = options.portraits;
   // The portrait sheet is at most one image per companion generation; keep the
   // last body so repeated page loads and SSE reconnects avoid disk reads.
-  const portraitCache = new Map<string, { etag: string; body: Buffer }>();
+  const portraitCache = new Map<string, CachedAsset>();
 
   async function handleRemote(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const path = url.pathname;
@@ -258,33 +260,15 @@ export function createRemoteRoutes(options: RemoteRoutesOptions): {
     const companion = db.getCompanion(companionId);
     const dir = portraits?.dirFor(companion?.portraitId ?? "");
     if (dir === undefined) throw fail(404, "No portrait");
-    const file = join(dir, "sheet.png");
-    let info;
-    try {
-      info = statSync(file);
-    } catch {
-      throw fail(404, "No portrait");
-    }
-    const etag = `"${Math.floor(info.mtimeMs)}-${info.size}"`;
-    res.setHeader("etag", etag);
-    res.setHeader("cache-control", "private, max-age=60");
-    if (req.headers["if-none-match"] === etag) {
-      res.writeHead(304).end();
-      return;
-    }
-    let cached = portraitCache.get(file);
-    if (cached === undefined || cached.etag !== etag) {
-      let body: Buffer;
-      try {
-        body = readFileSync(file);
-      } catch {
-        throw fail(404, "No portrait");
-      }
-      portraitCache.clear();
-      cached = { etag, body };
-      portraitCache.set(file, cached);
-    }
-    sendBytes(res, 200, "image/png", cached.body, { etag, "cache-control": "private, max-age=60" });
+    serveCachedAsset(req, res, {
+      file: join(dir, "sheet.png"),
+      cache: portraitCache,
+      kind: "image/png",
+      headers: { "cache-control": "private, max-age=60" },
+      notFound: "No portrait",
+      readNotFound: "No portrait",
+      exclusive: true,
+    });
   }
 
   async function handleRemoteApi(req: IncomingMessage, res: ServerResponse, path: string, scope: RemoteTokenScope): Promise<void> {

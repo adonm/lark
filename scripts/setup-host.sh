@@ -81,39 +81,26 @@ install_kokoro() (
 )
 install_kokoro
 
-install_silero() (
-    local name=silero_vad_v5.onnx checksum=6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396
+install_model() (
+    local name=$1 url=$2 checksum=$3 label=$4
     local models="$data/stt-models" destination
     destination="$models/$name"
     if [[ -f "$destination" ]] && verify_sha256 "$checksum" "$destination"; then
         return 0
     fi
     mkdir -p -- "$models"
-    if ! download_verified \
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$name" \
-        "$destination" "$checksum"; then
-        printf 'Silero v5 model failed SHA-256 verification.\n' >&2
+    if ! download_verified "$url" "$destination" "$checksum"; then
+        printf '%s failed SHA-256 verification.\n' "$label" >&2
         return 1
     fi
 )
-install_silero
 
-install_smart_turn() (
-    local name=smart-turn-v3.2-cpu.onnx checksum=2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f
-    local models="$data/stt-models" destination
-    destination="$models/$name"
-    if [[ -f "$destination" ]] && verify_sha256 "$checksum" "$destination"; then
-        return 0
-    fi
-    mkdir -p -- "$models"
-    if ! download_verified \
-        "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/$name" \
-        "$destination" "$checksum"; then
-        printf 'Smart Turn v3.2 model failed SHA-256 verification.\n' >&2
-        return 1
-    fi
-)
-install_smart_turn
+while IFS='|' read -r name url checksum label; do
+    install_model "$name" "$url" "$checksum" "$label"
+done <<'EOF'
+silero_vad_v5.onnx|https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx|6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396|Silero v5 model
+smart-turn-v3.2-cpu.onnx|https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/smart-turn-v3.2-cpu.onnx|2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f|Smart Turn v3.2 model
+EOF
 if "$models_only"; then
     exit 0
 fi

@@ -64,41 +64,42 @@ phase_parakeet_compile() {
 }
 
 phase_c_host() {
-    "${host_cc[@]}" firmware/tests/vad_test.c firmware/main/vad.c -o "$host_tests/vad"
-    "$host_tests/vad"
-    printf 'PASS host VAD tests\n'
-
-    "${host_cc[@]}" firmware/tests/touch_gesture_test.c firmware/main/touch_gesture.c -o "$host_tests/touch_gesture"
-    "$host_tests/touch_gesture"
-
-    "${host_cc[@]}" firmware/tests/proto_test.c -o "$host_tests/proto"
-    "$host_tests/proto"
-
-    "${host_cc[@]}" firmware/tests/wake_gate_test.c -o "$host_tests/wake_gate"
-    "$host_tests/wake_gate"
-
-    "${host_cc[@]}" firmware/tests/net_logic_test.c firmware/main/net_logic.c -o "$host_tests/net_logic"
-    "$host_tests/net_logic"
-
-    "${host_cc[@]}" firmware/tests/telemetry_logic_test.c firmware/main/telemetry_logic.c -o "$host_tests/telemetry_logic" && "$host_tests/telemetry_logic"
-
-    "${host_cc[@]}" firmware/tests/audio_logic_test.c firmware/main/audio_logic.c -o "$host_tests/audio_logic"
-    "$host_tests/audio_logic"
-
-    "${host_cc[@]}" firmware/tests/debug_parse_test.c -o "$host_tests/debug_parse"
-    "$host_tests/debug_parse"
+    local entry sources binary
+    local -a srcs
+    local -a single=(
+        "firmware/tests/vad_test.c firmware/main/vad.c|vad"
+        "firmware/tests/touch_gesture_test.c firmware/main/touch_gesture.c|touch_gesture"
+        "firmware/tests/proto_test.c|proto"
+        "firmware/tests/wake_gate_test.c|wake_gate"
+        "firmware/tests/net_logic_test.c firmware/main/net_logic.c|net_logic"
+        "firmware/tests/telemetry_logic_test.c firmware/main/telemetry_logic.c|telemetry_logic"
+        "firmware/tests/audio_logic_test.c firmware/main/audio_logic.c|audio_logic"
+        "firmware/tests/debug_parse_test.c|debug_parse"
+    )
+    for entry in "${single[@]}"; do
+        IFS='|' read -r sources binary <<<"$entry"
+        read -r -a srcs <<<"$sources"
+        "${host_cc[@]}" "${srcs[@]}" -o "$host_tests/$binary"
+        "$host_tests/$binary"
+    done
+    printf 'PASS host VAD, gesture, protocol, gate, net, telemetry, audio and parse tests\n'
 
     local board flags
+    local -a board_tests=(
+        "firmware/tests/frame_test.c firmware/main/frame.c|frame"
+        "firmware/tests/gfx_test.c firmware/main/gfx.c|gfx"
+        "firmware/tests/display_logic_test.c firmware/main/display_logic.c|display_logic"
+    )
     for board in vocat box3; do
         flags=()
         if [[ "$board" == box3 ]]; then flags+=(-DLARK_BOX3=1); fi
         printf 'Host frame and graphics tests (%s)\n' "$board"
-        "${host_cc[@]}" "${flags[@]}" firmware/tests/frame_test.c firmware/main/frame.c -o "$host_tests/frame"
-        "$host_tests/frame"
-        "${host_cc[@]}" "${flags[@]}" firmware/tests/gfx_test.c firmware/main/gfx.c -o "$host_tests/gfx"
-        "$host_tests/gfx"
-        "${host_cc[@]}" "${flags[@]}" firmware/tests/display_logic_test.c firmware/main/display_logic.c -o "$host_tests/display_logic"
-        "$host_tests/display_logic"
+        for entry in "${board_tests[@]}"; do
+            IFS='|' read -r sources binary <<<"$entry"
+            read -r -a srcs <<<"$sources"
+            "${host_cc[@]}" "${flags[@]}" "${srcs[@]}" -o "$host_tests/$binary"
+            "$host_tests/$binary"
+        done
     done
 }
 
