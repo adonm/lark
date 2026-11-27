@@ -48,10 +48,9 @@
     const oldComp = (prev && prev.companion) || {};
     const companion = Object.assign({}, oldComp, next.companion || {});
     // The portrait URL is compact and stable until the portrait generation
-    // changes; keep the last one when a state push omits it. `portrait` remains
-    // a fallback for older servers that still inline a data URL.
-    for (const key of ["portraitUrl", "portrait"]) {
-      if (!(next.companion && next.companion[key]) && oldComp[key]) companion[key] = oldComp[key];
+    // changes; keep the last one when a state push omits it.
+    if (!(next.companion && next.companion.portraitUrl) && oldComp.portraitUrl) {
+      companion.portraitUrl = oldComp.portraitUrl;
     }
     return {
       companion,
@@ -143,7 +142,7 @@
     document.getElementById("live-state-text").textContent = stateLabels[live] || live;
     const wrap = document.getElementById("portrait-wrap");
     let img = wrap.querySelector("img.portrait");
-    const portrait = c.portraitUrl || c.portrait;
+    const portrait = c.portraitUrl;
     if (portrait) {
       if (!img) {
         wrap.className = "";
