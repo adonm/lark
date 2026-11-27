@@ -10,9 +10,7 @@
 #include "display.h"
 #include "frame.h"
 #include "esp_app_desc.h"
-#include "esp_crt_bundle.h"
 #include "esp_http_server.h"
-#include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -26,7 +24,6 @@
 #include "telemetry_logic.h"
 #include "wifi.h"
 #include "net_client.h"
-#include "proto.h"
 
 static const char *TAG = "ota";
 
@@ -177,69 +174,11 @@ static esp_err_t volume_post(httpd_req_t *request)
     return json_response(request, reply);
 }
 
-static esp_err_t pull_headers(esp_http_client_handle_t client)
-{
-    return esp_http_client_set_header(client, "X-Lark-Token", CONFIG_LARK_TOKEN);
-}
-
 static bool matching_board(const esp_app_desc_t *image)
 {
     const char *project = esp_app_get_description()->project_name;
     const char *incoming = image->project_name;
     return strncmp(incoming, project, sizeof(image->project_name)) == 0;
-}
-
-static esp_err_t ota_pull_post(httpd_req_t *request)
-{
-    char url[256];
-    if (!strncmp(CONFIG_LARK_URL, "http://", 7) || !strncmp(CONFIG_LARK_URL, "https://", 8)) {
-        int len = snprintf(url, sizeof(url), "%s%s", CONFIG_LARK_URL, BOARD_OTA_PATH);
-        if (len < 0 || (size_t)len >= sizeof(url)) {
-            return text_response(request, "500 Internal Server Error", "OTA URL too large\n");
-        }
-    } else {
-        char host[128];
-        uint16_t unused_port = 0;
-        if (!lark_parse_bridge_url(CONFIG_LARK_URL, host, sizeof(host), &unused_port)) {
-            return text_response(request, "500 Internal Server Error", "Invalid bridge URL\n");
-        }
-        const char *scheme = !strncmp(CONFIG_LARK_URL, "wss://", 6) ? "https" : "http";
-        int len = strchr(host, ':') ? snprintf(url, sizeof(url), "%s://[%s]:%d%s", scheme, host, LARK_DEFAULT_HTTP_PORT, BOARD_OTA_PATH)
-                                    : snprintf(url, sizeof(url), "%s://%s:%d%s", scheme, host, LARK_DEFAULT_HTTP_PORT, BOARD_OTA_PATH);
-        if (len < 0 || (size_t)len >= sizeof(url)) {
-            return text_response(request, "500 Internal Server Error", "OTA URL too large\n");
-        }
-    }
-    const esp_http_client_config_t http = {
-        .url = url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 15000,
-        .disable_auto_redirect = true,
-    };
-    const esp_https_ota_config_t config = {
-        .http_config = &http, .http_client_init_cb = pull_headers,
-    };
-    esp_https_ota_handle_t update = NULL;
-    esp_app_desc_t image;
-    esp_err_t err = esp_https_ota_begin(&config, &update);
-    if (err == ESP_OK) err = esp_https_ota_get_img_desc(update, &image);
-    if (err == ESP_OK && !matching_board(&image)) {
-        esp_https_ota_abort(update);
-        return text_response(request, "400 Bad Request", "Firmware is for a different board\n");
-    }
-    if (err == ESP_OK) {
-        do {
-            err = esp_https_ota_perform(update);
-        } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
-    }
-    if (err == ESP_OK && !esp_https_ota_is_complete_data_received(update)) err = ESP_ERR_INVALID_SIZE;
-    if (err == ESP_OK) err = esp_https_ota_finish(update);
-    else if (update) esp_https_ota_abort(update);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Pull failed: %s", esp_err_to_name(err));
-        return text_response(request, "502 Bad Gateway", "OTA pull failed\n");
-    }
-    return respond_and_reboot(request, "OTA installed; rebooting\n");
 }
 
 static esp_err_t ota_upload_post(httpd_req_t *request)
@@ -379,7 +318,7 @@ static esp_err_t checked_post(httpd_req_t *request)
 esp_err_t ota_server_start(void)
 {
     static const post_route_t posts[] = {
-        { "/ota", ota_pull_post }, { "/ota/upload", ota_upload_post }, { "/reboot", reboot_post },
+        { "/ota/upload", ota_upload_post }, { "/reboot", reboot_post },
         { "/volume", volume_post }, { "/debug/tap", debug_tap_post }, { "/debug/mic", debug_mic_post },
     };
     const httpd_uri_t status = { .uri = "/status", .method = HTTP_GET, .handler = status_get };

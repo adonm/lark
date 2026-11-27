@@ -339,15 +339,14 @@ and `library --download|--build` to `lark-library`.
 | --- | --- |
 | `GET /status` | Identity, board, display size, firmware, partition, CPU, memory, RSSI, uptime, battery, volume, sleeping, and `connected` |
 | `POST /volume` | `{"level":65}` → saved volume (0–100) |
-| `POST /ota`, `POST /ota/upload` | Pull or upload the board's firmware (`application/octet-stream`); reboot on success |
+| `POST /ota/upload` | Upload the board's firmware (`application/octet-stream`); reboot on success |
 | `POST /reboot` | Reboot |
 
 ## Networking
 
 Devices need TCP and UDP **8766** (`LARK_DEVICE_PORT`) for the native device
-protocol and TCP **8765** for OTA pull; direct OTA uses TCP **80** to the device.
-Use Avahi (`avahi-resolve -n lark-XXXX.local`) for mDNS or the device IP if the
-container cannot resolve `.local`. HTTP and device transport are unencrypted;
+protocol; OTA pushes use TCP **80** to the device. HTTP and device transport are
+unencrypted;
 use a trusted LAN and keep configs and firmware images private.
 
 ## License

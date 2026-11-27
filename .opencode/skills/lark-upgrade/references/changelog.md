@@ -7,6 +7,30 @@ them; the v1 record stays in git history.
 
 ---
 
+## 2026-11-27 — firmware 0.24.0: push-only OTA and a smaller image
+
+### Affects
+- Devices: firmware `0.24.0` on vocat and box3.
+- Host: no change. `lark ota` already pushes to `POST /ota/upload`.
+
+### Breaking Changes
+- The device's `POST /ota` pull route is gone; a recovery flow must use `POST /ota/upload` or USB.
+- The firmware no longer links the HTTPS client, `esp_https_ota`, the Mozilla certificate bundle or the TLS stack. Plain-HTTP `esp_http_server` still serves `/status`, `/ota/upload` and `/reboot`.
+- IPv6, mDNS queries and softAP/DHCP-server support are disabled; the boards are STA-only IPv4.
+
+### How to Detect
+- `GET /status` reports `firmware` below `0.24.0`, or `POST /ota` still returns `200`/`502` instead of `404`.
+
+### Upgrade Steps
+1. Push each board: `./scripts/lark ota --no-build <ip>` (add `--board box3` for a BOX-3). Canary a vocat first.
+2. No host, config or database step.
+
+### Verification
+- `/status` reports `firmware: "0.24.0"`, `connected: true`, `ota_pending: false`, `reset_reason: "sw"`.
+- Frames, touch, TTS and `lark doctor` remain clean.
+
+---
+
 ## 2026-11-27 — firmware 0.23.0: transport split and mDNS removal
 
 ### Affects
