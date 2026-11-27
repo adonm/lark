@@ -241,13 +241,7 @@ func (c *pixelCanvas) scaleNearest(scale int) *image.RGBA {
 }
 
 func lookupGlyph(f dogica.Font, r rune) dogica.Glyph {
-	if g, ok := f.Glyphs[r]; ok {
-		return g
-	}
-	if g, ok := f.Glyphs['?']; ok {
-		return g
-	}
-	return f.Glyphs[' ']
+	return f.GlyphOrFallback(r)
 }
 
 func drawTextPhysical(dst *image.RGBA, x, y int, s string, f dogica.Font, scale int, col imagecolor.RGBA) {
