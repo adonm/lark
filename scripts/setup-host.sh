@@ -157,27 +157,11 @@ trap - EXIT
 
 mkdir -p -- "$units" "$config/lark"
 wrap="$data/lark"
-# Replace the v1 server binary (or a stale symlink) with the CLI wrapper.
 ln -sfn -- "$REPO_DIR/scripts/lark" "$wrap"
 python3 "$REPO_DIR/scripts/setup/lark_env.py" "$env_file" "$pin_gpu"
 node_bin=$(type -P node)
 python3 "$REPO_DIR/scripts/setup/systemd_units.py" "$REPO_DIR" "$data_home" \
     "$lark_bin" "$node_bin" "$units" "$env_file"
-python3 "$REPO_DIR/scripts/setup/import_credentials.py" \
-    "$data_home/opencode/auth.json" "$data/opencode/auth.json"
-systemctl --user daemon-reload
-retire_unit() {
-    local unit=$1
-    if [[ -e $units/$unit ]]; then
-        # Separate disable/stop: `--now` refuses to run where sd_booted()
-        # reports false (containers) even though the user manager is up.
-        systemctl --user disable "$unit"
-        systemctl --user stop "$unit"
-        rm -f -- "$units/$unit"
-    fi
-}
-retire_unit lark.service
-retire_unit lark-opencode.service
 systemctl --user daemon-reload
 systemctl --user enable lark-edge.service lark-brain.service
 systemctl --user restart lark-edge.service lark-brain.service

@@ -23,7 +23,7 @@ in the codebase.
    - Inspect running services (`systemctl --user status lark-edge lark-brain`), config (`~/.config/lark/lark.env`), and DB (`~/.local/share/lark/lark.db`).
    - Stop both services before copying or editing SQLite files:
      `systemctl --user stop lark-brain.service lark-edge.service`.
-   - Back up the database (`sqlite3 <db> ".backup '<backup-path>'"`) and copy `lark.env` and `~/.local/share/lark/opencode/auth.json`.
+   - Back up the database (`sqlite3 <db> ".backup '<backup-path>'"`) and copy `lark.env` and `~/.local/share/lark/opencode/opencode.db`.
 
 2. **Read `references/changelog.md` newest first, apply bottom-up**
    - Entries are ordered newest first; apply them from the oldest applicable entry up to the newest.

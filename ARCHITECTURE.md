@@ -169,8 +169,9 @@ configuration, session data, cache, and state under
 `~/.local/share/lark/opencode/`, loads only the `lark.context`,
 `lark.model-fallback`, and `lark.tools` plugins, and never reads personal
 OpenCode sessions, plugins, or coding `AGENTS.md`. Setup copies the
-`opencode` provider entry from the user's OpenCode `auth.json` once; providers
-authenticated later can be copied by rerunning `scripts/setup-host.sh`.
+`opencode` provider credential from the user's OpenCode SQLite store once;
+providers authenticated later can be copied by rerunning
+`scripts/setup-host.sh`.
 
 | Role | Default model |
 | --- | --- |

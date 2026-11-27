@@ -8,9 +8,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Retired when OpenCode became embedded in the brain process.
-RETIRED = {"LARK_OPENCODE_URL", "LARK_OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"}
-
 
 def write_env_file(path, pin_gpu):
     path = Path(path)
@@ -24,8 +21,7 @@ def write_env_file(path, pin_gpu):
     if pin_gpu != "false":
         settings["GGML_VK_VISIBLE_DEVICES"] = pin_gpu
     kept = [line for line in old.splitlines(keepends=True)
-            if line.strip().partition("=")[0].rstrip() not in settings.keys()
-            and line.strip().partition("=")[0].rstrip() not in RETIRED]
+            if line.strip().partition("=")[0].rstrip() not in settings.keys()]
     text = "".join(kept)
     if text and not text.endswith("\n"):
         text += "\n"

@@ -1,6 +1,5 @@
 """Tests for the Python helpers setup-host.sh calls."""
 
-import json
 import re
 import sys
 import tempfile
@@ -10,7 +9,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "setup"))
 
-import import_credentials  # noqa: E402
 import lark_env  # noqa: E402
 import systemd_units  # noqa: E402
 
@@ -29,19 +27,13 @@ class LarkEnvTest(unittest.TestCase):
         self.assertNotIn("GGML_VK_VISIBLE_DEVICES", text)
         self.assertNotIn("OPENCODE_SERVER_PASSWORD", text)
 
-    def test_existing_values_are_kept_and_retired_settings_removed(self):
+    def test_existing_values_are_kept(self):
         self.path.write_text(
             "LARK_HOST=127.0.0.1\n"
-            "LARK_TOKEN=abc\n"
-            "LARK_OPENCODE_URL=http://stale:1\n"
-            "LARK_OPENCODE_PASSWORD=" + "a" * 64 + "\n"
-            "OPENCODE_SERVER_PASSWORD=" + "a" * 64 + "\n")
+            "LARK_TOKEN=abc\n")
         text = lark_env.write_env_file(self.path, "1")
         self.assertIn("LARK_HOST=127.0.0.1\n", text)
         self.assertIn("LARK_TOKEN=abc\n", text)
-        self.assertNotIn("LARK_OPENCODE_URL", text)
-        self.assertNotIn("LARK_OPENCODE_PASSWORD", text)
-        self.assertNotIn("OPENCODE_SERVER_PASSWORD", text)
         self.assertIn("GGML_VK_VISIBLE_DEVICES=1\n", text)
 
 
@@ -77,34 +69,6 @@ class SystemdUnitsTest(unittest.TestCase):
             edge = rendered["lark-edge.service"]
             self.assertIn(f'ExecStart="{edge_bin}"', edge)
             self.assertIn('Environment="MALLOC_ARENA_MAX=2"', edge)
-
-
-class ImportCredentialsTest(unittest.TestCase):
-    def test_adds_missing_opencode_entry_and_keeps_existing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            source = tmp / "source.json"
-            destination = tmp / "lark" / "auth.json"
-            source.write_text(json.dumps({
-                "opencode": {"type": "oauth", "access": "new"},
-                "other": {"type": "api", "key": "ignored"},
-            }))
-            destination.parent.mkdir()
-            destination.write_text(json.dumps({
-                "opencode": {"type": "oauth", "access": "kept"},
-            }))
-            added = import_credentials.import_auth(source, destination)
-            self.assertEqual(added, 0)
-            stored = json.loads(destination.read_text())
-            self.assertEqual(stored["opencode"]["access"], "kept")
-            self.assertNotIn("other", stored)
-            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
-            destination.unlink()
-            added = import_credentials.import_auth(source, destination)
-            self.assertEqual(added, 1)
-            stored = json.loads(destination.read_text())
-            self.assertEqual(stored, {"opencode": {"type": "oauth", "access": "new"}})
-            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

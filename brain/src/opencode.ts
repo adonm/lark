@@ -97,9 +97,9 @@ export function parseStoredCredential(raw: unknown): StoredCredentialValue | und
 }
 
 /**
- * Read active provider credentials from a live OpenCode store. Auth.json is
- * legacy: current OpenCode keeps OAuth logins in its SQLite database, so a v1
- * cutover would otherwise start the embedded host without the Zen credential.
+ * Read active provider credentials from a live OpenCode store. OAuth logins
+ * live in OpenCode's SQLite database; the embedded host copies the active
+ * credential for our integration on first start.
  */
 export function readOpenCodeCredentials(path: string, integrationID: string): StoredCredential[] {
   let db: DatabaseSync;
@@ -159,9 +159,6 @@ export interface BrainOptions {
 export interface EmitEvent {
   to?: string;
   say?: string;
-  intercom?: { from: string; text: string };
-  notes?: string[];
-  sfx?: string;
 }
 
 export interface TurnInput {
