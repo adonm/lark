@@ -3,7 +3,7 @@
 Lark is two long-lived processes on one Linux host. A compiled Go **edge** owns
 terminals, audio, speech models, endpointing, and frame encoding. A Node 26
 TypeScript **brain** owns SQLite, OpenCode, Delta Chat, HTTP, stories, timers,
-portraits, and remote controls. They speak one versioned NDJSON protocol over a
+portraits, and remote controls. They speak one typed NDJSON protocol over a
 Unix socket, so either side can restart without dropping the other's hardware
 session.
 
@@ -86,7 +86,7 @@ three binaries to `~/.local/share/lark/` and symlinks this wrapper next to them.
    **8 s** is interrupted and retried once on the fallback.
 5. **Speech.** The brain splits the streaming reply into sentences and sends
    `terminal.speak_chunk`; the edge synthesizes and queues PCM ahead of display
-   frames. Prefill is **250 ms**.
+   frames. Playback prefill is **250 ms**.
 6. **Playback.** The device reports `playback.done`; the brain records the turn.
 
 Screens are static: a frame is encoded only when state changes. Nothing
