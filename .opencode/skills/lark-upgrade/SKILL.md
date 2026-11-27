@@ -1,6 +1,6 @@
 ---
 name: lark-upgrade
-description: Upgrade existing Lark or legacy EchoEar installations, companions, SQLite databases, and OpenCode sessions via the Lark server using changelog-style upgrade notes, or record new breaking changes.
+description: Upgrade existing Lark installations, companions, SQLite databases, and OpenCode sessions via the Lark server using changelog-style upgrade notes, or record new breaking changes.
 ---
 
 # Lark Upgrade
@@ -24,7 +24,6 @@ in the codebase.
    - Stop both services before copying or editing SQLite files:
      `systemctl --user stop lark-brain.service lark-edge.service`.
    - Back up the database (`sqlite3 <db> ".backup '<backup-path>'"`) and copy `lark.env` and `~/.local/share/lark/opencode/auth.json`.
-   - Legacy EchoEar installs still use `~/.config/echoear`, `~/.local/share/echoear`, `echoear-*` units, and tables such as `cats`; convert them while the service is stopped.
 
 2. **Read `references/changelog.md` newest first, apply bottom-up**
    - Entries are ordered newest first; apply them from the oldest applicable entry up to the newest.
