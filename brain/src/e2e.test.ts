@@ -615,8 +615,11 @@ test("real Go edge + Node brain + stub Delta Chat end to end", { timeout: 180_00
     };
 
     let brain = spawnBrain("brain-1");
-    await waitHome();
+    // Wait for the child to report ready before spending the frame budget.
+    // Brain.create and the DC/library setup run before the edge IPC client
+    // attaches, and that cold start can exceed a frame timeout under load.
     await waitHttp(`http://127.0.0.1:${httpPort}/health`, 20_000);
+    await waitHome();
 
     // Menu → Stories → open the story silently.
     await tapHit("menu");
@@ -670,8 +673,8 @@ test("real Go edge + Node brain + stub Delta Chat end to end", { timeout: 180_00
 
     brainEnv.LARK_DC_STUB_PORT = String(await freePort());
     brain = spawnBrain("brain-2");
-    await waitHome();
     await waitHttp(`http://127.0.0.1:${httpPort}/health`, 20_000);
+    await waitHome();
     await device.ping();
     assert.equal(device.connections, 1);
 
