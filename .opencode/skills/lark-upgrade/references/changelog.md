@@ -7,6 +7,33 @@ them; the v1 record stays in git history.
 
 ---
 
+## 2026-11-27 — firmware 0.25.0: edge naming, strict RESUME token, narrower URL schemes
+
+### Affects
+- Devices: firmware `0.25.0` on vocat and box3.
+- Host: `lark-edge` from this commit; protocol bytes and message layouts are unchanged.
+
+### Breaking Changes
+- The `bridge` protocol vocabulary is now `edge`: `LARK_WELCOME_FLAG_EDGE_EP`, `LARK_CAP_EDGE_ENDPOINT`, and `LARK_REC_TARGET_EDGE_EP` keep their original bit values, so 0.24.0 boards interoperate in both directions.
+- `RESUME` now requires the 16-byte token issued in `WELCOME`; a mismatch is rejected as unknown-terminal and falls back to a fresh `HELLO`. Firmware has sent this token since 0.12.0, so no board behaviour changes.
+- `CONFIG_LARK_URL` accepts only `lark://host[:port]`, `http://host[:port]` and bare `host[:port]`. `https://`, `ws://` and `wss://` are rejected at boot.
+- Retired wire fields are named `reserved*` in the generated headers and `docs/protocol.md`; offsets and values are unchanged.
+
+### How to Detect
+- `GET /status` reports `firmware` below `0.25.0`.
+- A board built with an `https://`, `ws://` or `wss://` URL never reaches `connected: true`.
+
+### Upgrade Steps
+1. If `firmware/sdkconfig.local` uses `https://`, `ws://` or `wss://`, rewrite `CONFIG_LARK_URL` as `http://<host>:8765` or `lark://<host>:8766`.
+2. Rebuild and OTA: canary one vocat, then the remaining boards.
+3. No host, config, database or API step.
+
+### Verification
+- `/status` reports `firmware: "0.25.0"`, `connected: true`, `ota_pending: false`, `reset_reason: "sw"`.
+- A forced reconnect resumes without a fresh `HELLO` rejection; frames, touch, TTS and `lark doctor` stay clean.
+
+---
+
 ## 2026-11-27 — firmware 0.24.0: push-only OTA and a smaller image
 
 ### Affects

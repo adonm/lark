@@ -352,7 +352,7 @@ esp_err_t ota_server_start(void)
 void ota_check_boot(int64_t boot_us)
 {
     if (!pending_verification()) return;
-    // Roll back only if the bridge never completes HELLO_OK within 45 s of
+    // Roll back only if the edge never completes HELLO_OK within 45 s of
     // boot. Audio init is logged but not fatal: a codec fault must not roll
     // back every image forever.
     if (!media_audio_ready()) {
@@ -362,12 +362,12 @@ void ota_check_boot(int64_t boot_us)
     if ((net_client_connected() || (remaining_us > 0 && net_client_wait_connected((uint32_t)(remaining_us / 1000))))) {
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Confirmed OTA image after bridge hello");
+            ESP_LOGI(TAG, "Confirmed OTA image after edge hello");
             return;
         }
         ESP_LOGE(TAG, "Confirm OTA image: %s", esp_err_to_name(err));
     }
-    ESP_LOGE(TAG, "OTA boot health check failed (bridge=%d)", net_client_connected());
+    ESP_LOGE(TAG, "OTA boot health check failed (edge=%d)", net_client_connected());
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     ESP_LOGE(TAG, "Roll back OTA image: %s", esp_err_to_name(err));
     // USB flashes may have no known-good OTA image. Keep local recovery reachable.

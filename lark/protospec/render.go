@@ -118,8 +118,8 @@ func renderGoFile(pkg string) ([]byte, error) {
 		}
 		for _, f := range m.Fields {
 			doc := f.Doc
-			if f.Retired && doc == "" {
-				doc = "retired"
+			if f.Reserved && doc == "" {
+				doc = "reserved"
 			}
 			if doc != "" {
 				fmt.Fprintf(&b, "\t// %s\n", doc)
@@ -142,10 +142,12 @@ func renderGoFile(pkg string) ([]byte, error) {
 			continue
 		}
 		fmt.Fprintf(&b, "const %sFixedSize = %d\n", typeName, m.FixedSize())
-		off := 0
-		for _, f := range m.Fields {
-			fmt.Fprintf(&b, "const %s%sOff = %d\n", typeName, s.fieldName(f), off)
-			off += f.Size()
+		if m.NeedsGoDecode() {
+			off := 0
+			for _, f := range m.Fields {
+				fmt.Fprintf(&b, "const %s%sOff = %d\n", typeName, s.fieldName(f), off)
+				off += f.Size()
+			}
 		}
 		b.WriteString("\n")
 
@@ -162,7 +164,7 @@ func renderGoFile(pkg string) ([]byte, error) {
 				limit = 65535
 			}
 			arg := "m." + s.fieldName(f)
-			if f.Retired {
+			if f.Reserved {
 				arg = `""`
 			}
 			fmt.Fprintf(&b, "\ts%d := %s\n", vi, arg)
@@ -171,7 +173,7 @@ func renderGoFile(pkg string) ([]byte, error) {
 		}
 		fmt.Fprintf(&b, "\tb := make([]byte, 0, %sFixedSize", typeName)
 		for _, f := range m.Fields {
-			if f.Variable() && !f.Retired {
+			if f.Variable() && !f.Reserved {
 				fmt.Fprintf(&b, "+len(m.%s)", s.fieldName(f))
 			}
 		}
@@ -180,7 +182,7 @@ func renderGoFile(pkg string) ([]byte, error) {
 			if f.Variable() {
 				continue
 			}
-			if f.Retired {
+			if f.Reserved {
 				switch f.Kind {
 				case U8:
 					b.WriteString("\tb = append(b, 0)\n")
@@ -354,8 +356,8 @@ func renderC() ([]byte, error) {
 		b.WriteString("typedef struct __attribute__((packed)) {\n")
 		for _, f := range m.Fields {
 			doc := f.Doc
-			if f.Retired && doc == "" {
-				doc = "retired"
+			if f.Reserved && doc == "" {
+				doc = "reserved"
 			}
 			if doc != "" {
 				fmt.Fprintf(&b, "    // %s\n", doc)
@@ -382,20 +384,6 @@ func renderC() ([]byte, error) {
 	}
 	b.WriteString("\n")
 
-	// Field offsets.
-	b.WriteString("// Packed field offsets.\nenum {\n")
-	for _, m := range Messages {
-		if m.Opaque {
-			continue
-		}
-		off := 0
-		for _, f := range m.Fields {
-			fmt.Fprintf(&b, "    LARK_%s_%s_OFF = %d,\n", upperSnake(m.Name), upperSnake(f.C), off)
-			off += f.Size()
-		}
-	}
-	b.WriteString("};\n\n")
-
 	for _, m := range Messages {
 		if m.Opaque {
 			continue
@@ -410,7 +398,7 @@ func renderC() ([]byte, error) {
 func cStringArgs(m Message) string {
 	var parts []string
 	for _, f := range m.Fields {
-		if f.Variable() && !f.Retired {
+		if f.Variable() && !f.Reserved {
 			parts = append(parts, fmt.Sprintf("const char *%s", f.Go))
 		}
 	}
@@ -423,7 +411,7 @@ func cStringArgs(m Message) string {
 func cOutArgs(m Message) string {
 	var parts []string
 	for _, f := range m.Fields {
-		if f.Variable() && !f.Retired {
+		if f.Variable() && !f.Reserved {
 			parts = append(parts, fmt.Sprintf("char *%s, size_t %s_cap", f.Go, f.Go))
 		}
 	}
@@ -442,9 +430,9 @@ func renderCEncode(b *bytes.Buffer, m Message) {
 		cFuncName(m), m.CName, cStringArgs(m))
 	b.WriteString("    if (!dst || !m) return 0;\n")
 	fmt.Fprintf(b, "    %s tmp = *m;\n", m.CName)
-	// Zero retired fields in the copy so they never leak onto the wire.
+	// Zero reserved fields in the copy so padding never leaks onto the wire.
 	for _, f := range m.Fields {
-		if !f.Retired {
+		if !f.Reserved {
 			continue
 		}
 		if f.Variable() {
@@ -454,7 +442,7 @@ func renderCEncode(b *bytes.Buffer, m Message) {
 		}
 	}
 	for _, f := range m.Fields {
-		if !f.Variable() || f.Retired {
+		if !f.Variable() || f.Reserved {
 			continue
 		}
 		var max int
@@ -473,14 +461,14 @@ func renderCEncode(b *bytes.Buffer, m Message) {
 	}
 	b.WriteString("    size_t total = sizeof(tmp)")
 	for _, f := range m.Fields {
-		if f.Variable() && !f.Retired {
+		if f.Variable() && !f.Reserved {
 			fmt.Fprintf(b, " + %s_len", f.Go)
 		}
 	}
 	b.WriteString(";\n    if (total > cap) return 0;\n    memcpy(dst, &tmp, sizeof(tmp));\n")
 	hasBody := false
 	for _, f := range m.Fields {
-		if f.Variable() && !f.Retired {
+		if f.Variable() && !f.Reserved {
 			hasBody = true
 		}
 	}
@@ -488,7 +476,7 @@ func renderCEncode(b *bytes.Buffer, m Message) {
 		b.WriteString("    size_t off = sizeof(tmp);\n")
 	}
 	for _, f := range m.Fields {
-		if !f.Variable() || f.Retired {
+		if !f.Variable() || f.Reserved {
 			continue
 		}
 		fmt.Fprintf(b, "    if (%s_len) memcpy(dst + off, %s, %s_len);\n", f.Go, f.Go, f.Go)
@@ -511,16 +499,18 @@ func renderCDecode(b *bytes.Buffer, m Message) {
 	if hasVar {
 		b.WriteString("    size_t need = sizeof(*out)")
 		for _, f := range m.Fields {
-			if f.Variable() {
+			if f.Variable() && !f.Reserved {
 				fmt.Fprintf(b, " + out->%s", f.CLen)
 			}
 		}
-		b.WriteString(";\n    if (len < need) return false;\n    size_t off = sizeof(*out);\n")
+		b.WriteString(";\n    if (len != need) return false;\n    size_t off = sizeof(*out);\n")
 		for _, f := range m.Fields {
 			if !f.Variable() {
 				continue
 			}
-			if !f.Retired {
+			if f.Reserved {
+				fmt.Fprintf(b, "    if (out->%s != 0) return false;\n", f.CLen)
+			} else {
 				fmt.Fprintf(b, "    if (%s && %s_cap) {\n", f.Go, f.Go)
 				fmt.Fprintf(b, "        size_t n = out->%s < %s_cap - 1 ? out->%s : %s_cap - 1;\n", f.CLen, f.Go, f.CLen, f.Go)
 				fmt.Fprintf(b, "        if (n) memcpy(%s, src + off, n);\n        %s[n] = '\\0';\n    }\n", f.Go, f.Go)
@@ -560,11 +550,11 @@ func renderDocs() ([]byte, error) {
 				typ = "bytes"
 			}
 			notes := f.Doc
-			if f.Retired && !strings.Contains(notes, "retired") {
+			if f.Reserved && !strings.Contains(notes, "reserved") {
 				if notes != "" {
-					notes = "retired: " + notes
+					notes = "reserved: " + notes
 				} else {
-					notes = "retired"
+					notes = "reserved"
 				}
 			}
 			fmt.Fprintf(&b, "| %d | %s | %s | %d | %s |\n", off, f.C, typ, f.Size(), notes)
@@ -606,7 +596,7 @@ func sampleMessage(m Message) []byte {
 		if f.Variable() {
 			continue
 		}
-		if f.Retired {
+		if f.Reserved {
 			b = append(b, make([]byte, f.Size())...)
 			continue
 		}
@@ -634,7 +624,7 @@ func sampleMessage(m Message) []byte {
 			continue
 		}
 		s := f.Str
-		if f.Retired {
+		if f.Reserved {
 			s = ""
 		}
 		if f.Kind == Str8 {
@@ -656,7 +646,7 @@ func sampleMessage(m Message) []byte {
 			continue
 		}
 		s := f.Str
-		if f.Retired {
+		if f.Reserved {
 			s = ""
 		}
 		if f.Kind == Str8 && len(s) > 255 {

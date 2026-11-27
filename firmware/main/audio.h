@@ -17,7 +17,7 @@ void audio_tone(audio_tone_t tone, bool (*stop_requested)(const void *), const v
 esp_err_t audio_read_10ms(int16_t pcm[AUDIO_10MS]);
 esp_err_t audio_write_10ms(const int16_t pcm[AUDIO_10MS]);
 esp_err_t audio_fade_out(int16_t last, bool (*stop_requested)(void));
-esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_buf, bool (*stop_requested)(void), audio_capture_sink_t sink, void *ctx);
+esp_err_t audio_record_stream(bool edge_endpoint, bool listen, int16_t *chunk_buf, bool (*stop_requested)(void), audio_capture_sink_t sink, void *ctx);
 int audio_get_volume(void);
 esp_err_t audio_set_volume(int level);
 esp_err_t audio_set_volume_live(int level);

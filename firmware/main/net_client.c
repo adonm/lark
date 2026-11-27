@@ -71,8 +71,8 @@ typedef struct {
 
 static const char *TAG = "net";
 
-static char bridge_host[128];
-static uint16_t bridge_port = LARK_DEFAULT_DEVICE_PORT;
+static char edge_host[128];
+static uint16_t edge_port = LARK_DEFAULT_DEVICE_PORT;
 
 static TaskHandle_t service;
 static QueueHandle_t ctrl_queue;
@@ -314,7 +314,7 @@ static bool send_hello(uint32_t session, uint16_t local_udp_port)
     uint32_t caps = LARK_CAP_DRAG | LARK_CAP_POINTER_REV;
     if (BOARD_HAS_BATTERY) caps |= LARK_CAP_BATTERY | LARK_CAP_PANEL_SLEEP;
     if (media_audio_ready()) {
-        caps |= LARK_CAP_BRIDGE_ENDPOINT;
+        caps |= LARK_CAP_EDGE_ENDPOINT;
     }
     const char *board = BOARD_NAME;
     const char *fw = esp_app_get_description()->version;
@@ -399,7 +399,7 @@ static void handle_handshake(uint32_t session, uint8_t type, const uint8_t *payl
         net_backoff_connected(&backoff);
         if (hello_sem) xSemaphoreGive(hello_sem);
         display_set_link(true);
-        ESP_LOGI(TAG, "Bridge welcome (id=%s comp=%s udp=%u ssrc=0x%08" PRIx32 ")",
+        ESP_LOGI(TAG, "Edge welcome (id=%s comp=%s udp=%u ssrc=0x%08" PRIx32 ")",
                  tid, cid, w.udp_port, w.ssrc);
         return;
     }
@@ -407,7 +407,7 @@ static void handle_handshake(uint32_t session, uint8_t type, const uint8_t *payl
     lark_reject_t reject;
     char msg[128];
     if (!lark_decode_reject(payload, len, &reject, msg, sizeof(msg))) return;
-    ESP_LOGW(TAG, "Bridge rejected connection (reason=%u: %s)", reject.reason, msg);
+    ESP_LOGW(TAG, "Edge rejected connection (reason=%u: %s)", reject.reason, msg);
     session_rejected = true;
     if (reject.reason == LARK_REJECT_UNKNOWN_TERMINAL) {
         has_resume_token = false;
@@ -442,9 +442,9 @@ static void handle_recording(uint32_t session, const uint8_t *payload, uint32_t 
         atomic_store_explicit(&rec_ctrl_us, (uint64_t)esp_timer_get_time(), memory_order_relaxed);
         atomic_store_explicit(&rec_first_rtp, true, memory_order_relaxed);
         uint8_t target_id = ctrl.flags & LARK_REC_TARGET_INTERCOM;
-        bool bridge_ep = (ctrl.flags & LARK_REC_TARGET_BRIDGE_EP) != 0;
+        bool edge_ep = (ctrl.flags & LARK_REC_TARGET_EDGE_EP) != 0;
         bool listen = (ctrl.flags & LARK_REC_TARGET_LISTEN) != 0;
-        if (!media_record_start(ctrl.session, target_id, bridge_ep, listen)) {
+        if (!media_record_start(ctrl.session, target_id, edge_ep, listen)) {
             enqueue_session((input_t){
                 .kind = REJECT_RECORD,
                 .session = session,
@@ -508,8 +508,8 @@ static void handle_misc(uint32_t session, uint8_t type, const uint8_t *payload, 
         }
         break;
     case LARK_MSG_STATUS: {
-        // Only the state byte is meaningful; text, progress and kind are gone
-        // from the protocol, and older servers may still append them.
+        // Only the state byte is meaningful; the remaining bytes are reserved
+        // padding and the decoder rejects a payload that does not match it.
         lark_status_t status;
         if (!lark_decode_status(payload, len, &status)) break;
         ESP_LOGD(TAG, "Status state=%u", status.state);
@@ -562,7 +562,7 @@ static void close_sockets(void)
 static bool open_connection(uint32_t *out_session)
 {
     struct sockaddr_in remote;
-    if (!net_transport_resolve(bridge_host, bridge_port, &remote)) return false;
+    if (!net_transport_resolve(edge_host, edge_port, &remote)) return false;
 
     uint16_t local_udp_port = 0;
     if (!net_transport_open(&remote, &local_udp_port)) return false;
@@ -718,7 +718,7 @@ void net_client_network_changed(bool online)
 
 esp_err_t net_client_init(void)
 {
-    if (!lark_parse_bridge_url(CONFIG_LARK_URL, bridge_host, sizeof(bridge_host), &bridge_port)) {
+    if (!lark_parse_edge_url(CONFIG_LARK_URL, edge_host, sizeof(edge_host), &edge_port)) {
         return ESP_ERR_INVALID_ARG;
     }
     rx_buffer = heap_caps_malloc(FRAME_PACKET_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -738,6 +738,6 @@ esp_err_t net_client_init(void)
         rx_buffer = NULL;
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "Native Lark device client targeting %s:%u", bridge_host, bridge_port);
+    ESP_LOGI(TAG, "Native Lark device client targeting %s:%u", edge_host, edge_port);
     return ESP_OK;
 }

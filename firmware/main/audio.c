@@ -164,7 +164,7 @@ void audio_tone(audio_tone_t tone, bool (*stop_requested)(const void *), const v
     int16_t samples[FRAMES];
 
     // The BSP queues up to 6 × 240 frames (90 ms); send silence to play the tone
-    // out before starting capture or waiting on the bridge.
+    // out before starting capture or waiting on the edge.
     for (int offset = 0; offset < length + DMA_TAIL; offset += FRAMES) {
         if (stop_requested && stop_requested(ctx)) return;
         for (int i = 0; i < FRAMES; ++i) {
@@ -183,7 +183,7 @@ void audio_tone(audio_tone_t tone, bool (*stop_requested)(const void *), const v
     }
 }
 
-esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_buf, bool (*stop_requested)(void), audio_capture_sink_t sink, void *ctx)
+esp_err_t audio_record_stream(bool edge_endpoint, bool listen, int16_t *chunk_buf, bool (*stop_requested)(void), audio_capture_sink_t sink, void *ctx)
 {
     _Static_assert(AUDIO_RECORD_CHUNK_SAMPLES % FRAMES == 0, "Chunk must contain whole VAD frames");
     ESP_RETURN_ON_FALSE(chunk_buf, ESP_ERR_INVALID_ARG, TAG, "No record buffer");
@@ -220,7 +220,7 @@ esp_err_t audio_record_stream(bool bridge_endpoint, bool listen, int16_t *chunk_
         }
         pending += FRAMES;
         vad_result_t result = listen ? VAD_CONTINUE
-                                     : bridge_endpoint ? (vad_bridge_watchdog(&vad, sum / FRAMES) ? VAD_SEND : VAD_CONTINUE)
+                                     : edge_endpoint ? (vad_edge_watchdog(&vad, sum / FRAMES) ? VAD_SEND : VAD_CONTINUE)
                                                        : vad_update(&vad, sum / FRAMES);
         if (result == VAD_NO_SPEECH && !stop_requested()) {
             return ESP_ERR_NOT_FOUND;

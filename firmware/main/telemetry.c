@@ -22,7 +22,7 @@ static unsigned sample_cpu(uint64_t *uptime_us)
     unsigned result = 0;
     portENTER_CRITICAL(&cpu_lock);
     result = cpu_pct;
-    // Share a five-second minimum sample window between HTTP and bridge readers;
+    // Share a five-second minimum sample window between HTTP and edge readers;
     // one reader computes while the other returns the last value.
     if (!sampling && (!sampled_us || now - sampled_us >= 5000000)) {
         due = true;

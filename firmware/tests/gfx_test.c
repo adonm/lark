@@ -14,7 +14,7 @@ static void expect_pixel(unsigned x, unsigned y, uint8_t hi, uint8_t lo)
 
 int main(void)
 {
-    gfx_offline_cat(fb);
+    gfx_offline(fb);
     // Background #1E1A2B -> RGB565 0x18C5
     expect_pixel(0, 0, 0x18, 0xc5);
     expect_pixel(FRAME_WIDTH - 1, FRAME_HEIGHT - 1, 0x18, 0xc5);
@@ -28,5 +28,5 @@ int main(void)
         }
     }
     assert(found_icon);
-    puts("PASS offline cat fallback in LCD byte order");
+    puts("PASS offline screen in LCD byte order");
 }

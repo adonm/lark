@@ -163,7 +163,7 @@ func dialHardware(t *testing.T, e *Edge, id string) *hardware {
 	br := bufio.NewReader(conn)
 	hello := proto.TerminalHello{
 		ProtoVersion: proto.ProtoVersion1, Kind: proto.TermKindHardware,
-		CapsMask:       proto.CapBattery | proto.CapPointerRev | proto.CapBridgeEndpoint,
+		CapsMask:       proto.CapBattery | proto.CapPointerRev | proto.CapEdgeEndpoint,
 		DisplayFormats: proto.DispRGB565, FrameCodecs: proto.CodecBitAll,
 		Width: 360, Height: 360, Shape: proto.ShapeRound, UdpPort: 40000,
 		TerminalID: id, CompanionID: "cake", Board: "esp-vocat",

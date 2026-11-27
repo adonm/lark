@@ -53,7 +53,7 @@ function hello(terminalId: string): Buffer {
   const payload = Buffer.alloc(21 + terminal.length + companion.length + board.length + firmware.length + token.length);
   payload[0] = 1;
   payload[1] = 0;
-  payload.writeUInt32LE(0b1110001, 2); // battery, drag, pointer rev, bridge endpoint
+  payload.writeUInt32LE(0b1110001, 2); // battery, drag, pointer rev, edge endpoint
   payload[6] = 1;
   payload[7] = 15;
   payload.writeUInt16LE(360, 8);

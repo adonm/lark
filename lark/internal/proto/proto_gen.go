@@ -31,15 +31,15 @@ const (
 	// hello flags
 	HelloFlagIfFree = 1
 	// welcome flags
-	WelcomeFlagBridgeEP = 1 << 0
+	WelcomeFlagEdgeEP = 1 << 0
 	// telemetry flags
 	TelemetryFlagSleeping = 1 << 0
 	// HELLO capability bits
-	CapBattery        = 1 << 0
-	CapDrag           = 1 << 4
-	CapPointerRev     = 1 << 5
-	CapBridgeEndpoint = 1 << 6
-	CapPanelSleep     = 1 << 7
+	CapBattery      = 1 << 0
+	CapDrag         = 1 << 4
+	CapPointerRev   = 1 << 5
+	CapEdgeEndpoint = 1 << 6
+	CapPanelSleep   = 1 << 7
 	// reject reasons
 	RejectBadToken        = 1
 	RejectBadVersion      = 2
@@ -64,9 +64,9 @@ const (
 	RecOpStart  = 1
 	RecOpCancel = 2
 	// recording target flags
-	RecTargetInter   = 1 << 0
-	RecTargetListen  = 1 << 6
-	RecTargetBridgeE = 1 << 7
+	RecTargetInter  = 1 << 0
+	RecTargetListen = 1 << 6
+	RecTargetEdgeE  = 1 << 7
 	// TTS ops
 	TtsOpStop  = 0
 	TtsOpStart = 1
@@ -240,19 +240,19 @@ func DecodeTerminalHello(b []byte) (TerminalHello, bool) {
 	return m, true
 }
 
-// Resume: Resume token and terminal id. The old sequence field stays in the layout.
+// Resume: Resume token and terminal id, plus reserved padding.
 type TerminalResume struct {
 	ProtoVersion uint8
 	ResumeToken  [16]byte
-	// retired snapshot sequence
-	LastSeq    uint32
+	// reserved
+	Reserved0  uint32
 	TerminalID string
 }
 
 const TerminalResumeFixedSize = 22
 const TerminalResumeProtoVersionOff = 0
 const TerminalResumeResumeTokenOff = 1
-const TerminalResumeLastSeqOff = 17
+const TerminalResumeReserved0Off = 17
 const TerminalResumeTerminalIDOff = 21
 
 func (m TerminalResume) Encode() []byte {
@@ -276,7 +276,7 @@ func DecodeTerminalResume(b []byte) (TerminalResume, bool) {
 	}
 	m.ProtoVersion = b[TerminalResumeProtoVersionOff]
 	copy(m.ResumeToken[:], b[TerminalResumeResumeTokenOff:TerminalResumeResumeTokenOff+16])
-	m.LastSeq = binary.LittleEndian.Uint32(b[TerminalResumeLastSeqOff : TerminalResumeLastSeqOff+4])
+	m.Reserved0 = binary.LittleEndian.Uint32(b[TerminalResumeReserved0Off : TerminalResumeReserved0Off+4])
 	off := TerminalResumeFixedSize
 	n0 := int(b[TerminalResumeTerminalIDOff])
 	if off+n0 > len(b) {
@@ -490,21 +490,11 @@ type ProtoPing struct {
 }
 
 const ProtoPingFixedSize = 4
-const ProtoPingPayloadOff = 0
 
 func (m ProtoPing) Encode() []byte {
 	b := make([]byte, 0, ProtoPingFixedSize)
 	b = append(b, m.Payload[:]...)
 	return b
-}
-
-func DecodeProtoPing(b []byte) (ProtoPing, bool) {
-	var m ProtoPing
-	if len(b) < ProtoPingFixedSize {
-		return m, false
-	}
-	copy(m.Payload[:], b[ProtoPingPayloadOff:ProtoPingPayloadOff+4])
-	return m, true
 }
 
 // Pong: TCP keepalive reply.
@@ -513,21 +503,11 @@ type ProtoPong struct {
 }
 
 const ProtoPongFixedSize = 4
-const ProtoPongPayloadOff = 0
 
 func (m ProtoPong) Encode() []byte {
 	b := make([]byte, 0, ProtoPongFixedSize)
 	b = append(b, m.Payload[:]...)
 	return b
-}
-
-func DecodeProtoPong(b []byte) (ProtoPong, bool) {
-	var m ProtoPong
-	if len(b) < ProtoPongFixedSize {
-		return m, false
-	}
-	copy(m.Payload[:], b[ProtoPongPayloadOff:ProtoPongPayloadOff+4])
-	return m, true
 }
 
 // Welcome: Session accepted: UDP endpoint, SSRC, limits, resume token and ids.
@@ -538,8 +518,8 @@ type ProtoWelcome struct {
 	Ssrc           uint32
 	MaxMsgBytes    uint32
 	ResumeWindowMS uint32
-	// retired snapshot sequence
-	Seq         uint32
+	// reserved
+	Reserved0   uint32
 	ResumeToken [16]byte
 	TerminalID  string
 	CompanionID string
@@ -552,7 +532,7 @@ const ProtoWelcomeUdpPortOff = 2
 const ProtoWelcomeSsrcOff = 4
 const ProtoWelcomeMaxMsgBytesOff = 8
 const ProtoWelcomeResumeWindowMSOff = 12
-const ProtoWelcomeSeqOff = 16
+const ProtoWelcomeReserved0Off = 16
 const ProtoWelcomeResumeTokenOff = 20
 const ProtoWelcomeTerminalIDOff = 36
 const ProtoWelcomeCompanionIDOff = 37
@@ -593,7 +573,7 @@ func DecodeProtoWelcome(b []byte) (ProtoWelcome, bool) {
 	m.Ssrc = binary.LittleEndian.Uint32(b[ProtoWelcomeSsrcOff : ProtoWelcomeSsrcOff+4])
 	m.MaxMsgBytes = binary.LittleEndian.Uint32(b[ProtoWelcomeMaxMsgBytesOff : ProtoWelcomeMaxMsgBytesOff+4])
 	m.ResumeWindowMS = binary.LittleEndian.Uint32(b[ProtoWelcomeResumeWindowMSOff : ProtoWelcomeResumeWindowMSOff+4])
-	m.Seq = binary.LittleEndian.Uint32(b[ProtoWelcomeSeqOff : ProtoWelcomeSeqOff+4])
+	m.Reserved0 = binary.LittleEndian.Uint32(b[ProtoWelcomeReserved0Off : ProtoWelcomeReserved0Off+4])
 	copy(m.ResumeToken[:], b[ProtoWelcomeResumeTokenOff:ProtoWelcomeResumeTokenOff+16])
 	off := ProtoWelcomeFixedSize
 	n0 := int(b[ProtoWelcomeTerminalIDOff])
@@ -618,8 +598,6 @@ type ProtoReject struct {
 }
 
 const ProtoRejectFixedSize = 2
-const ProtoRejectReasonOff = 0
-const ProtoRejectMessageOff = 1
 
 func (m ProtoReject) Encode() []byte {
 	s0 := m.Message
@@ -649,10 +627,6 @@ type ProtoRecCtrl struct {
 }
 
 const ProtoRecCtrlFixedSize = 5
-const ProtoRecCtrlOpOff = 0
-const ProtoRecCtrlFlagsOff = 1
-const ProtoRecCtrlSessionOff = 2
-const ProtoRecCtrlTargetOff = 4
 
 func (m ProtoRecCtrl) Encode() []byte {
 	s0 := m.Target
@@ -708,7 +682,6 @@ type ProtoChime struct {
 }
 
 const ProtoChimeFixedSize = 1
-const ProtoChimeKindOff = 0
 
 func (m ProtoChime) Encode() []byte {
 	b := make([]byte, 0, ProtoChimeFixedSize)
@@ -722,7 +695,6 @@ type ProtoPower struct {
 }
 
 const ProtoPowerFixedSize = 1
-const ProtoPowerLevelOff = 0
 
 func (m ProtoPower) Encode() []byte {
 	b := make([]byte, 0, ProtoPowerFixedSize)
@@ -730,22 +702,17 @@ func (m ProtoPower) Encode() []byte {
 	return b
 }
 
-// Volume: Set output volume, optionally persisting. The auto-mode byte is retired.
+// Volume: Set output volume, optionally persisting. A reserved byte follows.
 type ProtoVolume struct {
 	Level   uint8
 	Persist uint8
-	// retired auto-volume mode
-	Auto        uint8
+	// reserved
+	Reserved0   uint8
 	TerminalID  string
 	CompanionID string
 }
 
 const ProtoVolumeFixedSize = 5
-const ProtoVolumeLevelOff = 0
-const ProtoVolumePersistOff = 1
-const ProtoVolumeAutoOff = 2
-const ProtoVolumeTerminalIDOff = 3
-const ProtoVolumeCompanionIDOff = 4
 
 func (m ProtoVolume) Encode() []byte {
 	s0 := m.TerminalID
@@ -767,25 +734,20 @@ func (m ProtoVolume) Encode() []byte {
 	return b
 }
 
-// Status: Assistant state. Sequence, progress, kind and text stay in the layout.
+// Status: Assistant state. Reserved padding stays in the layout.
 type ProtoStatus struct {
-	// retired state sequence
-	Seq   uint32
-	State uint8
-	// retired progress percent
-	Progress uint8
-	// retired prompt kind
-	Kind uint8
-	// retired detail text
-	Text string
+	// reserved
+	Reserved0 uint32
+	State     uint8
+	// reserved
+	Reserved1 uint8
+	// reserved
+	Reserved2 uint8
+	// reserved
+	Reserved3 string
 }
 
 const ProtoStatusFixedSize = 9
-const ProtoStatusSeqOff = 0
-const ProtoStatusStateOff = 4
-const ProtoStatusProgressOff = 5
-const ProtoStatusKindOff = 6
-const ProtoStatusTextOff = 7
 
 func (m ProtoStatus) Encode() []byte {
 	s0 := ""
@@ -804,16 +766,13 @@ func (m ProtoStatus) Encode() []byte {
 
 // VoiceOwner: Companion voice ownership broadcast.
 type ProtoVoiceOwner struct {
-	// retired state sequence
-	Seq         uint32
+	// reserved
+	Reserved0   uint32
 	CompanionID string
 	TerminalID  string
 }
 
 const ProtoVoiceOwnerFixedSize = 6
-const ProtoVoiceOwnerSeqOff = 0
-const ProtoVoiceOwnerCompanionIDOff = 4
-const ProtoVoiceOwnerTerminalIDOff = 5
 
 func (m ProtoVoiceOwner) Encode() []byte {
 	s0 := m.CompanionID

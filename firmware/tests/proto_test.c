@@ -65,27 +65,30 @@ static void test_url_parsing(void)
     char host[128];
     uint16_t port = 0;
 
-    assert(lark_parse_bridge_url("http://192.168.1.42:8765", host, sizeof(host), &port));
+    assert(lark_parse_edge_url("http://192.168.1.42:8765", host, sizeof(host), &port));
     assert(strcmp(host, "192.168.1.42") == 0 && port == 8766);
 
-    assert(lark_parse_bridge_url("https://bridge.local:8443/", host, sizeof(host), &port));
-    assert(strcmp(host, "bridge.local") == 0 && port == 8766);
-
-    assert(lark_parse_bridge_url("ws://10.0.0.5:8765/ws", host, sizeof(host), &port));
+    assert(lark_parse_edge_url("10.0.0.5", host, sizeof(host), &port));
     assert(strcmp(host, "10.0.0.5") == 0 && port == 8766);
 
-    assert(lark_parse_bridge_url("lark://10.0.0.5:9001", host, sizeof(host), &port));
+    assert(lark_parse_edge_url("edge.local:9001", host, sizeof(host), &port));
+    assert(strcmp(host, "edge.local") == 0 && port == 9001);
+
+    assert(lark_parse_edge_url("lark://10.0.0.5:9001", host, sizeof(host), &port));
     assert(strcmp(host, "10.0.0.5") == 0 && port == 9001);
 
-    assert(lark_parse_bridge_url("lark://lark.local", host, sizeof(host), &port));
+    assert(lark_parse_edge_url("lark://lark.local", host, sizeof(host), &port));
     assert(strcmp(host, "lark.local") == 0 && port == 8766);
 
-    assert(lark_parse_bridge_url("lark://[::1]:7777", host, sizeof(host), &port));
+    assert(lark_parse_edge_url("lark://[::1]:7777", host, sizeof(host), &port));
     assert(strcmp(host, "::1") == 0 && port == 7777);
 
-    assert(!lark_parse_bridge_url("ftp://10.0.0.5", host, sizeof(host), &port));
-    assert(!lark_parse_bridge_url("http://user@10.0.0.5:8765", host, sizeof(host), &port));
-    assert(!lark_parse_bridge_url("lark://10.0.0.5:99999", host, sizeof(host), &port));
+    assert(!lark_parse_edge_url("https://edge.local:8443/", host, sizeof(host), &port));
+    assert(!lark_parse_edge_url("ws://10.0.0.5:8765/ws", host, sizeof(host), &port));
+    assert(!lark_parse_edge_url("wss://10.0.0.5:8765/ws", host, sizeof(host), &port));
+    assert(!lark_parse_edge_url("ftp://10.0.0.5", host, sizeof(host), &port));
+    assert(!lark_parse_edge_url("http://user@10.0.0.5:8765", host, sizeof(host), &port));
+    assert(!lark_parse_edge_url("lark://10.0.0.5:99999", host, sizeof(host), &port));
 }
 
 // Each fixture below was produced by the Go codec from lark/protospec/spec.go.
@@ -133,7 +136,6 @@ static void test_resume_fixture(void)
 {
     lark_resume_t r = {
         .proto_version = FIXTURE_RESUME_PROTO_VERSION,
-        .last_seq = FIXTURE_RESUME_LAST_SEQ,
         .id_len = strlen(FIXTURE_RESUME_ID_LEN),
     };
     for (int i = 0; i < LARK_RESUME_TOKEN_LEN; ++i) r.resume_token[i] = (uint8_t)(i + 1);
@@ -252,7 +254,6 @@ static void test_welcome_fixture(void)
         .ssrc = FIXTURE_WELCOME_SSRC,
         .max_msg_bytes = FIXTURE_WELCOME_MAX_MSG_BYTES,
         .resume_window_ms = FIXTURE_WELCOME_RESUME_WINDOW_MS,
-        .seq = FIXTURE_WELCOME_SEQ,
         .id_len = strlen(FIXTURE_WELCOME_ID_LEN),
         .comp_len = strlen(FIXTURE_WELCOME_COMP_LEN),
     };
@@ -325,7 +326,6 @@ static void test_simple_fixtures(void)
     lark_volume_t vol = {
         .level = FIXTURE_VOLUME_LEVEL,
         .persist = FIXTURE_VOLUME_PERSIST,
-        .auto_mode = FIXTURE_VOLUME_AUTO_MODE,
         .id_len = strlen(FIXTURE_VOLUME_ID_LEN),
         .comp_len = strlen(FIXTURE_VOLUME_COMP_LEN),
     };
@@ -338,20 +338,15 @@ static void test_simple_fixtures(void)
     assert(strcmp(cid, FIXTURE_VOLUME_COMP_LEN) == 0);
 
     lark_status_t status = {
-        .seq = FIXTURE_STATUS_SEQ,
         .state = FIXTURE_STATUS_STATE,
-        .progress = FIXTURE_STATUS_PROGRESS,
-        .kind = FIXTURE_STATUS_KIND,
-        .text_len = strlen(FIXTURE_STATUS_TEXT_LEN),
     };
     n = lark_encode_status(buf, sizeof(buf), &status);
     assert(n == PROTO_FIXTURE_STATUS_LEN && memcmp(buf, proto_fixture_status, n) == 0);
     lark_status_t sout;
     assert(lark_decode_status(proto_fixture_status, sizeof(proto_fixture_status), &sout));
-    assert(sout.state == FIXTURE_STATUS_STATE && sout.seq == FIXTURE_STATUS_SEQ);
+    assert(sout.state == FIXTURE_STATUS_STATE);
 
     lark_voice_owner_t owner = {
-        .seq = FIXTURE_VOICE_OWNER_SEQ,
         .comp_len = strlen(FIXTURE_VOICE_OWNER_COMP_LEN),
         .term_len = strlen(FIXTURE_VOICE_OWNER_TERM_LEN),
     };

@@ -36,7 +36,7 @@ static const uint8_t proto_fixture_resume[] = {
 };
 enum { PROTO_FIXTURE_RESUME_LEN = 32 };
 #define FIXTURE_RESUME_PROTO_VERSION 1
-#define FIXTURE_RESUME_LAST_SEQ 0
+#define FIXTURE_RESUME_RESERVED0 0
 #define FIXTURE_RESUME_ID_LEN "vocat-33d8"
 
 static const uint8_t proto_fixture_telemetry[] = {
@@ -109,7 +109,7 @@ enum { PROTO_FIXTURE_WELCOME_LEN = 52 };
 #define FIXTURE_WELCOME_SSRC 287454020
 #define FIXTURE_WELCOME_MAX_MSG_BYTES 327680
 #define FIXTURE_WELCOME_RESUME_WINDOW_MS 30000
-#define FIXTURE_WELCOME_SEQ 0
+#define FIXTURE_WELCOME_RESERVED0 0
 #define FIXTURE_WELCOME_ID_LEN "vocat-33d8"
 #define FIXTURE_WELCOME_COMP_LEN "cake"
 
@@ -155,7 +155,7 @@ static const uint8_t proto_fixture_volume[] = {
 enum { PROTO_FIXTURE_VOLUME_LEN = 19 };
 #define FIXTURE_VOLUME_LEVEL 60
 #define FIXTURE_VOLUME_PERSIST 1
-#define FIXTURE_VOLUME_AUTO_MODE 0
+#define FIXTURE_VOLUME_RESERVED0 0
 #define FIXTURE_VOLUME_ID_LEN "vocat-33d8"
 #define FIXTURE_VOLUME_COMP_LEN "cake"
 
@@ -163,17 +163,17 @@ static const uint8_t proto_fixture_status[] = {
     0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 
 };
 enum { PROTO_FIXTURE_STATUS_LEN = 9 };
-#define FIXTURE_STATUS_SEQ 0
+#define FIXTURE_STATUS_RESERVED0 0
 #define FIXTURE_STATUS_STATE 3
-#define FIXTURE_STATUS_PROGRESS 0
-#define FIXTURE_STATUS_KIND 0
-#define FIXTURE_STATUS_TEXT_LEN ""
+#define FIXTURE_STATUS_RESERVED1 0
+#define FIXTURE_STATUS_RESERVED2 0
+#define FIXTURE_STATUS_RESERVED3_LEN ""
 
 static const uint8_t proto_fixture_voice_owner[] = {
     0x00, 0x00, 0x00, 0x00, 0x04, 0x0A, 0x63, 0x61, 0x6B, 0x65, 0x76, 0x6F, 
     0x63, 0x61, 0x74, 0x2D, 0x33, 0x33, 0x64, 0x38, 
 };
 enum { PROTO_FIXTURE_VOICE_OWNER_LEN = 20 };
-#define FIXTURE_VOICE_OWNER_SEQ 0
+#define FIXTURE_VOICE_OWNER_RESERVED0 0
 #define FIXTURE_VOICE_OWNER_COMP_LEN "cake"
 #define FIXTURE_VOICE_OWNER_TERM_LEN "vocat-33d8"

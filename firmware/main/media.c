@@ -41,7 +41,7 @@ typedef struct {
     uint16_t rec_session;
     uint8_t target;
     audio_tone_t tone;
-    bool bridge_endpoint;
+    bool edge_endpoint;
     bool listen;
     net_upload_t upload;
 } job_t;
@@ -102,7 +102,7 @@ void media_link_lost(void)
     media_interrupt();
 }
 
-bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoint, bool listen)
+bool media_record_start(uint16_t rec_session, uint8_t target, bool edge_endpoint, bool listen)
 {
     if (!jobs) return false;
     job_t job = {
@@ -110,7 +110,7 @@ bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoi
         .session = net_client_session(),
         .rec_session = rec_session,
         .target = target,
-        .bridge_endpoint = bridge_endpoint,
+        .edge_endpoint = edge_endpoint,
         .listen = listen,
     };
     xSemaphoreTake(lock, portMAX_DELAY);
@@ -260,7 +260,7 @@ static void record(job_t *job)
     bool started = !atomic_load(&cancel_recording) && net_client_rec_start(job->session, job->rec_session, job->target);
     bool cancelled = true;
     if (started && !capture_cancelled(NULL)) {
-        esp_err_t err = audio_record_stream(job->bridge_endpoint, job->listen, net_client_rec_buf(),
+        esp_err_t err = audio_record_stream(job->edge_endpoint, job->listen, net_client_rec_buf(),
                                             stop_capture, upload_pcm, job);
         cancelled = err != ESP_OK || capture_cancelled(NULL);
     }

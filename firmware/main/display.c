@@ -96,7 +96,7 @@ static esp_err_t blit(frame_bounds_t area)
 
 static void display_show_offline(void)
 {
-    gfx_offline_cat(fb);
+    gfx_offline(fb);
 }
 
 static void paint_task(void *arg)
@@ -129,7 +129,7 @@ static void paint_task(void *arg)
                     atomic_store_explicit(&telemetry_io.last_frame_rev, decoded.rect.rev_lo, memory_order_relaxed);
                     if (first_frame) {
                         first_frame = false;
-                        ESP_LOGI(TAG, "Applied bridge frame 0x03 %ux%u (codec %u)", decoded.rect.w, decoded.rect.h, work_pkt[9]);
+                        ESP_LOGI(TAG, "Applied edge frame 0x03 %ux%u (codec %u)", decoded.rect.w, decoded.rect.h, work_pkt[9]);
                     }
                 }
                 xSemaphoreGive(fb_lock);
@@ -218,7 +218,7 @@ bool display_apply_frame(const uint8_t *data, size_t len)
 
 void display_set_brightness(int level)
 {
-    // The bridge raises the pairing screen to 100%; DIM/BRIGHT stay the normal
+    // The edge raises the pairing screen to 100%; DIM/BRIGHT stay the normal
     // UI range that idle sleep and touch wake restore.
     if (level < 0 || level > 100) return;
     atomic_store(&brightness, level);
@@ -238,7 +238,7 @@ void display_wake(void)
     xSemaphoreTake(fb_lock, portMAX_DELAY);
     bool host_controls = linked;
     xSemaphoreGive(fb_lock);
-    // While linked, the bridge owns brightness (the pairing screen stays at
+    // While linked, the edge owns brightness (the pairing screen stays at
     // 100%); the local fallback only restores dimmed offline panels.
     if (!host_controls && atomic_load(&brightness) == DIM) display_set_brightness(BRIGHT);
 }

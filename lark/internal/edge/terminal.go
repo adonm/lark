@@ -283,8 +283,8 @@ func (t *Terminal) pingInterval() time.Duration {
 
 func (t *Terminal) welcomePayload(udpPort uint16) []byte {
 	var flags uint8
-	if t.info.caps&proto.CapBridgeEndpoint != 0 {
-		flags |= proto.WelcomeFlagBridgeEP
+	if t.info.caps&proto.CapEdgeEndpoint != 0 {
+		flags |= proto.WelcomeFlagEdgeEP
 	}
 	return proto.ProtoWelcome{
 		ProtoVersion: proto.ProtoVersion1, Flags: flags, UdpPort: udpPort,

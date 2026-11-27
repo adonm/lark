@@ -6,7 +6,7 @@ enum { DEBUG_MIC_MAX_BYTES = 16000 * 10 * sizeof(int16_t) };
 
 esp_err_t media_init(bool audio_ready);
 bool media_audio_ready(void);
-bool media_record_start(uint16_t rec_session, uint8_t target, bool bridge_endpoint, bool listen);
+bool media_record_start(uint16_t rec_session, uint8_t target, bool edge_endpoint, bool listen);
 void media_record_stop(bool cancelled);
 bool media_is_recording(void);
 bool media_tts_start(uint32_t audio_id);

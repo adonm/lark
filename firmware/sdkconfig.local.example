@@ -1,6 +1,6 @@
 CONFIG_LARK_WIFI_SSID="YOUR_WIFI_SSID"
 CONFIG_LARK_WIFI_PASSWORD="YOUR_WIFI_PASSWORD"
 # Accepts http://LARK_HOST:8765 (HTTP/OTA) or lark://LARK_HOST:8766; the native
-# bridge client derives host:8766 from the same value.
+# edge client derives host:8766 from the same value.
 CONFIG_LARK_URL="http://LARK_HOST:8765"
 CONFIG_LARK_TOKEN="CHANGE_ME"

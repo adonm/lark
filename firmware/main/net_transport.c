@@ -32,7 +32,7 @@ static int udp_fd = -1;
 static int wake_rx_fd = -1;
 static int wake_tx_fd = -1;
 static wake_gate_t wake_gate;
-static struct sockaddr_in bridge_udp_addr;
+static struct sockaddr_in edge_udp_addr;
 static uint32_t active_ssrc;
 static uint16_t rtp_seq;
 static uint32_t rtp_ts;
@@ -259,8 +259,8 @@ bool net_transport_open(const struct sockaddr_in *remote, uint16_t *local_udp_po
 
     portENTER_CRITICAL(&udp_lock);
     udp_fd = ufd;
-    bridge_udp_addr = *remote;
-    bridge_udp_addr.sin_port = 0;
+    edge_udp_addr = *remote;
+    edge_udp_addr.sin_port = 0;
     active_ssrc = 0;
     portEXIT_CRITICAL(&udp_lock);
 
@@ -279,7 +279,7 @@ void net_transport_close(void)
     int ufd = udp_fd;
     udp_fd = -1;
     active_ssrc = 0;
-    memset(&bridge_udp_addr, 0, sizeof(bridge_udp_addr));
+    memset(&edge_udp_addr, 0, sizeof(edge_udp_addr));
     portEXIT_CRITICAL(&udp_lock);
     if (ufd >= 0) lwip_close(ufd);
 }
@@ -312,7 +312,7 @@ void net_transport_init_wake(void)
 void net_transport_set_udp_peer(uint16_t port, uint32_t ssrc)
 {
     portENTER_CRITICAL(&udp_lock);
-    bridge_udp_addr.sin_port = htons(port);
+    edge_udp_addr.sin_port = htons(port);
     active_ssrc = ssrc;
     rtp_seq = 0;
     rtp_ts = 0;
@@ -323,7 +323,7 @@ void net_transport_clear_udp_peer(void)
 {
     portENTER_CRITICAL(&udp_lock);
     active_ssrc = 0;
-    bridge_udp_addr.sin_port = 0;
+    edge_udp_addr.sin_port = 0;
     portEXIT_CRITICAL(&udp_lock);
 }
 
@@ -340,9 +340,9 @@ bool net_transport_send_rtp(uint8_t pt, const int16_t *pcm, size_t samples)
     uint16_t seq = 0;
 
     portENTER_CRITICAL(&udp_lock);
-    if (udp_fd >= 0 && active_ssrc != 0 && bridge_udp_addr.sin_port != 0) {
+    if (udp_fd >= 0 && active_ssrc != 0 && edge_udp_addr.sin_port != 0) {
         fd = udp_fd;
-        dst = bridge_udp_addr;
+        dst = edge_udp_addr;
         ssrc = active_ssrc;
         seq = rtp_seq++;
         ts = rtp_ts;

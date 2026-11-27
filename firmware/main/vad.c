@@ -50,9 +50,9 @@ vad_result_t vad_update(vad_t *v, uint32_t energy)
     return VAD_CONTINUE;
 }
 
-bool vad_bridge_watchdog(vad_t *v, uint32_t energy)
+bool vad_edge_watchdog(vad_t *v, uint32_t energy)
 {
-    enum { BRIDGE_SILENT_FRAMES = 800, BRIDGE_LIMIT_FRAMES = 6000 };
+    enum { EDGE_SILENT_FRAMES = 800, EDGE_LIMIT_FRAMES = 6000 };
     if (calibrate(v, energy)) return false;
     if (energy >= v->threshold) {
         if (++v->streak >= MIN_WORD_FRAMES) v->silence = 0;
@@ -60,5 +60,5 @@ bool vad_bridge_watchdog(vad_t *v, uint32_t energy)
         v->streak = 0;
         ++v->silence;
     }
-    return v->silence >= BRIDGE_SILENT_FRAMES || v->frames >= BRIDGE_LIMIT_FRAMES;
+    return v->silence >= EDGE_SILENT_FRAMES || v->frames >= EDGE_LIMIT_FRAMES;
 }

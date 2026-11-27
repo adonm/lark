@@ -37,7 +37,7 @@ tune, nearby-song identification, stop).
 
 **Firmware.** ESP-IDF C for ESP-VoCat v1.2 and ESP32-S3-BOX-3. It captures and
 plays audio, renders frames, draws a fallback face when offline, reports
-telemetry, accepts pushed OTA, and advertises `caps.bridge_endpoint` in `hello`
+telemetry, accepts pushed OTA, and advertises `caps.edge_endpoint` in `hello`
 so the edge owns endpointing.
 
 | Path | Contents |

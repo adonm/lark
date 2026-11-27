@@ -266,7 +266,7 @@ static void test_dirty_union(void)
 
 static void test_strip_copy(void)
 {
-    // A 120x160 rect (the bridge's coarse frame grid) committed at an odd x
+    // A 120x160 rect (the edge's coarse frame grid) committed at an odd x
     // coordinate, then copied out strip by strip exactly like the painter.
     enum { ROWS = 24, W = 120, H = 160 };
     const unsigned x = FRAME_WIDTH - W - 3, y = FRAME_HEIGHT - H - 7;

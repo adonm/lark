@@ -36,7 +36,7 @@ enum {
     LARK_SHAPE_RECT = 1,
 
     // welcome flags
-    LARK_WELCOME_FLAG_BRIDGE_EP = 1u << 0,
+    LARK_WELCOME_FLAG_EDGE_EP = 1u << 0,
 
     // telemetry flags
     LARK_TELEMETRY_SLEEPING = 1u << 0,
@@ -45,7 +45,7 @@ enum {
     LARK_CAP_BATTERY = 1u << 0,
     LARK_CAP_DRAG = 1u << 4,
     LARK_CAP_POINTER_REV = 1u << 5,
-    LARK_CAP_BRIDGE_ENDPOINT = 1u << 6,
+    LARK_CAP_EDGE_ENDPOINT = 1u << 6,
     LARK_CAP_PANEL_SLEEP = 1u << 7,
 
     // reject reasons
@@ -76,7 +76,7 @@ enum {
     // recording target flags
     LARK_REC_TARGET_INTERCOM = 1u << 0,
     LARK_REC_TARGET_LISTEN = 1u << 6,
-    LARK_REC_TARGET_BRIDGE_EP = 1u << 7,
+    LARK_REC_TARGET_EDGE_EP = 1u << 7,
 
     // TTS ops
     LARK_TTS_STOP = 0,
@@ -142,12 +142,12 @@ typedef struct __attribute__((packed)) {
     uint8_t tok_len;
 } lark_hello_t;
 
-// RESUME (0x02): Resume token and terminal id. The old sequence field stays in the layout.
+// RESUME (0x02): Resume token and terminal id, plus reserved padding.
 typedef struct __attribute__((packed)) {
     uint8_t proto_version;
     uint8_t resume_token[16];
-    // retired snapshot sequence
-    uint32_t last_seq;
+    // reserved
+    uint32_t reserved0;
     uint8_t id_len;
 } lark_resume_t;
 
@@ -209,8 +209,8 @@ typedef struct __attribute__((packed)) {
     uint32_t ssrc;
     uint32_t max_msg_bytes;
     uint32_t resume_window_ms;
-    // retired snapshot sequence
-    uint32_t seq;
+    // reserved
+    uint32_t reserved0;
     uint8_t resume_token[16];
     uint8_t id_len;
     uint8_t comp_len;
@@ -246,33 +246,33 @@ typedef struct __attribute__((packed)) {
     uint8_t level;
 } lark_power_t;
 
-// VOLUME (0x8C): Set output volume, optionally persisting. The auto-mode byte is retired.
+// VOLUME (0x8C): Set output volume, optionally persisting. A reserved byte follows.
 typedef struct __attribute__((packed)) {
     uint8_t level;
     uint8_t persist;
-    // retired auto-volume mode
-    uint8_t auto_mode;
+    // reserved
+    uint8_t reserved0;
     uint8_t id_len;
     uint8_t comp_len;
 } lark_volume_t;
 
-// STATUS (0x8D): Assistant state. Sequence, progress, kind and text stay in the layout.
+// STATUS (0x8D): Assistant state. Reserved padding stays in the layout.
 typedef struct __attribute__((packed)) {
-    // retired state sequence
-    uint32_t seq;
+    // reserved
+    uint32_t reserved0;
     uint8_t state;
-    // retired progress percent
-    uint8_t progress;
-    // retired prompt kind
-    uint8_t kind;
-    // retired detail text
-    uint16_t text_len;
+    // reserved
+    uint8_t reserved1;
+    // reserved
+    uint8_t reserved2;
+    // reserved
+    uint16_t reserved3_len;
 } lark_status_t;
 
 // VOICE_OWNER (0x8E): Companion voice ownership broadcast.
 typedef struct __attribute__((packed)) {
-    // retired state sequence
-    uint32_t seq;
+    // reserved
+    uint32_t reserved0;
     uint8_t comp_len;
     uint8_t term_len;
 } lark_voice_owner_t;
@@ -304,84 +304,6 @@ _Static_assert(sizeof(lark_power_t) == 1, "lark_power_t must be 1 bytes");
 _Static_assert(sizeof(lark_volume_t) == 5, "lark_volume_t must be 5 bytes");
 _Static_assert(sizeof(lark_status_t) == 9, "lark_status_t must be 9 bytes");
 _Static_assert(sizeof(lark_voice_owner_t) == 6, "lark_voice_owner_t must be 6 bytes");
-
-// Packed field offsets.
-enum {
-    LARK_HELLO_PROTO_VERSION_OFF = 0,
-    LARK_HELLO_KIND_OFF = 1,
-    LARK_HELLO_CAPS_MASK_OFF = 2,
-    LARK_HELLO_DISPLAY_FORMATS_OFF = 6,
-    LARK_HELLO_FRAME_CODECS_OFF = 7,
-    LARK_HELLO_WIDTH_OFF = 8,
-    LARK_HELLO_HEIGHT_OFF = 10,
-    LARK_HELLO_SHAPE_OFF = 12,
-    LARK_HELLO_FLAGS_OFF = 13,
-    LARK_HELLO_UDP_PORT_OFF = 14,
-    LARK_HELLO_ID_LEN_OFF = 16,
-    LARK_HELLO_COMP_LEN_OFF = 17,
-    LARK_HELLO_BOARD_LEN_OFF = 18,
-    LARK_HELLO_FW_LEN_OFF = 19,
-    LARK_HELLO_TOK_LEN_OFF = 20,
-    LARK_RESUME_PROTO_VERSION_OFF = 0,
-    LARK_RESUME_RESUME_TOKEN_OFF = 1,
-    LARK_RESUME_LAST_SEQ_OFF = 17,
-    LARK_RESUME_ID_LEN_OFF = 21,
-    LARK_TELEMETRY_WIFI_RSSI_OFF = 0,
-    LARK_TELEMETRY_BATTERY_PCT_OFF = 2,
-    LARK_TELEMETRY_CHARGING_OFF = 4,
-    LARK_TELEMETRY_CPU_PCT_OFF = 5,
-    LARK_TELEMETRY_FLAGS_OFF = 6,
-    LARK_TELEMETRY_PAD_OFF = 7,
-    LARK_TELEMETRY_FREE_HEAP_OFF = 8,
-    LARK_TELEMETRY_UPTIME_S_OFF = 12,
-    LARK_POINTER_KIND_OFF = 0,
-    LARK_POINTER_PAD_OFF = 1,
-    LARK_POINTER_X_OFF = 2,
-    LARK_POINTER_Y_OFF = 4,
-    LARK_POINTER_REV_LO_OFF = 6,
-    LARK_REC_START_SESSION_OFF = 0,
-    LARK_REC_START_TARGET_LEN_OFF = 2,
-    LARK_REC_END_SESSION_OFF = 0,
-    LARK_REC_END_CANCELLED_OFF = 2,
-    LARK_REC_END_TARGET_LEN_OFF = 3,
-    LARK_TTS_ACK_ABORTED_OFF = 0,
-    LARK_TTS_ACK_AUDIO_ID_OFF = 1,
-    LARK_PING_PAYLOAD_OFF = 0,
-    LARK_PONG_PAYLOAD_OFF = 0,
-    LARK_WELCOME_PROTO_VERSION_OFF = 0,
-    LARK_WELCOME_FLAGS_OFF = 1,
-    LARK_WELCOME_UDP_PORT_OFF = 2,
-    LARK_WELCOME_SSRC_OFF = 4,
-    LARK_WELCOME_MAX_MSG_BYTES_OFF = 8,
-    LARK_WELCOME_RESUME_WINDOW_MS_OFF = 12,
-    LARK_WELCOME_SEQ_OFF = 16,
-    LARK_WELCOME_RESUME_TOKEN_OFF = 20,
-    LARK_WELCOME_ID_LEN_OFF = 36,
-    LARK_WELCOME_COMP_LEN_OFF = 37,
-    LARK_REJECT_REASON_OFF = 0,
-    LARK_REJECT_MSG_LEN_OFF = 1,
-    LARK_REC_CTRL_OP_OFF = 0,
-    LARK_REC_CTRL_FLAGS_OFF = 1,
-    LARK_REC_CTRL_SESSION_OFF = 2,
-    LARK_REC_CTRL_TARGET_LEN_OFF = 4,
-    LARK_TTS_CTRL_OP_OFF = 0,
-    LARK_TTS_CTRL_AUDIO_ID_OFF = 1,
-    LARK_CHIME_KIND_OFF = 0,
-    LARK_POWER_LEVEL_OFF = 0,
-    LARK_VOLUME_LEVEL_OFF = 0,
-    LARK_VOLUME_PERSIST_OFF = 1,
-    LARK_VOLUME_AUTO_MODE_OFF = 2,
-    LARK_VOLUME_ID_LEN_OFF = 3,
-    LARK_VOLUME_COMP_LEN_OFF = 4,
-    LARK_STATUS_SEQ_OFF = 0,
-    LARK_STATUS_STATE_OFF = 4,
-    LARK_STATUS_PROGRESS_OFF = 5,
-    LARK_STATUS_KIND_OFF = 6,
-    LARK_STATUS_TEXT_LEN_OFF = 7,
-    LARK_VOICE_OWNER_SEQ_OFF = 0,
-    LARK_VOICE_OWNER_COMP_LEN_OFF = 4,
-    LARK_VOICE_OWNER_TERM_LEN_OFF = 5,
-};
 
 static inline size_t lark_encode_hello(uint8_t *dst, size_t cap, const lark_hello_t *m, const char *terminalID, const char *companionID, const char *board, const char *firmware, const char *token)
 {
@@ -424,7 +346,7 @@ static inline bool lark_decode_hello(const uint8_t *src, size_t len, lark_hello_
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->id_len + out->comp_len + out->board_len + out->fw_len + out->tok_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (terminalID && terminalID_cap) {
         size_t n = out->id_len < terminalID_cap - 1 ? out->id_len : terminalID_cap - 1;
@@ -463,7 +385,7 @@ static inline size_t lark_encode_resume(uint8_t *dst, size_t cap, const lark_res
 {
     if (!dst || !m) return 0;
     lark_resume_t tmp = *m;
-    memset(&tmp.last_seq, 0, sizeof(tmp.last_seq));
+    memset(&tmp.reserved0, 0, sizeof(tmp.reserved0));
     size_t terminalID_len = terminalID ? strlen(terminalID) : 0;
     if (terminalID_len > 255) terminalID_len = 255;
     tmp.id_len = (uint8_t)terminalID_len;
@@ -481,7 +403,7 @@ static inline bool lark_decode_resume(const uint8_t *src, size_t len, lark_resum
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->id_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (terminalID && terminalID_cap) {
         size_t n = out->id_len < terminalID_cap - 1 ? out->id_len : terminalID_cap - 1;
@@ -547,7 +469,7 @@ static inline bool lark_decode_rec_start(const uint8_t *src, size_t len, lark_re
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->target_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (target && target_cap) {
         size_t n = out->target_len < target_cap - 1 ? out->target_len : target_cap - 1;
@@ -579,7 +501,7 @@ static inline bool lark_decode_rec_end(const uint8_t *src, size_t len, lark_rec_
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->target_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (target && target_cap) {
         size_t n = out->target_len < target_cap - 1 ? out->target_len : target_cap - 1;
@@ -645,7 +567,7 @@ static inline size_t lark_encode_welcome(uint8_t *dst, size_t cap, const lark_we
 {
     if (!dst || !m) return 0;
     lark_welcome_t tmp = *m;
-    memset(&tmp.seq, 0, sizeof(tmp.seq));
+    memset(&tmp.reserved0, 0, sizeof(tmp.reserved0));
     size_t terminalID_len = terminalID ? strlen(terminalID) : 0;
     if (terminalID_len > 255) terminalID_len = 255;
     tmp.id_len = (uint8_t)terminalID_len;
@@ -668,7 +590,7 @@ static inline bool lark_decode_welcome(const uint8_t *src, size_t len, lark_welc
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->id_len + out->comp_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (terminalID && terminalID_cap) {
         size_t n = out->id_len < terminalID_cap - 1 ? out->id_len : terminalID_cap - 1;
@@ -706,7 +628,7 @@ static inline bool lark_decode_reject(const uint8_t *src, size_t len, lark_rejec
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->msg_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (message && message_cap) {
         size_t n = out->msg_len < message_cap - 1 ? out->msg_len : message_cap - 1;
@@ -738,7 +660,7 @@ static inline bool lark_decode_rec_ctrl(const uint8_t *src, size_t len, lark_rec
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->target_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (target && target_cap) {
         size_t n = out->target_len < target_cap - 1 ? out->target_len : target_cap - 1;
@@ -804,7 +726,7 @@ static inline size_t lark_encode_volume(uint8_t *dst, size_t cap, const lark_vol
 {
     if (!dst || !m) return 0;
     lark_volume_t tmp = *m;
-    memset(&tmp.auto_mode, 0, sizeof(tmp.auto_mode));
+    memset(&tmp.reserved0, 0, sizeof(tmp.reserved0));
     size_t terminalID_len = terminalID ? strlen(terminalID) : 0;
     if (terminalID_len > 255) terminalID_len = 255;
     tmp.id_len = (uint8_t)terminalID_len;
@@ -827,7 +749,7 @@ static inline bool lark_decode_volume(const uint8_t *src, size_t len, lark_volum
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->id_len + out->comp_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (terminalID && terminalID_cap) {
         size_t n = out->id_len < terminalID_cap - 1 ? out->id_len : terminalID_cap - 1;
@@ -848,10 +770,10 @@ static inline size_t lark_encode_status(uint8_t *dst, size_t cap, const lark_sta
 {
     if (!dst || !m) return 0;
     lark_status_t tmp = *m;
-    memset(&tmp.seq, 0, sizeof(tmp.seq));
-    memset(&tmp.progress, 0, sizeof(tmp.progress));
-    memset(&tmp.kind, 0, sizeof(tmp.kind));
-    tmp.text_len = 0;
+    memset(&tmp.reserved0, 0, sizeof(tmp.reserved0));
+    memset(&tmp.reserved1, 0, sizeof(tmp.reserved1));
+    memset(&tmp.reserved2, 0, sizeof(tmp.reserved2));
+    tmp.reserved3_len = 0;
     size_t total = sizeof(tmp);
     if (total > cap) return 0;
     memcpy(dst, &tmp, sizeof(tmp));
@@ -862,10 +784,11 @@ static inline bool lark_decode_status(const uint8_t *src, size_t len, lark_statu
 {
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
-    size_t need = sizeof(*out) + out->text_len;
-    if (len < need) return false;
+    size_t need = sizeof(*out);
+    if (len != need) return false;
     size_t off = sizeof(*out);
-    off += out->text_len;
+    if (out->reserved3_len != 0) return false;
+    off += out->reserved3_len;
     return true;
 }
 
@@ -873,7 +796,7 @@ static inline size_t lark_encode_voice_owner(uint8_t *dst, size_t cap, const lar
 {
     if (!dst || !m) return 0;
     lark_voice_owner_t tmp = *m;
-    memset(&tmp.seq, 0, sizeof(tmp.seq));
+    memset(&tmp.reserved0, 0, sizeof(tmp.reserved0));
     size_t companionID_len = companionID ? strlen(companionID) : 0;
     if (companionID_len > 255) companionID_len = 255;
     tmp.comp_len = (uint8_t)companionID_len;
@@ -896,7 +819,7 @@ static inline bool lark_decode_voice_owner(const uint8_t *src, size_t len, lark_
     if (!src || !out || len < sizeof(*out)) return false;
     memcpy(out, src, sizeof(*out));
     size_t need = sizeof(*out) + out->comp_len + out->term_len;
-    if (len < need) return false;
+    if (len != need) return false;
     size_t off = sizeof(*out);
     if (companionID && companionID_cap) {
         size_t n = out->comp_len < companionID_cap - 1 ? out->comp_len : companionID_cap - 1;

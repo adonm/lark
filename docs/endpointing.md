@@ -2,7 +2,7 @@
 
 Lark keeps the mic open through thinking pauses and uses local transcription to
 decide when to send. **Send** ends recording now; **Cancel** discards it.
-Firmware advertises `caps.bridge_endpoint` when audio is ready, so the edge owns
+Firmware advertises `caps.edge_endpoint` when audio is ready, so the edge owns
 endpointing rather than the board.
 
 ## Policy
@@ -63,7 +63,7 @@ and current drawer state.
 
 ## Wire behavior
 
-- Firmware that advertises `caps.bridge_endpoint: true` in `hello` uses the
+- Firmware that advertises `caps.edge_endpoint: true` in `hello` uses the
   edge-owned endpoint path for tap-to-talk.
 - Microphone audio is RTP over UDP: payload type 96, 320 samples of 16 kHz mono
   s16le per packet, 20 ms apart. The edge consumes it between `rec_start` and

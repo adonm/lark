@@ -45,7 +45,7 @@ Length-prefixed string fields follow the fixed prefix in table order.
 
 ### 0x02 RESUME (terminal → Lark)
 
-Resume token and terminal id. The old sequence field stays in the layout.
+Resume token and terminal id, plus reserved padding.
 
 Fixed size: 22 bytes.
 
@@ -53,7 +53,7 @@ Fixed size: 22 bytes.
 | --- | --- | --- | --- | --- |
 | 0 | proto_version | u8 | 1 |  |
 | 1 | resume_token | bytes | 16 |  |
-| 17 | last_seq | u32 | 4 | retired snapshot sequence |
+| 17 | reserved0 | u32 | 4 | reserved |
 | 21 | id_len | str8 | 1 |  |
 
 Length-prefixed string fields follow the fixed prefix in table order.
@@ -161,7 +161,7 @@ Fixed size: 38 bytes.
 | 4 | ssrc | u32 | 4 |  |
 | 8 | max_msg_bytes | u32 | 4 |  |
 | 12 | resume_window_ms | u32 | 4 |  |
-| 16 | seq | u32 | 4 | retired snapshot sequence |
+| 16 | reserved0 | u32 | 4 | reserved |
 | 20 | resume_token | bytes | 16 |  |
 | 36 | id_len | str8 | 1 |  |
 | 37 | comp_len | str8 | 1 |  |
@@ -241,7 +241,7 @@ Fixed size: 1 bytes.
 
 ### 0x8C VOLUME (Lark → terminal)
 
-Set output volume, optionally persisting. The auto-mode byte is retired.
+Set output volume, optionally persisting. A reserved byte follows.
 
 Fixed size: 5 bytes.
 
@@ -249,7 +249,7 @@ Fixed size: 5 bytes.
 | --- | --- | --- | --- | --- |
 | 0 | level | u8 | 1 |  |
 | 1 | persist | u8 | 1 |  |
-| 2 | auto_mode | u8 | 1 | retired auto-volume mode |
+| 2 | reserved0 | u8 | 1 | reserved |
 | 3 | id_len | str8 | 1 |  |
 | 4 | comp_len | str8 | 1 |  |
 
@@ -257,17 +257,17 @@ Length-prefixed string fields follow the fixed prefix in table order.
 
 ### 0x8D STATUS (Lark → terminal)
 
-Assistant state. Sequence, progress, kind and text stay in the layout.
+Assistant state. Reserved padding stays in the layout.
 
 Fixed size: 9 bytes.
 
 | Offset | Field | Type | Width | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | seq | u32 | 4 | retired state sequence |
+| 0 | reserved0 | u32 | 4 | reserved |
 | 4 | state | u8 | 1 |  |
-| 5 | progress | u8 | 1 | retired progress percent |
-| 6 | kind | u8 | 1 | retired prompt kind |
-| 7 | text_len | str16 | 2 | retired detail text |
+| 5 | reserved1 | u8 | 1 | reserved |
+| 6 | reserved2 | u8 | 1 | reserved |
+| 7 | reserved3_len | str16 | 2 | reserved |
 
 Length-prefixed string fields follow the fixed prefix in table order.
 
@@ -279,7 +279,7 @@ Fixed size: 6 bytes.
 
 | Offset | Field | Type | Width | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | seq | u32 | 4 | retired state sequence |
+| 0 | reserved0 | u32 | 4 | reserved |
 | 4 | comp_len | str8 | 1 |  |
 | 5 | term_len | str8 | 1 |  |
 
@@ -307,12 +307,12 @@ Length-prefixed string fields follow the fixed prefix in table order.
 | `shapeRound` | `LARK_SHAPE_ROUND` | 0 |
 | `shapeRect` | `LARK_SHAPE_RECT` | 1 |
 | `helloFlagIfFree` | `—` | 1 |
-| `welcomeFlagBridgeEP` | `LARK_WELCOME_FLAG_BRIDGE_EP` | 1 << 0 |
+| `welcomeFlagEdgeEP` | `LARK_WELCOME_FLAG_EDGE_EP` | 1 << 0 |
 | `telemetryFlagSleeping` | `LARK_TELEMETRY_SLEEPING` | 1 << 0 |
 | `capBattery` | `LARK_CAP_BATTERY` | 1 << 0 |
 | `capDrag` | `LARK_CAP_DRAG` | 1 << 4 |
 | `capPointerRev` | `LARK_CAP_POINTER_REV` | 1 << 5 |
-| `capBridgeEndpoint` | `LARK_CAP_BRIDGE_ENDPOINT` | 1 << 6 |
+| `capEdgeEndpoint` | `LARK_CAP_EDGE_ENDPOINT` | 1 << 6 |
 | `capPanelSleep` | `LARK_CAP_PANEL_SLEEP` | 1 << 7 |
 | `rejectBadToken` | `LARK_REJECT_BAD_TOKEN` | 1 |
 | `rejectBadVersion` | `LARK_REJECT_BAD_VERSION` | 2 |
@@ -335,7 +335,7 @@ Length-prefixed string fields follow the fixed prefix in table order.
 | `recOpCancel` | `LARK_REC_CANCEL` | 2 |
 | `recTargetInter` | `LARK_REC_TARGET_INTERCOM` | 1 << 0 |
 | `recTargetListen` | `LARK_REC_TARGET_LISTEN` | 1 << 6 |
-| `recTargetBridgeE` | `LARK_REC_TARGET_BRIDGE_EP` | 1 << 7 |
+| `recTargetEdgeE` | `LARK_REC_TARGET_EDGE_EP` | 1 << 7 |
 | `ttsOpStop` | `LARK_TTS_STOP` | 0 |
 | `ttsOpStart` | `LARK_TTS_START` | 1 |
 | `ttsOpEnd` | `LARK_TTS_END` | 2 |

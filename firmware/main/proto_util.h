@@ -54,24 +54,20 @@ static inline bool lark_rtp_decode(const uint8_t *src, size_t len, uint8_t *pt, 
     return true;
 }
 
-static inline bool lark_parse_bridge_url(const char *url, char *host_out, size_t host_cap, uint16_t *port_out)
+static inline bool lark_parse_edge_url(const char *url, char *host_out, size_t host_cap, uint16_t *port_out)
 {
     if (!url || !host_out || !host_cap || !port_out) return false;
     const char *p = NULL;
     bool custom_port = false;
     if (!strncmp(url, "http://", 7)) {
         p = url + 7;
-    } else if (!strncmp(url, "https://", 8)) {
-        p = url + 8;
-    } else if (!strncmp(url, "ws://", 5)) {
-        p = url + 5;
-    } else if (!strncmp(url, "wss://", 6)) {
-        p = url + 6;
     } else if (!strncmp(url, "lark://", 7)) {
         p = url + 7;
         custom_port = true;
     } else {
-        return false;
+        if (strstr(url, "://")) return false;
+        p = url;
+        custom_port = true;
     }
     size_t auth_len = strcspn(p, "/?#");
     if (!auth_len) return false;

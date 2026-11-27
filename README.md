@@ -63,9 +63,10 @@ chmod 600 firmware/sdkconfig.local
 ```
 
 Set `CONFIG_LARK_WIFI_SSID`, `CONFIG_LARK_WIFI_PASSWORD`, `CONFIG_LARK_URL`
-(`lark://<host>:8766`, no trailing slash), and `CONFIG_LARK_TOKEN` (copy
-`LARK_TOKEN` from `~/.config/lark/lark.env`). Both board builds read the same
-file. Never commit it or share the resulting binaries.
+(`lark://<host>:8766`, `http://<host>:8765`, or bare `<host>[:port]`), and
+`CONFIG_LARK_TOKEN` (copy `LARK_TOKEN` from `~/.config/lark/lark.env`). Both
+board builds read the same file. Never commit it or share the resulting
+binaries.
 
 ### 3. Build and flash
 

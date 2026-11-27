@@ -71,7 +71,7 @@ type Field struct {
 	CLen    string // C length field for Str8/Str16
 	Kind    Kind
 	Count   int   // Bytes width
-	Retired bool  // kept in the layout, always encoded as zero
+	Reserved bool // kept in the layout, always encoded as zero
 	Sample  int64 // fixture value for numeric fields
 	Str     string
 	Bytes   []byte
@@ -124,6 +124,9 @@ type Message struct {
 	// TestDecode keeps the Go decoder for a Lark -> terminal message because
 	// the host tests decode crafted payloads to stand in for a fake board.
 	TestDecode bool
+	// NoDecode suppresses the Go decoder for a message whose bytes cross the
+	// envelope unchanged (PING/PONG); the edge handles the payload directly.
+	NoDecode bool
 }
 
 func (m Message) FixedSize() int {
@@ -137,7 +140,9 @@ func (m Message) FixedSize() int {
 // NeedsGoDecode reports whether the Go codec emits a decoder. Lark never
 // decodes its own terminal-bound messages, so those decoders would be dead
 // unless a host test deliberately decodes a crafted payload.
-func (m Message) NeedsGoDecode() bool { return !m.ToDevice || m.TestDecode }
+func (m Message) NeedsGoDecode() bool {
+	return (!m.ToDevice || m.TestDecode) && !m.NoDecode
+}
 
 // Const is a protocol constant shared by both languages (or one, when Only is
 // set).
@@ -181,11 +186,11 @@ var Messages = []Message{
 	{
 		Name: "Resume", GoName: "terminalResume", CName: "lark_resume_t",
 		MsgGo: "msgResume", MsgC: "LARK_MSG_RESUME", TypeByte: 0x02,
-		Doc: "Resume token and terminal id. The old sequence field stays in the layout.",
+		Doc: "Resume token and terminal id, plus reserved padding.",
 		Fields: []Field{
 			{Go: "protoVersion", C: "proto_version", Kind: U8, Sample: 1},
 			{Go: "resumeToken", C: "resume_token", Kind: Bytes, Count: resumeTokenLen, Bytes: tokenSample()},
-			{Go: "lastSeq", C: "last_seq", Kind: U32, Retired: true, Doc: "retired snapshot sequence"},
+			{Go: "reserved0", C: "reserved0", Kind: U32, Reserved: true},
 			{Go: "terminalID", C: "id_len", CLen: "id_len", Kind: Str8, Str: "vocat-33d8"},
 		},
 	},
@@ -248,6 +253,7 @@ var Messages = []Message{
 		Name: "Ping", GoName: "protoPing", CName: "lark_ping_t",
 		MsgGo: "msgPing", MsgC: "LARK_MSG_PING", TypeByte: 0x0F,
 		Doc: "TCP keepalive; the four payload bytes are echoed by PONG.",
+		NoDecode: true,
 		Fields: []Field{
 			{Go: "payload", C: "payload", Kind: Bytes, Count: 4, Bytes: []byte{0xAA, 0xBB, 0xCC, 0xDD}},
 		},
@@ -256,6 +262,7 @@ var Messages = []Message{
 		Name: "Pong", GoName: "protoPong", CName: "lark_pong_t",
 		MsgGo: "msgPong", MsgC: "LARK_MSG_PONG", TypeByte: 0x10,
 		Doc: "TCP keepalive reply.",
+		NoDecode: true,
 		Fields: []Field{
 			{Go: "payload", C: "payload", Kind: Bytes, Count: 4, Bytes: []byte{0xAA, 0xBB, 0xCC, 0xDD}},
 		},
@@ -272,7 +279,7 @@ var Messages = []Message{
 			{Go: "ssrc", C: "ssrc", Kind: U32, Sample: 0x11223344},
 			{Go: "maxMsgBytes", C: "max_msg_bytes", Kind: U32, Sample: 327680},
 			{Go: "resumeWindowMS", C: "resume_window_ms", Kind: U32, Sample: 30000},
-			{Go: "seq", C: "seq", Kind: U32, Retired: true, Doc: "retired snapshot sequence"},
+			{Go: "reserved0", C: "reserved0", Kind: U32, Reserved: true},
 			{Go: "resumeToken", C: "resume_token", Kind: Bytes, Count: resumeTokenLen, Bytes: tokenSample()},
 			{Go: "terminalID", C: "id_len", CLen: "id_len", Kind: Str8, Str: "vocat-33d8"},
 			{Go: "companionID", C: "comp_len", CLen: "comp_len", Kind: Str8, Str: "cake"},
@@ -337,11 +344,11 @@ var Messages = []Message{
 	{
 		Name: "Volume", GoName: "protoVolume", CName: "lark_volume_t",
 		MsgGo: "msgVolume", MsgC: "LARK_MSG_VOLUME", TypeByte: 0x8C, ToDevice: true,
-		Doc: "Set output volume, optionally persisting. The auto-mode byte is retired.",
+		Doc: "Set output volume, optionally persisting. A reserved byte follows.",
 		Fields: []Field{
 			{Go: "level", C: "level", Kind: U8, Sample: 60},
 			{Go: "persist", C: "persist", Kind: U8, Sample: 1},
-			{Go: "auto", C: "auto_mode", Kind: U8, Retired: true, Doc: "retired auto-volume mode"},
+			{Go: "reserved0", C: "reserved0", Kind: U8, Reserved: true},
 			{Go: "terminalID", C: "id_len", CLen: "id_len", Kind: Str8, Str: "vocat-33d8"},
 			{Go: "companionID", C: "comp_len", CLen: "comp_len", Kind: Str8, Str: "cake"},
 		},
@@ -349,13 +356,13 @@ var Messages = []Message{
 	{
 		Name: "Status", GoName: "protoStatus", CName: "lark_status_t",
 		MsgGo: "msgStatus", MsgC: "LARK_MSG_STATUS", TypeByte: 0x8D, ToDevice: true,
-		Doc: "Assistant state. Sequence, progress, kind and text stay in the layout.",
+		Doc: "Assistant state. Reserved padding stays in the layout.",
 		Fields: []Field{
-			{Go: "seq", C: "seq", Kind: U32, Retired: true, Doc: "retired state sequence"},
+			{Go: "reserved0", C: "reserved0", Kind: U32, Reserved: true},
 			{Go: "state", C: "state", Kind: U8, Sample: 3},
-			{Go: "progress", C: "progress", Kind: U8, Retired: true, Doc: "retired progress percent"},
-			{Go: "kind", C: "kind", Kind: U8, Retired: true, Doc: "retired prompt kind"},
-			{Go: "text", C: "text_len", CLen: "text_len", Kind: Str16, Retired: true, Doc: "retired detail text"},
+			{Go: "reserved1", C: "reserved1", Kind: U8, Reserved: true},
+			{Go: "reserved2", C: "reserved2", Kind: U8, Reserved: true},
+			{Go: "reserved3", C: "reserved3_len", CLen: "reserved3_len", Kind: Str16, Reserved: true},
 		},
 	},
 	{
@@ -363,7 +370,7 @@ var Messages = []Message{
 		MsgGo: "msgVoiceOwner", MsgC: "LARK_MSG_VOICE_OWNER", TypeByte: 0x8E, ToDevice: true,
 		Doc: "Companion voice ownership broadcast.",
 		Fields: []Field{
-			{Go: "seq", C: "seq", Kind: U32, Retired: true, Doc: "retired state sequence"},
+			{Go: "reserved0", C: "reserved0", Kind: U32, Reserved: true},
 			{Go: "companionID", C: "comp_len", CLen: "comp_len", Kind: Str8, Str: "cake"},
 			{Go: "terminalID", C: "term_len", CLen: "term_len", Kind: Str8, Str: "vocat-33d8"},
 		},
@@ -393,14 +400,14 @@ var Constants = []Const{
 	{Go: "shapeRect", C: "LARK_SHAPE_RECT", Value: 1},
 	{Go: "helloFlagIfFree", Value: 1, Only: "go", Doc: "hello flags"},
 
-	{Go: "welcomeFlagBridgeEP", C: "LARK_WELCOME_FLAG_BRIDGE_EP", Flag: true, Bit: 0, Doc: "welcome flags"},
+	{Go: "welcomeFlagEdgeEP", C: "LARK_WELCOME_FLAG_EDGE_EP", Flag: true, Bit: 0, Doc: "welcome flags"},
 
 	{Go: "telemetryFlagSleeping", C: "LARK_TELEMETRY_SLEEPING", Flag: true, Bit: 0, Doc: "telemetry flags"},
 
 	{Go: "capBattery", C: "LARK_CAP_BATTERY", Flag: true, Bit: 0, Doc: "HELLO capability bits"},
 	{Go: "capDrag", C: "LARK_CAP_DRAG", Flag: true, Bit: 4},
 	{Go: "capPointerRev", C: "LARK_CAP_POINTER_REV", Flag: true, Bit: 5},
-	{Go: "capBridgeEndpoint", C: "LARK_CAP_BRIDGE_ENDPOINT", Flag: true, Bit: 6},
+	{Go: "capEdgeEndpoint", C: "LARK_CAP_EDGE_ENDPOINT", Flag: true, Bit: 6},
 	{Go: "capPanelSleep", C: "LARK_CAP_PANEL_SLEEP", Flag: true, Bit: 7},
 
 	{Go: "rejectBadToken", C: "LARK_REJECT_BAD_TOKEN", Value: 1, Doc: "reject reasons"},
@@ -427,7 +434,7 @@ var Constants = []Const{
 	{Go: "recOpCancel", C: "LARK_REC_CANCEL", Value: 2},
 	{Go: "recTargetInter", C: "LARK_REC_TARGET_INTERCOM", Flag: true, Bit: 0, Doc: "recording target flags"},
 	{Go: "recTargetListen", C: "LARK_REC_TARGET_LISTEN", Flag: true, Bit: 6},
-	{Go: "recTargetBridgeE", C: "LARK_REC_TARGET_BRIDGE_EP", Flag: true, Bit: 7},
+	{Go: "recTargetEdgeE", C: "LARK_REC_TARGET_EDGE_EP", Flag: true, Bit: 7},
 
 	{Go: "ttsOpStop", C: "LARK_TTS_STOP", Value: 0, Doc: "TTS ops"},
 	{Go: "ttsOpStart", C: "LARK_TTS_START", Value: 1},

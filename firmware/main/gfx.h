@@ -2,4 +2,4 @@
 
 #include <stdint.h>
 
-void gfx_offline_cat(uint16_t *fb);
+void gfx_offline(uint16_t *fb);

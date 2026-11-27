@@ -57,7 +57,7 @@ static void draw_glyph(uint16_t *fb, int x, int y, int scale, int idx, uint16_t 
     }
 }
 
-void gfx_offline_cat(uint16_t *fb)
+void gfx_offline(uint16_t *fb)
 {
     uint16_t bg = wire_color(0x1e1a2b);
     uint16_t ink = wire_color(0xfaf0f6);

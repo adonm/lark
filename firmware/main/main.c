@@ -32,7 +32,7 @@ void app_main(void)
     ESP_ERROR_CHECK(media_init(audio_init() == ESP_OK));
     ESP_ERROR_CHECK(display_init());
     esp_err_t net = net_client_init();
-    if (net != ESP_OK) ESP_LOGW(TAG, "Bridge client unavailable: %s", esp_err_to_name(net));
+    if (net != ESP_OK) ESP_LOGW(TAG, "Edge client unavailable: %s", esp_err_to_name(net));
     if (power_start() != ESP_OK) ESP_LOGW(TAG, "Battery monitor unavailable");
     ESP_ERROR_CHECK(wifi_start(on_wifi));
     ESP_ERROR_CHECK(ota_server_start());

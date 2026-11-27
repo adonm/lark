@@ -148,8 +148,8 @@ func (t *Terminal) beginCapture(listen bool, windowS int, followUp bool, name st
 	}
 	c.session = uint16(t.nextTurn())
 	var flags uint8
-	if t.info.caps&proto.CapBridgeEndpoint != 0 {
-		flags |= proto.RecTargetBridgeE
+	if t.info.caps&proto.CapEdgeEndpoint != 0 {
+		flags |= proto.RecTargetEdgeE
 	}
 	if listen {
 		flags |= proto.RecTargetListen
