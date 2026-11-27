@@ -155,7 +155,6 @@ export async function handlePointer(
   }
   const actionValue = value !== "" ? value : hit.startsWith("menu-") ? hit.slice("menu-".length) : hit;
   if (
-    actionValue === "talk" ||
     actionValue === "stories" ||
     actionValue === "memories" ||
     actionValue === "voice" ||
@@ -188,7 +187,7 @@ export async function handlePointer(
     if (Number.isFinite(contactId)) await unpair(ctx, state, contactId);
     return;
   }
-  if (state.drawer === "memories" || state.drawer === "talk") {
+  if (state.drawer === "memories") {
     await renderDetail(ctx, state, hit);
     return;
   }
@@ -266,24 +265,6 @@ export async function renderDrawer(ctx: UiContext, state: TerminalState): Promis
       });
       return;
     }
-    case "talk":
-      await ctx.edge.render(state.id, {
-        kind: "list",
-        title: "Talk to…",
-        page: state.page,
-        items: ctx.db
-          .listCompanions()
-          .filter((peer) => peer.id !== companion.id)
-          .map((peer) => ({
-            id: `talk-${peer.id}`,
-            label: peer.name,
-            detail: peer.form,
-            icon: "talk",
-            action: "talk-select",
-            value: peer.id,
-          })),
-      });
-      return;
     case "memories":
       await ctx.edge.render(state.id, {
         kind: "list",
@@ -373,12 +354,6 @@ export async function renderDetail(
     if (row !== undefined) {
       title = row.key;
       text = typeof row.value === "string" ? row.value : JSON.stringify(row.value, null, 2);
-    }
-  } else if (id.startsWith("talk-")) {
-    const peer = ctx.db.getCompanion(id.slice("talk-".length));
-    if (peer !== undefined) {
-      title = peer.name;
-      text = peer.form === "" ? "Say hello on the device." : peer.form;
     }
   }
   await ctx.edge.render(state.id, { kind: "detail", title, heading: title, body: text });

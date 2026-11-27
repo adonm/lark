@@ -700,18 +700,12 @@ function audioTool(deps: ToolDeps) {
 const EMIT_INPUT = obj({
   to: str({ max: 128 }).optional(),
   say: str({ max: 1000 }).optional(),
-  intercom: obj({
-    from: str({ max: 128 }),
-    text: str({ max: 1000 }),
-  }).optional(),
-  notes: strOrList().optional(),
-  sfx: str({ max: 64 }).optional(),
 });
 
 function emitTool(deps: ToolDeps) {
   return {
     name: "lark_emit",
-    description: "Emit an intercom message, spoken line, melody, or sound effect to a terminal.",
+    description: "Emit a spoken line to a terminal.",
     input: inputSchema(EMIT_INPUT),
     options: { codemode: false },
     execute: async (input: unknown, context: { sessionID: string; signal: AbortSignal }) => {
@@ -719,15 +713,8 @@ function emitTool(deps: ToolDeps) {
       const event: EmitEvent = {};
       if (args.to !== undefined) event.to = args.to;
       if (args.say !== undefined) event.say = args.say;
-      if (args.intercom !== undefined) event.intercom = { from: args.intercom.from, text: args.intercom.text };
-      if (args.notes !== undefined) {
-        event.notes = typeof args.notes === "string"
-          ? args.notes.split(/\s+/).filter(Boolean)
-          : args.notes;
-      }
-      if (args.sfx !== undefined) event.sfx = args.sfx;
-      if (event.say === undefined && event.intercom === undefined && event.notes === undefined && event.sfx === undefined) {
-        throw new ToolInputError("emit needs say, intercom, notes, or sfx");
+      if (event.say === undefined) {
+        throw new ToolInputError("emit needs say");
       }
       return deps.gate.mutate(context.sessionID, context.signal, () => {
         deps.emit?.(event);

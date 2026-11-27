@@ -9,15 +9,10 @@ import (
 	"lark/fonts/dogica"
 )
 
-const DrawerIntercom = "intercom"
-
 type Action struct{ Kind, Value string }
-
-type IntercomCard struct{ Companion, Reply, Heading, Text string }
 
 type Scene struct {
 	Title, Heading, Text string
-	Intercom             *IntercomCard
 	Actions              map[string]Action
 	DuringTurn           bool
 }
@@ -116,22 +111,9 @@ func RenderSceneCard(spec Spec, v Scene, th Theme) (*image.RGBA, []HitBox) {
 	}
 
 	var hits []HitBox
-	if v.Intercom != nil {
-		gap := 4
-		bw := (btnRect.Dx() - gap) / 2
-		r1 := image.Rect(btnRect.Min.X, btnRect.Min.Y, btnRect.Min.X+bw, btnRect.Max.Y)
-		r2 := image.Rect(btnRect.Min.X+bw+gap, btnRect.Min.Y, btnRect.Max.X, btnRect.Max.Y)
-		c.panel(r1.Min.X, r1.Min.Y, r1.Dx(), r1.Dy(), pxTileBG, th.Border)
-		c.panel(r2.Min.X, r2.Min.Y, r2.Dx(), r2.Dy(), pxTileBG, th.Accent)
-		texts = addCenteredText(texts, PhysicalRect(r1, s), "Close", dogica.Regular, spec.BodyTextScale, pxInk)
-		texts = addCenteredText(texts, PhysicalRect(r2, s), "Reply", dogica.Bold, spec.BodyTextScale, th.Accent)
-		hits = AddLogicalHit(hits, spec, "close", r1)
-		hits = AddLogicalHit(hits, spec, "reply", r2)
-	} else {
-		c.panel(btnRect.Min.X, btnRect.Min.Y, btnRect.Dx(), btnRect.Dy(), pxTileBG, th.Border)
-		texts = addCenteredText(texts, PhysicalRect(btnRect, s), "OK", dogica.Bold, spec.BodyTextScale, pxInk)
-		hits = AddLogicalHit(hits, spec, "close", image.Rect(0, 0, spec.LogicalW, spec.LogicalH))
-	}
+	c.panel(btnRect.Min.X, btnRect.Min.Y, btnRect.Dx(), btnRect.Dy(), pxTileBG, th.Border)
+	texts = addCenteredText(texts, PhysicalRect(btnRect, s), "OK", dogica.Bold, spec.BodyTextScale, pxInk)
+	hits = AddLogicalHit(hits, spec, "close", image.Rect(0, 0, spec.LogicalW, spec.LogicalH))
 	return finishPixelScreen(c, spec, texts), hits
 }
 
@@ -259,9 +241,6 @@ func RenderMenuWithHits(spec Spec, page int, th Theme) (*image.RGBA, []HitBox, m
 		th = DefaultTheme()
 	}
 	hits, actions := menuGridHits(spec, HomeMenuItems, page, func(item pixelMenuItem) (string, Action) {
-		if item.ID == "talk" {
-			return "menu-intercom", Action{"menu-open", DrawerIntercom}
-		}
 		return "menu-" + item.ID, Action{"menu-open", item.ID}
 	})
 	return RenderMenu(spec, page, th), hits, actions

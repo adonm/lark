@@ -118,7 +118,7 @@ const VALID: Array<{ name: string; input: unknown }> = [
     name: "lark_library",
     input: { op: "search", query: "otters", source: "simple", ref: "Otters", section: 0, limit: 5 },
   },
-  { name: "lark_emit", input: { to: "vocat-1", say: "hello", intercom: { from: "Sam", text: "hi" }, notes: ["C4", "E4"], sfx: "chime" } },
+  { name: "lark_emit", input: { to: "vocat-1", say: "hello" } },
   {
     name: "lark_audio",
     input: { op: "tune", style: "hum", tempo: 100, notes: [{ note: "C4", beats: 1 }], title: "Twinkle" },
@@ -186,7 +186,6 @@ test("every native tool rejects unknown keys, wrong types and out-of-bound value
     { name: "lark_audio", input: { op: "metronome", style: "hum" }, message: /unknown field/ },
     { name: "lark_emit", input: { say: "hi", bogus: 1 }, message: /unknown field/ },
     { name: "lark_emit", input: { say: 5 }, message: /must be a string/ },
-    { name: "lark_emit", input: { notes: Array(33).fill("x") }, message: /at most 32/ },
   ];
   for (const entry of rejected) {
     const d = deps();

@@ -29,7 +29,6 @@ type pixelMenuItem struct {
 }
 
 var HomeMenuItems = []pixelMenuItem{
-	{ID: "talk", Label: "Talk to…", Icon: "talk", Accent: Peach},
 	{ID: "stories", Label: "Stories", Icon: "books", Accent: Mint},
 	{ID: "memories", Label: "Memories", Icon: "memories", Accent: Danger},
 	{ID: "voice", Label: "Voice", Icon: "voice", Accent: Mint},

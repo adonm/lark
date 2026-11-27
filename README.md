@@ -152,7 +152,6 @@ and commits on gated silence. See [docs/endpointing.md](docs/endpointing.md).
 
 Tap **Menu**:
 
-- **Talk to…** lists the other companions.
 - **Stories** opens the Twee reader.
 - **Memories** lists saved memories.
 - **Voice** pages through eight voices and previews each on the device.
