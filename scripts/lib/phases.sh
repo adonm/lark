@@ -104,3 +104,34 @@ phase_c_host() {
 }
 
 phase_build() { (cd lark && "$GO_BIN" build ./...); }
+
+phase_diagrams() {
+    python3 - <<'PY'
+import glob
+import sys
+import xml.etree.ElementTree as ET
+
+paths = sorted(glob.glob("docs/diagrams/*.svg"))
+if not paths:
+    sys.exit("no docs/diagrams/*.svg files")
+for path in paths:
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as error:
+        sys.exit(f"{path}: {error}")
+    tags = [node.tag.rsplit("}", 1)[-1] for node in root.iter()]
+    if "title" not in tags or "desc" not in tags:
+        sys.exit(f"{path}: missing <title> or <desc>")
+    for node in root.iter():
+        tag = node.tag.rsplit("}", 1)[-1]
+        if tag in ("script", "foreignObject"):
+            sys.exit(f"{path}: forbidden <{tag}>")
+        for name, value in node.attrib.items():
+            local = name.rsplit("}", 1)[-1].lower()
+            if local.startswith("on"):
+                sys.exit(f"{path}: forbidden event handler {local}")
+            if local == "href" and not value.startswith(("#", "data:")):
+                sys.exit(f"{path}: external href")
+print(f"PASS diagrams ({len(paths)} SVGs)")
+PY
+}

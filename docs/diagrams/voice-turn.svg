@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 560" width="880" height="560" role="img" aria-labelledby="voice-title voice-desc">
+  <title id="voice-title">One voice turn</title>
+  <desc id="voice-desc">A voice turn moves from microphone RTP packets to edge endpointing, whole-clip Parakeet recognition, an OpenCode model turn in the brain, streamed Kokoro speech, and playback. Endpointing commits after 400 milliseconds of gated silence when Smart Turn is at least 0.90, otherwise at the 1.2 second cap; speculation starts at 180 milliseconds of quiet. Measured speech recognition is 96 milliseconds at p50 and 133 milliseconds at p95, and the first model token is about 1.47 seconds at p50 and 1.90 seconds at p95.</desc>
+  <style>
+    svg {
+      --ink: #1f2328;
+      --muted: #5b6571;
+      --line: #7f8a97;
+      --bg: #ffffff;
+      --card: #ffffff;
+      --device: #fbe7d6;
+      --device-line: #b5663a;
+      --edge: #e4eef9;
+      --edge-line: #356da6;
+      --brain: #e1f1e8;
+      --brain-line: #357a5e;
+      --accent: #7355a3;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --ink: #e6edf3;
+        --muted: #a7b1bd;
+        --line: #94a0ae;
+        --bg: #0d1117;
+        --card: #161b22;
+        --device: #3a2a20;
+        --device-line: #d08a5c;
+        --edge: #1d2b3b;
+        --edge-line: #78a9d8;
+        --brain: #1c3229;
+        --brain-line: #6fb99a;
+        --accent: #b59adb;
+      }
+    }
+    text {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      fill: var(--ink);
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title { font-size: 20px; font-weight: 650; }
+    .sub { font-size: 12.5px; fill: var(--muted); }
+    .label { font-size: 13px; font-weight: 650; }
+    .body { font-size: 11.5px; }
+    .small { font-size: 10.5px; fill: var(--muted); }
+    .tiny { font-size: 9.5px; fill: var(--muted); }
+    .box { stroke-width: 1.6; rx: 10; }
+    .device { fill: var(--device); stroke: var(--device-line); }
+    .edge { fill: var(--edge); stroke: var(--edge-line); }
+    .brain { fill: var(--brain); stroke: var(--brain-line); }
+    .panel { fill: var(--card); stroke: var(--line); stroke-width: 1.2; rx: 12; }
+    .arrow { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .spec { stroke: var(--accent); stroke-width: 1.4; fill: none; stroke-dasharray: 5 5; }
+    .arrowhead { fill: var(--line); }
+    .tick { stroke: var(--line); stroke-width: 1; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="560" fill="var(--bg)"/>
+  <text x="30" y="38" class="title">One voice turn</text>
+  <text x="30" y="60" class="sub">The edge spends silence, recognition, and synthesis; the brain spends model time.</text>
+
+  <path d="M312 100 L596 100" class="spec" marker-end="url(#a)"/>
+  <text x="454" y="92" text-anchor="middle" class="tiny">speculative probe after 180 ms quiet (Smart Turn ≥ 0.40); model starts on its transcript</text>
+
+  <rect x="22" y="120" width="130" height="82" class="box device"/>
+  <text x="87" y="144" text-anchor="middle" class="label">Mic</text>
+  <text x="87" y="163" text-anchor="middle" class="body">tap, then speak</text>
+  <text x="87" y="181" text-anchor="middle" class="small">20 ms RTP packets</text>
+
+  <rect x="168" y="120" width="130" height="82" class="box edge"/>
+  <text x="233" y="144" text-anchor="middle" class="label">Endpoint</text>
+  <text x="233" y="163" text-anchor="middle" class="body">Silero VAD</text>
+  <text x="233" y="181" text-anchor="middle" class="small">Smart Turn gate</text>
+
+  <rect x="314" y="120" width="130" height="82" class="box edge"/>
+  <text x="379" y="144" text-anchor="middle" class="label">STT</text>
+  <text x="379" y="163" text-anchor="middle" class="body">Parakeet</text>
+  <text x="379" y="181" text-anchor="middle" class="small">whole clip</text>
+
+  <rect x="460" y="120" width="130" height="82" class="box brain"/>
+  <text x="525" y="144" text-anchor="middle" class="label">Model</text>
+  <text x="525" y="163" text-anchor="middle" class="body">OpenCode turn</text>
+  <text x="525" y="181" text-anchor="middle" class="small">first token</text>
+
+  <rect x="606" y="120" width="130" height="82" class="box edge"/>
+  <text x="671" y="144" text-anchor="middle" class="label">Speech</text>
+  <text x="671" y="163" text-anchor="middle" class="body">Kokoro TTS</text>
+  <text x="671" y="181" text-anchor="middle" class="small">streamed PCM</text>
+
+  <rect x="752" y="120" width="106" height="82" class="box device"/>
+  <text x="805" y="144" text-anchor="middle" class="label">Playback</text>
+  <text x="805" y="163" text-anchor="middle" class="body">speaker</text>
+  <text x="805" y="181" text-anchor="middle" class="small">playback.done</text>
+
+  <path d="M152 161 L164 161" class="arrow" marker-end="url(#a)"/>
+  <path d="M298 161 L310 161" class="arrow" marker-end="url(#a)"/>
+  <path d="M444 161 L456 161" class="arrow" marker-end="url(#a)"/>
+  <path d="M590 161 L602 161" class="arrow" marker-end="url(#a)"/>
+  <path d="M736 161 L748 161" class="arrow" marker-end="url(#a)"/>
+
+  <text x="87" y="222" text-anchor="middle" class="tiny">tap → first packet</text>
+  <text x="87" y="236" text-anchor="middle" class="tiny">≈24 ms measured</text>
+
+  <text x="233" y="222" text-anchor="middle" class="tiny">mic stays open</text>
+  <text x="233" y="236" text-anchor="middle" class="tiny">250 ms probes</text>
+  <text x="233" y="250" text-anchor="middle" class="tiny">400 ms quiet / 1.2 s cap</text>
+
+  <text x="379" y="222" text-anchor="middle" class="tiny">+150 ms padding</text>
+  <text x="379" y="236" text-anchor="middle" class="tiny">p50 96 ms</text>
+  <text x="379" y="250" text-anchor="middle" class="tiny">p95 133 ms</text>
+
+  <text x="525" y="222" text-anchor="middle" class="tiny">long-lived session</text>
+  <text x="525" y="236" text-anchor="middle" class="tiny">p50 ≈1.47 s</text>
+  <text x="525" y="250" text-anchor="middle" class="tiny">p95 ≈1.90 s</text>
+
+  <text x="671" y="222" text-anchor="middle" class="tiny">250 ms prefill</text>
+  <text x="671" y="236" text-anchor="middle" class="tiny">sentence chunks</text>
+  <text x="671" y="250" text-anchor="middle" class="tiny">ahead of frames</text>
+
+  <text x="805" y="222" text-anchor="middle" class="tiny">PCM over TCP</text>
+  <text x="805" y="236" text-anchor="middle" class="tiny">turn recorded</text>
+
+  <rect x="22" y="280" width="836" height="254" class="panel"/>
+  <text x="42" y="306" class="label">Endpoint decision clock</text>
+  <text x="42" y="324" class="small">Measured from the last frame that was both VAD-positive and above the adaptive room floor.</text>
+
+  <path d="M62 378 L822 378" class="arrow"/>
+  <path d="M62 370 L62 386" class="tick"/>
+  <text x="62" y="406" text-anchor="middle" class="tiny">0</text>
+  <text x="62" y="420" text-anchor="middle" class="tiny">last voiced</text>
+
+  <path d="M124 370 L124 386" class="tick"/>
+  <text x="124" y="360" text-anchor="middle" class="tiny">180 ms</text>
+  <text x="124" y="348" text-anchor="middle" class="tiny">speculate</text>
+
+  <path d="M200 370 L200 386" class="tick"/>
+  <text x="200" y="406" text-anchor="middle" class="tiny">400 ms</text>
+  <text x="200" y="420" text-anchor="middle" class="tiny">quiet commit</text>
+  <text x="200" y="434" text-anchor="middle" class="tiny">Smart Turn ≥ 0.90</text>
+
+  <path d="M476 370 L476 386" class="tick"/>
+  <text x="476" y="360" text-anchor="middle" class="tiny">1.2 s</text>
+  <text x="476" y="348" text-anchor="middle" class="tiny">cap</text>
+
+  <path d="M822 370 L822 386" class="tick"/>
+  <text x="822" y="406" text-anchor="middle" class="tiny">2.2 s</text>
+  <text x="822" y="420" text-anchor="middle" class="tiny">hesitation cap</text>
+
+  <text x="42" y="466" class="small">Quiet commit also requires a complete trailing word: function words, articles, possessives, prepositions, auxiliaries, and fillers wait for the cap.</text>
+  <text x="42" y="486" class="small">Continuous speech commits at 20 s. STT and first-token percentiles are reference-host measurements; thresholds are defaults in <tspan class="mono">lark/internal/edge/dsp.go</tspan>.</text>
+  <text x="42" y="506" class="small">A stalled primary model is interrupted after 8 s and retried once on the fallback model.</text>
+</svg>

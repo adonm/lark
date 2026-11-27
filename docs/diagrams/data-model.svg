@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 620" width="880" height="620" role="img" aria-labelledby="data-title data-desc">
+  <title id="data-title">Lark data model</title>
+  <desc id="data-desc">Companions are the root of the household database. Each companion owns terminals, one OpenCode session, messages, timers, and story progress; terminals carry one volume preference. Stories are shared content, and memory is keyed by a text scope rather than a foreign key. Meta stores small server keys such as saved remote routes and token hashes.</desc>
+  <style>
+    svg {
+      --ink: #1f2328;
+      --muted: #5b6571;
+      --line: #7f8a97;
+      --bg: #ffffff;
+      --card: #ffffff;
+      --device: #fbe7d6;
+      --device-line: #b5663a;
+      --brain: #e1f1e8;
+      --brain-line: #357a5e;
+      --ext: #eee7f8;
+      --ext-line: #7355a3;
+      --tool: #f2f4f7;
+      --tool-line: #69737f;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --ink: #e6edf3;
+        --muted: #a7b1bd;
+        --line: #94a0ae;
+        --bg: #0d1117;
+        --card: #161b22;
+        --device: #3a2a20;
+        --device-line: #d08a5c;
+        --brain: #1c3229;
+        --brain-line: #6fb99a;
+        --ext: #2e2539;
+        --ext-line: #b59adb;
+        --tool: #21262d;
+        --tool-line: #8b96a5;
+      }
+    }
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title { font-size: 20px; font-weight: 650; }
+    .sub { font-size: 12.5px; fill: var(--muted); }
+    .label { font-size: 12.5px; font-weight: 650; }
+    .field { font-size: 10px; }
+    .pk { font-size: 10px; font-weight: 650; }
+    .small { font-size: 10px; fill: var(--muted); }
+    .tiny { font-size: 9px; fill: var(--muted); }
+    .box { stroke-width: 1.6; rx: 9; }
+    .device { fill: var(--device); stroke: var(--device-line); }
+    .brain { fill: var(--brain); stroke: var(--brain-line); }
+    .ext { fill: var(--ext); stroke: var(--ext-line); }
+    .tool { fill: var(--tool); stroke: var(--tool-line); }
+    .arrow { stroke: var(--line); stroke-width: 1.3; fill: none; }
+    .dotted { stroke-dasharray: 4 5; }
+    .arrowhead { fill: var(--line); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="620" fill="var(--bg)"/>
+  <text x="30" y="38" class="title">Lark data model</text>
+  <text x="30" y="60" class="sub">SQLite WAL at <tspan class="mono">$LARK_DATA_DIR/lark.db</tspan> · private 0700 directory, 0600 file.</text>
+  <text x="850" y="38" text-anchor="end" class="small">arrows: referenced row → holder</text>
+
+  <rect x="310" y="78" width="260" height="132" class="box brain"/>
+  <text x="326" y="100" class="label">companions</text>
+  <text x="326" y="119" class="pk mono">id PK</text>
+  <text x="326" y="136" class="field mono">name · form · personality</text>
+  <text x="326" y="152" class="field mono">voice · portrait_id</text>
+  <text x="326" y="168" class="field mono">listening · dc_account_id</text>
+  <text x="326" y="184" class="field mono">identity_version · identity_synced</text>
+
+  <rect x="20" y="278" width="160" height="104" class="box device"/>
+  <text x="34" y="298" class="label">terminals</text>
+  <text x="34" y="315" class="pk mono">id PK</text>
+  <text x="34" y="330" class="field mono">kind</text>
+  <text x="34" y="345" class="field mono">companion_id FK</text>
+  <text x="34" y="360" class="field mono">ip · port · last_seen</text>
+
+  <rect x="192" y="278" width="160" height="104" class="box brain"/>
+  <text x="206" y="298" class="label">sessions</text>
+  <text x="206" y="315" class="pk mono">companion_id PK</text>
+  <text x="206" y="330" class="field mono">session_id</text>
+  <text x="206" y="345" class="field mono">contract_hash</text>
+  <text x="206" y="360" class="field mono">context_after_ms</text>
+
+  <rect x="364" y="278" width="160" height="104" class="box brain"/>
+  <text x="378" y="298" class="label">messages</text>
+  <text x="378" y="315" class="pk mono">id PK</text>
+  <text x="378" y="330" class="field mono">companion_id</text>
+  <text x="378" y="345" class="field mono">role · sender · text</text>
+  <text x="378" y="360" class="field mono">source · channel · peer</text>
+  <text x="378" y="375" class="field mono">card_title · ts_ms</text>
+
+  <rect x="536" y="278" width="160" height="104" class="box brain"/>
+  <text x="550" y="298" class="label">timers</text>
+  <text x="550" y="315" class="pk mono">id PK</text>
+  <text x="550" y="330" class="field mono">companion_id</text>
+  <text x="550" y="345" class="field mono">label · say · chime</text>
+  <text x="550" y="360" class="field mono">wake_agent · fire_at</text>
+  <text x="550" y="375" class="field mono">notes_json</text>
+
+  <rect x="708" y="278" width="160" height="104" class="box brain"/>
+  <text x="722" y="298" class="label">story_progress</text>
+  <text x="722" y="315" class="pk mono">companion_id + story_id</text>
+  <text x="722" y="330" class="field mono">passage</text>
+  <text x="722" y="345" class="field mono">page</text>
+  <text x="722" y="360" class="field mono">flags_json</text>
+
+  <rect x="20" y="440" width="160" height="72" class="box device"/>
+  <text x="34" y="460" class="label">terminal_prefs</text>
+  <text x="34" y="477" class="pk mono">terminal_id PK</text>
+  <text x="34" y="492" class="field mono">volume</text>
+
+  <rect x="192" y="440" width="160" height="72" class="box tool"/>
+  <text x="206" y="460" class="label">memory</text>
+  <text x="206" y="477" class="pk mono">scope + key PK</text>
+  <text x="206" y="492" class="field mono">value_json · version</text>
+
+  <rect x="364" y="440" width="160" height="72" class="box tool"/>
+  <text x="378" y="460" class="label">meta</text>
+  <text x="378" y="477" class="pk mono">key PK</text>
+  <text x="378" y="492" class="field mono">value</text>
+
+  <rect x="708" y="440" width="160" height="72" class="box ext"/>
+  <text x="722" y="460" class="label">stories</text>
+  <text x="722" y="477" class="pk mono">id PK</text>
+  <text x="722" y="488" class="field mono">title · author</text>
+  <text x="722" y="502" class="field mono">passages · twee</text>
+
+  <path d="M340 210 L100 274" class="arrow" marker-end="url(#a)"/>
+  <path d="M390 210 L272 274" class="arrow" marker-end="url(#a)"/>
+  <path d="M440 210 L444 274" class="arrow" marker-end="url(#a)"/>
+  <path d="M490 210 L616 274" class="arrow" marker-end="url(#a)"/>
+  <path d="M540 210 L788 274" class="arrow" marker-end="url(#a)"/>
+
+  <text x="100" y="262" text-anchor="middle" class="tiny">1:N</text>
+  <text x="272" y="262" text-anchor="middle" class="tiny">1:1</text>
+  <text x="462" y="254" text-anchor="middle" class="tiny">1:N</text>
+  <text x="616" y="262" text-anchor="middle" class="tiny">1:N</text>
+  <text x="788" y="262" text-anchor="middle" class="tiny">1:N</text>
+
+  <path d="M100 382 L100 436" class="arrow" marker-end="url(#a)"/>
+  <text x="108" y="414" class="tiny">1:1</text>
+
+  <path d="M788 436 L788 386" class="arrow" marker-end="url(#a)"/>
+  <text x="796" y="414" class="tiny">1:N</text>
+
+  <text x="192" y="544" class="small">memory scope is <tspan class="mono">companion:&lt;id&gt;</tspan> or <tspan class="mono">shared</tspan>; not a foreign key.</text>
+  <text x="192" y="560" class="small">meta keeps remote routes and token hashes, not raw tokens.</text>
+  <text x="858" y="544" text-anchor="end" class="small">stories are shared by every companion.</text>
+</svg>

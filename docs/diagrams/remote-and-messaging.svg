@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 630" width="880" height="630" role="img" aria-labelledby="msg-title msg-desc">
+  <title id="msg-title">Pairing, messaging, and remote links</title>
+  <desc id="msg-desc">A contact pairs by scanning the companion's QR code on the device screen. Delta Chat messages travel through a Chatmail relay to the brain; incoming voice notes are transcribed and outgoing replies are always text. A verified contact can send slash commands, including remote, which mints a token scoped to that companion and contact and exposes one REST command route set plus a server-sent events stream through an OpenTunnel HTTPS route. A new remote link rotates the token, and remote off or revoke stops the tunnel and drops every token.</desc>
+  <style>
+    svg {
+      --ink: #1f2328;
+      --muted: #5b6571;
+      --line: #7f8a97;
+      --bg: #ffffff;
+      --card: #ffffff;
+      --device: #fbe7d6;
+      --device-line: #b5663a;
+      --brain: #e1f1e8;
+      --brain-line: #357a5e;
+      --ext: #eee7f8;
+      --ext-line: #7355a3;
+      --accent: #7355a3;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --ink: #e6edf3;
+        --muted: #a7b1bd;
+        --line: #94a0ae;
+        --bg: #0d1117;
+        --card: #161b22;
+        --device: #3a2a20;
+        --device-line: #d08a5c;
+        --brain: #1c3229;
+        --brain-line: #6fb99a;
+        --ext: #2e2539;
+        --ext-line: #b59adb;
+        --accent: #b59adb;
+      }
+    }
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title { font-size: 20px; font-weight: 650; }
+    .sub { font-size: 12.5px; fill: var(--muted); }
+    .label { font-size: 13px; font-weight: 650; }
+    .body { font-size: 11.5px; }
+    .small { font-size: 10.5px; fill: var(--muted); }
+    .tiny { font-size: 9.5px; fill: var(--muted); }
+    .box { stroke-width: 1.6; rx: 10; }
+    .device { fill: var(--device); stroke: var(--device-line); }
+    .brain { fill: var(--brain); stroke: var(--brain-line); }
+    .ext { fill: var(--ext); stroke: var(--ext-line); }
+    .panel { fill: var(--card); stroke: var(--line); stroke-width: 1.2; rx: 12; }
+    .arrow { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+    .dotted { stroke-dasharray: 5 5; }
+    .arrowhead { fill: var(--line); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="630" fill="var(--bg)"/>
+  <text x="30" y="38" class="title">Pairing, messaging, and remote links</text>
+  <text x="30" y="60" class="sub">Pairing starts at the screen; messaging stays text; remote links are scoped and revocable.</text>
+
+  <rect x="30" y="80" width="820" height="128" class="panel"/>
+  <text x="46" y="104" class="label">1 · Pair a contact</text>
+  <rect x="46" y="118" width="230" height="72" class="box device"/>
+  <text x="161" y="142" text-anchor="middle" class="body">Companion screen</text>
+  <text x="161" y="160" text-anchor="middle" class="small">Menu → More → Pair</text>
+  <text x="161" y="178" text-anchor="middle" class="tiny">Delta Chat QR card</text>
+
+  <path d="M284 154 L346 154" class="arrow" marker-end="url(#a)"/>
+  <text x="315" y="145" text-anchor="middle" class="tiny">scan</text>
+
+  <rect x="354" y="118" width="230" height="72" class="box ext"/>
+  <text x="469" y="142" text-anchor="middle" class="body">Delta Chat on a phone</text>
+  <text x="469" y="160" text-anchor="middle" class="small">secure join</text>
+  <text x="469" y="178" text-anchor="middle" class="tiny">verified contact</text>
+
+  <text x="610" y="142" class="body">Pairing is on-screen only.</text>
+  <text x="610" y="160" class="small">There is no host-side pairing form.</text>
+  <text x="610" y="178" class="small">Each companion has one Chatmail account.</text>
+
+  <rect x="30" y="222" width="820" height="194" class="panel"/>
+  <text x="46" y="246" class="label">2 · Text-only messaging</text>
+
+  <rect x="46" y="260" width="166" height="48" class="box ext"/>
+  <text x="129" y="280" text-anchor="middle" class="body">Contact phone</text>
+  <text x="129" y="296" text-anchor="middle" class="tiny">Delta Chat</text>
+
+  <rect x="244" y="260" width="166" height="48" class="box ext"/>
+  <text x="327" y="280" text-anchor="middle" class="body">Chatmail relay</text>
+  <text x="327" y="296" text-anchor="middle" class="tiny">message transport</text>
+
+  <rect x="442" y="260" width="166" height="48" class="box brain"/>
+  <text x="525" y="280" text-anchor="middle" class="body">Delta Chat service</text>
+  <text x="525" y="296" text-anchor="middle" class="tiny">one child per companion</text>
+
+  <rect x="640" y="260" width="190" height="48" class="box device"/>
+  <text x="735" y="280" text-anchor="middle" class="body">Companion terminal</text>
+  <text x="735" y="296" text-anchor="middle" class="tiny">speech + on-screen reply</text>
+
+  <path d="M212 284 L240 284" class="arrow" marker-end="url(#a)"/>
+  <path d="M410 284 L438 284" class="arrow" marker-end="url(#a)"/>
+  <path d="M608 284 L636 284" class="arrow" marker-end="url(#a)"/>
+
+  <text x="46" y="334" class="small">In: text is read in the room. A voice note is decoded with ffmpeg and transcribed; the audio is discarded.</text>
+
+  <path d="M640 310 L640 356 L608 356" class="arrow" marker-end="url(#a)"/>
+  <path d="M442 356 L410 356" class="arrow" marker-end="url(#a)"/>
+  <path d="M244 356 L226 356" class="arrow" marker-end="url(#a)"/>
+  <text x="640" y="374" text-anchor="end" class="small">Out: companion replies are sent as text.</text>
+  <text x="640" y="392" text-anchor="end" class="small">No outbound voice note or audio attachment is created.</text>
+
+  <rect x="30" y="436" width="820" height="170" class="panel"/>
+  <text x="46" y="460" class="label">3 · /remote control link</text>
+
+  <rect x="46" y="476" width="160" height="52" class="box ext"/>
+  <text x="126" y="498" text-anchor="middle" class="body">Contact phone</text>
+  <text x="126" y="514" text-anchor="middle" class="tiny">/remote reply link</text>
+
+  <path d="M214 502 L262 502" class="accent" marker-end="url(#a)"/>
+  <text x="238" y="493" text-anchor="middle" class="tiny">tap</text>
+
+  <rect x="270" y="476" width="160" height="52" class="box ext"/>
+  <text x="350" y="498" text-anchor="middle" class="body">OpenTunnel</text>
+  <text x="350" y="514" text-anchor="middle" class="tiny">HTTPS subdomain</text>
+
+  <path d="M438 502 L486 502" class="accent" marker-end="url(#a)"/>
+  <text x="462" y="493" text-anchor="middle" class="tiny">route</text>
+
+  <rect x="494" y="476" width="166" height="52" class="box brain"/>
+  <text x="577" y="498" text-anchor="middle" class="body">Scoped token</text>
+  <text x="577" y="514" text-anchor="middle" class="tiny">one companion + contact</text>
+
+  <path d="M668 502 L716 502" class="accent" marker-end="url(#a)"/>
+  <text x="692" y="493" text-anchor="middle" class="tiny">router</text>
+
+  <rect x="724" y="476" width="106" height="52" class="box device"/>
+  <text x="777" y="498" text-anchor="middle" class="body">Terminal</text>
+  <text x="777" y="514" text-anchor="middle" class="tiny">live state</text>
+
+  <text x="46" y="556" class="small">One REST route per command under <tspan class="mono">/remote/api/…</tspan> and one SSE stream at <tspan class="mono">/remote/events</tspan>.</text>
+  <text x="46" y="574" class="small">A new <tspan class="mono">/remote</tspan> rotates the token. <tspan class="mono">/remote off</tspan> or <tspan class="mono">revoke</tspan> stops the tunnel and drops every token.</text>
+  <text x="46" y="592" class="small">History shows in-person room messages and this contact's conversation; other contacts stay hidden.</text>
+</svg>

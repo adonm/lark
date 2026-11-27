@@ -71,6 +71,7 @@ timeit go-race phase_race
 timeit parakeet-compile phase_parakeet_compile
 timeit c-host phase_c_host
 timeit hygiene phase_hygiene
+timeit diagrams phase_diagrams
 
 phase_remote_ui() {
     # Headless-Chromium DOM tests for the remote page. Dev-only and slower

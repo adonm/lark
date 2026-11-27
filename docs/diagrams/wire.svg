@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 600" width="880" height="600" role="img" aria-labelledby="wire-title wire-desc">
+  <title id="wire-title">Terminal to edge transport</title>
+  <desc id="wire-desc">A terminal opens one TCP connection on port 8766 for HELLO or RESUME, binary frames, control messages, telemetry, touch, and keepalive. The edge replies with WELCOME, display frames, recording and speech control, status, and PONG. Microphone audio travels separately as 20 millisecond RTP packets over UDP, each carrying 320 samples of 16 kHz mono PCM. A fresh HELLO replaces a live session immediately; RESUME within 30 seconds keeps the terminal state and swaps the UDP stream. The firmware retries with bounded backoff from 1 to 30 seconds.</desc>
+  <style>
+    svg {
+      --ink: #1f2328;
+      --muted: #5b6571;
+      --line: #7f8a97;
+      --bg: #ffffff;
+      --card: #ffffff;
+      --device: #fbe7d6;
+      --device-line: #b5663a;
+      --edge: #e4eef9;
+      --edge-line: #356da6;
+      --accent: #7355a3;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --ink: #e6edf3;
+        --muted: #a7b1bd;
+        --line: #94a0ae;
+        --bg: #0d1117;
+        --card: #161b22;
+        --device: #3a2a20;
+        --device-line: #d08a5c;
+        --edge: #1d2b3b;
+        --edge-line: #78a9d8;
+        --accent: #b59adb;
+      }
+    }
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title { font-size: 20px; font-weight: 650; }
+    .sub { font-size: 12.5px; fill: var(--muted); }
+    .label { font-size: 13px; font-weight: 650; }
+    .body { font-size: 11.5px; }
+    .small { font-size: 10.5px; fill: var(--muted); }
+    .tiny { font-size: 9.5px; fill: var(--muted); }
+    .box { stroke-width: 1.6; rx: 10; }
+    .device { fill: var(--device); stroke: var(--device-line); }
+    .edge { fill: var(--edge); stroke: var(--edge-line); }
+    .panel { fill: var(--card); stroke: var(--line); stroke-width: 1.2; rx: 12; }
+    .arrow { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .pkt { fill: var(--card); stroke: var(--line); stroke-width: 1.2; rx: 4; }
+    .arrowhead { fill: var(--line); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="600" fill="var(--bg)"/>
+  <text x="30" y="38" class="title">Terminal ↔ edge transport</text>
+  <text x="30" y="60" class="sub">One TCP session owns control and display; one UDP flow carries the microphone.</text>
+
+  <text x="40" y="92" class="label">TCP :8766</text>
+  <text x="40" y="108" class="small">8-byte envelope: magic 0x4C, type, seq, length · payload cap 320 KiB</text>
+
+  <rect x="40" y="122" width="330" height="164" class="box device"/>
+  <text x="56" y="146" class="label">Terminal sends</text>
+  <text x="56" y="168" class="body mono">HELLO · RESUME</text>
+  <text x="56" y="187" class="body mono">TELEMETRY · POINTER</text>
+  <text x="56" y="206" class="body mono">REC_START · REC_END</text>
+  <text x="56" y="225" class="body mono">TTS_ACK · PING</text>
+  <text x="56" y="250" class="small">HELLO carries id, board, firmware, caps, and token.</text>
+  <text x="56" y="266" class="small">RESUME carries the 16-byte token and terminal id.</text>
+
+  <rect x="510" y="122" width="330" height="164" class="box edge"/>
+  <text x="526" y="146" class="label">Edge sends</text>
+  <text x="526" y="168" class="body mono">WELCOME · REJECT</text>
+  <text x="526" y="187" class="body mono">FRAME · REC_CTRL</text>
+  <text x="526" y="206" class="body mono">TTS_CTRL · TTSPCM</text>
+  <text x="526" y="225" class="body mono">STATUS · VOICE_OWNER · PONG</text>
+  <text x="526" y="250" class="small">WELCOME carries UDP port, SSRC, limits, and resume token.</text>
+  <text x="526" y="266" class="small">FRAME carries RGB565, RLE565, LZ4, or JPEG pixels.</text>
+
+  <path d="M378 168 L502 168" class="arrow" marker-end="url(#a)"/>
+  <text x="440" y="160" text-anchor="middle" class="tiny">requests</text>
+  <path d="M502 238 L378 238" class="arrow" marker-end="url(#a)"/>
+  <text x="440" y="256" text-anchor="middle" class="tiny">replies</text>
+
+  <text x="40" y="320" class="label">UDP :8766 · microphone uplink</text>
+  <text x="40" y="336" class="small">One RTP packet every 20 ms · payload type 96 · 16 kHz mono s16le</text>
+
+  <rect x="40" y="352" width="112" height="58" class="box device"/>
+  <text x="96" y="376" text-anchor="middle" class="body">terminal</text>
+  <text x="96" y="394" text-anchor="middle" class="tiny">mic capture</text>
+
+  <path d="M160 381 L282 381" class="arrow" marker-end="url(#a)"/>
+  <text x="221" y="372" text-anchor="middle" class="tiny">RTP</text>
+
+  <rect x="290" y="352" width="120" height="58" class="pkt"/>
+  <text x="350" y="374" text-anchor="middle" class="tiny">12 B header</text>
+  <text x="350" y="390" text-anchor="middle" class="tiny">V=2, PT=96, seq, ts,</text>
+  <text x="350" y="404" text-anchor="middle" class="tiny">SSRC</text>
+
+  <rect x="418" y="352" width="182" height="58" class="pkt"/>
+  <text x="509" y="374" text-anchor="middle" class="tiny">640 B PCM</text>
+  <text x="509" y="390" text-anchor="middle" class="tiny">320 samples · 20 ms</text>
+  <text x="509" y="404" text-anchor="middle" class="tiny">652 B on the wire</text>
+
+  <path d="M608 381 L698 381" class="arrow" marker-end="url(#a)"/>
+
+  <rect x="706" y="352" width="134" height="58" class="box edge"/>
+  <text x="773" y="376" text-anchor="middle" class="body">edge</text>
+  <text x="773" y="394" text-anchor="middle" class="tiny">SSRC → terminal</text>
+
+  <rect x="40" y="432" width="256" height="138" class="panel"/>
+  <text x="56" y="456" class="label">Fresh HELLO</text>
+  <text x="56" y="477" class="small">Takes over immediately. Any live</text>
+  <text x="56" y="494" class="small">session closes as replaced; the</text>
+  <text x="56" y="511" class="small">edge issues a new SSRC.</text>
+  <text x="56" y="536" class="small">Used after reboot or a half-open</text>
+  <text x="56" y="553" class="small">TCP connection.</text>
+
+  <rect x="312" y="432" width="256" height="138" class="panel"/>
+  <text x="328" y="456" class="label">RESUME</text>
+  <text x="328" y="477" class="small">Accepted for 30 s after disconnect.</text>
+  <text x="328" y="494" class="small">Keeps terminal state and swaps the</text>
+  <text x="328" y="511" class="small">UDP stream to a new SSRC.</text>
+  <text x="328" y="536" class="small">The terminal ID must match a session</text>
+  <text x="328" y="553" class="small">kept warm after the disconnect.</text>
+
+  <rect x="584" y="432" width="256" height="138" class="panel"/>
+  <text x="600" y="456" class="label">Liveness</text>
+  <text x="600" y="477" class="small">5 s handshake read · 75 s session read.</text>
+  <text x="600" y="494" class="small">Edge PING every 12 s awake, 30 s asleep;</text>
+  <text x="600" y="511" class="small">terminal answers PONG.</text>
+  <text x="600" y="536" class="small">Firmware retries at 1 s, backing off to</text>
+  <text x="600" y="553" class="small">30 s; WELCOME resets the delay.</text>
+</svg>

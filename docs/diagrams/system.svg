@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 710" width="880" height="710" role="img" aria-labelledby="system-title system-desc">
+  <title id="system-title">Lark system map</title>
+  <desc id="system-desc">Two ESP32 terminals connect over TCP and UDP to the Go edge, which runs voice activity detection, Smart Turn, Parakeet speech recognition, Kokoro speech synthesis, and the pixel renderer. The edge talks to the Node brain over a Unix socket. The brain owns HTTP, SQLite, OpenCode, Delta Chat, and remote controls, and reaches OpenCode Zen, a Chatmail relay, OpenTunnel, and portrait generation over HTTPS. Host-only tools provision the library and push firmware updates.</desc>
+  <style>
+    svg {
+      --ink: #1f2328;
+      --muted: #5b6571;
+      --line: #7f8a97;
+      --bg: #ffffff;
+      --card: #ffffff;
+      --device: #fbe7d6;
+      --device-line: #b5663a;
+      --edge: #e4eef9;
+      --edge-line: #356da6;
+      --brain: #e1f1e8;
+      --brain-line: #357a5e;
+      --ext: #eee7f8;
+      --ext-line: #7355a3;
+      --tool: #f2f4f7;
+      --tool-line: #69737f;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        --ink: #e6edf3;
+        --muted: #a7b1bd;
+        --line: #94a0ae;
+        --bg: #0d1117;
+        --card: #161b22;
+        --device: #3a2a20;
+        --device-line: #d08a5c;
+        --edge: #1d2b3b;
+        --edge-line: #78a9d8;
+        --brain: #1c3229;
+        --brain-line: #6fb99a;
+        --ext: #2e2539;
+        --ext-line: #b59adb;
+        --tool: #21262d;
+        --tool-line: #8b96a5;
+      }
+    }
+    text {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      fill: var(--ink);
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .title { font-size: 20px; font-weight: 650; }
+    .sub { font-size: 12.5px; fill: var(--muted); }
+    .tier { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; fill: var(--muted); }
+    .label { font-size: 13.5px; font-weight: 650; }
+    .body { font-size: 12px; }
+    .small { font-size: 11px; fill: var(--muted); }
+    .tiny { font-size: 10.5px; fill: var(--muted); }
+    .box { stroke-width: 1.6; rx: 12; }
+    .device { fill: var(--device); stroke: var(--device-line); }
+    .edge { fill: var(--edge); stroke: var(--edge-line); }
+    .brain { fill: var(--brain); stroke: var(--brain-line); }
+    .ext { fill: var(--ext); stroke: var(--ext-line); }
+    .tool { fill: var(--tool); stroke: var(--tool-line); }
+    .chip { fill: var(--card); stroke: var(--line); stroke-width: 1; rx: 7; }
+    .arrow { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .dotted { stroke-dasharray: 5 6; }
+    .arrowhead { fill: var(--line); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="710" fill="var(--bg)"/>
+  <text x="32" y="38" class="title">Lark system map</text>
+  <text x="32" y="60" class="sub">Two processes, one household. The edge owns timing; the brain owns state.</text>
+
+  <text x="32" y="96" class="tier">TERMINALS</text>
+  <rect x="32" y="108" width="378" height="72" class="box device"/>
+  <text x="48" y="132" class="label">ESP-VoCat v1.2</text>
+  <text x="48" y="152" class="body">360 × 360 round touch panel · battery</text>
+  <text x="48" y="169" class="small mono">vocat-…</text>
+
+  <rect x="430" y="108" width="418" height="72" class="box device"/>
+  <text x="446" y="132" class="label">ESP32-S3-BOX-3</text>
+  <text x="446" y="152" class="body">320 × 240 rectangular touch panel · USB power</text>
+  <text x="446" y="169" class="small mono">box3-…</text>
+
+  <path d="M221 180 L221 226" class="arrow" marker-end="url(#a)"/>
+  <path d="M639 226 L639 180" class="arrow" marker-end="url(#a)"/>
+  <text x="430" y="200" text-anchor="middle" class="small">TCP 8766 · frames, control, touch, telemetry</text>
+  <text x="430" y="216" text-anchor="middle" class="small">UDP 8766 · RTP mic, 20 ms packets</text>
+
+  <rect x="32" y="232" width="816" height="176" class="box edge"/>
+  <text x="48" y="258" class="label">lark-edge · Go</text>
+  <text x="48" y="276" class="small">real-time media and speech</text>
+  <rect x="48" y="292" width="150" height="48" class="chip"/>
+  <text x="123" y="312" text-anchor="middle" class="body">terminal server</text>
+  <text x="123" y="329" text-anchor="middle" class="tiny">TCP + UDP</text>
+  <rect x="210" y="292" width="150" height="48" class="chip"/>
+  <text x="285" y="312" text-anchor="middle" class="body">VAD + Smart Turn</text>
+  <text x="285" y="329" text-anchor="middle" class="tiny">Silero v5, CPU</text>
+  <rect x="372" y="292" width="150" height="48" class="chip"/>
+  <text x="447" y="312" text-anchor="middle" class="body">Parakeet STT</text>
+  <text x="447" y="329" text-anchor="middle" class="tiny">Vulkan, whole clip</text>
+  <rect x="534" y="292" width="150" height="48" class="chip"/>
+  <text x="609" y="312" text-anchor="middle" class="body">Kokoro TTS</text>
+  <text x="609" y="329" text-anchor="middle" class="tiny">streamed PCM</text>
+  <rect x="696" y="292" width="136" height="48" class="chip"/>
+  <text x="764" y="312" text-anchor="middle" class="body">pixel renderer</text>
+  <text x="764" y="329" text-anchor="middle" class="tiny">RGB565 / RLE / LZ4</text>
+  <text x="48" y="368" class="small">Owns endpointing, capture DSP, playback queueing, and frame encoding.</text>
+  <text x="48" y="388" class="small mono">$LARK_DATA_DIR/edge.sock · 0600</text>
+
+  <path d="M283 408 L283 448" class="arrow" marker-end="url(#a)"/>
+  <path d="M283 494 L283 454" class="arrow" marker-end="url(#a)"/>
+  <text x="298" y="434" class="small">Unix socket · NDJSON</text>
+
+  <rect x="32" y="500" width="500" height="136" class="box brain"/>
+  <text x="48" y="526" class="label">lark-brain · Node 26 TypeScript</text>
+  <text x="48" y="544" class="small">conversation, household state, and outbound services</text>
+  <rect x="48" y="558" width="146" height="40" class="chip"/>
+  <text x="121" y="583" text-anchor="middle" class="body">HTTP :8765</text>
+  <rect x="206" y="558" width="146" height="40" class="chip"/>
+  <text x="279" y="583" text-anchor="middle" class="body">SQLite WAL</text>
+  <rect x="364" y="558" width="152" height="40" class="chip"/>
+  <text x="440" y="583" text-anchor="middle" class="body">OpenCode SDK</text>
+  <rect x="48" y="606" width="146" height="22" class="chip"/>
+  <text x="121" y="622" text-anchor="middle" class="tiny">Delta Chat</text>
+  <rect x="206" y="606" width="146" height="22" class="chip"/>
+  <text x="279" y="622" text-anchor="middle" class="tiny">/remote + SSE</text>
+  <rect x="364" y="606" width="152" height="22" class="chip"/>
+  <text x="440" y="622" text-anchor="middle" class="tiny">stories · timers · portraits</text>
+
+  <path d="M548 536 L586 536" class="arrow" marker-end="url(#a)"/>
+  <path d="M586 570 L548 570" class="arrow" marker-end="url(#a)"/>
+  <text x="567" y="526" text-anchor="middle" class="tiny">network</text>
+
+  <rect x="596" y="500" width="252" height="136" class="box ext"/>
+  <text x="612" y="522" class="tiny">EXTERNAL</text>
+  <text x="612" y="544" class="body">OpenCode Zen</text>
+  <text x="832" y="544" text-anchor="end" class="tiny">models</text>
+  <text x="612" y="568" class="body">Chatmail relay</text>
+  <text x="832" y="568" text-anchor="end" class="tiny">Delta Chat</text>
+  <text x="612" y="592" class="body">OpenTunnel</text>
+  <text x="832" y="592" text-anchor="end" class="tiny">/remote</text>
+  <text x="612" y="616" class="body">Nano Banana</text>
+  <text x="832" y="616" text-anchor="end" class="tiny">portraits</text>
+
+  <rect x="32" y="654" width="816" height="42" class="box tool"/>
+  <text x="48" y="679" class="small"><tspan class="mono">lark</tspan> CLI → HTTP 8765</text>
+  <text x="300" y="679" class="small"><tspan class="mono">lark-library</tspan> → FTS5 packs</text>
+  <text x="570" y="679" class="small"><tspan class="mono">lark-ops</tspan> → device HTTP :80 OTA</text>
+  <text x="832" y="679" text-anchor="end" class="tiny">host-only</text>
+</svg>
