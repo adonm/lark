@@ -98,20 +98,26 @@ func (c *nativeConn) enqueuePCM(payload []byte) bool {
 	}
 }
 
-func (c *nativeConn) enqueueFrame(payload []byte) {
+func (c *nativeConn) enqueueFrame(payload []byte) bool {
 	if c.closed.Load() {
-		return
+		return false
 	}
 	c.frameMu.Lock()
 	// Only the newest frame matters; reuse the slot instead of allocating a
-	// fresh outMsg for every render.
+	// fresh outMsg for every render. The replaced payload returns to the
+	// encoder's free list once it can no longer be written.
+	old := c.pendingFrame.payload
 	c.pendingFrame = outMsg{proto.MsgFrame, payload}
 	c.framePending = true
 	c.frameMu.Unlock()
+	if old != nil {
+		c.releaseFrame(old)
+	}
 	select {
 	case c.frameNotify <- struct{}{}:
 	default:
 	}
+	return true
 }
 
 func (c *nativeConn) takeFrame() (outMsg, bool) {
@@ -124,6 +130,13 @@ func (c *nativeConn) takeFrame() (outMsg, bool) {
 	c.pendingFrame = outMsg{}
 	c.framePending = false
 	return msg, true
+}
+
+// releaseFrame returns a frame payload to the terminal's encoder after write.
+func (c *nativeConn) releaseFrame(payload []byte) {
+	if c.t != nil {
+		c.t.releaseFrame(payload)
+	}
 }
 
 func (c *nativeConn) nextMsg() (outMsg, bool, bool) {
@@ -156,6 +169,16 @@ func (c *nativeConn) writePacket(msgType uint8, payload []byte) error {
 	return err
 }
 
+// writeMsg writes one queued message and returns frame buffers to the encoder.
+// The payload is not touched after WriteTo, whether the write succeeded or not.
+func (c *nativeConn) writeMsg(msg outMsg) error {
+	err := c.writePacket(msg.msgType, msg.payload)
+	if msg.msgType == proto.MsgFrame {
+		c.releaseFrame(msg.payload)
+	}
+	return err
+}
+
 func (c *nativeConn) writeLoop() {
 	defer c.writeWG.Done()
 	defer c.close()
@@ -166,13 +189,13 @@ func (c *nativeConn) writeLoop() {
 			return
 		}
 		if msg, isPCM, ok := c.nextMsg(); ok {
-			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
+			if err := c.writeMsg(msg); err != nil {
 				c.setReason("write: " + err.Error())
 				return
 			}
 			if isPCM {
 				if frame, ok := c.takeFrame(); ok {
-					if err := c.writePacket(frame.msgType, frame.payload); err != nil {
+					if err := c.writeMsg(frame); err != nil {
 						c.setReason("write: " + err.Error())
 						return
 					}
@@ -184,12 +207,12 @@ func (c *nativeConn) writeLoop() {
 		case <-c.t.life.done:
 			return
 		case msg := <-c.ctrlOut:
-			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
+			if err := c.writeMsg(msg); err != nil {
 				c.setReason("write: " + err.Error())
 				return
 			}
 		case msg := <-c.pcmOut:
-			if err := c.writePacket(msg.msgType, msg.payload); err != nil {
+			if err := c.writeMsg(msg); err != nil {
 				c.setReason("write: " + err.Error())
 				return
 			}
@@ -211,6 +234,9 @@ func (c *nativeConn) close() {
 		return
 	}
 	_ = c.conn.Close()
+	if frame, ok := c.takeFrame(); ok {
+		c.releaseFrame(frame.payload)
+	}
 	c.t.detach(c)
 	last := "-"
 	if v := c.lastMsg.Load(); v != 0 {

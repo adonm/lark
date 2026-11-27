@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"image"
 	"image/jpeg"
+	"sync"
 
 	"github.com/pierrec/lz4/v4"
 )
@@ -95,6 +96,40 @@ type FrameEncoder struct {
 	lz4Comp lz4.Compressor
 	jpegBuf bytes.Buffer
 	jpegImg *image.RGBA
+
+	// outFree is a mutex-guarded free list of wire buffers. Encode hands one
+	// to the caller; Release returns it after the write path is done. The list
+	// is owned by the encoder rather than sync.Pool so steady-state frame
+	// encoding stays allocation-free across GC cycles.
+	outMu   sync.Mutex
+	outFree [][]byte
+}
+
+// acquireOut returns a buffer of len n, reusing a released one when possible.
+func (e *FrameEncoder) acquireOut(n int) []byte {
+	e.outMu.Lock()
+	if last := len(e.outFree) - 1; last >= 0 {
+		buf := e.outFree[last]
+		e.outFree = e.outFree[:last]
+		e.outMu.Unlock()
+		if cap(buf) < n {
+			return make([]byte, n)
+		}
+		return buf[:n]
+	}
+	e.outMu.Unlock()
+	return make([]byte, n)
+}
+
+// Release returns a buffer from EncodeWithCodecs once its payload has been
+// written. Callers must not touch the payload after Release.
+func (e *FrameEncoder) Release(buf []byte) {
+	if buf == nil {
+		return
+	}
+	e.outMu.Lock()
+	e.outFree = append(e.outFree, buf[:0])
+	e.outMu.Unlock()
 }
 
 func (e *FrameEncoder) rgbaFromFB(fb []uint16, r image.Rectangle, width int) *image.RGBA {
@@ -182,7 +217,7 @@ func (e *FrameEncoder) EncodeWithCodecs(fb []uint16, rgba *image.RGBA, r image.R
 		}
 	}
 
-	out := make([]byte, 12+len(bestPayload))
+	out := e.acquireOut(12 + len(bestPayload))
 	out[0] = 0x03
 	binary.LittleEndian.PutUint16(out[1:], uint16(r.Min.X))
 	binary.LittleEndian.PutUint16(out[3:], uint16(r.Min.Y))

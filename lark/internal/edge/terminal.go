@@ -174,6 +174,10 @@ type Terminal struct {
 	playback terminalPlayback
 
 	cache *clipCache
+
+	// frames encodes render output; buffers it returns are released by the
+	// write path after the payload leaves the socket.
+	frames *pixel.FrameEncoder
 }
 
 func (s *terminalServer) newTerminal(h proto.TerminalHello, remoteIP netip.Addr) *Terminal {
@@ -198,6 +202,7 @@ func (s *terminalServer) newTerminal(h proto.TerminalHello, remoteIP netip.Addr)
 	t.conn.ip = remoteIP.String()
 	t.conn.mu.Unlock()
 	t.cache = s.e.clipCache()
+	t.frames = new(pixel.FrameEncoder)
 	return t
 }
 
@@ -497,7 +502,17 @@ func (t *Terminal) pcm(payload []byte) bool {
 
 func (t *Terminal) frame(payload []byte) {
 	if nc := t.native(); nc != nil {
-		nc.enqueueFrame(payload)
+		if nc.enqueueFrame(payload) {
+			return
+		}
+	}
+	t.releaseFrame(payload)
+}
+
+// releaseFrame returns an encoded frame buffer to the renderer's free list.
+func (t *Terminal) releaseFrame(payload []byte) {
+	if t.frames != nil {
+		t.frames.Release(payload)
 	}
 }
 
@@ -539,7 +554,11 @@ func (t *Terminal) setModeFromScreen(s Screen) {
 }
 
 func (t *Terminal) commitFrame(fb *frameBuilt) {
-	if fb == nil || fb.gen != t.screen.gen || t.isClosed() {
+	if fb == nil {
+		return
+	}
+	if fb.gen != t.screen.gen || t.isClosed() {
+		t.releaseFrame(fb.payload)
 		return
 	}
 	t.screen.rev = fb.rev

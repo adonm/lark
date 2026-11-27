@@ -265,6 +265,32 @@ func BenchmarkDirtyRect(b *testing.B) {
 	}
 }
 
+func TestFrameEncoderReusesOutputBuffer(t *testing.T) {
+	var enc FrameEncoder
+	fb := make([]uint16, 360*360)
+	rect := image.Rect(0, 0, 360, 360)
+	first := enc.EncodeWithCodecs(fb, nil, rect, 1, 360, CodecBitAll)
+	want := append([]byte(nil), first...)
+	base := &first[0]
+	enc.Release(first)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		frame := enc.EncodeWithCodecs(fb, nil, rect, 1, 360, CodecBitAll)
+		enc.Release(frame)
+	})
+	if allocs != 0 {
+		t.Fatalf("frame encoding allocated %.0f times, want 0", allocs)
+	}
+
+	got := enc.EncodeWithCodecs(fb, nil, rect, 1, 360, CodecBitAll)
+	if &got[0] != base {
+		t.Fatal("encoder did not reuse the released buffer")
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("reused buffer changed the encoded frame")
+	}
+}
+
 func BenchmarkFrameEncoderRLE(b *testing.B) {
 	var enc FrameEncoder
 	fb := make([]uint16, 360*360)

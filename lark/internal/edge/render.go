@@ -105,7 +105,11 @@ func (b *frameBuffers) commit() {
 }
 
 func (t *Terminal) renderWorker() {
-	enc := new(pixel.FrameEncoder)
+	enc := t.frames
+	if enc == nil {
+		enc = new(pixel.FrameEncoder)
+		t.frames = enc
+	}
 	var bufs frameBuffers
 	var prevGrade pixel.GradeKey
 	var rev uint64
@@ -161,6 +165,7 @@ func (t *Terminal) renderWorker() {
 				gen: job.gen, rev: rev, payload: payload, hits: hits, actions: actions,
 			}}:
 			case <-t.life.done:
+				enc.Release(payload)
 				return
 			}
 		}
