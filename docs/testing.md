@@ -95,7 +95,7 @@ Local: 16 cores, Go 1.26.10, Node 26.5, warm build cache, Go test cache warm.
 | Step | Warm |
 | --- | ---: |
 | shell | 0.6 s |
-| brain (typecheck + 123 tests) | 19.3 s |
+| brain (typecheck + 123 tests) | 19.4 s |
 | python | 0.0 s |
 | vet (+ `go mod verify`) | 0.5 s |
 | go-race | 0.0 s |
@@ -103,11 +103,11 @@ Local: 16 cores, Go 1.26.10, Node 26.5, warm build cache, Go test cache warm.
 | host C (ASan/UBSan, both boards) | 1.1 s |
 | hygiene | 0.5 s |
 | diagrams | 0.0 s |
-| full gate | 23.1 s |
+| full gate | 23.2 s |
 
 `--remote-ui` adds 3.1 s of DOM tests against Chromium in
 `~/.cache/ms-playwright` (no browser download on the hot path); the measured
-total was 26.2 s.
+total was about 26 s.
 
 The brain suite is most of the gate. The E2E test alone compiles the edge and
 drives a full turn; the remaining tests cover the DB, router, Delta Chat,
