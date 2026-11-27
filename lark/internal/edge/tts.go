@@ -136,63 +136,122 @@ func (s *ttsStream) run() {
 	var scratch []float32
 	pending := make([]byte, 0, ttsPrefillByte+2*pcmPacket)
 	sent := false
-	flush := func() {
+	flush := func() bool {
 		for len(pending) > 0 {
 			n := min(pcmPacket, len(pending))
 			if !s.t.pcm(pending[:n]) {
 				s.stop()
-				return
+				return false
 			}
-			if !sent {
-				sent = true
-			}
+			sent = true
 			pending = pending[n:]
 		}
 		pending = pending[:0]
+		return true
 	}
-	synth := func(text string) {
-		pcm := s.synthesize(&scratch, text)
+	// send buffers until the prefill threshold is reached, then forwards every
+	// later chunk immediately so streamed synthesis keeps the queue fed.
+	send := func(pcm []byte) bool {
 		if len(pcm) == 0 {
-			return
+			return true
+		}
+		if s.ctx.Err() != nil {
+			return false
 		}
 		pending = append(pending, pcm...)
-		if len(pending) >= ttsPrefillByte {
-			flush()
+		if sent || len(pending) >= ttsPrefillByte {
+			return flush()
 		}
+		return true
+	}
+	synth := func(text string) bool {
+		s.synthesize(&scratch, text, send)
+		return s.ctx.Err() == nil
 	}
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case text := <-s.texts:
-			synth(text)
+			if !synth(text) {
+				return
+			}
 		case <-s.end:
 			for {
 				select {
 				case text := <-s.texts:
-					synth(text)
+					if !synth(text) {
+						return
+					}
 					continue
 				default:
 				}
 				break
 			}
-			flush()
+			if !flush() {
+				return
+			}
 			s.t.event(evTTSStreamDone, func(ev *termEvent) { ev.tts = s })
 			return
 		}
 	}
 }
 
-func (s *ttsStream) synthesize(scratch *[]float32, text string) []byte {
+// streamingSynthesizer optionally delivers synthesized samples before the
+// whole utterance is finished. Kokoro implements it; injected test backends
+// that only implement Generate take the batch path.
+type streamingSynthesizer interface {
+	GenerateStream(text string, voice audio.Voice, keepGoing func() bool, emit func([]float32) bool) (int, bool)
+}
+
+// synthesize emits PCM as it arrives and returns the full clip for the cache.
+// emit must not retain its slice; the streaming path reuses the buffer.
+func (s *ttsStream) synthesize(scratch *[]float32, text string, emit func([]byte) bool) []byte {
 	key := clipKey(s.voice.ID, text)
 	if pcm, ok := s.t.cache.Get(key); ok {
+		if len(pcm) > 0 && !emit(pcm) {
+			return nil
+		}
 		return pcm
 	}
 	tts := s.t.deps.e.models.synthesizer()
 	if tts == nil {
 		return nil
 	}
-	raw, rate := tts.Generate(text, s.voice, func() bool { return s.ctx.Err() == nil })
+	keepGoing := func() bool { return s.ctx.Err() == nil }
+	var buf, all []byte
+	if streamer, ok := tts.(streamingSynthesizer); ok {
+		resampler := audio.NewResampler(audio.KokoroRate)
+		rate, streamed := streamer.GenerateStream(text, s.voice, keepGoing, func(raw []float32) bool {
+			buf = resampler.Push(buf[:0], raw)
+			if len(buf) == 0 {
+				return true
+			}
+			all = append(all, buf...)
+			return emit(buf)
+		})
+		if streamed {
+			if s.ctx.Err() != nil {
+				return nil
+			}
+			buf = resampler.Flush(buf[:0])
+			if len(buf) > 0 {
+				all = append(all, buf...)
+				if !emit(buf) {
+					return nil
+				}
+			}
+			if rate != audio.KokoroRate || len(all) == 0 {
+				return nil
+			}
+			s.t.cache.Put(key, all, false)
+			return all
+		}
+		if s.ctx.Err() != nil {
+			return nil
+		}
+	}
+	raw, rate := tts.Generate(text, s.voice, keepGoing)
 	if len(raw) == 0 {
 		return nil
 	}
@@ -202,6 +261,9 @@ func (s *ttsStream) synthesize(scratch *[]float32, text string) []byte {
 		return nil
 	}
 	s.t.cache.Put(key, pcm, false)
+	if !emit(pcm) {
+		return nil
+	}
 	return pcm
 }
 
@@ -246,7 +308,8 @@ func (t *Terminal) playEphemeral(voiceID, text string, pinned bool) {
 	t.screen.mode = modeSpeaking
 	t.ordered(proto.MsgTTSCtrl, proto.ProtoTTSCtrl{Op: proto.TtsOpStart, AudioID: id}.Encode())
 	go func() {
-		pcm := s.synthesize(new([]float32), text)
+		var scratch []float32
+		pcm := s.synthesize(&scratch, text, func([]byte) bool { return true })
 		if len(pcm) > 0 {
 			t.cache.Put(clipKey(voice.ID, text), pcm, pinned)
 			s.pendingSend(pcm)

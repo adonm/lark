@@ -48,15 +48,19 @@ func OpenKokoro(dir string, threads int) (*Kokoro, error) {
 	return &Kokoro{tts}, nil
 }
 
-func (k *Kokoro) Generate(text string, voice Voice, keepGoing func() bool) ([]float32, int) {
+func (k *Kokoro) generationConfig(voice Voice) sherpa_onnx.GenerationConfig {
 	lang := voice.Lang
 	if lang == "en-gb" {
 		// The model pack's British eSpeak voice is the file lang/gmw/en.
 		lang = "en"
 	}
-	config := sherpa_onnx.GenerationConfig{
+	return sherpa_onnx.GenerationConfig{
 		Sid: voice.SID, Speed: 1, SilenceScale: 0.2, Extra: []byte(`{"lang":"` + lang + `"}`),
 	}
+}
+
+func (k *Kokoro) Generate(text string, voice Voice, keepGoing func() bool) ([]float32, int) {
+	config := k.generationConfig(voice)
 	more := true
 	callback := func(_ []float32, _ float32) bool {
 		more = keepGoing()
@@ -77,6 +81,59 @@ func (k *Kokoro) Generate(text string, voice Voice, keepGoing func() bool) ([]fl
 		}
 	}
 	return samples, KokoroRate
+}
+
+// GenerateStream synthesizes text and hands each newly generated 24 kHz
+// sentence to emit as soon as it exists, instead of waiting for the whole
+// utterance. The sherpa-onnx progress callback receives only the samples
+// generated since the previous callback (see its c-api.h comment: "Newly
+// generated samples valid only during the callback"), so callers may forward
+// each slice directly and must copy anything they keep. emit returning false
+// stops generation after the current inference.
+//
+// ok is false when no samples were emitted at all, letting callers fall back
+// to Generate for a binding that does not deliver progress callbacks.
+func (k *Kokoro) GenerateStream(text string, voice Voice, keepGoing func() bool, emit func([]float32) bool) (int, bool) {
+	config := k.generationConfig(voice)
+	emitted := false
+	stopped := false
+	callback := func(samples []float32, _ float32) bool {
+		if !keepGoing() {
+			stopped = true
+			return false
+		}
+		if len(samples) == 0 {
+			return true
+		}
+		emitted = true
+		if !emit(samples) {
+			stopped = true
+			return false
+		}
+		return true
+	}
+	for text != "" && !stopped {
+		var chunk string
+		chunk, text = splitKokoroText(text)
+		audio := k.tts.GenerateWithConfig(chunk, &config, callback)
+		if stopped {
+			break
+		}
+		if audio == nil || audio.SampleRate != KokoroRate {
+			return 0, emitted
+		}
+		if !emitted && len(audio.Samples) > 0 {
+			// A binding without progress delivery still produced audio.
+			emitted = true
+			if !emit(audio.Samples) {
+				break
+			}
+		}
+	}
+	if !emitted {
+		return 0, false
+	}
+	return KokoroRate, true
 }
 
 // Native callbacks cannot preempt a single ONNX inference. Break long sentences

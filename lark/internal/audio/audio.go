@@ -89,7 +89,6 @@ func SynthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []
 	}
 	pcm := make([]byte, count*2)
 	var peak float64
-	const knee, headroom = 0.75, 0.8912509381337456 - 0.75
 	for i := range count {
 		var v float32
 		if rate == KokoroRate {
@@ -102,18 +101,128 @@ func SynthPCMWithScratch(raw []float32, rate int, scratch []float32) ([]byte, []
 		} else {
 			v = raw[i]
 		}
-		scaled := float64(v) * 1.8
-		mag := math.Abs(scaled)
-		peak = max(peak, mag)
-		if mag > knee {
-			mag = knee + headroom*math.Tanh((mag-knee)/headroom)
-		}
-		le.PutUint16(pcm[2*i:], uint16(int16(math.RoundToEven(math.Copysign(mag, scaled)*32767))))
+		peak = max(peak, math.Abs(float64(v)*1.8))
+		putPCM(pcm, i, v)
 	}
 	if peak < 1e-5 || math.IsNaN(peak) || math.IsInf(peak, 0) {
 		return nil, scratch, errInvalidPCM
 	}
 	return pcm, scratch, nil
+}
+
+const (
+	pcmKnee     = 0.75
+	pcmHeadroom = 0.8912509381337456 - pcmKnee
+)
+
+// putPCM converts one float sample to clipped 16-bit PCM. Both the batch and
+// streaming resamplers use it so their output is byte-identical per sample.
+func putPCM(pcm []byte, i int, v float32) {
+	scaled := float64(v) * 1.8
+	mag := math.Abs(scaled)
+	if mag > pcmKnee {
+		mag = pcmKnee + pcmHeadroom*math.Tanh((mag-pcmKnee)/pcmHeadroom)
+	}
+	le.PutUint16(pcm[2*i:], uint16(int16(math.RoundToEven(math.Copysign(mag, scaled)*32767))))
+}
+
+// Resampler converts 24 kHz float samples to 16 kHz 16-bit PCM incrementally.
+// It carries the sinc filter phase and the last input window between Push
+// calls, so concatenating chunk outputs is byte-identical to resampling the
+// whole utterance at once. Call Flush once at the end to emit the padded tail.
+type Resampler struct {
+	rate     int
+	hist     []float32 // retained input: global samples [base, base+len(hist))
+	base     int64
+	nextOut  int64
+	consumed int64
+	started  bool
+	done     bool
+}
+
+func NewResampler(rate int) *Resampler {
+	return &Resampler{rate: rate}
+}
+
+// Push appends PCM for every output sample whose filter window is fully known,
+// growing dst as needed.
+func (r *Resampler) Push(dst []byte, raw []float32) []byte {
+	if r.done || len(raw) == 0 {
+		return dst
+	}
+	if r.rate != KokoroRate {
+		for _, v := range raw {
+			dst = appendPCM(dst, v)
+		}
+		return dst
+	}
+	if !r.started {
+		r.started = true
+		r.base = -sincRadius
+		r.hist = append(r.hist[:0], make([]float32, sincRadius)...)
+	}
+	r.hist = append(r.hist, raw...)
+	r.consumed += int64(len(raw))
+	dst = r.resample(dst)
+
+	// Keep enough history for the next window, which can start up to 32 raw
+	// samples before the samples seen so far.
+	const keep = 2 * sincRadius
+	if len(r.hist) > keep {
+		cut := len(r.hist) - keep
+		copy(r.hist, r.hist[cut:])
+		r.hist = r.hist[:keep]
+		r.base += int64(cut)
+	}
+	return dst
+}
+
+// Flush pads the input with sincRadius zeros like the batch path and emits the
+// remaining output samples. It is idempotent.
+func (r *Resampler) Flush(dst []byte) []byte {
+	if r.done {
+		return dst
+	}
+	r.done = true
+	if r.rate != KokoroRate {
+		return dst
+	}
+	if !r.started {
+		return dst
+	}
+	r.hist = append(r.hist, make([]float32, sincRadius)...)
+	return r.resample(dst)
+}
+
+func (r *Resampler) resample(dst []byte) []byte {
+	if r.rate != KokoroRate {
+		return dst
+	}
+	count := (2*r.consumed + 2) / 3
+	for ; r.nextOut < count; r.nextOut++ {
+		center := 3 * r.nextOut / 2
+		local := int(center - r.base)
+		if local < sincRadius {
+			break
+		}
+		if local+sincRadius >= len(r.hist) {
+			break
+		}
+		var v float32
+		samples := r.hist[local-sincRadius : local+sincRadius+1]
+		weights := &sinc[r.nextOut&1]
+		for j, sample := range samples {
+			v += sample * weights[j]
+		}
+		dst = appendPCM(dst, v)
+	}
+	return dst
+}
+
+func appendPCM(dst []byte, v float32) []byte {
+	var b [2]byte
+	putPCM(b[:], 0, v)
+	return append(dst, b[0], b[1])
 }
 
 // ReadWAVPCM decodes a RIFF/WAVE file into 16 kHz mono little-endian PCM.
