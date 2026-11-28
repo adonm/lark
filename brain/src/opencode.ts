@@ -313,6 +313,9 @@ export class Brain {
   readonly #now: () => number;
   readonly #stallMs: number;
   readonly #eventListeners = new Map<string, Set<(event: OcEvent) => void>>();
+  // One chain per session: an aborted speculation must finish interrupting and
+  // reverting before the next prompt on that session starts.
+  readonly #sessionChains = new Map<string, Promise<void>>();
   #eventPump: Promise<void> | undefined;
   #eventAbort: AbortController | undefined;
   #oc: Oc | undefined;
@@ -408,7 +411,7 @@ export class Brain {
         gate: this.#gate,
         emit: options.onEmit,
         audio: options.audio,
-        companionFor: (sessionID) => this.#companions.get(sessionID)?.id,
+        companionFor: (sessionID) => this.companionFor(sessionID)?.id,
         setCompanion: (sessionID, companion) => this.setCompanion(sessionID, companion),
       }),
       contextPlugin,
@@ -550,7 +553,37 @@ export class Brain {
   }
 
   companionFor(sessionID: string): CompanionInstruction | undefined {
-    return this.#companions.get(sessionID);
+    const cached = this.#companions.get(sessionID);
+    if (cached !== undefined) return cached;
+    // After a restart the in-memory map is empty; the sessions table still
+    // binds the session to its companion, so tools keep working.
+    const row = this.#db.getSessionBySessionId(sessionID);
+    if (row === undefined) return undefined;
+    const companion = this.#db.getCompanion(row.companionId);
+    if (companion === undefined) return undefined;
+    const value: CompanionInstruction = {
+      id: companion.id.toLowerCase(),
+      name: companion.name,
+      personality: companion.personality,
+    };
+    this.#companions.set(sessionID, value);
+    return value;
+  }
+
+  /** Append work behind every earlier operation on the session. */
+  #enqueue(sessionID: string, op: () => Promise<void>): Promise<void> {
+    const previous = this.#sessionChains.get(sessionID) ?? Promise.resolve();
+    const next = previous.then(op, op).catch(() => undefined);
+    this.#sessionChains.set(sessionID, next);
+    void next.then(() => {
+      if (this.#sessionChains.get(sessionID) === next) this.#sessionChains.delete(sessionID);
+    });
+    return next;
+  }
+
+  /** Session transcript, for diagnostics and tests. */
+  async sessionMessages(sessionID: string): Promise<readonly unknown[]> {
+    return (await this.#requireOc().message.list({ sessionID })).data;
   }
 
   /** Instruction entries currently attached to a session, for diagnostics/tests. */
@@ -570,9 +603,16 @@ export class Brain {
     const speculation = this.#gate.begin(input.sessionID);
     this.#speculations.add(speculation);
     const controller = new AbortController();
+    let promptMsgID: string | undefined;
+    let kept = false;
+    let cleaned = false;
 
     const consume = async (): Promise<TurnResult> => {
-      const generator = this.#turn(input, controller.signal);
+      const generator = this.#turn(input, controller.signal, (messageID) => {
+        // The first prompt starts the speculative turn; a fallback attempt is
+        // part of the same range.
+        promptMsgID ??= messageID;
+      });
       return await drain(generator, (delta) => onDelta?.(delta.text));
     };
 
@@ -581,6 +621,23 @@ export class Brain {
       this.#gate.promote(speculation);
     });
     void completed.catch(() => undefined);
+
+    // Aborting must not leave the speculative prompt in the session context:
+    // once the turn has stopped, revert every message it produced. The revert
+    // runs on the session chain so the next prompt sees a clean session.
+    const revert = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      void this.#enqueue(input.sessionID, async () => {
+        await completed.catch(() => undefined);
+        const messageID = promptMsgID;
+        if (messageID === undefined) return;
+        await oc.session.interrupt({ sessionID: input.sessionID }).catch(() => undefined);
+        await oc.session.wait({ sessionID: input.sessionID }).catch(() => undefined);
+        await oc.session.revert.stage({ sessionID: input.sessionID, messageID, files: false }).catch(() => undefined);
+        await oc.session.revert.commit({ sessionID: input.sessionID }).catch(() => undefined);
+      });
+    };
     const aborted = new Promise<never>((_, reject) => {
       speculation.wait(undefined).catch(reject);
     });
@@ -593,12 +650,15 @@ export class Brain {
       sessionID: input.sessionID,
       result,
       promote: () => {
+        kept = true;
         this.#gate.promote(speculation);
       },
       abort: (reason?: Error) => {
+        if (kept) return;
         this.#gate.abort(speculation, reason);
         controller.abort();
         void oc.session.interrupt({ sessionID: input.sessionID }).catch(() => undefined);
+        revert();
       },
     };
   }
@@ -631,14 +691,21 @@ export class Brain {
     }
   }
 
-  async *#turn(input: TurnInput, signal?: AbortSignal): AsyncGenerator<TurnDelta, TurnResult> {
+  async *#turn(
+    input: TurnInput,
+    signal?: AbortSignal,
+    onPrompt?: (messageID: string) => void,
+  ): AsyncGenerator<TurnDelta, TurnResult> {
     const oc = this.#requireOc();
     const sessionID = input.sessionID;
+    // A pending revert from an aborted speculation owns the session first.
+    await this.#sessionChains.get(sessionID);
     const t0 = this.#now();
     let firstAt = 0;
     let full = "";
     let current = input.model ?? this.#primary;
     let attempts = 0;
+    let needStepGap = false;
 
     for (;;) {
       const attemptStart = full.length;
@@ -666,7 +733,8 @@ export class Brain {
 
       try {
         await oc.session.switchModel({ sessionID, model: { ...current } });
-        await oc.sessions.prompt({ sessionID, text: input.text, agent: input.agent ?? "lark" });
+        const promptMsg = await oc.sessions.prompt({ sessionID, text: input.text, agent: input.agent ?? "lark" });
+        onPrompt?.(promptMsg.id);
         for (;;) {
           const step = await queue.next();
           if (step.done) break;
@@ -681,9 +749,19 @@ export class Brain {
               stallTimer = undefined;
             }
           }
-          if (event.type === "session.text.delta" && typeof data.delta === "string" && !stalled) {
-            full += data.delta;
-            yield { type: "delta", text: data.delta };
+          if (event.type === "session.text.started" && full !== "" && !/\s$/.test(full)) {
+            // A tool-call step boundary: the next step must not glue words
+            // together as "now.Your".
+            needStepGap = true;
+          }
+          if (event.type === "session.text.delta" && typeof data.delta === "string" && data.delta !== "" && !stalled) {
+            let delta = data.delta;
+            if (needStepGap) {
+              if (!/^[\s.,!?;:)'"”\]]/.test(delta)) delta = ` ${delta}`;
+              needStepGap = false;
+            }
+            full += delta;
+            yield { type: "delta", text: delta };
           }
           if (
             event.type === "session.execution.succeeded" ||
@@ -718,6 +796,7 @@ export class Brain {
         // Discard any late text from the stalled attempt; the fallback replays
         // the same turn from scratch.
         full = full.slice(0, attemptStart);
+        needStepGap = false;
         attempts++;
         current = this.#fallback;
         continue;

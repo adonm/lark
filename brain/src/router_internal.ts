@@ -6,6 +6,9 @@ import type { Story, StoryValue } from "./stories.ts";
 import type { DeltaCapture } from "./speech.ts";
 import type { SpeculationHandle } from "./opencode.ts";
 
+/** What the companion says when a turn produced no speakable reply. */
+export const NOT_CAUGHT_LINE = "I didn't catch that.";
+
 export interface StoryRun {
   id: string;
   story: Story;
@@ -46,6 +49,8 @@ export interface TerminalState {
   listenTimer?: ReturnType<typeof setTimeout>;
   speculation?: { transcript: string; stream: DeltaCapture; handle: SpeculationHandle };
   turn?: AbortController;
+  /** Bumped by every speculate/commit/cancel/disconnect; stale guesses stop. */
+  specSeq: number;
 }
 
 export function statusOf(state: Pick<TerminalState, "speaking" | "busy" | "listening">): string {

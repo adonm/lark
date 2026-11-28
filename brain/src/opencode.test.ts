@@ -101,7 +101,8 @@ class MockModel {
           return;
         }
         if (afterLastUserTool(parsed)) {
-          send({ ...base, choices: [{ index: 0, delta: { content: "Tool finished." }, finish_reason: null }] });
+          const content = lastUser(parsed).includes("TOOLSTEP") ? "second" : "Tool finished.";
+          send({ ...base, choices: [{ index: 0, delta: { content }, finish_reason: null }] });
           finish();
           return;
         }
@@ -136,6 +137,11 @@ class MockModel {
           response.write("data: [DONE]\n\n");
           response.end();
         };
+        if (prompt.includes("TOOLSTEP")) {
+          send({ ...base, choices: [{ index: 0, delta: { content: "first" }, finish_reason: null }] });
+          call("lark_state", { companion_id: "cake", include: ["me"] });
+          return;
+        }
         if (prompt.includes("TOOLSTATE")) {
           call("lark_state", { companion_id: "cake", include: ["me", "messages"] });
           return;
@@ -543,6 +549,82 @@ test("missing agent markdown fails fast", async () => {
   } finally {
     scratchDb.close();
     rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("aborting a speculation reverts its messages from the session", async () => {
+  const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
+  await drain(brain.runTurn({ sessionID, text: "STREAM before" }));
+  model.reset();
+  const handle = brain.startSpeculate({ sessionID, text: "GATEABORT now" });
+  await until(
+    () => model.requests.some((request) => lastUser(request).includes("GATEABORT")),
+    "the speculative prompt",
+  );
+  const speculative = await brain.sessionMessages(sessionID);
+  assert.ok(JSON.stringify(speculative).includes("GATEABORT"), "speculative prompt never reached the session");
+  handle.abort(new SpeculationAbortedError("cancelled by test"));
+  await assert.rejects(handle.result, SpeculationAbortedError);
+
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const messages = await brain.sessionMessages(sessionID);
+    if (!JSON.stringify(messages).includes("GATEABORT")) break;
+    if (Date.now() > deadline) throw new Error(`aborted speculation stayed in context: ${JSON.stringify(messages)}`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+
+  model.reset();
+  await drain(brain.runTurn({ sessionID, text: "STREAM after" }));
+  const request = model.requests.at(-1);
+  assert.ok(request !== undefined);
+  assert.ok(!JSON.stringify(request.messages).includes("GATEABORT"), "reverted prompt leaked into the next turn");
+});
+
+test("a tool-step boundary inserts a space between text blocks", async () => {
+  const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
+  model.reset();
+  const deltas: string[] = [];
+  const generator = brain.runTurn({ sessionID, text: "TOOLSTEP now" });
+  let step = await generator.next();
+  while (!step.done) {
+    deltas.push(step.value.text);
+    step = await generator.next();
+  }
+  assert.equal(deltas.join(""), "first second");
+  assert.equal(step.value.text, "first second");
+});
+
+test("a restarted brain resolves the companion from the persisted session", async () => {
+  db.upsertCompanion({ id: "restart", name: "Restart", personality: "a test owl", listening: false });
+  const sessionID = await brain.createSession({ id: "restart", name: "Restart", personality: "a test owl" });
+  // A real restart: the OpenCode store survives, the in-memory companion map
+  // does not. Only one embedded host may own the store at a time.
+  await brain.close();
+  const restarted = await Brain.create({
+    directory: dir,
+    dataDir,
+    db,
+    agentFile: resolve(import.meta.dirname, "../../agents/lark.md"),
+    provider: { id: "mock", baseURL: model.baseURL, models: ["m1", "m2", "m3"] },
+    models: { primary: "mock/m1", fallback: "mock/m2", deep: "mock/m3" },
+    stallMs: 0,
+    audio: {
+      metronome: async () => ({ caption: "Metronome" }),
+      tune: async () => ({ caption: "Tune" }),
+      identify: async () => ({ matched: false, title: "", artist: "" }),
+      stop: async () => ({ stopped: true }),
+    },
+  });
+  try {
+    assert.equal(restarted.companionFor(sessionID)?.id, "restart");
+    db.patchCompanion("restart", { listening: false });
+    model.reset();
+    await drain(restarted.runTurn({ sessionID, text: "TOOLPATCH now" }));
+    assert.equal(db.getCompanion("restart")?.listening, true, "lark_patch lost the companion after restart");
+    assert.ok(model.toolResults().some((content) => content.includes("listening")));
+  } finally {
+    await restarted.close();
   }
 });
 

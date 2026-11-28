@@ -10,6 +10,8 @@ export const TIMER_MAX_SECONDS = 86400;
 export const TIMER_WAKE_MIN_SECONDS = 30;
 export const TIMER_LIMIT_PER_DEVICE = 8;
 export const TIMER_LIMIT_TOTAL = 32;
+export const TIMER_RECENT_MS = 10 * 60 * 1000;
+const TIMER_RECENT_MAX = 64;
 
 export const CHIMES = ["tap", "think", "intercom", "celebrate"] as const;
 export type Chime = (typeof CHIMES)[number];
@@ -194,6 +196,9 @@ export class TimerScheduler {
   readonly #maxPerDevice: number;
   readonly #maxTotal: number;
   readonly #handles = new Map<string, Handle>();
+  // Timers the scheduler has just fired, so a late update/cancel can explain
+  // that the deadline already passed instead of "not found".
+  readonly #recentlyFired = new Map<string, { companionId: string; label: string; firedAtMs: number }>();
   #started = false;
   #closed = false;
 
@@ -327,7 +332,7 @@ export class TimerScheduler {
   update(id: string, companionId: string, edit: TimerEdit): TimerState {
     if (this.#closed) throw new TimerError(503, "Timers unavailable");
     const existing = this.get(id);
-    if (existing === undefined) throw new TimerError(404, "Timer not found");
+    if (existing === undefined) throw this.#missing(id, companionId);
     if (existing.companionId !== companionId.toLowerCase()) {
       throw new TimerError(403, "Companion out of scope");
     }
@@ -360,7 +365,7 @@ export class TimerScheduler {
     if (all === Boolean(id)) throw new TimerError(400, "Provide exactly one of id or all=true");
     if (!all && id !== undefined) {
       const timer = this.get(id);
-      if (timer === undefined) throw new TimerError(404, "Timer not found");
+      if (timer === undefined) throw this.#missing(id, companionId);
       if (timer.companionId !== companionId.toLowerCase()) {
         throw new TimerError(403, "Companion out of scope");
       }
@@ -376,6 +381,29 @@ export class TimerScheduler {
       this.#disarm(timerId);
     }
     return ids;
+  }
+
+  #rememberFired(timer: Timer): void {
+    const firedAtMs = this.#now().getTime();
+    this.#recentlyFired.delete(timer.id);
+    this.#recentlyFired.set(timer.id, { companionId: timer.companionId, label: timer.label, firedAtMs });
+    while (this.#recentlyFired.size > TIMER_RECENT_MAX) {
+      const oldest = this.#recentlyFired.keys().next().value;
+      if (oldest === undefined) break;
+      this.#recentlyFired.delete(oldest);
+    }
+  }
+
+  #missing(id: string, companionId: string): TimerError {
+    const recent = this.#recentlyFired.get(id);
+    if (recent === undefined) return new TimerError(404, "Timer not found");
+    const ageMs = this.#now().getTime() - recent.firedAtMs;
+    if (ageMs > TIMER_RECENT_MS || recent.companionId !== companionId.toLowerCase()) {
+      this.#recentlyFired.delete(id);
+      return new TimerError(404, "Timer not found");
+    }
+    const ago = Math.max(0, Math.round(ageMs / 1000));
+    return new TimerError(404, `Timer "${recent.label}" already finished ${ago}s ago; set a new timer instead`);
   }
 
   #deadline(edit: TimerEdit, now: Date): Date {
@@ -409,6 +437,7 @@ export class TimerScheduler {
       this.#handles.delete(id);
       const claimed = this.#db.claimTimer(id);
       if (claimed === undefined) return;
+      this.#rememberFired(toTimer(claimed));
       this.#onFire(toTimer(claimed));
     }, safeDelay);
     this.#handles.set(id, { timer, fireAt: delay });

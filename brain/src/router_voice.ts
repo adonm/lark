@@ -15,7 +15,7 @@ import type { LarkDb } from "./db.ts";
 import type { DcPeerTurn } from "./deltachat.ts";
 import type { RouterDc, RouterEdge, TurnBrain } from "./router.ts";
 import type { SongMatch } from "./song_id.ts";
-import type { TerminalState } from "./router_internal.ts";
+import { NOT_CAUGHT_LINE, type TerminalState } from "./router_internal.ts";
 import type { TurnResult } from "./opencode.ts";
 import { nameMatches } from "./matching.ts";
 import { DeltaCapture, SpeechStream, sanitizeSpeech } from "./speech.ts";
@@ -78,9 +78,14 @@ export async function runTurn(
 
 export async function speculate(ctx: VoiceContext, event: EdgeSpeculate): Promise<void> {
   const state = ctx.terminal(event.terminal_id);
-  if (state === undefined || state.busy || state.drawer === "story-reader" || event.transcript.trim() === "") return;
-  state.speculation?.handle.abort();
+  if (state === undefined) return;
+  // Every event invalidates earlier guesses, including ones still waiting for
+  // a session; only the newest may start after the await.
+  const seq = ++state.specSeq;
+  if (state.busy || state.drawer === "story-reader" || event.transcript.trim() === "") return;
   const sessionID = await sessionFor(ctx, state.companionId);
+  if (state.specSeq !== seq || state.busy || ctx.closed()) return;
+  state.speculation?.handle.abort();
   const capture = new DeltaCapture();
   const handle = ctx.brain.startSpeculate({ sessionID, text: event.transcript.trim() }, (delta) => capture.push(delta));
   state.speculation = { transcript: event.transcript.trim(), stream: capture, handle };
@@ -90,6 +95,8 @@ export async function speculate(ctx: VoiceContext, event: EdgeSpeculate): Promis
 export async function commit(ctx: VoiceContext, event: EdgeCommit): Promise<void> {
   const state = ctx.terminal(event.terminal_id);
   if (state === undefined || ctx.closed() || state.busy) return;
+  // A commit supersedes every speculation that has not started yet.
+  state.specSeq++;
   const companion = ctx.db.getCompanion(state.companionId);
   if (companion === undefined) return;
   state.listening = false;
@@ -147,35 +154,58 @@ export async function commit(ctx: VoiceContext, event: EdgeCommit): Promise<void
   capture.commit(speech);
 
   let full = "";
+  const freshTurn = async (): Promise<string> => {
+    const result = await runTurn(ctx, state.companionId, transcript, (delta) => capture.push(delta));
+    return result.text;
+  };
   try {
     if (matching) {
-      const result = await speculation.handle.result;
-      full = result.text;
+      let speculated = false;
+      try {
+        const result = await speculation.handle.result;
+        full = result.text;
+        speculated = true;
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          // A failed speculation must not drop the turn: a stale binding
+          // rebinds, any other failure just runs fresh once.
+          if (isSessionNotFound(error)) ctx.db.deleteSession(state.companionId);
+          else ctx.log(`turn: ${errMessage(error)}`);
+          try {
+            full = await freshTurn();
+          } catch (retryError) {
+            if (!controller.signal.aborted) ctx.log(`turn: ${errMessage(retryError)}`);
+          }
+        }
+      }
+      if (speculated && full.trim() === "" && !/\[silent\]/i.test(full) && !controller.signal.aborted) {
+        ctx.log("turn: speculative reply was empty; running the turn again");
+        try {
+          full = await freshTurn();
+        } catch (error) {
+          if (!controller.signal.aborted) ctx.log(`turn: ${errMessage(error)}`);
+        }
+      }
     } else {
-      const result = await runTurn(ctx, state.companionId, transcript, (delta) => capture.push(delta));
-      full = result.text;
+      full = await freshTurn();
     }
   } catch (error) {
-    if (matching && isSessionNotFound(error)) {
-      // The speculative turn found a stale binding; rebind and run once.
-      ctx.db.deleteSession(state.companionId);
-      try {
-        const result = await runTurn(ctx, state.companionId, transcript, (delta) => capture.push(delta));
-        full = result.text;
-      } catch (retryError) {
-        if (!controller.signal.aborted) ctx.log(`turn: ${errMessage(retryError)}`);
-      }
-    } else if (!controller.signal.aborted) {
-      ctx.log(`turn: ${errMessage(error)}`);
-    }
+    if (!controller.signal.aborted) ctx.log(`turn: ${errMessage(error)}`);
   } finally {
     state.turn = undefined;
     state.busy = false;
     ctx.notify();
   }
-  await speech.end();
 
-  const spoken = sanitizeSpeech(full);
+  let spoken = sanitizeSpeech(full);
+  if (spoken === "" && !controller.signal.aborted && !/\[silent\]/i.test(full)) {
+    // Never drop a spoken turn silently; say so instead of just listening.
+    ctx.log(`turn: empty reply for ${JSON.stringify(transcript)}`);
+    full = NOT_CAUGHT_LINE;
+    spoken = NOT_CAUGHT_LINE;
+    capture.push(NOT_CAUGHT_LINE);
+  }
+  await speech.end();
   ctx.db.appendMessage({
     id: `turn:${state.id}:${ctx.now()}:user`,
     companionId: state.companionId,
@@ -266,6 +296,7 @@ export async function playbackDone(ctx: VoiceContext, event: EdgePlayback): Prom
 export async function cancel(ctx: VoiceContext, terminalId: string, reason: string): Promise<void> {
   const state = ctx.terminal(terminalId);
   if (state === undefined) return;
+  state.specSeq++;
   state.speculation?.handle.abort(new Error(reason));
   state.speculation = undefined;
   state.turn?.abort();

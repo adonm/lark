@@ -149,3 +149,32 @@ test("start restores a persisted timer and fires it", async () => {
   db.close();
 });
 
+
+test("updating a recently fired timer explains it already finished", async () => {
+  const db = freshDb();
+  let now = new Date("2026-11-26T07:00:00");
+  const fired: Timer[] = [];
+  const scheduler = new TimerScheduler(db, {
+    minSeconds: 0.01,
+    now: () => now,
+    onFire: (timer) => fired.push(timer),
+  });
+  const timer = scheduler.set({ companionId: "cake", label: "tea", inSeconds: 0.02 });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(fired.length, 1);
+
+  now = new Date(now.getTime() + 42_000);
+  assert.throws(
+    () => scheduler.update(timer.id, "cake", { inSeconds: 120 }),
+    /Timer "tea" already finished 42s ago; set a new timer instead/,
+  );
+  assert.throws(
+    () => scheduler.cancel("cake", { id: timer.id }),
+    /already finished 42s ago/,
+  );
+
+  now = new Date(now.getTime() + 10 * 60 * 1000);
+  assert.throws(() => scheduler.update(timer.id, "cake", { inSeconds: 120 }), /^TimerError: Timer not found$/);
+  scheduler.stop();
+  db.close();
+});

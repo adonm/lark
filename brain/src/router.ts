@@ -23,7 +23,7 @@ import type { SpeculationHandle, TurnDelta, TurnResult } from "./opencode.ts";
 import type { PortraitManager } from "./portraits.ts";
 import { nameMatches } from "./matching.ts";
 import { sanitizeSpeech } from "./speech.ts";
-import { statusOf, type TerminalState } from "./router_internal.ts";
+import { NOT_CAUGHT_LINE, statusOf, type TerminalState } from "./router_internal.ts";
 import * as ui from "./router_ui.ts";
 import * as voice from "./router_voice.ts";
 
@@ -34,7 +34,7 @@ export { FOLLOW_UP_GRACE_MS, LISTEN_WINDOW_MS, REPLY_CONTEXT_MS } from "./router
 export type { TurnDelta, TurnResult };
 export type TurnHandle = SpeculationHandle;
 
-export const NOT_CAUGHT_LINE = "I didn't catch that.";
+export { NOT_CAUGHT_LINE };
 const PORTRAIT_PATH = "/remote/api/portrait";
 
 export interface TurnBrain {
@@ -433,6 +433,7 @@ export class Router {
       speaking: false,
       caption: "",
       previousBrightness: 100,
+      specSeq: 0,
     };
     this.#terminals.set(info.terminal_id, state);
     this.#db.upsertTerminal({
@@ -455,6 +456,7 @@ export class Router {
     const state = this.#terminals.get(terminalId);
     if (state !== undefined) {
       if (state.listenTimer !== undefined) clearTimeout(state.listenTimer);
+      state.specSeq++;
       state.speculation?.handle.abort();
       state.turn?.abort();
       this.#db.upsertTerminal({

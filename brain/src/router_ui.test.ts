@@ -31,6 +31,7 @@ function harness(): { ctx: UiContext; state: TerminalState; edge: FakeEdge; db: 
     speaking: false,
     caption: "",
     previousBrightness: 100,
+    specSeq: 0,
   };
   const ctx: UiContext = {
     db,

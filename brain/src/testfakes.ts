@@ -144,6 +144,7 @@ export class FakeBrain implements TurnBrain {
   readonly promoted: string[] = [];
   readonly aborted: string[] = [];
   readonly missingSessions = new Set<string>();
+  readonly speculationErrors: Error[] = [];
   sessionExistsCalls = 0;
 
   nextTurn(text: string, deltas?: string[]): void {
@@ -177,6 +178,11 @@ export class FakeBrain implements TurnBrain {
     const result = Promise.withResolvers<TurnResult>();
     let aborted = false;
     queueMicrotask(() => {
+      const failure = this.speculationErrors.shift();
+      if (failure !== undefined) {
+        result.reject(failure);
+        return;
+      }
       if (this.missingSessions.has(input.sessionID)) {
         result.reject(new Error("session not found"));
         return;

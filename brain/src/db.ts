@@ -586,6 +586,11 @@ export class LarkDb {
     return row === undefined ? undefined : sessionFrom(row);
   }
 
+  getSessionBySessionId(sessionId: string): SessionRow | undefined {
+    const row = this.#stmt(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId);
+    return row === undefined ? undefined : sessionFrom(row);
+  }
+
   listSessions(): SessionRow[] {
     return this.#stmt(`SELECT * FROM sessions ORDER BY companion_id`)
       .all()

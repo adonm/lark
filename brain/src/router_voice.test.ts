@@ -15,7 +15,7 @@ import {
   playbackDone,
   speculate,
 } from "./router_voice.ts";
-import type { TerminalState } from "./router_internal.ts";
+import { NOT_CAUGHT_LINE, type TerminalState } from "./router_internal.ts";
 import type { StoryRun } from "./router_internal.ts";
 
 function harness(options: { listening?: boolean } = {}): {
@@ -49,6 +49,7 @@ function harness(options: { listening?: boolean } = {}): {
     speaking: false,
     caption: "",
     previousBrightness: 100,
+    specSeq: 0,
   };
   let stream = 0;
   const ctx: VoiceContext = {
@@ -186,4 +187,66 @@ test("cancel aborts in-flight speculation and turn work", async () => {
   assert.equal(controller.signal.aborted, true);
   assert.equal(h.state.busy, false);
   assert.equal(h.edge.lastScreen()?.status, "idle");
+});
+
+test("overlapping speculation starts only the newest and never after commit", async () => {
+  const h = harness();
+  const base = { terminal_id: "vocat-1", speech_at_ms: 0 };
+  await Promise.all([
+    speculate(h.ctx, { ...base, seq: 1, transcript: "first guess" }),
+    speculate(h.ctx, { ...base, seq: 2, transcript: "second guess" }),
+  ]);
+  assert.equal(h.brain.speculated.length, 1);
+  assert.equal(h.brain.speculated[0]?.transcript, "second guess");
+
+  const pending = speculate(h.ctx, { ...base, seq: 3, transcript: "late guess" });
+  const committed = commit(h.ctx, {
+    ...base,
+    seq: 4,
+    transcript: "hello there",
+    listen_window: false,
+    audio_ms: 600,
+  });
+  await Promise.all([pending, committed]);
+  assert.equal(h.brain.speculated.length, 1, "a stale speculation started after commit");
+  assert.equal(h.brain.inputs.at(-1)?.text, "hello there");
+});
+
+test("an empty matched speculation falls back to a fresh turn", async () => {
+  const h = harness();
+  const event = { terminal_id: "vocat-1", seq: 1, transcript: "what is it", speech_at_ms: 0, listen_window: false, audio_ms: 600 };
+  h.brain.nextTurn("", []);
+  await speculate(h.ctx, event);
+  h.brain.nextTurn("Recovered.");
+  await commit(h.ctx, event);
+  assert.equal(h.brain.inputs.length, 2, "the turn was dropped instead of retried");
+  assert.equal(h.brain.inputs.at(-1)?.text, "what is it");
+  assert.equal(h.state.caption, "Recovered.");
+  assert.ok(h.edge.spoken.some((line) => line.text.includes("Recovered")));
+});
+
+test("a failed matched speculation falls back to a fresh turn", async () => {
+  const h = harness();
+  const event = { terminal_id: "vocat-1", seq: 1, transcript: "what is it", speech_at_ms: 0, listen_window: false, audio_ms: 600 };
+  h.brain.speculationErrors.push(new Error("provider exploded"));
+  await speculate(h.ctx, event);
+  h.brain.nextTurn("Recovered after failure.");
+  await commit(h.ctx, event);
+  assert.equal(h.brain.inputs.length, 2);
+  assert.equal(h.state.caption, "Recovered after failure.");
+});
+
+test("an empty reply says it was not caught instead of staying silent", async () => {
+  const h = harness();
+  h.brain.nextTurn("", []);
+  await commit(h.ctx, {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "hello?",
+    speech_at_ms: 0,
+    listen_window: false,
+    audio_ms: 500,
+  });
+  assert.equal(h.state.caption, NOT_CAUGHT_LINE);
+  assert.ok(h.edge.spoken.some((line) => line.text.includes(NOT_CAUGHT_LINE)));
 });
