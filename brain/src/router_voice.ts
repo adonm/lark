@@ -48,6 +48,33 @@ function isSessionNotFound(error: unknown): boolean {
   return /session not found/i.test(errMessage(error));
 }
 
+/**
+ * Whether speech that began too late in the listening window is background
+ * chatter. The grace runs from speech onset, not commit time, so a slow
+ * transcription or playback tail cannot make speech that started inside the
+ * window look late.
+ */
+function followUpBlocked(
+  ctx: VoiceContext,
+  state: TerminalState,
+  companion: Companion,
+  transcript: string,
+  speechAtMs: number,
+  audioMs: number,
+  log = false,
+): boolean {
+  const startedAt = speechAtMs > 0 ? Math.min(ctx.now(), speechAtMs) : Math.max(0, ctx.now() - audioMs);
+  if (startedAt - state.listeningSince <= FOLLOW_UP_GRACE_MS || nameMatches(transcript, companion.name)) {
+    return false;
+  }
+  if (log) {
+    ctx.log(
+      `listen: skipped unaddressed speech (${transcript.length} chars, ${Math.round((startedAt - state.listeningSince) / 1000)}s)`,
+    );
+  }
+  return true;
+}
+
 /** Keep values inside the single-line `[state: ...]` footer. */
 function stateValue(value: string): string {
   return value.replace(/]/g, ")").replace(/\s+/g, " ").trim();
@@ -163,6 +190,13 @@ export async function speculate(ctx: VoiceContext, event: EdgeSpeculate): Promis
   if (state.busy || state.drawer === "story-reader" || transcript === "") return;
   const companion = ctx.db.getCompanion(state.companionId);
   if (companion === undefined) return;
+  if (
+    state.listening &&
+    companion.listening &&
+    followUpBlocked(ctx, state, companion, transcript, event.speech_at_ms, 0)
+  ) {
+    return;
+  }
   const sessionID = await sessionFor(ctx, state.companionId);
   if (state.specSeq !== seq || state.busy || ctx.closed()) return;
   state.speculation?.handle.abort();
@@ -188,6 +222,12 @@ export async function commit(ctx: VoiceContext, event: EdgeCommit): Promise<void
   const companion = ctx.db.getCompanion(state.companionId);
   if (companion === undefined) return;
   state.listening = false;
+  if (state.listenTimer !== undefined) {
+    // A window timer armed before this turn must never fire mid-answer and
+    // overwrite "thinking"/"speaking" with "idle".
+    clearTimeout(state.listenTimer);
+    state.listenTimer = undefined;
+  }
   ctx.notify();
 
   // A silent story reader uses spoken choice matching and never synthesizes
@@ -203,12 +243,13 @@ export async function commit(ctx: VoiceContext, event: EdgeCommit): Promise<void
     return;
   }
 
-  if (event.listen_window && companion.listening) {
-    const elapsed = ctx.now() - state.listeningSince;
-    if (elapsed > FOLLOW_UP_GRACE_MS && !nameMatches(event.transcript, companion.name)) {
-      await armListening(ctx, state);
-      return;
-    }
+  if (
+    event.listen_window &&
+    companion.listening &&
+    followUpBlocked(ctx, state, companion, event.transcript, event.speech_at_ms, event.audio_ms, true)
+  ) {
+    await armListening(ctx, state);
+    return;
   }
 
   const transcript = event.transcript.trim();

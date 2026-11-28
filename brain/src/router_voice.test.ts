@@ -122,6 +122,90 @@ test("after the follow-up grace only speech naming the companion is a turn", asy
   if (h.state.listenTimer !== undefined) clearTimeout(h.state.listenTimer);
 });
 
+test("speech that began inside the grace still commits after a slow turn", async () => {
+  const h = harness({ listening: true });
+  await armListening(h.ctx, h.state);
+  const since = h.state.listeningSince;
+
+  // Speech starts 8 s in but the capture only commits at 12 s: the grace is
+  // measured from onset, so this is a follow-up, not background chatter.
+  h.now.value = since + 12_000;
+  await commit(h.ctx, {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "what time is it",
+    speech_at_ms: since + 8000,
+    listen_window: true,
+    audio_ms: 4000,
+  });
+  assert.equal(h.brain.inputs.length, 1, "speech that began inside the grace must reach the model");
+  assert.ok(
+    h.edge.screens.some((entry) => entry.screen.status === "thinking"),
+    "the turn must render thinking",
+  );
+  if (h.state.listenTimer !== undefined) clearTimeout(h.state.listenTimer);
+});
+
+test("unaddressed speculation after the grace does not start a turn", async () => {
+  const h = harness({ listening: true });
+  await armListening(h.ctx, h.state);
+  const since = h.state.listeningSince;
+
+  h.now.value = since + 15_000;
+  await speculate(h.ctx, {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "background chatter",
+    speech_at_ms: since + 14_000,
+  });
+  assert.equal(h.brain.speculated.length, 0, "late unaddressed chatter must not burn a speculative turn");
+
+  h.now.value = since + 16_000;
+  await speculate(h.ctx, {
+    terminal_id: "vocat-1",
+    seq: 2,
+    transcript: "Greg, are you there",
+    speech_at_ms: since + 15_000,
+  });
+  assert.equal(h.brain.speculated.length, 1, "speech naming the companion still speculates");
+  if (h.state.listenTimer !== undefined) clearTimeout(h.state.listenTimer);
+});
+
+test("commit clears the window timer so a slow turn keeps thinking", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = harness({ listening: true });
+  await armListening(h.ctx, h.state);
+  assert.notEqual(h.state.listenTimer, undefined);
+
+  const gate = Promise.withResolvers<void>();
+  const base = h.brain.runTurn.bind(h.brain);
+  h.brain.runTurn = async function* (input: { sessionID: string; text: string }) {
+    await gate.promise;
+    return yield* base(input);
+  };
+
+  const since = h.state.listeningSince;
+  h.now.value = since + 12_000;
+  const turn = commit(h.ctx, {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "what time is it",
+    speech_at_ms: since + 8000,
+    listen_window: true,
+    audio_ms: 4000,
+  });
+  await settle();
+  assert.equal(h.state.listenTimer, undefined, "commit must clear the window timer");
+  assert.equal(h.edge.lastScreen()?.status, "thinking");
+
+  t.mock.timers.tick(LISTEN_WINDOW_MS + 5000);
+  await settle();
+  assert.equal(h.edge.lastScreen()?.status, "thinking", "the stale window timer must not render idle");
+
+  gate.resolve();
+  await turn;
+});
+
 test("the silent story reader matches choices and never synthesizes passages", async () => {
   const h = harness();
   h.state.drawer = "story-reader";
