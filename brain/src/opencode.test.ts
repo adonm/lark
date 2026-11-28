@@ -488,6 +488,34 @@ test("aborting a speculation rejects and never executes the patch", async () => 
   assert.equal(db.getCompanion("cake")?.personality, "a curious cat");
 });
 
+test("aborting a speculation before its prompt never orphans or empties the next turn", async () => {
+  const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
+  model.reset();
+
+  const handle = brain.startSpeculate({ sessionID, text: "SPECABORT now" });
+  // A commit with a mismatched transcript can land within a few milliseconds,
+  // before the speculative #turn has reached oc.sessions.prompt.
+  handle.abort(new SpeculationAbortedError("commit mismatch"));
+  await assert.rejects(handle.result, SpeculationAbortedError);
+
+  // The next turn waits on the speculation's chain: it must receive the real
+  // reply, not an empty one left by an interrupt racing this prompt.
+  const reply = await drain(brain.runTurn({ sessionID, text: "STREAM after abort" }));
+  assert.equal(reply, "Hello from the brain", "the next turn was interrupted by the aborted speculation");
+
+  assert.equal(
+    model.requests.some((request) => lastUser(request).includes("SPECABORT")),
+    false,
+    "an aborted speculation must never send its prompt",
+  );
+  const messages = await brain.sessionMessages(sessionID);
+  assert.equal(
+    JSON.stringify(messages).includes("SPECABORT"),
+    false,
+    "aborted speculation left an orphan prompt in the session",
+  );
+});
+
 test("a first-token stall retries onto the fallback model", async () => {
   const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
   model.reset();

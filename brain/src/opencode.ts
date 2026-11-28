@@ -154,6 +154,8 @@ export interface BrainOptions {
   timers?: TimerScheduler;
   audio?: AudioOps;
   onEmit?: (event: EmitEvent) => void;
+  /** Diagnostic lines; defaults to silence. */
+  onLog?: (line: string) => void;
 }
 
 export interface EmitEvent {
@@ -642,15 +644,25 @@ export class Brain {
     this.#speculations.add(speculation);
     const controller = new AbortController();
     let promptMsgID: string | undefined;
+    // Set before oc.sessions.prompt starts, so abort() knows whether an
+    // interrupt/revert is owed even while the prompt RPC is still in flight.
+    let promptSent = false;
     let kept = false;
     let cleaned = false;
 
     const consume = async (): Promise<TurnResult> => {
-      const generator = this.#turn(input, controller.signal, (messageID) => {
-        // The first prompt starts the speculative turn; a fallback attempt is
-        // part of the same range.
-        promptMsgID ??= messageID;
-      });
+      const generator = this.#turn(
+        input,
+        controller.signal,
+        (messageID) => {
+          // The first prompt starts the speculative turn; a fallback attempt is
+          // part of the same range.
+          promptMsgID ??= messageID;
+        },
+        () => {
+          promptSent = true;
+        },
+      );
       return await drain(generator, (delta) => onDelta?.(delta.text));
     };
 
@@ -668,10 +680,13 @@ export class Brain {
       cleaned = true;
       void this.#enqueue(input.sessionID, async () => {
         await completed.catch(() => undefined);
+        // No prompt ever reached the session: there is nothing to interrupt or
+        // revert, and an interrupt here would race the next turn.
+        if (!promptSent) return;
         const messageID = promptMsgID;
-        if (messageID === undefined) return;
         await oc.session.interrupt({ sessionID: input.sessionID }).catch(() => undefined);
         await oc.session.wait({ sessionID: input.sessionID }).catch(() => undefined);
+        if (messageID === undefined) return;
         await oc.session.revert.stage({ sessionID: input.sessionID, messageID, files: false }).catch(() => undefined);
         await oc.session.revert.commit({ sessionID: input.sessionID }).catch(() => undefined);
       });
@@ -695,7 +710,8 @@ export class Brain {
         if (kept) return;
         this.#gate.abort(speculation, reason);
         controller.abort();
-        void oc.session.interrupt({ sessionID: input.sessionID }).catch(() => undefined);
+        // Never interrupt blindly: before the prompt exists that RPC would race
+        // the next turn's prompt and leave an orphan execution behind.
         revert();
       },
     };
@@ -733,12 +749,20 @@ export class Brain {
     input: TurnInput,
     signal?: AbortSignal,
     onPrompt?: (messageID: string) => void,
+    onPromptStart?: () => void,
   ): AsyncGenerator<TurnDelta, TurnResult> {
     const oc = this.#requireOc();
     const sessionID = input.sessionID;
+    const ensureLive = (): void => {
+      if (signal?.aborted) throw new SpeculationAbortedError("speculative turn aborted");
+    };
     // A pending revert from an aborted speculation owns the session first.
     await this.#sessionChains.get(sessionID);
+    // The abort can land while that chain settles: after it, no session write
+    // (companion sync, model switch, prompt) may start.
+    ensureLive();
     await this.#syncCompanion(sessionID);
+    ensureLive();
     const t0 = this.#now();
     let firstAt = 0;
     let full = "";
@@ -747,6 +771,9 @@ export class Brain {
     let needStepGap = false;
 
     for (;;) {
+      // Every await above can end a speculative turn; never subscribe, switch
+      // the model, or prompt after abort() ran.
+      ensureLive();
       const attemptStart = full.length;
       const ac = new AbortController();
       const forwardAbort = (): void => ac.abort();
@@ -754,6 +781,7 @@ export class Brain {
       let stalled = false;
       let firstToken = false;
       let terminalSeen = false;
+      let terminalType = "";
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       // One shared subscription feeds every active session; this turn only
       // consumes its own queue.
@@ -772,8 +800,15 @@ export class Brain {
 
       try {
         await oc.session.switchModel({ sessionID, model: { ...current } });
+        // The abort may have landed during the model switch; the prompt call
+        // below must never start after it.
+        ensureLive();
+        onPromptStart?.();
         const promptMsg = await oc.sessions.prompt({ sessionID, text: input.text, agent: input.agent ?? "lark" });
+        // Capture the message id even when the abort landed mid-prompt: the
+        // revert needs it to remove the speculative prompt from the session.
         onPrompt?.(promptMsg.id);
+        ensureLive();
         for (;;) {
           const step = await queue.next();
           if (step.done) break;
@@ -808,6 +843,7 @@ export class Brain {
             event.type === "session.execution.failed"
           ) {
             terminalSeen = true;
+            terminalType = event.type;
             break;
           }
         }
@@ -839,6 +875,16 @@ export class Brain {
         attempts++;
         current = this.#fallback;
         continue;
+      }
+
+      // An empty succeeded turn is model silence; an empty interrupted/failed
+      // turn is an execution fault that must not look like silence.
+      if (
+        full === "" &&
+        !signal?.aborted &&
+        (terminalType === "session.execution.interrupted" || terminalType === "session.execution.failed")
+      ) {
+        this.#options.onLog?.(`turn: empty reply after ${terminalType} (session ${sessionID})`);
       }
 
       const total = this.#now() - t0;

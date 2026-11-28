@@ -380,6 +380,25 @@ test("turn prompts carry the live clock, form, volume, battery and timers", () =
   );
 });
 
+test("a BOX-3 on USB reports USB instead of a negative battery reading", () => {
+  const h = harness();
+  h.state.info = { ...h.state.info, board: "esp-box-3" };
+  h.state.telemetry = {
+    terminal_id: "vocat-1",
+    wifi_rssi: -40,
+    battery_pct: -1,
+    charging: false,
+    cpu_pct: 5,
+    free_heap: 1,
+    uptime_s: 1,
+  };
+  const companion = h.db.getCompanion("greg");
+  assert.ok(companion !== undefined);
+  const prompt = formatTurnPrompt(h.ctx, { text: "hi", companion, state: h.state });
+  assert.match(prompt, /· battery: USB ·/);
+  assert.equal(prompt.includes("battery: -1%"), false);
+});
+
 test("state values cannot terminate the footer and an offline terminal is explicit", () => {
   const h = harness();
   h.db.patchCompanion("greg", { form: "a fox ] in a box" });

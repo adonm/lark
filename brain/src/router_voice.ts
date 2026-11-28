@@ -107,10 +107,16 @@ function timerSummary(ctx: Pick<VoiceContext, "db" | "now">, companionId: string
 function terminalParts(ctx: Pick<VoiceContext, "db">, state: TerminalState | undefined): string[] {
   if (state === undefined) return ["terminal: offline"];
   const parts = [`volume: ${ctx.db.getTerminalVolume(state.id)}%`];
-  if (state.telemetry?.battery_pct !== undefined) {
-    parts.push(`battery: ${state.telemetry.battery_pct}%${state.telemetry.charging ? " charging" : ""}`);
-  } else if (state.info.board === "esp-box-3") {
-    parts.push("battery: USB");
+  const battery = state.telemetry?.battery_pct;
+  if (state.info.board === "esp-box-3") {
+    // The BOX-3 has no battery ADC; its firmware reports -1 when on USB.
+    if (battery !== undefined && battery >= 0) {
+      parts.push(`battery: ${battery}%${state.telemetry?.charging ? " charging" : ""}`);
+    } else {
+      parts.push("battery: USB");
+    }
+  } else if (battery !== undefined) {
+    parts.push(`battery: ${battery}%${state.telemetry?.charging ? " charging" : ""}`);
   }
   return parts;
 }

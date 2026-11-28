@@ -175,6 +175,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     ...(modelSpec === undefined
       ? {}
       : { models: { primary: modelSpec, fallback: modelSpec, deep: modelSpec } }),
+    onLog: (line) => log(line),
     onEmit: (event) => {
       if (router === undefined) return;
       if (event.to !== undefined && event.to !== "" && event.say !== undefined) {
