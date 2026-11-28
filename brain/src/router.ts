@@ -24,6 +24,7 @@ import type { PortraitManager } from "./portraits.ts";
 import { nameMatches } from "./matching.ts";
 import { sanitizeSpeech } from "./speech.ts";
 import { NOT_CAUGHT_LINE, statusOf, type TerminalState } from "./router_internal.ts";
+import { errMessage } from "./util.ts";
 import * as ui from "./router_ui.ts";
 import * as voice from "./router_voice.ts";
 
@@ -42,6 +43,8 @@ export interface TurnBrain {
   createSession(companion: { id: string; name: string; personality: string }): Promise<string>;
   /** False when a stored session disappeared with an old OpenCode store. */
   sessionExists(sessionID: string): Promise<boolean>;
+  /** Re-attach the companion instruction to a persisted session. */
+  setCompanion(sessionID: string, companion: { id: string; name: string; personality: string }): Promise<void>;
   runTurn(input: { sessionID: string; text: string }): AsyncGenerator<TurnDelta, TurnResult>;
   startSpeculate(input: { sessionID: string; text: string }, onDelta?: (delta: string) => void): TurnHandle;
 }
@@ -490,6 +493,22 @@ export class Router {
   }
 
   async refreshCompanion(companionId: string): Promise<void> {
+    const companion = this.#db.getCompanion(companionId);
+    if (companion !== undefined) {
+      for (const session of this.#db.listSessions()) {
+        if (session.companionId !== companion.id.toLowerCase()) continue;
+        try {
+          await this.#brain.setCompanion(session.sessionId, {
+            id: companion.id,
+            name: companion.name,
+            personality: companion.personality,
+          });
+        } catch (error) {
+          // A stale session from an old store must not block the screen refresh.
+          this.#log(`companion.refresh failed session=${session.sessionId}: ${errMessage(error)}`);
+        }
+      }
+    }
     await ui.refreshCompanion(this.#ui, companionId);
   }
 

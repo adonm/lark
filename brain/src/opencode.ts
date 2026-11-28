@@ -306,6 +306,9 @@ export class Brain {
   readonly #gate = new SpeculationGate();
   readonly #speculations = new Set<Speculation>();
   readonly #companions = new Map<string, CompanionInstruction>();
+  // Sessions whose cached companion came from the database, so the persisted
+  // instruction entry still has to be compared before the next turn.
+  readonly #unverified = new Set<string>();
   readonly #envBefore = new Map<string, string | undefined>();
   readonly #primary: ModelRef;
   readonly #fallback: ModelRef;
@@ -545,6 +548,7 @@ export class Brain {
       personality: companion.personality,
     };
     this.#companions.set(sessionID, value);
+    this.#unverified.delete(sessionID);
     await this.#requireOc().experimental.session.instructions.entry.put({
       sessionID,
       key: "lark.companion",
@@ -567,7 +571,41 @@ export class Brain {
       personality: companion.personality,
     };
     this.#companions.set(sessionID, value);
+    this.#unverified.add(sessionID);
     return value;
+  }
+
+  /** Persisted sessions may outlive a companion edit, including a restart. */
+  async #syncCompanion(sessionID: string): Promise<void> {
+    const row = this.#db.getSessionBySessionId(sessionID);
+    if (row === undefined) return;
+    const companion = this.#db.getCompanion(row.companionId);
+    if (companion === undefined) return;
+    const expected: CompanionInstruction = {
+      id: companion.id.toLowerCase(),
+      name: companion.name,
+      personality: companion.personality,
+    };
+    const cached = this.#companions.get(sessionID);
+    const same = cached !== undefined
+      && cached.id === expected.id
+      && cached.name === expected.name
+      && cached.personality === expected.personality;
+    if (same && !this.#unverified.has(sessionID)) return;
+    if (same) {
+      // The first turn after restart: rewrite only when the stored entry differs.
+      const entries = await this.sessionInstructions(sessionID).catch(() => []);
+      const stored = entries.find((entry) => entry.key === "lark.companion")?.value;
+      this.#unverified.delete(sessionID);
+      if (
+        stored !== null
+        && typeof stored === "object"
+        && (stored as Record<string, unknown>).id === expected.id
+        && (stored as Record<string, unknown>).name === expected.name
+        && (stored as Record<string, unknown>).personality === expected.personality
+      ) return;
+    }
+    await this.setCompanion(sessionID, expected);
   }
 
   /** Append work behind every earlier operation on the session. */
@@ -700,6 +738,7 @@ export class Brain {
     const sessionID = input.sessionID;
     // A pending revert from an aborted speculation owns the session first.
     await this.#sessionChains.get(sessionID);
+    await this.#syncCompanion(sessionID);
     const t0 = this.#now();
     let firstAt = 0;
     let full = "";

@@ -623,9 +623,13 @@ test("a restarted brain resolves the companion from the persisted session", asyn
   });
   try {
     assert.equal(restarted.companionFor(sessionID)?.id, "restart");
+    db.patchCompanion("restart", { personality: "a wiser new owl" });
     db.patchCompanion("restart", { listening: false });
     model.reset();
     await drain(restarted.runTurn({ sessionID, text: "TOOLPATCH now" }));
+    const instruction = (await restarted.sessionInstructions(sessionID))
+      .find((entry) => entry.key === "lark.companion")?.value as { personality?: string } | undefined;
+    assert.equal(instruction?.personality, "a wiser new owl");
     assert.equal(db.getCompanion("restart")?.listening, true, "lark_patch lost the companion after restart");
     assert.ok(model.toolResults().some((content) => content.includes("listening")));
   } finally {

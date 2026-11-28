@@ -138,6 +138,7 @@ export interface FakeTurn {
 
 export class FakeBrain implements TurnBrain {
   readonly sessions: Array<{ id: string; name: string; personality: string }> = [];
+  readonly companionUpdates: Array<{ sessionID: string; companion: { id: string; name: string; personality: string } }> = [];
   readonly inputs: Array<{ sessionID: string; text: string }> = [];
   readonly turns: FakeTurn[] = [];
   speculated: Array<TurnHandle & { transcript: string }> = [];
@@ -159,6 +160,13 @@ export class FakeBrain implements TurnBrain {
   async sessionExists(sessionID: string): Promise<boolean> {
     this.sessionExistsCalls++;
     return !this.missingSessions.has(sessionID);
+  }
+
+  async setCompanion(
+    sessionID: string,
+    companion: { id: string; name: string; personality: string },
+  ): Promise<void> {
+    this.companionUpdates.push({ sessionID, companion });
   }
 
   async *runTurn(input: { sessionID: string; text: string }): AsyncGenerator<TurnDelta, TurnResult> {

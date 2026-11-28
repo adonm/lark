@@ -242,6 +242,25 @@ test("leaving speaking clears the stale caption and restores the menu", async ()
   assert.equal(h.edge.lastScreen()?.caption, "");
 });
 
+test("refreshing a companion resyncs persisted session instructions", async () => {
+  const h = harness();
+  h.db.putSession({
+    companionId: "greg",
+    sessionId: "sess-greg",
+    updatedAt: 1,
+    contractHash: "",
+    contextAfterMs: 0,
+  });
+  h.db.patchCompanion("greg", { name: "Gregory", personality: "a calm new lizard" });
+
+  await h.router.refreshCompanion("greg");
+
+  assert.deepEqual(h.brain.companionUpdates, [{
+    sessionID: "sess-greg",
+    companion: { id: "greg", name: "Gregory", personality: "a calm new lizard" },
+  }]);
+});
+
 test("a stale stored session binding is replaced", async () => {
   const h = harness();
   h.db.putSession({ companionId: "greg", sessionId: "ses_stale", updatedAt: 1, contractHash: "", contextAfterMs: 0 });
