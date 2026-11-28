@@ -568,6 +568,78 @@ func TestIdleCaptureDiscardsWithoutPackets(t *testing.T) {
 	}
 }
 
+// TestListenClockAdvancesOverPreRoll pins the frozen listening clock: while a
+// listen window waits for speech, audio lives in preRoll/preScan and pcm stays
+// empty, so the policy must measure time including that pre-roll.
+func TestListenClockAdvancesOverPreRoll(t *testing.T) {
+	u := &utterance{}
+	vad := &energyVAD{}
+	frame := make([]byte, endpointBytes)
+	const window = 30 * time.Second
+	for elapsed := time.Duration(0); elapsed < window; elapsed += endpointFrame {
+		u.addFor(frame, vad, true)
+	}
+	if len(u.pcm) != 0 {
+		t.Fatalf("pcm = %d bytes during pre-roll, want 0", len(u.pcm))
+	}
+	if got := u.at(len(u.pcm)); got != 0 {
+		t.Fatalf("pcm-based clock = %s during pre-roll, want 0", got)
+	}
+	if got := u.clock(); got < window-endpointFrame || got > window+endpointFrame {
+		t.Fatalf("listen clock = %s after %s of silent pre-roll", got, window)
+	}
+	if d := u.policy.classify(u.clock(), endpointCap, window, -1, true); d != decisionDiscardNoise {
+		t.Fatalf("silent listen window classified as %v, want discard-noise", d)
+	}
+}
+
+// TestListenCaptureExpiresWithSilentRTP replays the live zombie capture: a
+// listen window receives continuous silent RTP, so no VAD frame flushes the
+// pre-roll and the packet path owns the clock. It must still expire at its
+// window limit, stop the board, and tell the brain instead of hanging.
+func TestListenCaptureExpiresWithSilentRTP(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-listen-silent")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+
+	b.rpc("rec-1", map[string]any{
+		"cmd": "terminal.rec_start", "terminal_id": "vocat-listen-silent",
+		"listen_window": true, "window_s": 1,
+	})
+	if start := hw.readCtrl(t); start.Op != proto.RecOpStart {
+		t.Fatalf("rec ctrl = %+v, want start", start)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	start := time.Now()
+	for time.Now().Before(deadline) {
+		hw.rtp(make([]byte, proto.RtpPCMBytes))
+		time.Sleep(endpointFrame)
+		if e.Terminal("vocat-listen-silent").capture.pending.Load() == nil {
+			break
+		}
+	}
+	// The capture must expire while RTP is still flowing; waiting for RTP to
+	// stop and then timing out would mask the frozen clock.
+	if pending := e.Terminal("vocat-listen-silent").capture.pending.Load(); pending != nil {
+		t.Fatalf("silent listen capture still open after %s with RTP flowing", time.Since(start))
+	}
+	if elapsed := time.Since(start); elapsed > 1600*time.Millisecond {
+		t.Fatalf("silent listen capture expired after %s, want ~1s window", elapsed)
+	}
+
+	ev := b.waitFor("turn.cancel")
+	if ev["reason"] != "noise" {
+		t.Fatalf("cancel reason = %v, want noise", ev["reason"])
+	}
+	if stop := hw.readCtrl(t); stop.Op != proto.RecOpStop {
+		t.Fatalf("rec ctrl = %+v, want stop", stop)
+	}
+}
+
 func TestDeviceCaptureStartsAndStopsMic(t *testing.T) {
 	e := startTestEdge(t)
 	b := dialBrain(t, e)

@@ -325,7 +325,7 @@ func (c *captureState) run() {
 			}
 			probeAt, probeN, probeText = result.at, result.n, result.text
 			u.policy.observeProgress(result.at, result.text)
-			at := u.at(len(u.pcm))
+			at := u.clock()
 			if !specLive && u.policy.voiced && !u.policy.inVoice && at-u.policy.lastVoicedAt >= endpointSpecQuiet {
 				specSeq = c.t.nextTurn()
 				specAt = at
@@ -349,7 +349,7 @@ func (c *captureState) run() {
 				speechAt = pkt.at
 			}
 			c.putSlot(pkt.pcm)
-			at := u.at(len(u.pcm))
+			at := u.clock()
 			silence := at - u.policy.lastVoicedAt
 			// Trailing silence needs one probe that covers every voiced frame;
 			// re-probing silence at the packet rate both saturates Parakeet and
@@ -407,7 +407,7 @@ func (c *captureState) run() {
 			if lastTick.IsZero() {
 				lastTick = now
 			}
-			at := u.at(len(u.pcm)) + max(0, now.Sub(lastTick))
+			at := u.clock() + max(0, now.Sub(lastTick))
 			// Without RTP no VAD frame can end the voice, so the wall clock
 			// has to expire it or the turn stays open for the whole window.
 			if u.policy.inVoice && at-u.policy.lastVoicedAt >= endpointFrame {

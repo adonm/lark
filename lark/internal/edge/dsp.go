@@ -316,6 +316,13 @@ func pcmDuration(n int) time.Duration {
 
 func (u *utterance) at(n int) time.Duration { return pcmDuration(n) + u.speechOffset }
 
+// clock is the policy time for the whole capture, including listening
+// pre-roll that has not been flushed into pcm yet. flushPreRoll moves preScan
+// into pcm and speechOffset symmetrically, so this stays continuous across it.
+func (u *utterance) clock() time.Duration {
+	return pcmDuration(len(u.pcm)+u.preScan) + u.speechOffset
+}
+
 func (u *utterance) add(pcm []byte, vad VAD) {
 	limit := u.limit
 	if limit <= 0 {
