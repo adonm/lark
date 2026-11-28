@@ -106,12 +106,12 @@ if "$models_only"; then
 fi
 
 install_deltachat_rpc() (
-    local version=v2.56.0
+    local version=v2.69.0
     local bin_dir="$data/bin" dest="$data/bin/deltachat-rpc-server" arch checksum url staged
     case $(uname -m) in
         x86_64)
             arch=x86_64-linux
-            checksum=312d4753160ca0c50f32d3e4f6de4fcaf91527f53980e04f52505a6bf951843c
+            checksum=db1a2c08375c9c2e73c8d6009cc99094e642722a41d06370cdb4dc680247eaa0
             ;;
         *)
             printf 'Unsupported architecture %s for deltachat-rpc-server.\n' "$(uname -m)" >&2
