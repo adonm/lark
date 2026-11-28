@@ -55,8 +55,8 @@ if (existsSync(accountsFile)) {
 }
 
 const contacts = [
-  { id: 7, address: "sam@example.org", displayName: "Sam", name: "Sam", isBot: false, isBlocked: false, isVerified: true },
-  { id: 8, address: "alex@example.org", displayName: "Alex", name: "Alex", isBot: false, isBlocked: false, isVerified: true },
+  { id: 7, address: "sam@example.org", displayName: "Sam", name: "Sam", isBot: false, isBlocked: false, isKeyContact: true, e2eeAvail: true },
+  { id: 8, address: "alex@example.org", displayName: "Alex", name: "Alex", isBot: false, isBlocked: false, isKeyContact: true, e2eeAvail: true },
 ];
 
 function account(id) {
@@ -118,7 +118,8 @@ function inject({ sender, address, text, viewType = "Text", file = null }) {
       name: sender ?? "Friend",
       isBot: false,
       isBlocked: false,
-      isVerified: true,
+      isKeyContact: true,
+      e2eeAvail: true,
     };
     acc.contacts.push(contact);
   }

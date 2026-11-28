@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { StdioDeltaChat } from "@deltachat/jsonrpc-client";
+import { StdioDeltaChat, type T as DcTypes } from "@deltachat/jsonrpc-client";
 import type { Companion, LarkDb } from "./db.ts";
 import { parseTwee, slugFromTitle } from "./stories.ts";
 import type { RemoteManager } from "./remote.ts";
@@ -275,11 +275,13 @@ export class DcService {
     }
     this.#child = child;
     child.stderr.on("data", (chunk: Buffer) => this.#log(`deltachat-rpc-server: ${chunk.toString().trim()}`));
-    const dc = new StdioDeltaChat(child.stdin, child.stdout, true);
-    const adapter = stdioDcAdapter(dc as unknown as DcClient);
-    void this.attach(adapter).catch((error: unknown) => {
-      this.#log(`Delta Chat attach: ${errMessage(error)}`);
-    });
+    const dc = new StdioDeltaChat(child.stdin, child.stdout, false);
+    const adapter = stdioDcAdapter(dc);
+    void this.attach(adapter)
+      .then(() => dc.eventLoop())
+      .catch((error: unknown) => {
+        if (!this.#closed) this.#log(`Delta Chat event loop: ${errMessage(error)}`);
+      });
     child.on("exit", (code, signal) => {
       this.#ready = false;
       this.#rpc = undefined;
@@ -736,58 +738,45 @@ export class DcService {
 
 // ---- @deltachat/jsonrpc-client adapter ------------------------------------
 
-interface IncomingEvent {
-  kind: string;
-  msgId?: number;
-  contactId?: number;
-  progress?: number;
-}
+export type StdioDcSource = Pick<StdioDeltaChat, "rpc" | "on" | "close">;
 
-interface DcClient {
-  rpc: {
-    addAccount(): Promise<number>;
-    removeAccount(id: number): Promise<null>;
-    getAllAccountIds(): Promise<number[]>;
-    startIoForAllAccounts(): Promise<null>;
-    addTransportFromQr(id: number, qr: string): Promise<null>;
-    batchSetConfig(id: number, config: Record<string, string | null>): Promise<null>;
-    setConfig(id: number, key: string, value: string | null): Promise<null>;
-    getConfig(id: number, key: string): Promise<string | null>;
-    getChatSecurejoinQrCode(id: number, chat: number | null): Promise<string>;
-    secureJoin(id: number, qr: string): Promise<number>;
-    getContacts(id: number, flags: number, query: string | null): Promise<DcContact[]>;
-    getContact(id: number, contact: number): Promise<DcContact>;
-    deleteContact(id: number, contact: number): Promise<null>;
-    getChatIdByContactId(id: number, contact: number): Promise<number | null>;
-    createChatByContactId(id: number, contact: number): Promise<number>;
-    deleteChat(id: number, chat: number): Promise<null>;
-    getBasicChatInfo(id: number, chat: number): Promise<DcBasicChat>;
-    getMessage(id: number, message: number): Promise<DcMessage>;
-    sendMsg(id: number, chat: number, data: { text?: string | null; viewtype?: string; file?: string }): Promise<number>;
+function toDcContact(contact: DcTypes.Contact): DcContact {
+  return {
+    id: contact.id,
+    address: contact.address,
+    displayName: contact.displayName,
+    name: contact.name,
+    // Delta Chat 2.69 replaced Contact.isVerified with key-contact + E2EE flags.
+    isVerified: contact.isKeyContact && contact.e2eeAvail,
+    isBot: contact.isBot,
+    isBlocked: contact.isBlocked,
   };
-  on(event: string, listener: (accountId: number, event: IncomingEvent) => void): void;
-  close(): void;
 }
 
 /**
  * Bridge the stdio JSON-RPC client to DcRpc. Pure RPCs fall through the proxy;
- * only subscription, close, and the message/chat shapes the wire client models
- * differently are overridden.
+ * only subscription, close, and the contact/message/chat shapes the wire
+ * client models differently are overridden.
  */
-export function stdioDcAdapter(dc: DcClient): DcRpc {
+export function stdioDcAdapter(dc: StdioDcSource): DcRpc {
   const overrides: Partial<DcRpc> = {
     subscribe(handlers): void {
       dc.on("IncomingMsg", (accountId, event) => {
-        if (typeof event.msgId === "number") handlers.onIncomingMessage(accountId, event.msgId);
+        handlers.onIncomingMessage(accountId, event.msgId);
       });
       dc.on("SecurejoinInviterProgress", (accountId, event) => {
-        if (typeof event.contactId !== "number") return;
-        if (typeof event.progress === "number" && event.progress < 1000) return;
+        if (event.progress < 1000) return;
         handlers.onSecureJoinVerified(accountId, event.contactId);
       });
     },
     close(): void {
       dc.close();
+    },
+    async getContact(accountId, contactId): Promise<DcContact> {
+      return toDcContact(await dc.rpc.getContact(accountId, contactId));
+    },
+    async getContacts(accountId, listFlags, query): Promise<DcContact[]> {
+      return (await dc.rpc.getContacts(accountId, listFlags, query)).map(toDcContact);
     },
     async getBasicChatInfo(accountId, chatId): Promise<DcBasicChat> {
       const chat = await dc.rpc.getBasicChatInfo(accountId, chatId);
@@ -807,10 +796,17 @@ export function stdioDcAdapter(dc: DcClient): DcRpc {
       };
     },
     async sendMsg(accountId, chatId, data): Promise<number> {
+      const viewtype = (data.viewtype ?? null) as DcTypes.Viewtype | null;
       return await dc.rpc.sendMsg(accountId, chatId, {
         text: data.text ?? null,
-        ...(data.viewtype === undefined ? {} : { viewtype: data.viewtype }),
-        ...(data.file === undefined ? {} : { file: data.file }),
+        html: null,
+        viewtype,
+        file: data.file ?? null,
+        filename: null,
+        location: null,
+        overrideSenderName: null,
+        quotedMessageId: null,
+        quotedText: null,
       });
     },
   };

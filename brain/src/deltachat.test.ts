@@ -10,12 +10,14 @@ import {
   contactName,
   parseSlashCommand,
   shortenDeltaChatInvite,
+  stdioDcAdapter,
   type DcBasicChat,
   type DcContact,
   type DcEventHandlers,
   type DcMessage,
   type DcMessageData,
   type DcRpc,
+  type StdioDcSource,
 } from "./deltachat.ts";
 import { RemoteManager } from "./remote.ts";
 
@@ -439,4 +441,56 @@ test("pairing and unpairing expose only verified human contacts", async () => {
   await h.service.unpairContact("greg", sam.id);
   assert.deepEqual(await h.service.listPairedContacts("greg"), []);
   assert.equal(h.rpc.account(1).contacts.has(sam.id), false);
+});
+
+test("stdioDcAdapter maps Delta Chat 2.69 isKeyContact + e2eeAvail to isVerified", async () => {
+  const verified = {
+    id: 21,
+    address: "sam@example.org",
+    authName: "Sam",
+    displayName: "Sam",
+    name: "",
+    color: "#112233",
+    profileImage: null,
+    status: "",
+    isBlocked: false,
+    isBot: false,
+    isKeyContact: true,
+    e2eeAvail: true,
+    lastSeen: 1,
+    wasSeenRecently: true,
+    verifierId: 0,
+  };
+  const noKey = { ...verified, id: 22, address: "nokey@example.org", e2eeAvail: false };
+  const addrOnly = { ...verified, id: 23, address: "addr@example.org", isKeyContact: false, e2eeAvail: false };
+  const listeners = new Map<string, (accountId: number, event: Record<string, unknown>) => void>();
+  const fakeDc = {
+    rpc: {
+      getContact: async (_accountId: number, contactId: number) => [verified, noKey, addrOnly].find((c) => c.id === contactId)!,
+      getContacts: async () => [verified, noKey, addrOnly],
+    },
+    on(event: string, listener: (accountId: number, event: Record<string, unknown>) => void) {
+      listeners.set(event, listener);
+    },
+    close() {},
+  } as unknown as StdioDcSource;
+  const rpc = stdioDcAdapter(fakeDc);
+  assert.equal((await rpc.getContact(5, 21)).isVerified, true);
+  assert.equal((await rpc.getContact(5, 22)).isVerified, false);
+  assert.equal((await rpc.getContact(5, 23)).isVerified, false);
+  assert.deepEqual(
+    (await rpc.getContacts(5, 0, null)).map((c) => ({ id: c.id, isVerified: c.isVerified })),
+    [
+      { id: 21, isVerified: true },
+      { id: 22, isVerified: false },
+      { id: 23, isVerified: false },
+    ],
+  );
+  const incoming: Array<[number, number]> = [];
+  rpc.subscribe({
+    onIncomingMessage: (accountId, msgId) => incoming.push([accountId, msgId]),
+    onSecureJoinVerified: () => undefined,
+  });
+  listeners.get("IncomingMsg")?.(5, { kind: "IncomingMsg", chatId: 17, msgId: 54764 });
+  assert.deepEqual(incoming, [[5, 54764]]);
 });
