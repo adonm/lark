@@ -6,11 +6,12 @@ type ToolSchema = Tool.ValueSchema;
 import type { CompanionPatch, LarkDb, TimerRow } from "./db.ts";
 import type { Library, SourceChoice } from "./library.ts";
 import { parseTwee, slugFromTitle, tweeFromText, type Story } from "./stories.ts";
-import type { TimerEdit, TimerScheduler } from "./timers.ts";
+import { formatLocalTime, type TimerEdit, type TimerScheduler } from "./timers.ts";
 import type { CompanionInstruction, EmitEvent } from "./opencode.ts";
 import type { SpeculationGate } from "./oc_plugins.ts";
 import type { TuneNote } from "./edge_client.ts";
 import type { SongMatch } from "./song_id.ts";
+import { clockParts } from "./util.ts";
 
 export class ToolInputError extends Error {
   constructor(message: string) {
@@ -233,6 +234,8 @@ export interface ToolDeps {
   audio?: AudioOps;
   companionFor: (sessionID: string) => string | undefined;
   setCompanion: (sessionID: string, companion: CompanionInstruction) => Promise<void>;
+  /** Injectable clock so state reads stay deterministic in tests. */
+  now?: () => number;
 }
 
 export interface NativeTool {
@@ -271,7 +274,7 @@ function textResult(value: unknown): { content: string } {
 }
 
 const STATE_INPUT = obj({
-  companion_id: str({ max: 64 }),
+  companion_id: str({ max: 64 }).optional(),
   include: arr(
     oneOf(["me", "companions", "terminals", "messages", "memory", "timers", "stories"]),
     { max: 7 },
@@ -292,18 +295,32 @@ function stateTool(deps: ToolDeps) {
       "Read companion, terminal, message, memory, timer, and story state. Message pages use a (before_ts, before_id) cursor.",
     input: inputSchema(STATE_INPUT),
     options: { codemode: false },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, context: { sessionID: string }) => {
       const args = STATE_INPUT.parse(input, "state");
-      const companionId = args.companion_id.toLowerCase();
+      const companionId = args.companion_id === undefined
+        ? deps.companionFor(context.sessionID)
+        : args.companion_id.toLowerCase();
+      if (companionId === undefined) throw new ToolInputError("companion_id is required");
       const include = args.include ?? ["me", "messages", "memory", "timers", "stories"];
-      const out: Record<string, unknown> = { companion_id: companionId };
+      const nowDate = new Date((deps.now ?? (() => Date.now()))());
+      const clock = clockParts(nowDate.getTime());
+      const out: Record<string, unknown> = {
+        companion_id: companionId,
+        now: {
+          local: formatLocalTime(nowDate),
+          weekday: clock.weekday,
+          date: clock.date,
+          time: clock.time,
+          timezone: clock.timezone,
+        },
+      };
       if (include.includes("me")) {
         const me = deps.db.getCompanion(companionId);
         if (me === undefined) throw new ToolInputError(`companion ${companionId} not found`);
         out.me = me;
       }
       if (include.includes("companions")) out.companions = deps.db.listCompanions();
-      if (include.includes("terminals")) out.terminals = deps.db.listTerminals();
+      if (include.includes("terminals")) out.terminals = deps.db.listTerminalsWithVolume(companionId);
       if (include.includes("messages")) {
         const limit = args.messages_limit ?? 10;
         let cursor: { beforeTs: number; beforeId: string } | undefined;

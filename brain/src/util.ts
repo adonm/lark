@@ -26,6 +26,39 @@ export function humanBytes(bytes: number): string {
   return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+export interface ClockParts {
+  /** Full weekday name, e.g. "Saturday". */
+  weekday: string;
+  /** Three-letter weekday, e.g. "Sat". */
+  weekdayShort: string;
+  /** Local calendar date, e.g. "2026-11-28". */
+  date: string;
+  /** Local 12-hour time, e.g. "11:35 AM". */
+  time: string;
+  /** IANA zone when the runtime reports one. */
+  timezone: string;
+}
+
+/** Local wall-clock parts for a timestamp, independent of locale settings. */
+export function clockParts(ms: number): ClockParts {
+  const date = new Date(ms);
+  const hours = date.getHours();
+  const weekday = WEEKDAY_NAMES[date.getDay()] ?? "Sunday";
+  return {
+    weekday,
+    weekdayShort: weekday.slice(0, 3),
+    date: `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`,
+    time: `${hours % 12 === 0 ? 12 : hours % 12}:${pad2(date.getMinutes())} ${hours < 12 ? "AM" : "PM"}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "local",
+  };
+}
+
 export interface SlugOptions {
   max?: number;
   fallback?: string;

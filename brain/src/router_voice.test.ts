@@ -12,9 +12,12 @@ import {
   armListening,
   cancel,
   commit,
+  formatTurnPrompt,
   playbackDone,
   speculate,
+  wakeTimer,
 } from "./router_voice.ts";
+import type { Timer } from "./timers.ts";
 import { NOT_CAUGHT_LINE, type TerminalState } from "./router_internal.ts";
 import type { StoryRun } from "./router_internal.ts";
 
@@ -23,6 +26,7 @@ function harness(options: { listening?: boolean } = {}): {
   state: TerminalState;
   edge: FakeEdge;
   brain: FakeBrain;
+  db: LarkDb;
   now: { value: number };
 } {
   const dir = mkdtempSync(join(tmpdir(), "lark-voice-test-"));
@@ -69,7 +73,7 @@ function harness(options: { listening?: boolean } = {}): {
     spokenStoryChoice: async () => false,
     nextStream: () => ++stream,
   };
-  return { ctx, state, edge, brain, now };
+  return { ctx, state, edge, brain, db, now };
 }
 
 test("arming the listening window sends its bounds and expires to idle", async (t) => {
@@ -111,7 +115,10 @@ test("after the follow-up grace only speech naming the companion is a turn", asy
 
   h.now.value += FOLLOW_UP_GRACE_MS + 1001;
   await commit(h.ctx, { terminal_id: "vocat-1", seq: 2, transcript: "Greg, what time is it", speech_at_ms: 0, listen_window: true, audio_ms: 700 });
-  assert.equal(h.brain.inputs.at(-1)?.text, "Greg, what time is it");
+  assert.match(
+    h.brain.inputs.at(-1)?.text ?? "",
+    /^Speaker: in person \(name unknown\)\nGreg, what time is it\n\[state: /,
+  );
   if (h.state.listenTimer !== undefined) clearTimeout(h.state.listenTimer);
 });
 
@@ -151,11 +158,13 @@ test("speculation ignores blank, busy and reader turns and replaces the previous
   h.state.drawer = "";
   await speculate(h.ctx, { ...base, transcript: " first guess " });
   assert.equal(h.brain.speculated.length, 1);
-  assert.equal(h.brain.speculated[0]?.transcript, "first guess");
+  assert.equal(h.state.speculation?.transcript, "first guess");
+  assert.ok(h.brain.speculated[0]?.transcript.includes("first guess"));
 
   await speculate(h.ctx, { ...base, seq: 2, transcript: "second guess" });
   assert.equal(h.brain.speculated.length, 2);
-  assert.deepEqual(h.brain.aborted, ["first guess"]);
+  assert.equal(h.brain.aborted.length, 1);
+  assert.ok(h.brain.aborted[0]?.includes("first guess"));
 });
 
 test("playback.done ignores stale and identify streams and clears on the live one", async () => {
@@ -183,7 +192,8 @@ test("cancel aborts in-flight speculation and turn work", async () => {
   h.state.turn = controller;
   h.state.busy = true;
   await cancel(h.ctx, "vocat-1", "user stopped");
-  assert.deepEqual(h.brain.aborted, ["guess"]);
+  assert.equal(h.brain.aborted.length, 1);
+  assert.ok(h.brain.aborted[0]?.includes("guess"));
   assert.equal(controller.signal.aborted, true);
   assert.equal(h.state.busy, false);
   assert.equal(h.edge.lastScreen()?.status, "idle");
@@ -197,7 +207,7 @@ test("overlapping speculation starts only the newest and never after commit", as
     speculate(h.ctx, { ...base, seq: 2, transcript: "second guess" }),
   ]);
   assert.equal(h.brain.speculated.length, 1);
-  assert.equal(h.brain.speculated[0]?.transcript, "second guess");
+  assert.ok(h.brain.speculated[0]?.transcript.includes("second guess"));
 
   const pending = speculate(h.ctx, { ...base, seq: 3, transcript: "late guess" });
   const committed = commit(h.ctx, {
@@ -209,7 +219,7 @@ test("overlapping speculation starts only the newest and never after commit", as
   });
   await Promise.all([pending, committed]);
   assert.equal(h.brain.speculated.length, 1, "a stale speculation started after commit");
-  assert.equal(h.brain.inputs.at(-1)?.text, "hello there");
+  assert.ok(h.brain.inputs.at(-1)?.text.includes("hello there"));
 });
 
 test("an empty matched speculation falls back to a fresh turn", async () => {
@@ -220,7 +230,7 @@ test("an empty matched speculation falls back to a fresh turn", async () => {
   h.brain.nextTurn("Recovered.");
   await commit(h.ctx, event);
   assert.equal(h.brain.inputs.length, 2, "the turn was dropped instead of retried");
-  assert.equal(h.brain.inputs.at(-1)?.text, "what is it");
+  assert.ok(h.brain.inputs.at(-1)?.text.includes("what is it"));
   assert.equal(h.state.caption, "Recovered.");
   assert.ok(h.edge.spoken.some((line) => line.text.includes("Recovered")));
 });
@@ -251,13 +261,115 @@ test("an empty reply says it was not caught instead of staying silent", async ()
   assert.ok(h.edge.spoken.some((line) => line.text.includes(NOT_CAUGHT_LINE)));
 });
 
+test("turn prompts carry the live clock, form, volume, battery and timers", () => {
+  const h = harness();
+  h.db.patchCompanion("greg", { voice: "bm_fable", listening: true });
+  h.db.setTerminalVolume("vocat-1", 60);
+  h.state.telemetry = {
+    terminal_id: "vocat-1",
+    wifi_rssi: -40,
+    battery_pct: 82,
+    charging: true,
+    cpu_pct: 5,
+    free_heap: 1,
+    uptime_s: 1,
+  };
+  h.db.insertTimer({
+    id: "t1",
+    companionId: "greg",
+    label: "Pasta",
+    say: "",
+    chime: "tap",
+    wakeAgent: true,
+    createdAt: new Date(h.now.value).toISOString(),
+    fireAt: new Date(h.now.value + 4 * 60_000).toISOString(),
+    notes: [],
+  });
+  const companion = h.db.getCompanion("greg");
+  assert.ok(companion !== undefined);
+  const lines = formatTurnPrompt(h.ctx, { text: "what now", companion, state: h.state }).split("\n");
+  assert.equal(lines[0], "Speaker: in person (name unknown)");
+  assert.equal(lines[1], "what now");
+  assert.match(
+    lines[2] ?? "",
+    /^\[state: now: \w{3} \d{4}-\d{2}-\d{2} \d{1,2}:\d{2} (AM|PM) \(.+\) · form: a chameleon · voice: bm_fable · listening: on · volume: 60% · battery: 82% charging · timers: 1 active: "Pasta" 4m left\]$/,
+  );
+});
+
+test("state values cannot terminate the footer and an offline terminal is explicit", () => {
+  const h = harness();
+  h.db.patchCompanion("greg", { form: "a fox ] in a box" });
+  const companion = h.db.getCompanion("greg");
+  assert.ok(companion !== undefined);
+  const prompt = formatTurnPrompt(h.ctx, { text: "hi", companion, replyTo: "Sam" });
+  assert.ok(prompt.startsWith("Speaker: in person (name unknown), replying to Sam (Delta Chat)\nhi\n[state: "));
+  assert.match(prompt, /· form: a fox \) in a box ·/);
+  assert.equal(prompt.match(/\[state: /g)?.length, 1);
+  assert.ok(prompt.endsWith("]"));
+  assert.match(prompt, /· terminal: offline · timers: none\]$/);
+});
+
+test("an armed Delta Chat reply names the contact on the next voice turn", async () => {
+  const h = harness();
+  h.state.reply = {
+    accountId: 1,
+    chatId: 77,
+    contact: "Sam",
+    peer: "sam@example.org",
+    armedUntil: h.now.value + 60_000,
+  };
+  await commit(h.ctx, {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "tell Sam hello",
+    speech_at_ms: 0,
+    listen_window: false,
+    audio_ms: 500,
+  });
+  assert.match(
+    h.brain.inputs.at(-1)?.text ?? "",
+    /^Speaker: in person \(name unknown\), replying to Sam \(Delta Chat\)\ntell Sam hello\n\[state: /,
+  );
+  const stored = h.db
+    .listMessages({ companionId: "greg", limit: 5 })
+    .messages.find((message) => message.role === "user");
+  assert.equal(stored?.text, "tell Sam hello", "history keeps only the clean transcript");
+});
+
+test("a wake-agent timer runs an event turn and falls back to its line", async () => {
+  const h = harness();
+  const timer: Timer = {
+    id: "t1",
+    companionId: "greg",
+    label: "Pasta",
+    say: "Tea is ready.",
+    chime: "tap",
+    wakeAgent: true,
+    notes: [],
+    createdAt: new Date(h.now.value),
+    fireAt: new Date(h.now.value),
+  };
+  h.brain.nextTurn("Your pasta is done.", ["Your pasta is done."]);
+  await wakeTimer(h.ctx, timer);
+  assert.match(
+    h.brain.inputs.at(-1)?.text ?? "",
+    /^Event: timer "Pasta" fired: Tea is ready\.\n\n\[state: /,
+  );
+  assert.ok(h.edge.spoken.some((line) => line.text.includes("Your pasta is done")));
+
+  h.brain.nextTurn("", []);
+  await wakeTimer(h.ctx, timer);
+  assert.ok(h.edge.spoken.at(-1)?.text.includes("Tea is ready."));
+});
+
 test("cancel with reason=speech aborts speculation without clearing listening", async () => {
   const h = harness();
   await armListening(h.ctx, h.state, false);
   h.brain.nextTurn("Half guess.", ["Half guess."]);
   await speculate(h.ctx, { terminal_id: "vocat-1", seq: 4, transcript: "half", speech_at_ms: 0 });
   await cancel(h.ctx, "vocat-1", "speech");
-  assert.deepEqual(h.brain.aborted, ["half"]);
+  assert.equal(h.brain.aborted.length, 1);
+  assert.ok(h.brain.aborted[0]?.includes("half"));
   assert.equal(h.state.listening, true);
   assert.equal(h.edge.lastScreen()?.status, "listening");
 

@@ -65,6 +65,7 @@ function deps(): ToolDeps {
     emit: () => undefined,
     companionFor: () => "greg",
     setCompanion: async () => undefined,
+    now: () => 1_760_000_000_000,
   };
 }
 
@@ -133,7 +134,7 @@ test("native tools advertise a complete object schema", () => {
     ["lark_state", "lark_patch", "lark_story", "lark_library", "lark_emit", "lark_audio"],
   );
   const expected: Record<string, string> = {
-    lark_state: "companion_id",
+    lark_state: "",
     lark_patch: "",
     lark_story: "op",
     lark_library: "op",
@@ -195,6 +196,49 @@ test("every native tool rejects unknown keys, wrong types and out-of-bound value
       `${entry.name} accepted ${JSON.stringify(entry.input)}`,
     );
   }
+});
+
+test("lark_state defaults to the session companion and always reports now", async () => {
+  const d = deps();
+  d.db.upsertTerminal({
+    id: "vocat-1",
+    kind: "esp-vocat",
+    companionId: "greg",
+    ip: "",
+    port: 0,
+    lastSeen: 1,
+    createdAt: new Date(1).toISOString(),
+  });
+  d.db.setTerminalVolume("vocat-1", 42);
+  const result = await tool(d, "lark_state").execute(
+    { include: ["me", "terminals"] },
+    { sessionID: "s", signal: new AbortController().signal },
+  );
+  const out = JSON.parse(result.content) as {
+    companion_id: string;
+    now: { local: string; weekday: string; date: string; time: string; timezone: string };
+    terminals: Array<{ id: string; volume: number }>;
+  };
+  assert.equal(out.companion_id, "greg");
+  assert.match(out.now.local, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+  assert.match(out.now.weekday, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)$/);
+  assert.match(out.now.date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.match(out.now.time, /^\d{1,2}:\d{2} (AM|PM)$/);
+  assert.ok(out.now.timezone.length > 0);
+  assert.equal(out.terminals[0]?.id, "vocat-1");
+  assert.equal(out.terminals[0]?.volume, 42);
+});
+
+test("lark_state requires a companion when the session has none", async () => {
+  const d = deps();
+  d.companionFor = () => undefined;
+  await assert.rejects(
+    tool(d, "lark_state").execute(
+      { include: ["me"] },
+      { sessionID: "s", signal: new AbortController().signal },
+    ),
+    /companion_id is required/,
+  );
 });
 
 test("the speculation gate classifies read-only and mutating tools", async () => {

@@ -20,6 +20,7 @@ import type { Companion, LarkDb, Message, StoryRow } from "./db.ts";
 import { parseTwee, type Story } from "./stories.ts";
 import type { DcPeerTurn } from "./deltachat.ts";
 import type { SpeculationHandle, TurnDelta, TurnResult } from "./opencode.ts";
+import type { Timer } from "./timers.ts";
 import type { PortraitManager } from "./portraits.ts";
 import { nameMatches } from "./matching.ts";
 import { sanitizeSpeech } from "./speech.ts";
@@ -554,6 +555,10 @@ export class Router {
 
   async speakPhrase(terminalId: string, text: string): Promise<void> {
     await voice.speakPhrase(this.#voice, terminalId, text);
+  }
+
+  async wakeTimer(timer: Timer): Promise<void> {
+    await voice.wakeTimer(this.#voice, timer);
   }
 
   async setListening(companionId: string, listening: boolean): Promise<void> {

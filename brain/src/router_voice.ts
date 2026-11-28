@@ -11,15 +11,16 @@ import type {
   EdgeSpeculate,
   TuneNote,
 } from "./edge_client.ts";
-import type { LarkDb } from "./db.ts";
+import type { Companion, LarkDb } from "./db.ts";
 import type { DcPeerTurn } from "./deltachat.ts";
 import type { RouterDc, RouterEdge, TurnBrain } from "./router.ts";
 import type { SongMatch } from "./song_id.ts";
 import { NOT_CAUGHT_LINE, type TerminalState } from "./router_internal.ts";
 import type { TurnResult } from "./opencode.ts";
+import type { Timer } from "./timers.ts";
 import { nameMatches } from "./matching.ts";
 import { DeltaCapture, SpeechStream, sanitizeSpeech } from "./speech.ts";
-import { drain, errMessage } from "./util.ts";
+import { clockParts, drain, errMessage } from "./util.ts";
 
 export const LISTEN_WINDOW_MS = 30_000;
 export const FOLLOW_UP_GRACE_MS = 10_000;
@@ -45,6 +46,82 @@ export interface VoiceContext {
 
 function isSessionNotFound(error: unknown): boolean {
   return /session not found/i.test(errMessage(error));
+}
+
+/** Keep values inside the single-line `[state: ...]` footer. */
+function stateValue(value: string): string {
+  return value.replace(/]/g, ")").replace(/\s+/g, " ").trim();
+}
+
+function remainingLabel(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds < 60) return `${seconds}s left`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m left`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h left` : `${hours}h ${rest}m left`;
+}
+
+function timerSummary(ctx: Pick<VoiceContext, "db" | "now">, companionId: string): string {
+  const timers = ctx.db
+    .listTimers(companionId)
+    .map((row) => ({ label: row.label, fireAt: Date.parse(row.fireAt) }))
+    .filter((row) => Number.isFinite(row.fireAt))
+    .sort((a, b) => a.fireAt - b.fireAt);
+  if (timers.length === 0) return "none";
+  const shown = timers
+    .slice(0, 3)
+    .map((row) => `"${stateValue(row.label === "" ? "timer" : row.label)}" ${remainingLabel(row.fireAt - ctx.now())}`);
+  const more = timers.length > 3 ? ` +${timers.length - 3} more` : "";
+  return `${timers.length} active: ${shown.join(", ")}${more}`;
+}
+
+function terminalParts(ctx: Pick<VoiceContext, "db">, state: TerminalState | undefined): string[] {
+  if (state === undefined) return ["terminal: offline"];
+  const parts = [`volume: ${ctx.db.getTerminalVolume(state.id)}%`];
+  if (state.telemetry?.battery_pct !== undefined) {
+    parts.push(`battery: ${state.telemetry.battery_pct}%${state.telemetry.charging ? " charging" : ""}`);
+  } else if (state.info.board === "esp-box-3") {
+    parts.push("battery: USB");
+  }
+  return parts;
+}
+
+export interface TurnPrompt {
+  /** Raw user text; the header and state footer are added around it. */
+  text: string;
+  companion: Companion;
+  /** Live terminal whose volume and battery belong to this turn. */
+  state?: TerminalState;
+  /** Header after "Speaker: "; defaults to an unknown in-person speaker. */
+  speaker?: string;
+  /** Timer event header; takes precedence over speaker. */
+  event?: string;
+  /** Armed Delta Chat contact an in-person turn replies to. */
+  replyTo?: string;
+}
+
+/** The `Speaker:`/`Event:` header, raw text, and live `[state: ...]` footer. */
+export function formatTurnPrompt(ctx: Pick<VoiceContext, "db" | "now">, turn: TurnPrompt): string {
+  const clock = clockParts(ctx.now());
+  let header: string;
+  if (turn.event !== undefined) {
+    header = `Event: ${turn.event}`;
+  } else {
+    const reply = turn.replyTo === undefined ? "" : `, replying to ${turn.replyTo} (Delta Chat)`;
+    header = `Speaker: ${turn.speaker ?? "in person (name unknown)"}${reply}`;
+  }
+  const parts = [
+    `now: ${clock.weekdayShort} ${clock.date} ${clock.time} (${clock.timezone})`,
+    `form: ${stateValue(turn.companion.form === "" ? "none" : turn.companion.form)}`,
+    `voice: ${stateValue(turn.companion.voice === "" ? "af_heart" : turn.companion.voice)}`,
+    `listening: ${turn.companion.listening ? "on" : "off"}`,
+  ];
+  if (!turn.companion.configured) parts.push("setup: pending");
+  parts.push(...terminalParts(ctx, turn.state));
+  parts.push(`timers: ${timerSummary(ctx, turn.companion.id)}`);
+  return `${header}\n${turn.text}\n[state: ${parts.join(" · ")}]`;
 }
 
 async function sessionFor(ctx: VoiceContext, companionId: string): Promise<string> {
@@ -82,13 +159,24 @@ export async function speculate(ctx: VoiceContext, event: EdgeSpeculate): Promis
   // Every event invalidates earlier guesses, including ones still waiting for
   // a session; only the newest may start after the await.
   const seq = ++state.specSeq;
-  if (state.busy || state.drawer === "story-reader" || event.transcript.trim() === "") return;
+  const transcript = event.transcript.trim();
+  if (state.busy || state.drawer === "story-reader" || transcript === "") return;
+  const companion = ctx.db.getCompanion(state.companionId);
+  if (companion === undefined) return;
   const sessionID = await sessionFor(ctx, state.companionId);
   if (state.specSeq !== seq || state.busy || ctx.closed()) return;
   state.speculation?.handle.abort();
   const capture = new DeltaCapture();
-  const handle = ctx.brain.startSpeculate({ sessionID, text: event.transcript.trim() }, (delta) => capture.push(delta));
-  state.speculation = { transcript: event.transcript.trim(), stream: capture, handle };
+  const text = formatTurnPrompt(ctx, {
+    text: transcript,
+    companion,
+    state,
+    ...(state.reply !== undefined && ctx.now() <= state.reply.armedUntil
+      ? { replyTo: state.reply.contact }
+      : {}),
+  });
+  const handle = ctx.brain.startSpeculate({ sessionID, text }, (delta) => capture.push(delta));
+  state.speculation = { transcript, stream: capture, handle };
   void handle.result.catch(() => undefined);
 }
 
@@ -128,6 +216,14 @@ export async function commit(ctx: VoiceContext, event: EdgeCommit): Promise<void
     await armListening(ctx, state);
     return;
   }
+  const prompt = formatTurnPrompt(ctx, {
+    text: transcript,
+    companion,
+    state,
+    ...(state.reply !== undefined && ctx.now() <= state.reply.armedUntil
+      ? { replyTo: state.reply.contact }
+      : {}),
+  });
 
   state.busy = true;
   ctx.notify();
@@ -155,7 +251,7 @@ export async function commit(ctx: VoiceContext, event: EdgeCommit): Promise<void
 
   let full = "";
   const freshTurn = async (): Promise<string> => {
-    const result = await runTurn(ctx, state.companionId, transcript, (delta) => capture.push(delta));
+    const result = await runTurn(ctx, state.companionId, prompt, (delta) => capture.push(delta));
     return result.text;
   };
   try {
@@ -469,6 +565,24 @@ export async function sayNow(ctx: VoiceContext, companionId: string, text: strin
   await speakPhrase(ctx, state.id, text);
 }
 
+/** A wake-agent timer runs a model turn; speech failure falls back to its line. */
+export async function wakeTimer(ctx: VoiceContext, timer: Timer): Promise<void> {
+  const state = ctx.onlineTerminals(timer.companionId)[0];
+  if (state === undefined) return;
+  const companion = ctx.db.getCompanion(timer.companionId);
+  if (companion === undefined) return;
+  const fallback = timer.say.trim() === "" ? timer.label : timer.say;
+  let reply = "";
+  try {
+    const event = `timer "${stateValue(timer.label)}" fired${timer.say === "" ? "" : `: ${stateValue(timer.say)}`}`;
+    const result = await runTurn(ctx, timer.companionId, formatTurnPrompt(ctx, { text: "", companion, state, event }));
+    reply = sanitizeSpeech(result.text);
+  } catch (error) {
+    ctx.log(`timer turn: ${errMessage(error)}`);
+  }
+  await speakPhrase(ctx, state.id, reply === "" ? fallback : reply);
+}
+
 export async function speakPhrase(ctx: VoiceContext, terminalId: string, text: string): Promise<void> {
   const state = ctx.terminal(terminalId);
   if (state === undefined) return;
@@ -524,8 +638,15 @@ export async function notifyDcTurn(
     }
     await speakPhrase(ctx, state.id, `Message from ${turn.sender}: ${turn.text}`);
   }
+  const kind = turn.private ? "private" : "public";
+  const prompt = formatTurnPrompt(ctx, {
+    text: turn.text,
+    companion,
+    ...(state === undefined ? {} : { state }),
+    speaker: `${turn.sender} via Delta Chat (${kind})`,
+  });
   try {
-    const result = await runTurn(ctx, turn.companionId, `${turn.sender} via Delta Chat: ${turn.text}`);
+    const result = await runTurn(ctx, turn.companionId, prompt);
     return sanitizeSpeech(result.text);
   } catch (error) {
     ctx.log(`dc turn: ${errMessage(error)}`);

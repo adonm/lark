@@ -508,10 +508,12 @@ test("a first-token stall retries onto the fallback model", async () => {
 test("lark.context strips stale state from earlier turns only", async () => {
   const sessionID = await brain.createSession({ id: "cake", name: "Cake", personality: "a curious cat" });
   model.reset();
-  for await (const _delta of brain.runTurn({ sessionID, text: "STREAM first [state: form=cat ts=1]" })) {
+  const first = "Speaker: in person (name unknown)\nSTREAM first\n[state: now: Sat 2026-11-28 11:35 AM (Australia/Perth) · form: cat · volume: 55%]";
+  const second = "Speaker: in person (name unknown)\nSTREAM second\n[state: now: Sat 2026-11-28 11:36 AM (Australia/Perth) · form: fox · volume: 55%]";
+  for await (const _delta of brain.runTurn({ sessionID, text: first })) {
     // drain
   }
-  for await (const _delta of brain.runTurn({ sessionID, text: "STREAM second [state: form=fox ts=2]" })) {
+  for await (const _delta of brain.runTurn({ sessionID, text: second })) {
     // drain
   }
   const request = [...model.requests]
@@ -521,7 +523,8 @@ test("lark.context strips stale state from earlier turns only", async () => {
   const users = (request.messages ?? []).filter((message) => message.role === "user");
   assert.equal(users.length, 2);
   assert.ok(!textOf(users[0]).includes("[state:"), "stale state survived");
-  assert.match(textOf(users[1]), /\[state: form=fox ts=2\]/);
+  assert.ok(!textOf(users[0]).includes("form: cat"), "stale form survived");
+  assert.match(textOf(users[1]), /\[state: now: .* · form: fox · volume: 55%\]$/);
 });
 
 test("compaction strips state from every message", () => {

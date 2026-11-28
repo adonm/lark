@@ -132,6 +132,10 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (timer.chime !== "") {
         options.log?.(`timer ${timer.id} chime ${timer.chime}`);
       }
+      if (timer.wakeAgent) {
+        void router.wakeTimer(timer);
+        return;
+      }
       void router.speakPhrase(terminal, timer.say === "" ? timer.label : timer.say);
     },
   });

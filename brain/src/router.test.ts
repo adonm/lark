@@ -192,8 +192,9 @@ test("a committed turn streams speech and speculation is promoted", async () => 
   });
   await settle(20);
 
-  assert.equal(h.brain.inputs.at(-1)?.text, "hello greg");
-  assert.deepEqual(h.brain.promoted, ["hello greg"]);
+  assert.ok(h.brain.inputs.at(-1)?.text.includes("hello greg"));
+  assert.equal(h.brain.promoted.length, 1);
+  assert.ok(h.brain.promoted[0]?.includes("hello greg"));
   assert.ok(h.edge.starts.length >= 1);
   const text = h.edge.spoken.map((chunk) => chunk.text).join(" ");
   assert.match(text, /Hello/);
@@ -319,9 +320,10 @@ test("a mismatched commit aborts speculation and runs a fresh turn", async () =>
     audio_ms: 500,
   });
   await settle(20);
-  assert.deepEqual(h.brain.aborted, ["wrong guess"]);
+  assert.equal(h.brain.aborted.length, 1);
+  assert.ok(h.brain.aborted[0]?.includes("wrong guess"));
   assert.deepEqual(h.brain.promoted, []);
-  assert.equal(h.brain.inputs.at(-1)?.text, "right question");
+  assert.ok(h.brain.inputs.at(-1)?.text.includes("right question"));
   assert.match(h.edge.spoken.map((chunk) => chunk.text).join(" "), /A fresh reply/);
 });
 
@@ -363,7 +365,7 @@ test("listening re-arms and requires the name after the follow-up grace", async 
   });
   await settle(20);
   assert.equal(h.brain.inputs.length, 1);
-  assert.equal(h.brain.inputs[0]?.text, "Greg, what time is it");
+  assert.match(h.brain.inputs[0]?.text ?? "", /^Speaker: in person \(name unknown\)\nGreg, what time is it\n\[state: /);
 });
 
 test("fuzzy names and spoken sanitising", () => {
@@ -434,6 +436,10 @@ test("a device reply within the 60 s window is sent back to Delta Chat", async (
     chatId: 77,
   });
   await settle();
+  assert.match(
+    h.brain.inputs.at(-1)?.text ?? "",
+    /^Speaker: Sam via Delta Chat \(public\)\nhow is the garden\n\[state: now: .* · form: an old chameleon · voice: af_heart · listening: off · volume: 55% · timers: none\]$/,
+  );
   h.edge.emit("playback.done", { terminal_id: "vocat-1", stream_id: 1, aborted: false, underruns_delta: 0 });
   await settle();
   h.brain.nextTurn("The tomatoes are ripe.", ["The tomatoes are ripe."]);
@@ -452,6 +458,21 @@ test("a device reply within the 60 s window is sent back to Delta Chat", async (
     .messages.find((message) => message.text === "The tomatoes are ripe.");
   assert.equal(routed?.peer, "sam@example.org");
   assert.equal(routed?.role, "assistant");
+});
+
+test("private Delta Chat turns are marked private and offline terminals explicit", async () => {
+  const h = harness();
+  await h.router.notifyDcTurn({
+    companionId: "greg",
+    text: "a secret",
+    sender: "Sam",
+    peer: "sam@example.org",
+    private: true,
+  });
+  assert.match(
+    h.brain.inputs.at(-1)?.text ?? "",
+    /^Speaker: Sam via Delta Chat \(private\)\na secret\n\[state: .* · terminal: offline · timers: none\]$/,
+  );
 });
 
 test("volume, voice and unpair menus call shared commands", async () => {
