@@ -567,3 +567,9 @@ test("remote controls drive the same router commands", async () => {
   await h.router.openStory("greg", "lantern", false);
   assert.equal(h.edge.lastScreen()?.kind, "reader");
 });
+
+test("connecting restores default panel brightness so offline-dimmed boards wake", async () => {
+  const h = harness();
+  await connect(h);
+  assert.deepEqual(h.edge.powers, [{ terminalId: "vocat-1", brightness: 85 }]);
+});

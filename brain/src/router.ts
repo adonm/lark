@@ -35,6 +35,7 @@ export type { TurnDelta, TurnResult };
 export type TurnHandle = SpeculationHandle;
 
 export { NOT_CAUGHT_LINE };
+const DEFAULT_BRIGHTNESS = 85;
 const PORTRAIT_PATH = "/remote/api/portrait";
 
 export interface TurnBrain {
@@ -432,10 +433,11 @@ export class Router {
       busy: false,
       speaking: false,
       caption: "",
-      previousBrightness: 100,
+      previousBrightness: DEFAULT_BRIGHTNESS,
       specSeq: 0,
     };
     this.#terminals.set(info.terminal_id, state);
+    this.#edge.power(info.terminal_id, DEFAULT_BRIGHTNESS);
     this.#db.upsertTerminal({
       id: info.terminal_id,
       kind: info.board === "" ? "terminal" : info.board,
