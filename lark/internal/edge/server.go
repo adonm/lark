@@ -557,6 +557,9 @@ func (s *terminalServer) handleTCP(t *Terminal, nc *nativeConn, msgType uint8, p
 		}
 	case proto.MsgRecEnd:
 		if m, ok := proto.DecodeProtoRecEnd(payload); ok {
+			// The capture handoff waits for this ack before the next start, so
+			// record it here on the reader goroutine, before the actor runs.
+			t.noteBoardRecEnd(m.Session)
 			t.event(evRecEnd, func(ev *termEvent) { ev.end = m })
 		}
 	case proto.MsgTTSAck:

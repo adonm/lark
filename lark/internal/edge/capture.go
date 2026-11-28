@@ -18,6 +18,22 @@ const (
 	cancelSend cancelReason = iota
 	cancelUser
 	cancelWindow
+	// cancelSupersede ends a capture because a newer one is starting. The
+	// brain already knows: it asked for the new window, so this must not emit
+	// turn.cancel and flip the terminal back to idle.
+	cancelSupersede
+)
+
+const (
+	// captureStopWait bounds how long a new capture waits for the previous
+	// capture goroutine to emit its RecOpStop/RecOpCancel.
+	captureStopWait = time.Second
+	// captureRecEndWait bounds the wait for the board to acknowledge that stop
+	// with MsgRecEnd before RecOpStart is sent.
+	captureRecEndWait = 120 * time.Millisecond
+	// captureRecEndFresh ignores stops older than this: by then the board's
+	// audio task has certainly exited and re-sending RecOpStart is safe.
+	captureRecEndFresh = 250 * time.Millisecond
 )
 
 type micPacket struct {
@@ -132,9 +148,7 @@ func (c *captureState) getSlot() []byte {
 }
 
 func (t *Terminal) beginCapture(listen bool, windowS int, followUp bool, name string) {
-	if active := t.capture.active.Load(); active != nil {
-		active.cancel(cancelUser)
-	}
+	t.stopCapture()
 	limit := 20 * time.Second
 	if windowS > 0 {
 		limit = time.Duration(windowS) * time.Second
@@ -293,6 +307,8 @@ func (c *captureState) run() {
 				return
 			case cancelWindow:
 				c.emitCancel(specSeq, "window")
+				return
+			case cancelSupersede:
 				return
 			default:
 				c.commit(u, probeText, probeN, speechAt, specSeq, specLive, specCount)
@@ -465,12 +481,106 @@ func (c *captureState) emitCancel(seq uint64, reason string) {
 	})
 }
 
+// stopCapture tears the active capture down and waits (bounded) for its
+// goroutine to emit RecOpStop/RecOpCancel. Only then may the next RecOpStart be
+// written, so a start never overtakes the previous stop on the wire.
+func (t *Terminal) stopCapture() {
+	if old := t.capture.active.Load(); old != nil {
+		old.cancel(cancelSupersede)
+		timer := time.NewTimer(captureStopWait)
+		select {
+		case <-old.done:
+		case <-timer.C:
+		case <-t.life.done:
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+	// The board clears `recording` only after its audio task exits and reports
+	// MsgRecEnd; a RecOpStart that lands earlier is rejected (REJECT_RECORD).
+	t.awaitBoardRecEnd()
+}
+
+// noteCaptureStop records the session whose stop/cancel just left the edge.
+func (t *Terminal) noteCaptureStop(session uint16) {
+	c := &t.capture
+	c.mu.Lock()
+	c.stopSeq = session
+	c.stopAt = time.Now()
+	if c.ackCh == nil {
+		c.ackCh = make(chan struct{})
+	}
+	c.mu.Unlock()
+}
+
+// noteBoardRecEnd runs on the TCP reader goroutine, so it never blocks: it
+// records the acknowledged session and wakes any handoff waiting on it.
+func (t *Terminal) noteBoardRecEnd(session uint16) {
+	c := &t.capture
+	c.mu.Lock()
+	if c.ackSeq == 0 || int16(session-c.ackSeq) > 0 {
+		c.ackSeq = session
+	}
+	if c.ackCh == nil {
+		c.ackCh = make(chan struct{})
+	}
+	close(c.ackCh)
+	c.ackCh = make(chan struct{})
+	c.mu.Unlock()
+}
+
+// awaitBoardRecEnd waits up to captureRecEndWait for the board to acknowledge
+// the most recent stop. Older stops are ignored so an idle window opens at
+// once instead of paying the wait on every re-arm.
+func (t *Terminal) awaitBoardRecEnd() {
+	c := &t.capture
+	deadline := time.Now().Add(captureRecEndWait)
+	for {
+		c.mu.Lock()
+		if c.stopSeq == 0 || time.Since(c.stopAt) > captureRecEndFresh ||
+			int16(c.ackSeq-c.stopSeq) >= 0 {
+			c.mu.Unlock()
+			return
+		}
+		ch := c.ackCh
+		if ch == nil {
+			ch = make(chan struct{})
+			c.ackCh = ch
+		}
+		c.mu.Unlock()
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			return
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ch:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			return
+		case <-t.life.done:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		}
+	}
+}
+
 func (c *captureState) finish() {
 	op := uint8(proto.RecOpStop)
-	if cancelReason(c.reason.Load()) == cancelUser {
+	switch cancelReason(c.reason.Load()) {
+	case cancelUser, cancelSupersede:
 		op = proto.RecOpCancel
 	}
 	c.t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: op, Session: c.session}.Encode())
+	c.t.noteCaptureStop(c.session)
 	if c.t.capture.pending.CompareAndSwap(c, nil) {
 		c.t.event(evCaptureDone, func(ev *termEvent) { ev.capture = c })
 	}
@@ -582,10 +692,13 @@ func (t *Terminal) recStartEvent(m proto.ProtoRecStart) {
 
 func (t *Terminal) recEndEvent(m proto.ProtoRecEnd) {
 	active := t.capture.active.Load()
-	if active == nil {
+	if active == nil || active.session != m.Session {
+		// A late MsgRecEnd belongs to an earlier capture; it must never end the
+		// window that is open now.
 		return
 	}
 	if m.Cancelled != 0 {
+		t.deps.e.logf("rec.end terminal=%s session=%d cancelled=1", t.info.id, m.Session)
 		active.cancel(cancelUser)
 	} else {
 		active.cancel(cancelSend)
@@ -593,9 +706,7 @@ func (t *Terminal) recEndEvent(m proto.ProtoRecEnd) {
 }
 
 func (t *Terminal) startDeviceCapture(cmd *ipcCommand) {
-	if active := t.capture.active.Load(); active != nil {
-		active.cancel(cancelUser)
-	}
+	t.stopCapture()
 	c := newCapture(t, false, time.Duration(cmd.Seconds)*time.Second, "")
 	c.device = true
 	c.captureID = cmd.CaptureID

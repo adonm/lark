@@ -205,6 +205,37 @@ func dialHardware(t *testing.T, e *Edge, id string) *hardware {
 
 func (h *hardware) close() { h.conn.Close() }
 
+// recEnd reports that the board's audio task exited for a session, as the
+// firmware does from media.c before it will accept another RecOpStart.
+func (h *hardware) recEnd(session uint16, cancelled uint8) {
+	h.t.Helper()
+	m := proto.ProtoRecEnd{Session: session, Cancelled: cancelled}
+	if _, err := h.conn.Write(proto.Pack(proto.MsgRecEnd, 0, m.Encode())); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// readWithin reads one frame, returning the timeout error instead of failing
+// so a test can assert that nothing was sent.
+func (h *hardware) readWithin(d time.Duration) (uint8, []byte, error) {
+	h.t.Helper()
+	_ = h.conn.SetReadDeadline(time.Now().Add(d))
+	msgType, _, payload, err := proto.ReadFrame(h.br)
+	return msgType, payload, err
+}
+
+func (h *hardware) readCtrl(t *testing.T) proto.ProtoRecCtrl {
+	t.Helper()
+	_, payload := h.read(proto.MsgRecCtrl)
+	if len(payload) < proto.ProtoRecCtrlFixedSize {
+		t.Fatalf("short rec ctrl %x", payload)
+	}
+	return proto.ProtoRecCtrl{
+		Op: payload[0], Flags: payload[1],
+		Session: uint16(payload[2]) | uint16(payload[3])<<8,
+	}
+}
+
 func (h *hardware) read(typ uint8) (uint8, []byte) {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -570,6 +601,85 @@ func TestDeviceCaptureStartsAndStopsMic(t *testing.T) {
 	info, err := os.Stat(out)
 	if err != nil || info.Size() <= 44 {
 		t.Fatalf("captured wav = %v size=%v", err, info)
+	}
+}
+
+// TestCaptureHandoffWaitsForStopAndRecEnd pins the handoff order: the previous
+// capture's RecOpCancel must reach the board before the next RecOpStart, and
+// the start must wait for the board's MsgRecEnd ack. The firmware keeps
+// `recording = true` until its audio task drains and rejects a start that
+// arrives earlier (REJECT_RECORD -> MsgRecEnd{Cancelled:1}), which showed up as
+// silent drops on consecutive listening turns.
+func TestCaptureHandoffWaitsForStopAndRecEnd(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-handoff")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+
+	b.rpc("rec-1", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-handoff"})
+	first := hw.readCtrl(t)
+	if first.Op != proto.RecOpStart || first.Session != 1 {
+		t.Fatalf("first rec ctrl = %+v", first)
+	}
+
+	// Start the next window while the first is still open.
+	b.rpc("rec-2", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-handoff"})
+	stop := hw.readCtrl(t)
+	if stop.Op != proto.RecOpCancel || stop.Session != 1 {
+		t.Fatalf("handoff ctrl = %+v, want cancel session 1 before start 2", stop)
+	}
+
+	// Start 2 must stay off the wire until the board acks the stop.
+	if msgType, payload, err := hw.readWithin(60 * time.Millisecond); err == nil {
+		t.Fatalf("rec ctrl before MsgRecEnd ack: type=0x%02x %x", msgType, payload)
+	}
+
+	hw.recEnd(1, 0)
+	second := hw.readCtrl(t)
+	if second.Op != proto.RecOpStart || second.Session != 2 {
+		t.Fatalf("second rec ctrl = %+v, want start session 2", second)
+	}
+
+	// The superseded window must not tell the brain to leave listening.
+	b.rpc("hits-1", map[string]any{"cmd": "terminal.hits", "terminal_id": "vocat-handoff"})
+	for _, msg := range b.seen {
+		if msg["type"] == "turn.cancel" {
+			t.Fatalf("superseded capture emitted %v", msg)
+		}
+	}
+	b.send(map[string]any{"cmd": "terminal.rec_cancel", "terminal_id": "vocat-handoff"})
+}
+
+// TestStaleRecEndDoesNotCancelActiveCapture: a late MsgRecEnd from a finished
+// session must never end the live window.
+func TestStaleRecEndDoesNotCancelActiveCapture(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-stale-end")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+
+	b.rpc("rec-1", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-stale-end"})
+	first := hw.readCtrl(t)
+	b.rpc("rec-2", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-stale-end"})
+	if stop := hw.readCtrl(t); stop.Session != first.Session {
+		t.Fatalf("stop session = %+v, want %d", stop, first.Session)
+	}
+	hw.recEnd(first.Session, 0)
+	second := hw.readCtrl(t)
+	if second.Op != proto.RecOpStart || second.Session != first.Session+1 {
+		t.Fatalf("second rec ctrl = %+v", second)
+	}
+
+	// Duplicate end for the finished session, then speak into the live one.
+	hw.recEnd(first.Session, 1)
+	hw.rtp(tone(audio.SampleRate))
+	commit := b.waitFor("turn.commit")
+	if commit["transcript"] != "hello there" {
+		t.Fatalf("commit = %v", commit)
 	}
 }
 

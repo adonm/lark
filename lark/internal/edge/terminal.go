@@ -147,10 +147,19 @@ type terminalScreen struct {
 	gen          uint64
 }
 
-// terminalCapture holds the active recording and the lock-free done probe.
+// terminalCapture holds the active recording, the lock-free done probe, and
+// the board's MsgRecEnd handshake for the most recently stopped session.
 type terminalCapture struct {
 	active  atomic.Pointer[captureState]
 	pending atomic.Pointer[captureState]
+
+	// The firmware keeps `recording = true` until its audio task drains and
+	// reports MsgRecEnd, so the next RecOpStart waits briefly for that ack.
+	mu      sync.Mutex // guards stopSeq, stopAt, ackSeq and ackCh
+	stopSeq uint16
+	stopAt  time.Time
+	ackSeq  uint16
+	ackCh   chan struct{}
 }
 
 // terminalPlayback tracks TTS/PCM streams and the acknowledgement they expect.
