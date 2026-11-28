@@ -14,8 +14,12 @@ separate process, and drives a virtual terminal over the real terminal protocol,
 IPC, Delta Chat stub, HTTP API, and CLI. No GPU, model weights, relay, or
 installed service is needed.
 
-Firmware source is 0.24.0 on both boards. The edge and brain ship from the same
+Firmware source is 0.25.0 on both boards. The edge and brain ship from the same
 checkout through `lark deploy`.
+
+[hk](https://hk.jdx.dev/) (`hk.pkl`) runs fast parallel lint/type/hygiene/C-host
+checks on `pre-commit` (`hk check`) and the full `./scripts/check.sh` gate on
+`pre-push`.
 
 ## To change X, run Y
 

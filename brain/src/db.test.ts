@@ -355,4 +355,3 @@ test("snapshot joins fetch terminals with volume and stories with progress", () 
   db.deleteStory("join-b");
   db.deleteCompanion("joins");
 });
-

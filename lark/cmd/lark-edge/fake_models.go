@@ -16,7 +16,7 @@ import (
 type fakeTranscriber struct{ text string }
 
 func (f *fakeTranscriber) Transcribe(context.Context, []byte) (string, error) { return f.text, nil }
-func (f *fakeTranscriber) Close()                                            {}
+func (f *fakeTranscriber) Close()                                             {}
 
 type fakeSynthesizer struct{}
 

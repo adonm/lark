@@ -1,0 +1,106 @@
+amends "package://github.com/jdx/hk/releases/download/v2.8.1/hk@2.8.1#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.8.1/hk@2.8.1#/Builtins.pkl"
+
+exclude = List(
+  "**/*.png",
+  "**/*.ttf",
+  "**/*.wav",
+  "**/*.bin",
+  "**/*.onnx",
+  "firmware/build/**",
+  "firmware/build-box3/**",
+  "firmware/managed_components/**",
+  "firmware/boards/*/managed_components/**",
+  "brain/node_modules/**",
+)
+
+local assetExcludes = List(
+  "**/*.svg",
+  "brain/package-lock.json",
+  "firmware/**/dependencies.lock",
+  "firmware/tests/testdata/proto_fixtures.h",
+  "firmware/main/proto.h",
+  "lark/internal/proto/proto_gen.go",
+  "lark/fonts/dogica/dogica.go",
+  "lark/fonts/dogica/OFL.txt",
+  "docs/protocol.md",
+)
+
+steps {
+  ["trailing_whitespace"] = (Builtins.trailing_whitespace) {
+    exclude = assetExcludes
+  }
+  ["newlines"] = (Builtins.newlines) {
+    exclude = assetExcludes
+  }
+  ["check_merge_conflict"] = Builtins.check_merge_conflict
+  ["check_added_large_files"] = Builtins.check_added_large_files
+  ["detect_private_key"] = Builtins.detect_private_key
+  ["check_symlinks"] = Builtins.check_symlinks
+  ["shellcheck"] = (Builtins.shellcheck) {
+    check = "shellcheck -x {{files}}"
+    check_diff = "shellcheck -x --format=diff {{files}}"
+    fix = "sh -c 'shellcheck -x --format=diff \"$@\" | git apply --allow-empty' sh {{files}}"
+  }
+  ["actionlint"] = Builtins.actionlint
+  ["python_check_ast"] = Builtins.python_check_ast
+  ["python_debug_statements"] = Builtins.python_debug_statements
+  ["go_fmt"] = Builtins.go_fmt
+  ["go_vet"] = (Builtins.go_vet) {
+    workspace_indicator = "go.mod"
+    dir = "{{workspace}}"
+  }
+  ["tsc"] {
+    glob = List("brain/**/*.ts")
+    check = "brain/node_modules/.bin/tsc --noEmit -p brain/tsconfig.json"
+  }
+  ["web_syntax"] {
+    glob = List("web/remote/*.js")
+    check = "node --check {{files}}"
+  }
+  ["shim_lint"] {
+    glob = List(
+      "lark/**/*.go",
+      "lark/**/*.c",
+      "lark/**/*.h",
+      "brain/**/*.ts",
+      "firmware/**/*.c",
+      "firmware/**/*.h",
+      "scripts/**/*",
+      "scripts/*",
+      "web/**/*",
+      "agents/*.md",
+      ".github/**/*",
+    )
+    check = "./scripts/lint-shims.sh"
+  }
+  ["python_tests"] {
+    glob = List("scripts/**/*.py", "scripts/setup-host.sh")
+    check = "python3 -m unittest discover -s scripts/tests"
+  }
+  ["diagrams"] {
+    glob = List("docs/diagrams/*.svg", "scripts/lib/phases.sh")
+    check = "bash -c 'source scripts/lib/phases.sh && phase_diagrams'"
+  }
+  ["c_host"] {
+    glob = List("firmware/main/*.c", "firmware/main/*.h", "firmware/tests/*.c", "firmware/tests/*.h", "scripts/lib/phases.sh")
+    check = "bash -c 'source scripts/lib/phases.sh && phase_c_host'"
+  }
+  ["protospec"] {
+    glob = List("lark/protospec/**/*.go", "lark/internal/proto/*.go", "firmware/main/proto.h", "brain/src/edge_types_gen.ts")
+    dir = "lark"
+    check = "go test -count=1 ./protospec"
+  }
+}
+
+hooks {
+  ["pre-push"] {
+    fix = false
+    stash = "none"
+    steps {
+      ["check"] {
+        check = "./scripts/check.sh"
+      }
+    }
+  }
+}

@@ -196,4 +196,3 @@ A healthy account has single-digit `S=30` rows. Thousands means a panel echo or 
 ### Verification
 - `PRAGMA integrity_check` returns `ok`; the `S=30` count is single-digit and `smtp` drains to 0.
 - `lark status` lists the household companions.
-

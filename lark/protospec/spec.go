@@ -66,16 +66,16 @@ func (k Kind) fixed() int {
 
 // Field is one field in a message.
 type Field struct {
-	Go      string // Go struct field, e.g. protoVersion
-	C       string // C struct field, e.g. proto_version
-	CLen    string // C length field for Str8/Str16
-	Kind    Kind
-	Count   int   // Bytes width
-	Reserved bool // kept in the layout, always encoded as zero
-	Sample  int64 // fixture value for numeric fields
-	Str     string
-	Bytes   []byte
-	Doc     string
+	Go       string // Go struct field, e.g. protoVersion
+	C        string // C struct field, e.g. proto_version
+	CLen     string // C length field for Str8/Str16
+	Kind     Kind
+	Count    int   // Bytes width
+	Reserved bool  // kept in the layout, always encoded as zero
+	Sample   int64 // fixture value for numeric fields
+	Str      string
+	Bytes    []byte
+	Doc      string
 }
 
 func (f Field) Size() int {
@@ -252,7 +252,7 @@ var Messages = []Message{
 	{
 		Name: "Ping", GoName: "protoPing", CName: "lark_ping_t",
 		MsgGo: "msgPing", MsgC: "LARK_MSG_PING", TypeByte: 0x0F,
-		Doc: "TCP keepalive; the four payload bytes are echoed by PONG.",
+		Doc:      "TCP keepalive; the four payload bytes are echoed by PONG.",
 		NoDecode: true,
 		Fields: []Field{
 			{Go: "payload", C: "payload", Kind: Bytes, Count: 4, Bytes: []byte{0xAA, 0xBB, 0xCC, 0xDD}},
@@ -261,7 +261,7 @@ var Messages = []Message{
 	{
 		Name: "Pong", GoName: "protoPong", CName: "lark_pong_t",
 		MsgGo: "msgPong", MsgC: "LARK_MSG_PONG", TypeByte: 0x10,
-		Doc: "TCP keepalive reply.",
+		Doc:      "TCP keepalive reply.",
 		NoDecode: true,
 		Fields: []Field{
 			{Go: "payload", C: "payload", Kind: Bytes, Count: 4, Bytes: []byte{0xAA, 0xBB, 0xCC, 0xDD}},

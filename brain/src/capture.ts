@@ -367,4 +367,3 @@ function uniqueCaptureName(companionId: string, at: Date, dir: string): string {
     if (!existsSync(join(dir, `${name}.wav`))) return name;
   }
 }
-
