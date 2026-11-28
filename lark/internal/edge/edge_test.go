@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,10 +20,24 @@ import (
 	proto "lark/internal/proto"
 )
 
-type fakeSTT struct{ text string }
+type fakeSTT struct {
+	text  string
+	delay time.Duration
+	calls atomic.Int32
+}
 
-func (f *fakeSTT) Transcribe(context.Context, []byte) (string, error) { return f.text, nil }
-func (f *fakeSTT) Close()                                             {}
+func (f *fakeSTT) Transcribe(ctx context.Context, _ []byte) (string, error) {
+	f.calls.Add(1)
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return f.text, nil
+}
+func (f *fakeSTT) Close() {}
 
 type fakeTTS struct{}
 
@@ -403,6 +418,118 @@ func TestEdgeRoundTrip(t *testing.T) {
 	r = b2.rpc("portrait-1", map[string]any{"cmd": "portrait.normalize", "dir": dir})
 	if r["ok"] != true || r["colors"].(float64) == 0 {
 		t.Fatalf("portrait reply = %v", r)
+	}
+}
+
+// TestTrailingSilenceProbesOnce pins the silence-storm and premature-cancel
+// regressions: a finished speculation must not be cancelled by silence, and
+// trailing silence must not re-probe Parakeet at the packet rate.
+func TestTrailingSilenceProbesOnce(t *testing.T) {
+	e := startTestEdge(t)
+	stt := e.cfg.Transcriber.(*fakeSTT)
+	stt.delay = 120 * time.Millisecond
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-silence")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+	b.rpc("rec-1", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-silence"})
+
+	// 950 ms of speech leaves the last probe trailing the final voiced frame,
+	// so the quiet probe covers the utterance and speculates promptly.
+	hw.rtp(tone(audio.SampleRate * 95 / 100))
+	// 600 ms of paced silence: the edge may probe and speculate once, then
+	// commits without cancelling the speculation.
+	for i := 0; i < 30; i++ {
+		hw.rtp(make([]byte, proto.RtpPCMBytes))
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	specs, cancels := 0, 0
+	var commit map[string]any
+	for commit == nil {
+		msg := b.next()
+		switch msg["type"] {
+		case "turn.speculate":
+			specs++
+		case "turn.cancel":
+			cancels++
+		case "turn.commit":
+			commit = msg
+		}
+	}
+	if commit["transcript"] != "hello there" {
+		t.Fatalf("commit = %v", commit)
+	}
+	if cancels != 0 {
+		t.Fatalf("turn.cancel during trailing silence = %d, want 0", cancels)
+	}
+	if specs > 2 {
+		t.Fatalf("turn.speculate = %d, want at most 2", specs)
+	}
+	// Four in-speech probes, one quiet probe and the commit transcription fit
+	// comfortably; the storm launched one per 20 ms silence packet.
+	if calls := stt.calls.Load(); calls > 8 {
+		t.Fatalf("STT calls = %d, want <= 8 (silence probe storm)", calls)
+	}
+}
+
+// TestTurnCommitsWhenRTPStops pins the frozen endpoint clock: when RTP goes
+// away mid-turn, the poll path must advance the policy clock on wall time and
+// commit instead of hanging until the window limit.
+func TestTurnCommitsWhenRTPStops(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-rtp-stop")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+	b.rpc("rec-1", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-rtp-stop"})
+
+	start := time.Now()
+	hw.rtp(tone(audio.SampleRate))
+	// No more RTP at all: only the poll timer can end the turn.
+	commit := b.waitFor("turn.commit")
+	if commit["transcript"] != "hello there" {
+		t.Fatalf("commit = %v", commit)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("commit after RTP stopped took %s, want <= 2s", elapsed)
+	}
+}
+
+// TestIdleCaptureDiscardsWithoutPackets pins the other half of the clock: a
+// capture that never receives RTP still reaches the 6 s idle discard.
+func TestIdleCaptureDiscardsWithoutPackets(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-idle")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+	term := e.Terminal("vocat-idle")
+	b.rpc("rec-1", map[string]any{"cmd": "terminal.rec_start", "terminal_id": "vocat-idle"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for term.capture.pending.Load() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("capture did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	start := time.Now()
+	deadline = start.Add(8 * time.Second)
+	for term.capture.pending.Load() != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("idle capture never discarded")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if elapsed := time.Since(start); elapsed < 5*time.Second {
+		t.Fatalf("idle capture ended after %s, want ~6s", elapsed)
+	}
+	if calls := e.cfg.Transcriber.(*fakeSTT).calls.Load(); calls != 0 {
+		t.Fatalf("idle capture transcribed %d clips", calls)
 	}
 }
 

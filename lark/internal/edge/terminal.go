@@ -149,7 +149,7 @@ type terminalScreen struct {
 
 // terminalCapture holds the active recording and the lock-free done probe.
 type terminalCapture struct {
-	active  *captureState
+	active  atomic.Pointer[captureState]
 	pending atomic.Pointer[captureState]
 }
 
@@ -254,9 +254,8 @@ func (t *Terminal) close() {
 			t.playback.pcm.cancel()
 			t.playback.pcm = nil
 		}
-		if t.capture.active != nil {
-			t.capture.active.cancel(cancelUser)
-			t.capture.active = nil
+		if active := t.capture.active.Swap(nil); active != nil {
+			active.cancel(cancelUser)
 		}
 		if nc := t.native(); nc != nil {
 			nc.close()
@@ -413,8 +412,8 @@ func (t *Terminal) handle(ev termEvent) {
 	case evPreview:
 		t.playEphemeral(ev.c.Voice, "Hi, this is how I sound.", true)
 	case evRecCancel:
-		if t.capture.active != nil {
-			t.capture.active.cancel(cancelUser)
+		if active := t.capture.active.Load(); active != nil {
+			active.cancel(cancelUser)
 		}
 	case evRecBegin:
 		if ev.c != nil {
@@ -427,12 +426,11 @@ func (t *Terminal) handle(ev termEvent) {
 			t.startDeviceCapture(ev.c)
 		}
 	case evCaptureStop:
-		if t.capture.active != nil {
-			t.capture.active.cancel(cancelUser)
+		if active := t.capture.active.Load(); active != nil {
+			active.cancel(cancelUser)
 		}
 	case evCaptureDone:
-		if t.capture.active == ev.capture {
-			t.capture.active = nil
+		if t.capture.active.CompareAndSwap(ev.capture, nil) {
 			t.screen.mode = modeIdle
 		}
 	case evClose:
@@ -456,12 +454,12 @@ func (t *Terminal) handlePointer(m proto.ProtoPointer) {
 	case "listen":
 		t.beginCapture(false, 0, true, "")
 	case "rec-send":
-		if t.capture.active != nil {
-			t.capture.active.cancel(cancelSend)
+		if active := t.capture.active.Load(); active != nil {
+			active.cancel(cancelSend)
 		}
 	case "rec-cancel":
-		if t.capture.active != nil {
-			t.capture.active.cancel(cancelUser)
+		if active := t.capture.active.Load(); active != nil {
+			active.cancel(cancelUser)
 		}
 	case "stop", "listen-stop":
 		t.stopAudio(true)
@@ -537,12 +535,13 @@ func (t *Terminal) render(s Screen, full bool) {
 }
 
 func (t *Terminal) setModeFromScreen(s Screen) {
+	active := t.capture.active.Load()
 	switch {
 	case t.playback.awaitAck != 0 || t.playback.tts != nil || t.playback.pcm != nil:
 		t.screen.mode = modeSpeaking
-	case t.capture.active != nil && t.capture.active.listen:
+	case active != nil && active.listen:
 		t.screen.mode = modeListening
-	case t.capture.active != nil:
+	case active != nil:
 		t.screen.mode = modeRecording
 	case s.Kind == "menu" || s.Kind == "list":
 		t.screen.mode = modeMenu

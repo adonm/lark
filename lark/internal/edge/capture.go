@@ -132,8 +132,8 @@ func (c *captureState) getSlot() []byte {
 }
 
 func (t *Terminal) beginCapture(listen bool, windowS int, followUp bool, name string) {
-	if t.capture.active != nil {
-		t.capture.active.cancel(cancelUser)
+	if active := t.capture.active.Load(); active != nil {
+		active.cancel(cancelUser)
 	}
 	limit := 20 * time.Second
 	if windowS > 0 {
@@ -155,7 +155,7 @@ func (t *Terminal) beginCapture(listen bool, windowS int, followUp bool, name st
 		flags |= proto.RecTargetListen
 	}
 	t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: proto.RecOpStart, Flags: flags, Session: c.session}.Encode())
-	t.capture.active = c
+	t.capture.active.Store(c)
 	t.capture.pending.Store(c)
 	t.screen.mode = modeListening
 	if !listen {
@@ -195,14 +195,16 @@ func (c *captureState) run() {
 	}
 	u := &utterance{pcm: make([]byte, 0, utteranceBytes(c.limit))}
 	var (
-		probeCh   <-chan probeResult
-		probeAt   time.Duration
-		probeN    int
-		probeText string
-		scratch   probeScratch
-		specSeq   uint64
-		specAt    time.Duration
-		specLive  bool
+		probeCh       <-chan probeResult
+		probeAt       time.Duration
+		probeLaunchAt time.Duration
+		probeN        int
+		probeText     string
+		scratch       probeScratch
+		specSeq       uint64
+		specAt        time.Duration
+		specLive      bool
+		specCount     int
 		// smartProb belongs to smartProbAt; -1 means no prediction for the
 		// current pause yet. A busy worker keeps its buffer untouched until the
 		// result returns, so predicting never races the RTP packet loop.
@@ -293,7 +295,7 @@ func (c *captureState) run() {
 				c.emitCancel(specSeq, "window")
 				return
 			default:
-				c.commit(u, probeText, probeN, speechAt, specSeq, specLive)
+				c.commit(u, probeText, probeN, speechAt, specSeq, specLive, specCount)
 				return
 			}
 		case result := <-smartRes:
@@ -312,6 +314,7 @@ func (c *captureState) run() {
 				specSeq = c.t.nextTurn()
 				specAt = at
 				specLive = true
+				specCount++
 				speechMS := int64(0)
 				if !speechAt.IsZero() {
 					speechMS = speechAt.UnixMilli()
@@ -332,12 +335,22 @@ func (c *captureState) run() {
 			c.putSlot(pkt.pcm)
 			at := u.at(len(u.pcm))
 			silence := at - u.policy.lastVoicedAt
-			if probeCh == nil && len(u.pcm) > 0 &&
-				((u.policy.inVoice && at-probeAt >= endpointProbeEvery) ||
-					(!u.policy.inVoice && u.policy.voiced && silence >= endpointSpecQuiet)) {
+			// Trailing silence needs one probe that covers every voiced frame;
+			// re-probing silence at the packet rate both saturates Parakeet and
+			// cannot improve the transcript. probeAt only advances on a
+			// successful transcript, so throttle failed/empty probes too.
+			quietProbe := !u.policy.inVoice && u.policy.voiced && silence >= endpointSpecQuiet &&
+				probeAt < u.policy.lastVoicedAt &&
+				(probeLaunchAt <= u.policy.lastVoicedAt || at-probeLaunchAt >= endpointProbeEvery)
+			probeDue := probeCh == nil && len(u.pcm) > 0 &&
+				((u.policy.inVoice && at-probeLaunchAt >= endpointProbeEvery) || quietProbe)
+			if probeDue {
 				launchProbe(len(u.pcm), at)
+				probeLaunchAt = at
 			}
-			if specLive && u.at(len(u.pcm)) > specAt+endpointBytes {
+			// A speculation only dies when speech actually resumes; comparing
+			// durations against endpointBytes cancelled it during silence.
+			if specLive && u.policy.inVoice && at > specAt+endpointFrame {
 				c.emitCancel(specSeq, "speech")
 				specLive = false
 			}
@@ -350,10 +363,11 @@ func (c *captureState) run() {
 				if d.discards() {
 					c.emitCancel(specSeq, "noise")
 				} else if probeText != "" && probeN == len(u.pcm) {
-					c.commit(u, probeText, probeN, speechAt, specSeq, specLive)
+					c.commit(u, probeText, probeN, speechAt, specSeq, specLive, specCount)
 				} else {
+					start := time.Now()
 					text, _ := c.t.transcribe(c.ctx, u.clip(), false)
-					c.commitText(text, u, speechAt, specSeq, specLive)
+					c.commitText(text, u, speechAt, specSeq, specLive, specCount, time.Since(start))
 				}
 				return
 			}
@@ -369,20 +383,30 @@ func (c *captureState) run() {
 			if len(c.packets) > 0 {
 				continue
 			}
+			// The policy clock normally advances with received audio. When RTP
+			// stops, the packet path can no longer move it; fall back to wall
+			// time so endpointing (and the idle discard) still fires instead of
+			// leaving the turn open until the window limit.
+			now := time.Now()
 			if lastTick.IsZero() {
-				lastTick = time.Now()
+				lastTick = now
 			}
-			at := u.at(len(u.pcm))
+			at := u.at(len(u.pcm)) + max(0, now.Sub(lastTick))
+			// Without RTP no VAD frame can end the voice, so the wall clock
+			// has to expire it or the turn stays open for the whole window.
+			if u.policy.inVoice && at-u.policy.lastVoicedAt >= endpointFrame {
+				u.policy.inVoice = false
+			}
 			if d := classify(at); d.stops() {
-				text, _ := c.t.transcribe(c.ctx, u.clip(), false)
 				if d.discards() {
 					c.emitCancel(specSeq, "noise")
 				} else {
-					c.commitText(text, u, speechAt, specSeq, specLive)
+					start := time.Now()
+					text, _ := c.t.transcribe(c.ctx, u.clip(), false)
+					c.commitText(text, u, speechAt, specSeq, specLive, specCount, time.Since(start))
 				}
 				return
 			}
-			_ = probeAt
 		}
 	}
 }
@@ -395,15 +419,18 @@ func (c *captureState) transcribeCommit(u *utterance) string {
 	return text
 }
 
-func (c *captureState) commit(u *utterance, cached string, cachedN int, speechAt time.Time, seq uint64, spec bool) {
+func (c *captureState) commit(u *utterance, cached string, cachedN int, speechAt time.Time, seq uint64, spec bool, specs int) {
 	text := cached
+	var stt time.Duration
 	if cachedN != len(u.pcm) || text == "" {
+		start := time.Now()
 		text = c.transcribeCommit(u)
+		stt = time.Since(start)
 	}
-	c.commitText(text, u, speechAt, seq, spec)
+	c.commitText(text, u, speechAt, seq, spec, specs, stt)
 }
 
-func (c *captureState) commitText(text string, u *utterance, speechAt time.Time, seq uint64, spec bool) {
+func (c *captureState) commitText(text string, u *utterance, speechAt time.Time, seq uint64, spec bool, specs int, stt time.Duration) {
 	_ = spec
 	if isFillerTranscript(text) {
 		c.t.deps.e.emit("turn.not_caught", map[string]any{"terminal_id": c.t.info.id})
@@ -416,10 +443,13 @@ func (c *captureState) commitText(text string, u *utterance, speechAt time.Time,
 	if !speechAt.IsZero() {
 		speechMS = speechAt.UnixMilli()
 	}
+	audioMS := pcmDuration(len(u.pcm)).Milliseconds()
+	c.t.deps.e.logf("turn.commit terminal=%s audio_ms=%d spec=%d stt_ms=%d",
+		c.t.info.id, audioMS, specs, stt.Milliseconds())
 	c.t.deps.e.emit("turn.commit", map[string]any{
 		"terminal_id": c.t.info.id, "seq": seq, "transcript": text,
 		"speech_at_ms": speechMS, "listen_window": c.listen,
-		"audio_ms": pcmDuration(len(u.pcm)).Milliseconds(),
+		"audio_ms": audioMS,
 	})
 }
 
@@ -542,7 +572,7 @@ func (t *Terminal) predict(pcm []byte) float32 {
 }
 
 func (t *Terminal) recStartEvent(m proto.ProtoRecStart) {
-	if t.capture.active != nil {
+	if t.capture.active.Load() != nil {
 		return
 	}
 	listen := m.Target == "listen"
@@ -550,26 +580,27 @@ func (t *Terminal) recStartEvent(m proto.ProtoRecStart) {
 }
 
 func (t *Terminal) recEndEvent(m proto.ProtoRecEnd) {
-	if t.capture.active == nil {
+	active := t.capture.active.Load()
+	if active == nil {
 		return
 	}
 	if m.Cancelled != 0 {
-		t.capture.active.cancel(cancelUser)
+		active.cancel(cancelUser)
 	} else {
-		t.capture.active.cancel(cancelSend)
+		active.cancel(cancelSend)
 	}
 }
 
 func (t *Terminal) startDeviceCapture(cmd *ipcCommand) {
-	if t.capture.active != nil {
-		t.capture.active.cancel(cancelUser)
+	if active := t.capture.active.Load(); active != nil {
+		active.cancel(cancelUser)
 	}
 	c := newCapture(t, false, time.Duration(cmd.Seconds)*time.Second, "")
 	c.device = true
 	c.captureID = cmd.CaptureID
 	c.outPath = cmd.OutPath
 	c.seconds = cmd.Seconds
-	t.capture.active = c
+	t.capture.active.Store(c)
 	t.capture.pending.Store(c)
 	t.screen.mode = modeRecording
 	go c.run()
