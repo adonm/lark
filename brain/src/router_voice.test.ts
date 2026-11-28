@@ -250,3 +250,18 @@ test("an empty reply says it was not caught instead of staying silent", async ()
   assert.equal(h.state.caption, NOT_CAUGHT_LINE);
   assert.ok(h.edge.spoken.some((line) => line.text.includes(NOT_CAUGHT_LINE)));
 });
+
+test("cancel with reason=speech aborts speculation without clearing listening", async () => {
+  const h = harness();
+  await armListening(h.ctx, h.state, false);
+  h.brain.nextTurn("Half guess.", ["Half guess."]);
+  await speculate(h.ctx, { terminal_id: "vocat-1", seq: 4, transcript: "half", speech_at_ms: 0 });
+  await cancel(h.ctx, "vocat-1", "speech");
+  assert.deepEqual(h.brain.aborted, ["half"]);
+  assert.equal(h.state.listening, true);
+  assert.equal(h.edge.lastScreen()?.status, "listening");
+
+  await cancel(h.ctx, "vocat-1", "noise");
+  assert.equal(h.state.listening, false);
+  assert.equal(h.edge.lastScreen()?.status, "idle");
+});

@@ -299,11 +299,18 @@ export async function cancel(ctx: VoiceContext, terminalId: string, reason: stri
   state.specSeq++;
   state.speculation?.handle.abort(new Error(reason));
   state.speculation = undefined;
+  // "speech" only aborts a mid-pause speculation when the speaker resumes;
+  // keep the listening screen active until the utterance commits or ends.
+  if (reason === "speech") return;
   state.turn?.abort();
   state.turn = undefined;
   state.busy = false;
   state.speaking = false;
   state.listening = false;
+  if (state.listenTimer !== undefined) {
+    clearTimeout(state.listenTimer);
+    state.listenTimer = undefined;
+  }
   await ctx.renderHome(state, "idle");
   ctx.notify();
 }

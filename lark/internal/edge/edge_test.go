@@ -531,6 +531,46 @@ func TestIdleCaptureDiscardsWithoutPackets(t *testing.T) {
 	if calls := e.cfg.Transcriber.(*fakeSTT).calls.Load(); calls != 0 {
 		t.Fatalf("idle capture transcribed %d clips", calls)
 	}
+	ev := b.waitFor("turn.cancel")
+	if ev["reason"] != "noise" {
+		t.Fatalf("cancel reason = %v, want noise", ev["reason"])
+	}
+}
+
+func TestDeviceCaptureStartsAndStopsMic(t *testing.T) {
+	e := startTestEdge(t)
+	b := dialBrain(t, e)
+	b.waitFor("ready")
+	hw := dialHardware(t, e, "vocat-cap")
+	defer hw.close()
+	b.waitFor("terminal.connected")
+
+	out := filepath.Join(t.TempDir(), "cap.wav")
+	r := b.rpc("cap-1", map[string]any{
+		"cmd": "capture.start", "terminal_id": "vocat-cap",
+		"capture_id": "c1", "out_path": out, "seconds": 1,
+	})
+	if r["ok"] != true {
+		t.Fatalf("capture.start reply = %v", r)
+	}
+	_, payload := hw.read(proto.MsgRecCtrl)
+	if len(payload) < 1 || payload[0] != proto.RecOpStart {
+		t.Fatalf("rec ctrl start = %x", payload)
+	}
+	hw.rtp(tone(audio.SampleRate / 2))
+	b.send(map[string]any{"cmd": "capture.stop", "terminal_id": "vocat-cap"})
+	done := b.waitFor("capture.done")
+	if done["error"] != nil {
+		t.Fatalf("capture.done error = %v", done)
+	}
+	_, stopPayload := hw.read(proto.MsgRecCtrl)
+	if len(stopPayload) < 1 || (stopPayload[0] != proto.RecOpStop && stopPayload[0] != proto.RecOpCancel) {
+		t.Fatalf("rec ctrl stop = %x", stopPayload)
+	}
+	info, err := os.Stat(out)
+	if err != nil || info.Size() <= 44 {
+		t.Fatalf("captured wav = %v size=%v", err, info)
+	}
 }
 
 func TestDetachedTerminalReconnectsImmediately(t *testing.T) {

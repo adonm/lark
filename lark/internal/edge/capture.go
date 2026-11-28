@@ -454,7 +454,10 @@ func (c *captureState) commitText(text string, u *utterance, speechAt time.Time,
 }
 
 func (c *captureState) emitCancel(seq uint64, reason string) {
-	if seq == 0 {
+	// Always notify the brain when a capture ends without committing (idle
+	// discard, user cancel, window timeout) so the terminal leaves "listening"
+	// immediately instead of waiting out the brain's 32 s fallback timer.
+	if reason == "speech" && seq == 0 {
 		return
 	}
 	c.t.deps.e.emit("turn.cancel", map[string]any{
@@ -463,13 +466,11 @@ func (c *captureState) emitCancel(seq uint64, reason string) {
 }
 
 func (c *captureState) finish() {
-	if !c.device {
-		op := uint8(proto.RecOpStop)
-		if cancelReason(c.reason.Load()) == cancelUser {
-			op = proto.RecOpCancel
-		}
-		c.t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: op, Session: c.session}.Encode())
+	op := uint8(proto.RecOpStop)
+	if cancelReason(c.reason.Load()) == cancelUser {
+		op = proto.RecOpCancel
 	}
+	c.t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: op, Session: c.session}.Encode())
 	if c.t.capture.pending.CompareAndSwap(c, nil) {
 		c.t.event(evCaptureDone, func(ev *termEvent) { ev.capture = c })
 	}
@@ -600,6 +601,12 @@ func (t *Terminal) startDeviceCapture(cmd *ipcCommand) {
 	c.captureID = cmd.CaptureID
 	c.outPath = cmd.OutPath
 	c.seconds = cmd.Seconds
+	c.session = uint16(t.nextTurn())
+	var flags uint8
+	if t.info.caps&proto.CapEdgeEndpoint != 0 {
+		flags |= proto.RecTargetEdgeE
+	}
+	t.ctrl(proto.MsgRecCtrl, proto.ProtoRecCtrl{Op: proto.RecOpStart, Flags: flags, Session: c.session}.Encode())
 	t.capture.active.Store(c)
 	t.capture.pending.Store(c)
 	t.screen.mode = modeRecording
