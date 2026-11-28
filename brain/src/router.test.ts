@@ -206,6 +206,42 @@ test("a committed turn streams speech and speculation is promoted", async () => 
   assert.equal(h.edge.lastScreen()?.status, "idle");
 });
 
+test("leaving speaking clears the stale caption and restores the menu", async () => {
+  const h = harness();
+  await connect(h);
+  h.brain.nextTurn("Hello there.", ["Hello there."]);
+
+  h.edge.emit("turn.commit", {
+    terminal_id: "vocat-1",
+    seq: 1,
+    transcript: "hello greg",
+    speech_at_ms: 0,
+    listen_window: false,
+    audio_ms: 700,
+  });
+  await settle(20);
+  assert.equal(h.edge.lastScreen()?.status, "speaking");
+  assert.equal(h.edge.lastScreen()?.caption, "Hello there.");
+
+  // A state refresh while speaking keeps the spoken caption.
+  await h.router.refreshCompanion("greg");
+  assert.equal(h.edge.lastScreen()?.caption, "Hello there.");
+
+  // Playback completion must clear it, or the idle menu stays covered.
+  h.edge.emit("playback.done", { terminal_id: "vocat-1", stream_id: 1, aborted: false, underruns_delta: 0 });
+  await settle();
+  assert.equal(h.edge.lastScreen()?.status, "idle");
+  assert.equal(h.edge.lastScreen()?.caption, "");
+
+  // Thinking and listening never inherit the previous reply either.
+  await h.router.setListening("greg", true);
+  assert.equal(h.edge.lastScreen()?.status, "listening");
+  assert.equal(h.edge.lastScreen()?.caption, "");
+  await h.router.setListening("greg", false);
+  assert.equal(h.edge.lastScreen()?.status, "idle");
+  assert.equal(h.edge.lastScreen()?.caption, "");
+});
+
 test("a stale stored session binding is replaced", async () => {
   const h = harness();
   h.db.putSession({ companionId: "greg", sessionId: "ses_stale", updatedAt: 1, contractHash: "", contextAfterMs: 0 });

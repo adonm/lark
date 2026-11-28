@@ -44,18 +44,21 @@ export async function renderHome(
   ctx: UiContext,
   state: TerminalState,
   status: string,
-  caption = state.caption,
+  caption?: string,
 ): Promise<void> {
   const companion = ctx.db.getCompanion(state.companionId);
   if (companion === undefined) return;
-  state.caption = caption;
+  // Only a speaking screen owns the caption; leaving it must clear the stale
+  // reply or the idle menu (and Cancel/Send/Stop) stays covered forever.
+  const text = caption ?? (status === "speaking" ? state.caption : "");
+  state.caption = text;
   await ctx.edge.render(state.id, {
     kind: "home",
     portrait_dir: portraitDir(ctx, companion),
     companion_name: companion.name,
     companion_form: companion.form,
     status,
-    caption,
+    caption: text,
     listen_window: state.listening,
   });
 }
