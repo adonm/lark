@@ -34,9 +34,9 @@ export interface ModelSpecs {
 }
 
 export const DEFAULT_MODELS: ModelSpecs = {
-  primary: "opencode/claude-haiku-5-5#none",
+  primary: "opencode/gemini-4-hydrogen#low",
   fallback: "opencode/gpt-6-luna#low",
-  deep: "opencode/claude-sonnet-5-5#high",
+  deep: "opencode/gemini-4-hydrogen#high",
 };
 
 export interface ModelRef {

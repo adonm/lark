@@ -200,9 +200,9 @@ The brain embeds `@opencode/sdk` in its own process with its own config, session
 data, cache, and state. It loads only Lark's `lark.context`,
 `lark.model-fallback`, and `lark.tools` plugins and never reads personal
 OpenCode sessions or coding configuration. The default companion model is
-`opencode/claude-haiku-5-5#none`, with one fallback retry on
+`opencode/gemini-4-hydrogen#low`, with one fallback retry on
 `opencode/gpt-6-luna#low` and a `deep` subagent on
-`opencode/claude-sonnet-5-5#high`. Model choices and tool contracts live in
+`opencode/gemini-4-hydrogen#high`. Model choices and tool contracts live in
 [ARCHITECTURE.md](ARCHITECTURE.md#agent-and-tools).
 
 ## Where next

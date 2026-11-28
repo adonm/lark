@@ -325,11 +325,16 @@ test("model specs and agent markdown parse strictly", () => {
     id: "claude-haiku-5-5",
     variant: "none",
   });
+  assert.deepEqual(parseModelSpec("opencode/gemini-4-hydrogen#low"), {
+    providerID: "opencode",
+    id: "gemini-4-hydrogen",
+    variant: "low",
+  });
   assert.deepEqual(parseModelSpec("mock/m1"), { providerID: "mock", id: "m1" });
   assert.throws(() => parseModelSpec("nope"), /provider\/model/);
-  assert.equal(DEFAULT_MODELS.primary, "opencode/claude-haiku-5-5#none");
+  assert.equal(DEFAULT_MODELS.primary, "opencode/gemini-4-hydrogen#low");
   assert.equal(DEFAULT_MODELS.fallback, "opencode/gpt-6-luna#low");
-  assert.equal(DEFAULT_MODELS.deep, "opencode/claude-sonnet-5-5#high");
+  assert.equal(DEFAULT_MODELS.deep, "opencode/gemini-4-hydrogen#high");
 
   const agent = parseAgentMarkdown(`---\ndescription: Companion\nmode: primary\npermissions:\n  - {action: "*", resource: "*", effect: deny}\n  - {action: lark_*, resource: "*", effect: allow}\n---\nBe playful.\n`);
   assert.equal(agent.description, "Companion");

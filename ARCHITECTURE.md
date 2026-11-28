@@ -175,9 +175,9 @@ providers authenticated later can be copied by rerunning
 
 | Role | Default model |
 | --- | --- |
-| Companion (`lark`) | `opencode/claude-haiku-5-5#none` |
+| Companion (`lark`) | `opencode/gemini-4-hydrogen#low` |
 | Fallback | `opencode/gpt-6-luna#low` |
-| Deep subagent (`deep`) | `opencode/claude-sonnet-5-5#high` |
+| Deep subagent (`deep`) | `opencode/gemini-4-hydrogen#high` |
 
 An explicit `429`, `503`, or `403` before output or tools can retry once on the
 fallback. The next turn starts on the primary. Stalls, interruptions, and
